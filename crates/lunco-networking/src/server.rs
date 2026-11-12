@@ -1641,7 +1641,7 @@ fn spawn_manifest_build(
     };
     let logical_name = match roots
         .register_twin(twin)
-        .and_then(|authority| roots.logical_name(&authority))
+        .and_then(|authority| roots.logical_identity_for_authority(&authority))
     {
         Ok(name) => name,
         Err(error) => {

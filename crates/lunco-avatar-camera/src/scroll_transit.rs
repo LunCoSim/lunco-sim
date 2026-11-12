@@ -1,13 +1,10 @@
-use avian3d::prelude::MoveAndSlide;
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_avatar_camera_core::{
     CAMERA_ZOOM_SENSITIVITY, OrbitReturnBehavior, OrbitViewReturn, RadialArrival,
 };
-use lunco_avatar_policy::{
-    AvatarCollisionSettings, AvatarSoilCollisionPolicy, avatar_soil_collision_policy,
-};
+use lunco_avatar_policy::{AvatarSoilCollisionPolicy, avatar_soil_collision_policy};
 use lunco_camera_core::{
     CameraPoseLock, CameraZoomInput, FreeFlightCamera, OrbitCamera, SpringArmCamera, SurfaceCamera,
     SurfaceRelativeMode, math::zoom_factor,
@@ -18,14 +15,78 @@ use lunco_celestial::{GeodeticAnchor, SiteAnchor};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_environment::GravityBody;
 use lunco_interaction_core::DragModeActive;
-use lunco_spatial::ActivePhysicsFrame;
+use lunco_spatial::coords::GridPos;
 use lunco_spatial::coords::grid_absolute_seeded;
-use lunco_terrain_surface::GridSurfaceQuery;
 use lunco_workspace::WorkspaceResource;
 
 use crate::locomotion::{
-    move_avatar_with_collision, report_avatar_policy_error, write_avatar_grid_position,
+    clear_camera_preparation, move_avatar_with_collision, report_avatar_policy_error,
+    report_camera_motion_error, write_avatar_grid_position,
 };
+
+/// A discrete scroll keeps its admitted endpoint while visual terrain prepares.
+/// The camera entity owns the lease; a new input supersedes this request.
+#[derive(Component, Clone)]
+pub(crate) struct PendingCameraScroll {
+    source_grid: Entity,
+    frame: Entity,
+    source: lunco_terrain_surface::TerrainSurfaceSnapshot,
+    start: DVec3,
+    end: DVec3,
+    frame_start: GridPos,
+    frame_end: GridPos,
+    rotation: Quat,
+    surface_mode: bool,
+    settings: lunco_avatar_policy::AvatarCollisionSettings,
+    radius_m: f64,
+    draw_revision: Option<u64>,
+    transition_direction: f32,
+    scroll_out: bool,
+}
+
+/// Retire pending scroll with its source/mode even when the scene no longer
+/// has a site and the transit controller itself has no work to perform.
+pub(crate) fn retire_pending_camera_scroll(
+    mut commands: Commands,
+    pending: Query<(
+        Entity,
+        &PendingCameraScroll,
+        Option<&ChildOf>,
+        Has<LocalEmbodiment>,
+        Has<FreeFlightCamera>,
+        Has<SurfaceCamera>,
+        Has<OrbitCamera>,
+        Has<SpringArmCamera>,
+        Has<CameraPoseLock>,
+    )>,
+    terrain: lunco_terrain_surface::GridSurfaceQuery,
+    settings: Res<lunco_avatar_policy::AvatarCollisionSettings>,
+    mut targets: ResMut<lunco_terrain_surface::TerrainCameraTargets>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let source = terrain.snapshot();
+    for (camera, request, parent, local, free, surface, orbit, follow, locked) in &pending {
+        let valid = local
+            && (free || surface)
+            && surface == request.surface_mode
+            && !orbit
+            && !follow
+            && !locked
+            && parent.is_some_and(|parent| parent.parent() == request.source_grid)
+            && *settings == request.settings
+            && source
+                .as_ref()
+                .is_some_and(|source| source.same_source(&request.source));
+        if !valid {
+            commands.entity(camera).remove::<PendingCameraScroll>();
+            targets.clear(camera);
+            clear_camera_preparation(&mut diagnostics, "camera-scroll", &mut None);
+        }
+    }
+}
 
 /// Seed a surface-to-orbit entry. `RadialArrival` replaces these orbital
 /// parameters with the camera's live pose in the target's inertial frame.
@@ -76,15 +137,18 @@ pub(crate) fn freeflight_scroll_transit_system(
             &ChildOf,
             &mut CameraZoomInput,
             Option<&Camera>,
+            &Projection,
             Option<&SurfaceCamera>,
             Option<&FreeFlightCamera>,
             Option<&GravityBody>,
             Has<SurfaceRelativeMode>,
             Has<CameraPoseLock>,
+            Option<&PendingCameraScroll>,
         ),
         (
             With<Embodiment>,
             With<LocalEmbodiment>,
+            Without<Grid>,
             Or<(With<FreeFlightCamera>, With<SurfaceCamera>)>,
             Without<OrbitCamera>,
             Without<SpringArmCamera>,
@@ -93,16 +157,14 @@ pub(crate) fn freeflight_scroll_transit_system(
     q_grids: Query<&Grid>,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<Embodiment>>,
-    terrain: GridSurfaceQuery,
     q_site: Query<&GeodeticAnchor, With<SiteAnchor>>,
     q_bodies: Query<(Entity, &CelestialBody)>,
     drag_mode: Option<Res<DragModeActive>>,
-    active_frame: Option<Res<ActivePhysicsFrame>>,
-    move_and_slide: Option<MoveAndSlide<'_, '_>>,
-    collision_settings: Res<AvatarCollisionSettings>,
+    mut collision: crate::locomotion::NavigationCollisionContext,
     camera_input_settings: Res<CameraInputSettings>,
     workspace: Option<Res<WorkspaceResource>>,
     mut policy_error: Local<Option<String>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if drag_mode.is_some_and(|drag| drag.active) {
         return;
@@ -114,8 +176,13 @@ pub(crate) fn freeflight_scroll_transit_system(
     let policy = match avatar_soil_collision_policy(workspace.as_deref()) {
         Ok(policy) => policy,
         Err(error) => {
-            report_avatar_policy_error(&error, &mut policy_error);
-            for (_, _, _, _, mut zoom, _, _, _, _, _, _) in q_avatar.iter_mut() {
+            report_avatar_policy_error(
+                &error,
+                &mut policy_error,
+                &mut diagnostics,
+                "camera-scroll",
+            );
+            for (_, _, _, _, mut zoom, _, _, _, _, _, _, _, _) in q_avatar.iter_mut() {
                 zoom.delta = 0.0;
             }
             return;
@@ -128,22 +195,29 @@ pub(crate) fn freeflight_scroll_transit_system(
         child_of,
         mut zoom,
         cam,
+        projection,
         surface_camera,
         freeflight_camera,
         gravity_body,
         surface_relative,
         cinematic_lock,
+        pending,
     ) in q_avatar.iter_mut()
     {
         if cinematic_lock {
+            commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+            collision.targets.clear(avatar_ent);
             continue;
         }
-        if zoom.delta == 0.0 {
+        if zoom.delta == 0.0 && pending.is_none() {
             continue;
         }
         // Only the active render camera transits (scenes carry inactive
         // Embodiment-tagged spawn cameras — same guard as `on_focus_command`).
         if !cam.is_some_and(|c| c.is_active) {
+            commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+            collision.targets.clear(avatar_ent);
+            clear_camera_preparation(&mut diagnostics, "camera-scroll", &mut policy_error);
             zoom.delta = 0.0;
             continue;
         }
@@ -167,55 +241,162 @@ pub(crate) fn freeflight_scroll_transit_system(
             zoom.delta = 0.0;
             continue;
         };
-        let datum_altitude_m = (pos - center).length() - radius_m;
-        let alt = crate::terrain_handoff::clearance_m(
-            avatar_ent,
-            Some(&cell),
-            &tf,
-            active_frame.as_deref(),
-            &terrain,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
-        .unwrap_or(datum_altitude_m);
-        let factor = zoom_factor(zoom.delta, CAMERA_ZOOM_SENSITIVITY);
-        let transition_direction = zoom.delta;
-        let scroll_out = zoom.delta < 0.0;
-        zoom.delta = 0.0;
-        let step = alt.abs().max(50.0) * (factor - 1.0);
-        let fwd = (tf.rotation * Vec3::NEG_Z).as_dvec3();
-        let desired_next = pos - fwd * step;
+        let new_input = zoom.delta != 0.0;
+        let (desired_next, transition_direction, scroll_out) = if !new_input {
+            let Some(request) = pending else { continue };
+            let valid = request.source_grid == child_of.parent()
+                && request.start == pos
+                && request.rotation == tf.rotation
+                && request.surface_mode == surface_camera.is_some()
+                && request.settings == *collision.settings
+                && collision
+                    .active_frame
+                    .as_deref()
+                    .is_some_and(|frame| frame.0 == request.frame)
+                && collision
+                    .terrain
+                    .snapshot()
+                    .is_some_and(|source| source.same_source(&request.source))
+                && collision
+                    .settings
+                    .camera_radius(projection)
+                    .is_ok_and(|radius| radius == request.radius_m);
+            if !valid {
+                commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+                collision.targets.clear(avatar_ent);
+                clear_camera_preparation(&mut diagnostics, "camera-scroll", &mut policy_error);
+                continue;
+            }
+            if policy == AvatarSoilCollisionPolicy::CollisionEnabled
+                && collision.drawn.revision(avatar_ent) == request.draw_revision
+            {
+                if let Err(reason) = collision.targets.request(
+                    avatar_ent,
+                    request.source.clone(),
+                    request.frame_start,
+                    request.frame_end,
+                    request.radius_m + request.settings.skin_m,
+                ) {
+                    commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+                    report_camera_motion_error(
+                        &reason.into(),
+                        &mut policy_error,
+                        &mut diagnostics,
+                        "camera-scroll",
+                    );
+                }
+                continue;
+            }
+            (
+                request.end,
+                request.transition_direction,
+                request.scroll_out,
+            )
+        } else {
+            commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+            let datum_altitude_m = (pos - center).length() - radius_m;
+            let alt = crate::terrain_handoff::clearance_m(
+                avatar_ent,
+                Some(&cell),
+                &tf,
+                collision.active_frame.as_deref(),
+                &collision.terrain,
+                &q_parents,
+                &q_grids,
+                &q_spatial,
+            )
+            .unwrap_or(datum_altitude_m);
+            let factor = zoom_factor(zoom.delta, CAMERA_ZOOM_SENSITIVITY);
+            let direction = zoom.delta;
+            zoom.delta = 0.0;
+            let step = alt.abs().max(50.0) * (factor - 1.0);
+            let fwd = (tf.rotation * Vec3::NEG_Z).as_dvec3();
+            (pos - fwd * step, direction, direction < 0.0)
+        };
         let next = if policy == AvatarSoilCollisionPolicy::ThroughSoilAllowed {
+            collision.targets.clear(avatar_ent);
             desired_next
         } else {
-            let up_direction = if surface_relative {
-                (pos - center).normalize_or(DVec3::Y).as_vec3()
-            } else {
-                Vec3::Y
-            };
-            let Some(next) = move_avatar_with_collision(
+            let next = match move_avatar_with_collision(
                 avatar_ent,
                 child_of.parent(),
                 &cell,
                 &tf,
                 desired_next - pos,
-                up_direction,
-                std::time::Duration::from_secs(1),
-                active_frame.as_deref().map(|frame| frame.0),
-                move_and_slide.as_ref(),
-                &collision_settings,
+                collision.active_frame.as_deref().map(|frame| frame.0),
+                collision.native.as_ref(),
+                &collision.settings,
+                projection,
+                &collision.terrain,
+                collision
+                    .budget
+                    .as_deref()
+                    .map(|budget| budget.max_intervals),
+                &collision.drawn,
+                &mut collision.targets,
                 &q_parents,
                 &q_grids,
                 &q_spatial,
-            ) else {
-                warn_once!(
-                    "[avatar] safe collision movement unavailable for scroll transit; movement held"
-                );
-                continue;
+            ) {
+                Ok(position) => position,
+                Err(error) => {
+                    if let crate::locomotion::CameraMotionError::Preparation { target, .. } = &error
+                    {
+                        if let (Some(frame), Some(source), Ok(camera_radius)) = (
+                            collision.active_frame.as_deref(),
+                            collision.terrain.snapshot(),
+                            collision.settings.camera_radius(projection),
+                        ) {
+                            if let Some(to_frame) =
+                                lunco_spatial::coords::grid_transform_between_grids(
+                                    child_of.parent(),
+                                    frame.0,
+                                    &q_parents,
+                                    &q_grids,
+                                    &q_spatial,
+                                )
+                            {
+                                commands.entity(avatar_ent).try_insert(PendingCameraScroll {
+                                    source_grid: child_of.parent(),
+                                    frame: frame.0,
+                                    source,
+                                    start: pos,
+                                    end: desired_next,
+                                    frame_start: GridPos(to_frame.transform_position(pos)),
+                                    frame_end: *target,
+                                    rotation: tf.rotation,
+                                    surface_mode: surface_camera.is_some(),
+                                    settings: *collision.settings,
+                                    radius_m: camera_radius,
+                                    draw_revision: collision.drawn.revision(avatar_ent),
+                                    transition_direction,
+                                    scroll_out,
+                                });
+                            }
+                        }
+                    } else {
+                        commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+                    }
+                    report_camera_motion_error(
+                        &error,
+                        &mut policy_error,
+                        &mut diagnostics,
+                        "camera-scroll",
+                    );
+                    continue;
+                }
             };
             next
         };
+        commands.entity(avatar_ent).remove::<PendingCameraScroll>();
+        if policy_error.take().is_some() {
+            lunco_camera_core::replace_camera_diagnostic(
+                &mut diagnostics,
+                "camera-scroll",
+                "CameraNavigation",
+                None,
+            );
+        }
         write_avatar_grid_position(grid, &mut cell, &mut tf, next);
 
         // Past the orbital floor going OUT -> hand over to the celestial
@@ -226,8 +407,8 @@ pub(crate) fn freeflight_scroll_transit_system(
             avatar_ent,
             Some(&cell),
             &tf,
-            active_frame.as_deref(),
-            &terrain,
+            collision.active_frame.as_deref(),
+            &collision.terrain,
             &q_parents,
             &q_grids,
             &q_spatial,

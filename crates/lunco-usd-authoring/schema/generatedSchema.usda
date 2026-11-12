@@ -76,6 +76,10 @@ class "LunCoTerrainLayerAPI"
     float lunco:layer:regionM = 0.0
     float lunco:layer:reliefScale = 0.0
     float lunco:layer:dynamicFrac = 0.0
+    asset lunco:layer:regionalDemSource = @@
+    double lunco:layer:regionalBlendM = 0.0
+    double lunco:layer:regionalHeightOffsetM = 0.0
+    uniform token lunco:layer:localFrame = ""
 }
 
 class "LunCoShadowAPI"

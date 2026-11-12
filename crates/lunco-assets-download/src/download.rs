@@ -588,12 +588,8 @@ pub fn download_all_for_twin_with_limit(
     }
     let entries: Vec<(String, AssetEntry)> = manifest.assets.into_iter().collect();
     let label = format!("twin {}", twin_root.display());
-    let destination_root = move |entry: &AssetEntry| {
-        Some(lunco_assets_datasets::DatasetScope::twin_cache_root(
-            twin_root,
-            entry.shared,
-        ))
-    };
+    let local_cache_root = lunco_assets_core::twin_cache_dir(twin_root);
+    let destination_root = move |_entry: &AssetEntry| Some(local_cache_root.clone());
     download_entries_with_limit(&label, entries, max_parallel, settings, destination_root)
 }
 
@@ -622,8 +618,7 @@ pub fn download_one_for_twin(
         .map_err(|e| DownloadError::ManifestFailed(e.to_string()))?;
     match manifest.assets.get(asset_key) {
         Some(entry) => {
-            let dest_root =
-                lunco_assets_datasets::DatasetScope::twin_cache_root(twin_root, entry.shared);
+            let dest_root = lunco_assets_core::twin_cache_dir(twin_root);
             download_asset(entry, asset_key, settings, Some(&dest_root))
         }
         None => Err(DownloadError::ManifestFailed(format!(
@@ -704,20 +699,14 @@ fn list_manifest_with_twin(
 
     println!("Assets for {label}:");
     for (key, entry) in &manifest.assets {
-        let twin_owner_cache = twin_root
-            .map(|root| lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared));
-        let owner_cache = twin_owner_cache.as_deref().or(dest_root);
-        let dest = entry_dest_path(entry, owner_cache)?;
+        let local_cache = twin_root
+            .map(lunco_assets_core::twin_cache_dir)
+            .or_else(|| dest_root.map(Path::to_path_buf))
+            .unwrap_or_else(lunco_assets_core::cache_dir);
+        let owner_cache = lunco_assets_datasets::dataset_cache_root(&local_cache, entry.shared);
+        let dest = entry_dest_path(entry, Some(&local_cache))?;
         let status = if let Some(process) = &entry.process {
-            let default_cache;
-            let process_cache = match owner_cache {
-                Some(root) => Some(root),
-                None => {
-                    default_cache = lunco_assets_core::cache_dir();
-                    Some(default_cache.as_path())
-                }
-            };
-            let artifact = process_output_path(process, process_cache, twin_root)?;
+            let artifact = process_output_path(process, Some(&owner_cache), twin_root)?;
             if processed_output_present(
                 &artifact,
                 process,

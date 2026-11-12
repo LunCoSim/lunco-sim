@@ -23,7 +23,7 @@ or compatibility shim because the first search was incomplete.
 | Scene structure, identity, topology, frames, connections, component parameters | USD | Rust projects the composed stage; it does not invent missing topology |
 | Continuous equations, state, control laws, filters, physical networks | Modelica | Rumoca compiles and steps the model |
 | Rigid-body collision, contacts, forces, torques, joints | Avian through USD-authored physics | Rust exposes the engine's generic mechanics and executes them |
-| Mission phases, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
+| Mission sequencing, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Asset URI algebra | `lunco-assets-path` | Logical addresses preserve scheme authority and reject root escape at admission |
 | Native asset resolution and bytes | `lunco-assets-core` and `lunco-storage` | One root order and first-entry selection; adapters supply source context, never another cache search |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
@@ -46,9 +46,34 @@ schedule when inputs can be captured by revision. Admit results only at an
 owner boundary in stable identity order. Keep live-world hooks and physics
 inside their deterministic schedule. The required Rhai USD composition policy
 decides incomplete initial stage and newly mounted reference closures before
-their respective admission and projection boundaries. A Rhai scenario that
-depends on Modelica
-ports or events declares the participating entity ids in
+their respective admission and projection boundaries. Async preparation waits
+on owner-published dependency state and revisions; it does not turn unresolved
+inputs into terminal errors or poll for readiness. Use the shared bounded
+admission for independent preparation, while stateful Modelica/FMI actors keep
+their ordered owner channels and commit accepted work through
+`SimulationProgress` and `SimulationCompletions`. The FMI importer declines
+Event Mode and early return until the master can synchronize every participant
+at intermediate communication points. Modelica source-root projection mirrors
+use the same shared async admission. On queue pressure, retain the exact
+worker response and operation lease at the ordered response boundary and retry
+after shared capacity or source-operation revisions change; native work uses
+the bounded queue and browser work retains an external-work permit through
+completion. The browser worker returns the parsed documents it accepted so the
+page does not parse source roots again. Its authoring-session mirror still runs
+as a cooperative page task; moving that session and its readers to the worker
+remains TODO because the permit bounds ownership but does not offload execution.
+The mirror records an explicit failure if the accepted source set installs no
+declarations in the authoring session.
+Reserve and release operation leases from response handling with nonblocking
+locks; sample the operation revision before each attempt and defer the same
+ordered response until shared capacity or source-operation revisions change.
+Reservations and source-operation gate releases advance that revision,
+including stale or already-retired operations. Do not add a mirror path that
+bypasses admission or adds a parallel queue. Terminal admission failures must
+reach the engine through its wakeable queue without blocking the response
+system on the engine mutex. A
+Rhai scenario that depends on Modelica ports or events declares the
+participating entity ids in
 `simulation_dependencies(me, ctx)`, where `ctx` is the validated scenario
 parameter map. The hook returns a map with `modelica_entities: [ids]`,
 `entity_reads: [ids]`, `entity_writes: [ids]`,
@@ -215,9 +240,19 @@ replacement is admitted. Reopening keeps logical source identity but receives
 a fresh load authority. Resolve authored dependencies through
 `lunco-assets-core::asset_path::load_asset_path` with the admitted live origin;
 retired origins fail before rebinding, and origin-free requests keep exact
-transport authority. Background file snapshots resolve logical source names
-and fence publication by scope and mount revision. See
+transport authority. Composed USD asset facts may retain authored logical
+source identities; `SceneDatasetRequirements` resolves those against the live
+mount before reading Twin dataset metadata. A retired authority remains invalid
+and never falls through to a same-named logical source. Background file
+snapshots resolve logical source names and fence publication by scope and mount
+revision. See
 [`61-scene-lifecycle-and-teardown.md`](../../docs/architecture/61-scene-lifecycle-and-teardown.md).
+Present scene paths through `asset_path::source_uri` or
+`source_uri_for_address`, and admit user scene addresses through
+`asset_path::load_source_uri`. `LoadScene` rejects internal mount authorities,
+even while live; loading notices, scenario menus and persisted current-scene
+paths use the stable source URI. Verify repeat load/reset/restart and direct
+lease rejection with `scripts/api/test_twin_source_uri.py`.
 
 Register scene-derived state with `AppSceneExt::init_scene_resource::<R>()` and
 implement `SceneResource` at its owner. The default reset drops owned caches and
@@ -280,6 +315,9 @@ available during loading. Callback commands also pin the exact
 `ToolHookBinding`. Retired targets reject through the shared terminal-result
 owner. `RuntimeExecutionContext.target_twin_id` retains the target separately
 from execution scope and clock, including nested commands.
+Scene loading keeps asset-cache leases internal: `SimulationProgress` reasons
+stay generic, and `/api/ready` `scene_load` labels convert through
+`source_uri_for_address` before they reach status surfaces.
 Queue admission publishes `CommandOutcome::Pending`; only execution or owner
 retirement may publish the terminal result.
 Parameter drafts pin their preview and document; document closure and preview
@@ -534,9 +572,23 @@ and an isolated Rhai hook reads it from the immutable `runtime_context` map.
 The shared hook registry rejects a clock that does not belong to its cycle,
 missing or invalid clock samples, and non-zero Core/Application generations
 before invoking either Rhai or native policy.
-`twin.lifecycle` uses the mounted Twin's `TwinId` as its `Twin/Lifecycle`
-generation, with explicit `Start`, `Event`, or `Stop` phase and no elapsed
-clock; `policy_status().lifecycle.runtime_context` exposes the exact stamp.
+`twin.lifecycle` uses `Twin/Lifecycle` with generation zero, an explicit
+`Start`, `Event`, or `Stop` phase, and no elapsed clock. The typed runtime
+retains the workspace Twin ID for ownership checks; Twin-scoped Rhai context
+and `policy_status()` do not expose that ID. Twin-scoped typed query, command,
+hook, and policy-status results also omit workspace selector fields
+recursively. Reflected `get()` and `get_setting()` apply the same projection to
+compound values and hide direct selector-field reads. Both `ScriptingCatalog`
+and `ScriptComplete` hide workspace selectors from Twin-scoped command and query
+discovery. Twin query response descriptions are withheld. Twin settings and
+engine exposure reads use the same projection; direct workspace identity paths
+return no value. Script values and diagnostics translate private mount
+authorities to stable source identities and redact unknown opaque tokens when
+lease metadata is unavailable.
+Rhai callers select only the needed catalog `sections` to stay within the
+shared value limit. Application scripts and APIs retain workspace selectors,
+while the internal mount authority remains private. Reflected command targets
+bind the ID inside Rust from the active owner.
 Rust call sites without a classified owner use the explicit unclassified hook
 entry point. The physics escape policy is a scheduled core simulation hook and
 receives its `Behavior` context from `SimTick` and `Time<Fixed>`; its authored
@@ -596,7 +648,7 @@ analyses do not hold simulation progress. Browser worker transport is explicit
 and remains unsupported by this native dispatcher. The Twin analysis producer
 registers `sysml.twin-analysis` and publishes each mounted Twin's state under
 its exact name. A scenario that needs those facts lists
-`#{ owner: "sysml.twin-analysis", identity: twin_name() }` in
+`#{ owner: "sysml.twin-analysis", identity: twin_source_identity() }` in
 `required_inputs`; only that scenario's activation hold waits for the async
 analysis. The analysis worker itself remains read-only and never acquires a
 world-time hold.
@@ -1232,10 +1284,15 @@ current default.
   `Placement` annotations through `ModelicaOp::SetPlacement`. A generated
   document stays read-only because USD plus Rhai owns its source; expose
   `Duplicate to edit` instead of accepting a non-persistent drag.
-- Keep projection responsive: Modelica root loading, parse, and inheritance/icon
-  walks run off the UI thread. UI readers use completed caches or a nonblocking
-  lock and show an explicit loading/error state until the generic completion
-  event requests reprojection. Never hold the engine mutex across painting.
+- Keep projection responsive: resolve missing Modelica namespaces through
+  `SourceRootRegistry` and `admit_compile_roots`, which dispatches the registered
+  source set through the ordered Modelica worker. The authoring engine mirrors
+  the worker-accepted parsed documents under a source-operation lease and
+  reports terminal mirror failures. Do not add direct package reads or a
+  second parser to the canvas path. UI readers use completed caches or a
+  nonblocking lock and keep the last scene visible until the typed source-root
+  event requests reprojection.
+  Never hold the engine mutex across painting.
 - Validate the returned generated source as a generic strict AST contract:
   exact root name and boundary, required `source`, `units`, `layout.units`,
   `layout.members`, `source_roots`, and `member_output_aliases` fields, no

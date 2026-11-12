@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rendered contact, route, trail, and bounded-cover regression on a real Twin."""
+"""Independent physics support, camera covers and route/trail regression on a real Twin."""
 from __future__ import annotations
 import argparse
 import json
@@ -15,6 +15,7 @@ def main():
     p.add_argument('--scene', required=True)
     p.add_argument('--body-path', required=True)
     p.add_argument('--route-path', required=True)
+    p.add_argument('--camera-path', required=True)
     p.add_argument('--port', type=int, default=4794)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--no-vsync', action='store_true', help='diagnostic uncapped presentation')
@@ -70,11 +71,13 @@ def main():
             while time.monotonic() < deadline:
                 s = execute('TerrainLodStatus')
                 stream = s['stream']
-                if (s['contacts'] and all(t['ready'] and t['drawn'] and t['pinned'] for t in s['contacts'])
+                if (s['contacts'] and all(t['ready'] for t in s['contacts'])
+                        and s['camera_cover'] and all(v['ready'] and v['wanted'] == v['resident']
+                            and v['drawn'] > 0 for v in s['camera_cover'])
                         and stream['wanted'] == stream['resident'] and stream['pending'] == 0):
                     return s
                 time.sleep(.15)
-            raise RuntimeError(f"contact cover did not settle: {s['stream']}; contacts={s['contacts']}; cameras={s['camera_cover']}")
+            raise RuntimeError(f"physical support and camera covers did not settle: {s['stream']}; contacts={s['contacts']}; cameras={s['camera_cover']}")
         def route_view():
             deadline = time.monotonic() + 30
             route_path = json.dumps(args.route_path)
@@ -83,7 +86,13 @@ def main():
                 code = f'let d=query("QueryUsdPrim", #{{path:{route_path}}}).doc_id; print(find_path_in_document(d,waypoint_editor::ribbon_geometry_path({route_path})));'
                 curve_id = int(rhai(code)['stdout'].strip())
                 if curve_id > 0:
-                    view = execute('InspectUsdCurveView', doc_id=doc_id, entity_id=curve_id)
+                    try:
+                        view = execute('InspectUsdCurveView', doc_id=doc_id, entity_id=curve_id)
+                    except RuntimeError as error:
+                        if 'HTTP 404' not in str(error) or 'has no build result' not in str(error):
+                            raise
+                        time.sleep(.15)
+                        continue
                     if view['state'] == 'failed':
                         raise RuntimeError(view)
                     if view['state'] == 'ready' and view['displayed_surface_binding_count'] > 0:
@@ -93,16 +102,35 @@ def main():
         def phase(name, trails):
             status = settle()
             doc_id, curve_id = route_view()
+            view = next((row for row in status['camera_cover']
+                         if row['source'] in {item['source'] for item in status['contacts']}), None)
+            if view is None:
+                raise RuntimeError('active camera has no source shared with physical support')
+            body_id = int(rhai(f'print(find_path({json.dumps(args.body_path)}));')['stdout'].strip())
+            if body_id <= 0:
+                raise RuntimeError('physical body is unavailable')
             run_authored_scenario(session, 'lunco://scenarios/tests/terrain_contact_visual.rhai',
-                title='TERRAIN CONTACT VISUAL', check_count=11,
-                params={'body_path': args.body_path, 'route_path': args.route_path,
-                        'require_trails': trails, 'doc_id': doc_id, 'curve_id': curve_id, 'require_finer': name == 'close-camera'}, timeout_s=90)
+                title='TERRAIN PHYSICS AND CAMERA ANNOTATIONS', check_count=9,
+                params={'body_id': body_id, 'source_raw': view['source'], 'camera_raw': view['camera'],
+                        'require_trails': trails, 'doc_id': doc_id, 'curve_id': curve_id}, timeout_s=90)
             time.sleep(.3)
             session.capture_screenshot(out / f'{name}.png')
             rows.append({'phase': name, 'config': status['config'], 'stream': status['stream'],
                          'contacts': status['contacts'], 'camera_cover': status['camera_cover'], 'performance': execute('EnginePerformance')})
             (out / 'validation.json').write_text(json.dumps(cohort, indent=2))
             assert_render_log_clean(log)
+        # The route's presentation is published by its running scenario. Wait
+        # for the scene to mount before starting time so scene activation cannot
+        # overwrite the transport request.
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            if int(rhai(f'find_path({json.dumps(args.route_path)})')['stdout'].strip()) > 0:
+                break
+            time.sleep(.2)
+        else:
+            raise RuntimeError('route scene did not mount')
+        execute('SetUserCamera', name=args.camera_path)
+        execute('SetTimeTransport', playing=True)
         phase('initial', False)
         body = json.dumps(args.body_path)
         body_id = int(rhai(f'print(find_path({body}));')['stdout'].strip())
@@ -171,12 +199,12 @@ def main():
                 writes=[['throttle', 0.0], ['steer', 0.0], ['brake', 1.0]])
         time.sleep(2)
         phase('post-drive', True)
-        # A lower discretionary budget/depth must not erase physical ground detail.
+        # Graphics changes must preserve independent physical support and annotations.
         execute('SetTerrainRenderingQuality', max_depth=6, tile_resolution=33, tile_budget=64)
         phase('constrained-budget', True)
         execute('SetTerrainRenderingQuality', max_depth=10, tile_resolution=65, tile_budget=256)
         phase('finer-camera', True)
-        execute('SetUserCamera', name='/Traverse/Avatar')
+        execute('SetUserCamera', name=args.camera_path)
         execute('FollowTarget', target=body_id)
         execute('SetCameraFollow', distance_m=150.0, height_m=80.0)
         time.sleep(1)
@@ -192,7 +220,7 @@ def main():
         raise RuntimeError('owned API port was not released')
     cohort.update(diagnostics=diagnostics, port_released=True)
     (out / 'validation.json').write_text(json.dumps(cohort, indent=2))
-    print('PASS contact geometry, route/trail bindings, drive, constrained graphics, owned Exit', flush=True)
+    print('PASS independent physics support, camera covers, route/trails, native-contact drive, owned Exit', flush=True)
 
 if __name__ == '__main__':
     main()

@@ -45,7 +45,10 @@ pub mod view;
 pub mod viz;
 #[cfg(feature = "ui")]
 pub use ui::graph_hud::{
-    CreateGraphHud, RemoveGraphHud, SetGraphHud, draw_graph_hud, graph_hud_menu_ui,
+    CreateGraphHud, GraphHudSnapshot, RemoveGraphHud, SetGraphHud, draw_graph_hud,
+    graph_hud_menu_ui, workspace_ids as graph_hud_workspace_ids,
+    workspace_revision as graph_hud_workspace_revision,
+    workspace_snapshots as graph_hud_workspace_snapshots,
 };
 #[cfg(feature = "ui")]
 pub use ui::signal_grid::{ConfigureSignalGrid, SignalGridEntry};
@@ -59,10 +62,10 @@ pub use panel::{VIZ_PANEL_KIND, VizPanel};
 #[cfg(feature = "ui")]
 pub use registry::{AppVizExt, VisualizationRegistry, VizFitRequests, VizKindCatalog};
 pub use signal::{
-    PersistedSignalRef, ScalarHistory, ScalarHistorySnapshot, ScalarSample, SignalExposure,
-    SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalType, TelemetryFocus,
-    compact_channel_label, display_channel_label, humanize_identifier, operator_channel_label,
-    operator_identifier_label,
+    PersistedSignalRef, ScalarHistory, ScalarHistorySnapshot, ScalarSample,
+    SignalDescriptorsChanged, SignalExposure, SignalMeta, SignalPresentation, SignalRef,
+    SignalRegistry, SignalType, TelemetryFocus, compact_channel_label, display_channel_label,
+    humanize_identifier, operator_channel_label, operator_identifier_label,
 };
 #[cfg(feature = "ui")]
 pub use telemetry_browser::{

@@ -24,6 +24,13 @@ pub enum RasterProjection {
         /// Natural origin longitude, degrees east.
         longitude_deg: f64,
     },
+    /// Spherical orthographic projection centred at the given site.
+    Orthographic {
+        /// Latitude of the tangent point, degrees.
+        latitude_deg: f64,
+        /// Longitude of the tangent point, degrees east.
+        longitude_deg: f64,
+    },
 }
 
 /// Source sample placement and spherical CRS, independent of raster sample type.
@@ -70,6 +77,24 @@ impl SphericalRaster {
                     self.radius_m * (latitude_deg - origin_lat).to_radians(),
                 )
             }
+            RasterProjection::Orthographic {
+                latitude_deg,
+                longitude_deg: origin_lon,
+            } => {
+                let center_lat = latitude_deg.to_radians();
+                let delta_lon = (longitude_deg - origin_lon).to_radians();
+                let visible = center_lat.sin() * latitude.sin()
+                    + center_lat.cos() * latitude.cos() * delta_lon.cos();
+                if visible < 0.0 {
+                    return [f64::NAN, f64::NAN];
+                }
+                (
+                    self.radius_m * latitude.cos() * delta_lon.sin(),
+                    self.radius_m
+                        * (center_lat.cos() * latitude.sin()
+                            - center_lat.sin() * latitude.cos() * delta_lon.cos()),
+                )
+            }
         };
         [
             (x + self.false_origin_m[0] - self.origin_m[0]) / self.pixel_size_m[0],
@@ -85,6 +110,43 @@ impl SphericalRaster {
                 .rem_euclid(360.0),
         ]
     }
+}
+
+/// Invert the spherical orthographic projection at a site tangent plane.
+/// Returns `None` for invalid inputs or points outside the visible hemisphere.
+pub fn orthographic_geographic_offset(
+    radius_m: f64,
+    lat_deg: f64,
+    lon_deg: f64,
+    east: f64,
+    north: f64,
+) -> Option<[f64; 2]> {
+    if !radius_m.is_finite()
+        || radius_m <= 0.0
+        || !lat_deg.is_finite()
+        || lat_deg.abs() > 90.0
+        || !lon_deg.is_finite()
+        || !east.is_finite()
+        || !north.is_finite()
+    {
+        return None;
+    }
+    let x = east / radius_m;
+    let y = north / radius_m;
+    let radial_squared = 1.0 - x * x - y * y;
+    if radial_squared < 0.0 {
+        return None;
+    }
+    let z = radial_squared.sqrt();
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let ux = z * lat.cos() * lon.cos() - x * lon.sin() - y * lat.sin() * lon.cos();
+    let uy = z * lat.cos() * lon.sin() + x * lon.cos() - y * lat.sin() * lon.sin();
+    let uz = z * lat.sin() + y * lat.cos();
+    Some([
+        uz.clamp(-1.0, 1.0).asin().to_degrees(),
+        uy.atan2(ux).to_degrees().rem_euclid(360.0),
+    ])
 }
 
 /// Read a spherical projected CRS. A plain TIFF has no CRS; incomplete,
@@ -170,6 +232,16 @@ pub fn read_spherical_raster<R: Read + Seek>(
                 longitude_deg: required(KEY_PROJ_CENTER_LONG)?,
             }
         }
+        Some(COORD_TRANS_ORTHOGRAPHIC) => {
+            let latitude_deg = required(KEY_PROJ_CENTER_LAT)?;
+            if latitude_deg.abs() > 90.0 {
+                return Err(GeoReadError::Malformed("invalid orthographic origin"));
+            }
+            RasterProjection::Orthographic {
+                latitude_deg,
+                longitude_deg: required(KEY_PROJ_CENTER_LONG)?,
+            }
+        }
         _ => {
             return Err(GeoReadError::Malformed(
                 "unsupported spherical raster projection",
@@ -216,6 +288,58 @@ pub fn read_spherical_raster<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn orthographic_roundtrip_preserves_regional_tangent_coordinates() {
+        let radius = 1_737_400.0;
+        let raster = SphericalRaster {
+            radius_m: radius,
+            pixel_size_m: [1.0, 1.0],
+            origin_m: [0.0, 0.0],
+            false_origin_m: [0.0, 0.0],
+            projection: RasterProjection::Orthographic {
+                latitude_deg: -84.72672255,
+                longitude_deg: 29.14428685,
+            },
+        };
+        let [lat, lon] =
+            orthographic_geographic_offset(radius, -84.72672255, 29.14428685, 30_000.0, 30_000.0)
+                .unwrap();
+        let [x, row] = raster.pixel_at(lat, lon);
+        assert!((x - 30_000.0).abs() < 1e-7);
+        assert!((row + 30_000.0).abs() < 1e-7);
+        let [lat, lon] =
+            orthographic_geographic_offset(radius, 0.0, 0.0, radius / 2.0, 0.0).unwrap();
+        assert!(lat.abs() < 1e-10 && (lon - 30.0).abs() < 1e-10);
+        assert!(orthographic_geographic_offset(radius, 0.0, 0.0, radius, 1.0).is_none());
+    }
+
+    #[test]
+    fn orthographic_geotiff_tags_roundtrip_projection() {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        {
+            let mut encoder = tiff::encoder::TiffEncoder::new(&mut bytes).unwrap();
+            let mut image = encoder
+                .new_image::<tiff::encoder::colortype::Gray64Float>(2, 2)
+                .unwrap();
+            let geo = GeoTransform::centred_square(20_000.0, 2, 1_737_400.0, -84.7, 29.1)
+                .with_projection(LocalProjection::Orthographic)
+                .with_frame(LunarFrame::MoonMe);
+            write_geo_tags(image.encoder(), &geo, "Moon 2000").unwrap();
+            image.write_data(&[0.0; 4]).unwrap();
+        }
+        let mut decoder =
+            tiff::decoder::Decoder::new(std::io::Cursor::new(bytes.into_inner())).unwrap();
+        let transform = read_geo_tags(&mut decoder).unwrap();
+        assert_eq!(transform.projection, Some(LocalProjection::Orthographic));
+        assert_eq!(transform.frame, Some(LunarFrame::MoonMe));
+        let raster = read_spherical_raster(&mut decoder).unwrap().unwrap();
+        assert!(matches!(
+            raster.projection,
+            RasterProjection::Orthographic { .. }
+        ));
+        let [x, y] = raster.pixel_at(-84.7, 29.1);
+        assert!((x - 0.5).abs() < 1e-10 && (y - 0.5).abs() < 1e-10);
+    }
     #[test]
     fn projected_reader_roundtrips_nodes_and_rejects_matrix_transforms() {
         for matrix in [false, true] {

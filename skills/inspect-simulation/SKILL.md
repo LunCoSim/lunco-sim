@@ -177,9 +177,11 @@ nonzero producer id for the same external caller, then re-read. Use
 `ReleasePort` / `ReleaseControl` with the same producer id when releasing a
 live hold to return an input to authored wiring. Apply a safe state with
 explicit named `SetPorts` values and keep that hold active while it is wanted.
-Controller holds outrank Twin/Simulation program setpoints at the actual input
-commit, including inputs without wires. A lower-priority program command can be
-accepted and retained without replacing the current controlled value. All held
+Controller holds outrank Twin Lifecycle/Simulation program setpoints at the
+actual input commit, including inputs without wires. Lifecycle stop setpoints
+retain program ownership through their ordered fixed-tick admission. A
+lower-priority program command can be accepted and retained without replacing
+the current controlled value. All held
 targets require unique nonzero `GlobalEntityId` values; missing or duplicate
 identity reports `cosim-held-input-identity-invalid` before exchange writes. Held
 inputs are levels: an unwired `force_x`, `torque_z`, or `force_command` continues
@@ -284,19 +286,25 @@ readiness signal. Streamed Lit terrain also waits for its USD material source
 projection and any required off-thread derived surface/normal product before
 exposing the initial tile set. During startup, a status entry may intentionally
 remain live at `resident == wanted` while `pending > 0`: that is render-material
-publication, not a completed tile bar. The query's `derived` object reads the
+publication or outstanding latest-selection work. Require `camera_cover.ready`
+for the latest settled generation; `presented_ready` only describes retained
+drawable geometry. `stream.selection_pending` includes unqueued follow-up and new
+outputs. The query's `derived` object reads the
 terrain owner's visual-map lifecycle: full visual preparation requires
 `active == false`, `pending == 0`, and `ready == total`. This remains independent
 of simulation readiness. Static USD DEM terrain keeps its `UsdShade`
 appearance intent on the terrain owner while the generated mesh is assembled.
 
 For rover/terrain contact, `TerrainLodStatus.contacts` reports the physics-owned
-support nodes and each matching visual tile's readiness, drawing and consumed
-morph pin. A settled camera cover alone does not prove support fidelity. Use
-`include_geometry` and `mesh_entity` to inspect the retained contact mesh, then
-compare interior triangle points with native `Raycast` contacts. Route and wheel
-marks must remain bound to these terrain tiles through the existing annotation
-texture; use `InspectUsdCurveView` and `InspectVehicleTrail` alongside captures.
+support nodes, native realization readiness and physical sampling lattice.
+Each `camera_cover` row separately reports one consumed output's visual cover;
+neither residency result establishes the other. Use `include_geometry` and
+`mesh_entity` to inspect a retained visual mesh with its owning camera's stitch
+and morph context. Native `Raycast` contacts establish physical support.
+Route and wheel marks use the existing source-bound annotation texture; inspect
+`InspectUsdCurveView` and `InspectVehicleTrail` alongside captures. Exercise a
+remote fixed main camera and a moving rover feed together with
+`scripts/api/test_camera_terrain_views.py`.
 
 For an interactive USD edit, query `InspectUsdViewport` before describing or
 changing the visible item, then correlate its explicit view/preview handle with

@@ -248,13 +248,28 @@ consumer pass. A single script instance must not run mutable `this` state on mul
 cycles; UI, Interaction, and Presentation work needs its own owner and state,
 with typed messages across cycles.
 
-Scenario ownership follows its explicit host marker. Twin-owned scenarios expose
-the stable Twin ID and optional scene generation in `execution_context()`
-(generation zero explicitly denotes no committed scene generation) and are stopped
-with their source document and asset handles on `TwinClosed`. Scene-owned
-programs are stopped when their USD scene is replaced; a USD script can carry
-both markers. Unmarked application scenarios keep generation zero across Twin
-reloads, and Core/Application policy engines remain in their own owner scope.
+Scenario ownership follows its explicit host marker. Twin-owned scenarios keep
+their workspace Twin ID in the typed runtime for ownership and command binding,
+but Twin-scoped `execution_context()` omits that app-level identity. It exposes
+the optional scene generation (zero explicitly denotes no committed scene
+generation). Twin-scoped `query()`, command, hook, and policy-status results also
+omit workspace Twin selectors, including nested selectors; application-scoped
+scripts retain them. Twin-scoped `ScriptingCatalog` and `ScriptComplete` also
+hide workspace identity selectors from command and query discovery. Query
+response descriptions are withheld in Twin scope. Reflected `get()` and
+`get_setting()` reads apply the same rule to compound values and direct selector
+fields. `get_twin_setting()` and `get_exposure()` apply the same projection;
+direct workspace Twin identity paths return no value. Script values and
+diagnostics translate known mount authorities to stable source identities and
+redact unknown opaque mount tokens.
+Rhai scripts that query
+`ScriptingCatalog` should pass a `sections` array such as
+`#{sections: ["commands", "queries"]}`; omitting it returns the full catalog
+for application-level discovery. Twin-owned scenarios stop with their source document and asset
+handles on `TwinClosed`. Scene-owned programs stop when their USD scene is
+replaced; a USD script can carry both markers. Unmarked application scenarios
+keep generation zero across Twin reloads, and Core/Application policy engines
+remain in their own owner scope.
 A committed Clear can carry a lifecycle generation with no mounted payload;
 use `InspectWorkbench.scene_mounted` when that distinction matters to UI policy.
 Launching a Twin tutorial creates an isolated host, so it cannot replace an
@@ -273,7 +288,7 @@ Keep these lifecycle stages distinct instead of adding overlapping `init` or
 evaluation constructs per-instance state once those inputs are ready, and
 `on_start` runs once at the ready boundary. Dependency planning must not read
 facts from its required inputs before admission. For active Twin analysis use
-`#{owner: "sysml.twin-analysis", identity: twin_name()}`. Select source-backed
+`#{owner: "sysml.twin-analysis", identity: twin_source_identity()}`. Select source-backed
 identities after readiness and commit their live access through
 `track_entity_read`/`track_entity_write` before accessing them.
 `on_stop` owns teardown. `on_event`
@@ -478,7 +493,7 @@ You'll use these constantly (the complete table is in
 | `query(name, #{params})` | **READ** — call a read-only query provider (Raycast, Nearest, GroundHeight, `CausalTrace`…). Successful data is returned directly; no-data is `()`; failures return `#{ok:false,error}`. |
 | `query("ListSpawnCatalog", #{})` | **READ** — discover the authoritative `entry_id`, name, category, default transform, source, and `origin` (`builtin` or named `twin`) for assets accepted by `cmd("SpawnEntity", ...)`. |
 | `query("ValidateTwin", #{path: "/work/rover-twin", policy: "warn"})` | **READ** — admit Twin-wide namespace preparation; poll with only the returned `operation_id`, consume `ready.report` or terminal `failed.diagnostic`. Collisions default to warnings; `policy: "error"` fails them. |
-| `asset_source_relative_uri(document, relative)` | **READ** — resolve a safe document-relative asset while preserving its registered source authority (`twin://…`, `lunco://…`); URI algebra only, with no filesystem read. |
+| `asset_source_relative_uri(document, relative)` | **READ** — resolve a safe document-relative asset while preserving its stable source identity (`twin://…`, `lunco://…`); URI algebra only, with no filesystem read. |
 | `get(id, "Comp.field")` / `set(id, "Comp.field", v)` | reflected component read/write (vectors → `[x,y,z]`); scalar co-simulation names use the canonical `PortRegistry` surface. |
 | `find(name)` / `world_pos(id)` | locate an entity; read its f64 active-frame array vector. Use `world_point(id)` when the value crosses a position or authoring boundary. |
 | `world_pos3(id)` / `world_forward3(id)` / `world_rotation_quat(id)` | native glam `Vec3`/`Quat` pose for hot loops; use `vec3_array`/`quat_array` when producing a wire/report value. |
@@ -542,13 +557,14 @@ Twin `RunLint` returns a queued Ack with its lint revision, then uses the same
 bounded async source preparation on native and mounted browser Twins. Follow
 that revision with `GetDiagnostics`; its scope becomes ready or failed.
 Superseded or retired preparations cannot replace a newer report.
-| `asset_source_relative_uri(document, relative)` | string \| error | resolve a safe document-relative asset while preserving the document's registered source authority; URI algebra only, with no filesystem read |
+| `asset_source_relative_uri(document, relative)` | string \| error | resolve a safe document-relative asset while preserving its stable source identity; URI algebra only, with no filesystem read |
 | `get(id, "Comp.field")` | value \| `()` | reflected component **read** (vectors → `[x,y,z]`, quats → `[x,y,z,w]`, structs → maps) |
 | `set(id, "Comp.field", value)` | bool | host-side **tuning write** — reflected component field or canonical scalar co-simulation port; supported field types only; not replicated, undoable, or a persistent port hold; `false` on bad path/type |
 | `get_setting("Res.field")` | value \| `()` | reflected **resource read** — global settings/config live in resources, not components |
 | `set_setting("Res.field", value)` | bool | host-side **tuning write** to a supported reflected resource field; not replicated or undoable; `false` on bad path/type |
 | `get_twin_setting("namespace.key")` | value \| `()` | read a scalar from the active Twin manifest's generic `[settings]` table |
-| `twin_name()` | string \| error | current `twin://` mount authority from the asset registry; empty only when no Twin is active. Reopening assigns a fresh authority; use this value for Twin source queries, never reconstruct it from the manifest name |
+| `twin_source_identity()` | string | stable source component for the active Twin's `twin://` URI, or an empty string when none is active |
+| `twin_display_name()` | string | human-readable manifest or folder name for UI and messages; empty when no Twin is active |
 | `set_twin_setting("namespace.key", value)` | bool | persist a scalar in the active Twin manifest through the generic `SetTwinSetting` command |
 | `get_exposure("namespace", "property")` | value \| `()` | read one raw engine capability value; Rhai owns selection and presentation policy |
 | `world_pos(id)` | `[x,y,z]` \| `()` | f64 active-frame position; independent of camera recentering and celestial ancestors |
@@ -572,7 +588,7 @@ Superseded or retired preparations cannot replace a newer report.
 | `emit(name, value?)` | bool | fire a `TelemetryEvent` (delivered to `on_event` on the next scenario pass) |
 | `intent_edge(target, intent, edge)` / `intent_pulse(target, intent)` | command result | emit one target-scoped semantic edge; the runtime publishes it as `intent.edge` with a correlation id usable by `CausalTrace` |
 | `sim_tick()` / `dt()` / `elapsed_seconds()` | i64 / f64 / f64 | fixed simulation clock; Rhai error outside the simulation cycle |
-| `execution_context()` | map | read-only owner scope, stable Twin ID when Twin-owned, cycle, phase, selected clock sample, sequence, and event producer stamp; scope, Twin ID, cycle, and generation are unit when no owner route exists |
+| `execution_context()` | map | read-only owner scope, cycle, phase, selected clock sample, sequence, and event producer stamp; Twin-scoped maps omit workspace Twin identity fields, while an unclassified route has unit scope, cycle, and generation |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a stable sequence-free seed |
 | `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |
 | `detach_joint(id)` | bool | detach an entity through the generic `DetachJoint` command; ordinary entities use normal removal, while joint entities release their rigid link through the solver lifecycle |
@@ -731,8 +747,9 @@ The shared `assets` library reads declarations through `ListDatasets`.
 `assets::bake_scope(scope)` queues all idle processing declarations in one
 scope. The native worker owns source resolution, cancellation, bake keys, and
 atomic publication; query `ListDatasets` to read each operation's live state.
-Scope selectors use `DatasetScope::id()`: `engine` or `twin:<name>`, matching
-the query's returned `scope` field. Unknown scopes reject explicitly. Use
+Scope selectors use `DatasetScope::id()`: `engine` or `twin:<source_identity>`,
+matching the query's returned `scope` field. UUID-backed Twins use
+`uuid-<simple-uuid>`. Unknown scopes reject explicitly. Use
 `assets::request_recommended(scope)` for idle recommendations; active and
 installed entries are excluded, and an empty request selection reports an error.
 
@@ -805,11 +822,11 @@ generic hook registry:
 
 For a deterministic audit, query `InspectUsdViewport` before and after the
 edit. Its `stage_asset_path` and sorted `recipe_layers` show the exact layer
-closure used by each preview. A file opened from a registered Twin is always
-addressed with that Twin's assigned `twin://` authority; only a file outside a
-registered Twin receives a synthetic viewport authority. This prevents a
-component preview from silently becoming a different asset identity than the
-assembly it is meant to update.
+closure used by each preview. A file opened from a registered Twin keeps its
+stable `twin://` source URI. The asset owner retains the exact mount lease for
+the preview; only a file outside a registered Twin receives a synthetic
+viewport source identity. This prevents a component preview from silently
+becoming a different asset identity than the assembly it is meant to update.
 
 ```rhai
 bind_policy("usd.component_refresh", "decide_refresh", #"
@@ -1514,7 +1531,7 @@ production contract is exercised by
 |---|---|
 | `ScriptStatus { target }` | *Is it healthy?* — compile/runtime diagnostics (state, ok, located errors) |
 | `ScriptInspect { target }` | *What is it doing?* — live `this` state, defined hooks, generation, paused/running, plus the status block |
-| `ScriptingCatalog` | the full callable surface for external authoring clients; Rhai discovery uses bounded `ScriptComplete { prefix, limit }` over the same owner |
+| `ScriptingCatalog` | the full callable surface for external authoring clients; Rhai callers can select sections with `sections: ["commands", "queries"]`, and completion uses bounded `ScriptComplete { prefix, limit }` over the same owner |
 
 ## K. Debugging, Diagnostics & Error Handling
 

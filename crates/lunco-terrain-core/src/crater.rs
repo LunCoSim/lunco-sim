@@ -224,10 +224,10 @@ impl Crater {
 /// Rim-lip Gaussian: centre and width in normalised radial distance. The
 /// narrowest crater feature — first to need band-limiting under coarse sampling.
 const RIM_CENTER: f64 = 0.98;
-const RIM_SIGMA: f64 = 0.14;
+pub(crate) const RIM_SIGMA: f64 = 0.14;
 /// Ejecta-apron Gaussian: centre, width, and amplitude as a fraction of rim height.
 const APRON_CENTER: f64 = 1.15;
-const APRON_SIGMA: f64 = 0.30;
+pub(crate) const APRON_SIGMA: f64 = 0.30;
 pub(crate) const APRON_FRAC: f64 = 0.25;
 
 /// Gaussian bump `exp(−((d−c)/σ)²)`.
@@ -246,8 +246,8 @@ pub(crate) fn radial_bounds(rect: [f64; 4], center: [f64; 2], radius: f64) -> [f
         .hypot((center[1] - rect[1]).abs().max((center[1] - rect[3]).abs()));
     [near / radius, far / radius]
 }
-/// Enclose the monotone bowl and each Gaussian separately. Gaussian amplitude
-/// and width are supplied by the owning profile's sampling convention.
+/// Enclose the total radial profile, retaining cancellation between bowl, rim
+/// and apron. Gaussian amplitude/width follow the owning sampling convention.
 pub(crate) fn profile_bounds(
     d: [f64; 2],
     depth: f64,
@@ -255,6 +255,13 @@ pub(crate) fn profile_bounds(
     rim: [f64; 2],
     apron: [f64; 2],
 ) -> [f64; 2] {
+    // The bowl meets the rim continuously at radius one, with distinct
+    // one-sided derivatives. Each side gets its own monotonicity certificate.
+    if d[0] < 1.0 && d[1] > 1.0 {
+        let left = profile_bounds([d[0], 1.0], depth, power, rim, apron);
+        let right = profile_bounds([1.0, d[1]], depth, power, rim, apron);
+        return [left[0].min(right[0]), left[1].max(right[1])];
+    }
     let bowl = |r: f64| {
         if r < 1.0 {
             -depth * (1.0 - r.powf(power))
@@ -277,7 +284,69 @@ pub(crate) fn profile_bounds(
         result[0] += a.min(b);
         result[1] += a.max(b);
     }
-    result
+    let derivative = profile_derivative_bounds(d, depth, power, rim, apron);
+    let profile = |r: f64| {
+        bowl(r)
+            + rim[0] * gauss(r, RIM_CENTER, rim[1])
+            + apron[0] * gauss(r, APRON_CENTER, apron[1])
+    };
+    let pad = 128.0 * f64::EPSILON * (depth.abs() + rim[0].abs() + apron[0].abs()).max(1.0);
+    let tighter = if derivative[0] >= 0.0 || derivative[1] <= 0.0 {
+        let a = profile(d[0]);
+        let b = profile(d[1]);
+        [a.min(b) - pad, a.max(b) + pad]
+    } else {
+        let mid = d[0] + (d[1] - d[0]) * 0.5;
+        let value = profile(mid);
+        let span = derivative[0].abs().max(derivative[1].abs()) * (d[1] - d[0]) * 0.5 + pad;
+        [value - span, value + span]
+    };
+    [result[0].max(tighter[0]), result[1].min(tighter[1])]
+}
+
+/// The power-law bowl derivative is monotone on either side of its cutoff.
+/// A Gaussian derivative has extrema at centre ± sigma/sqrt(2), so summing
+/// these closed-form intervals encloses the total derivative without sampling.
+pub(crate) fn profile_derivative_bounds(
+    d: [f64; 2],
+    depth: f64,
+    power: f64,
+    rim: [f64; 2],
+    apron: [f64; 2],
+) -> [f64; 2] {
+    let mut bounds = [0.0; 2];
+    if d[0] < 1.0 {
+        let a = depth * power * d[0].powf(power - 1.0);
+        let b = depth * power * d[1].min(1.0).powf(power - 1.0);
+        bounds = [a.min(b), a.max(b)];
+        if d[1] > 1.0 {
+            bounds[0] = bounds[0].min(0.0);
+            bounds[1] = bounds[1].max(0.0);
+        }
+    }
+    let mut magnitude = (depth * power).abs();
+    for (center, [amplitude, sigma]) in [(RIM_CENTER, rim), (APRON_CENTER, apron)] {
+        let derivative =
+            |r: f64| -2.0 * amplitude / sigma * ((r - center) / sigma) * gauss(r, center, sigma);
+        let a = derivative(d[0]);
+        let b = derivative(d[1]);
+        let mut term = [a.min(b), a.max(b)];
+        for critical in [
+            center - sigma * std::f64::consts::FRAC_1_SQRT_2,
+            center + sigma * std::f64::consts::FRAC_1_SQRT_2,
+        ] {
+            if critical >= d[0] && critical <= d[1] {
+                let value = derivative(critical);
+                term[0] = term[0].min(value);
+                term[1] = term[1].max(value);
+            }
+        }
+        bounds[0] += term[0];
+        bounds[1] += term[1];
+        magnitude += (2.0 * amplitude / sigma).abs();
+    }
+    let pad = 128.0 * f64::EPSILON * magnitude.max(1.0);
+    [bounds[0] - pad, bounds[1] + pad]
 }
 
 /// Enclosure for the full-height, widened-rim profile.
@@ -985,6 +1054,13 @@ impl Craters {
 }
 
 impl crate::modifier::HeightModifier for Craters {
+    fn height_enclosure(
+        &self,
+        rect: [f64; 4],
+        input: crate::source::HeightEnclosure,
+    ) -> Option<crate::source::HeightEnclosure> {
+        Some(input.add_delta(self.height_bounds(rect, [0.0; 2])?))
+    }
     fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
         let mut result = input;
         for g in &self.index.grids {
@@ -1847,6 +1923,69 @@ mod tests {
 #[cfg(test)]
 mod enclosure_tests {
     use super::*;
+    #[test]
+    fn total_radial_bounds_cover_signed_profiles_and_cutoff_intervals() {
+        for depth in [-0.4, 0.4] {
+            for power in [1.0, 2.2, 6.0] {
+                for sigma in [0.14, 0.35] {
+                    for sign in [-1.0, 1.0] {
+                        let rim_height = depth * sign * 0.3;
+                        for centre in [0.0_f64, 0.3, 0.85, 0.98, 1.0, 1.15, 1.8, 2.0] {
+                            for width in [0.00001, 0.002, 0.05, 0.4] {
+                                let range = [(centre - width * 0.5).max(0.0), centre + width * 0.5];
+                                let bounds = profile_bounds(
+                                    range,
+                                    depth,
+                                    power,
+                                    [rim_height, sigma],
+                                    [rim_height * APRON_FRAC, APRON_SIGMA],
+                                );
+                                for sample in 0..=128 {
+                                    let radius =
+                                        range[0] + (range[1] - range[0]) * sample as f64 / 128.0;
+                                    let value = crater_profile_rim_limited(
+                                        radius, depth, rim_height, power, sigma,
+                                    );
+                                    assert!(
+                                        value >= bounds[0] && value <= bounds[1],
+                                        "d={range:?} depth={depth} power={power} sigma={sigma}: {value} outside {bounds:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn total_profile_enclosure_retains_the_one_sided_rim_extremum() {
+        for sign in [-1.0, 1.0] {
+            let depth = sign * 0.4;
+            let rim = sign * 0.12;
+            let bounds = profile_bounds(
+                [0.999, 1.001],
+                depth,
+                2.0,
+                [rim, RIM_SIGMA],
+                [rim * APRON_FRAC, APRON_SIGMA],
+            );
+            let peak = crater_profile_rim_limited(1.0, depth, rim, 2.0, RIM_SIGMA);
+            if sign > 0.0 {
+                assert!(
+                    bounds[1] >= peak && bounds[1] - peak < 1e-10,
+                    "{bounds:?} versus {peak}"
+                );
+            } else {
+                assert!(
+                    bounds[0] <= peak && peak - bounds[0] < 1e-10,
+                    "{bounds:?} versus {peak}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn crater_enclosure_covers_rim_and_reach_at_each_sampling_gate() {
         let crater = Crater {

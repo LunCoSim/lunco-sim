@@ -137,7 +137,7 @@ fn simulation_dependencies(me, ctx) {
         entity_writes: [],
         query_reads: [],
         required_inputs: [
-            #{ owner: "sysml.twin-analysis", identity: twin_name() },
+            #{ owner: "sysml.twin-analysis", identity: twin_source_identity() },
         ],
     }
 }
@@ -147,6 +147,12 @@ Dependency planning runs before required inputs are ready. Restrict it to
 identity discovery and declarations; read source facts in top-level
 initialization or `on_start`. For source-selected entities discovered there,
 call `track_entity_read(id)` or `track_entity_write(id)` before access.
+When the source entity identifies the owning scene but its USD document is not
+attached yet, use `find_path_in_stage(me, path)` to resolve another live
+identity in that same scene mount; editor preview projections are excluded. Use
+`find_path_in_document(doc_id, path)` when the document identity is available.
+`find_path(path)` returns the first exact live path match, so use a scoped
+lookup when the same stage path can be mounted more than once.
 
 All active Modelica entities share the fixed-step barrier. Declarations grant
 scenario access without changing clock membership. Required input
@@ -289,9 +295,16 @@ in Modelica, and do not turn the recipe into an `on_tick` loop. See the
 
 Full reference: [`docs/scripting-guide.md`](../../docs/scripting-guide.md). The
 authoritative callable surface in one place: the `ScriptingCatalog` query for
-external authoring clients. Inside Rhai, use the existing bounded
-`ScriptComplete { prefix, limit }` query for discovery; the aggregate full
-catalog can exceed the sandbox value-size limit.
+external authoring clients. Rhai scripts that need catalog schemas request only
+the sections they consume, for example
+`query("ScriptingCatalog", #{sections: ["commands", "queries"]})`; the full
+catalog can exceed the sandbox value-size limit. `ScriptComplete { prefix,
+limit }` remains the bounded completion query. Twin-scoped catalog and
+completion schemas omit workspace Twin selectors. Twin-scoped query, command,
+hook, policy-status, reflected reads, Twin settings, and engine exposure reads
+also hide workspace Twin IDs; direct identity paths return no value. Rhai does
+not receive the private mount authority. Values and diagnostics show stable
+source identities; unknown opaque mount tokens are redacted.
 
 ## 1. Lifecycle hooks — the shape of every scenario
 

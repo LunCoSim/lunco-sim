@@ -178,9 +178,10 @@ runtime surface as typed `simulation_progress` data. Let the active Rhai policy
 turn those facts into user-facing labels such as `PHYSICS LOADING` or
 `WAITING FOR TERRAIN`; the engine does not hardcode HUD wording. Progress changes
 invalidate the existing surface projection, so a readiness label does not poll
-the simulation. During preparation the built-in Rhai visibility policy
-temporarily shows an authored surface before possession, then returns to its
-authored `possessed` or `always` mode when the holds clear.
+the simulation. Preparation updates status content without revealing an
+unpossessed scene surface. Visibility follows the authored mode throughout
+loading: `possessed` requires local control and `always` requires an available
+subject. This keeps unpossessed HUDs hidden on startup.
 
 Use the optional typed `pause` fact (`condition`, `detail`) for a coupled
 subject's retained stop condition. Keep the wording in Rhai and qualify the
@@ -222,6 +223,14 @@ production binary in both host modes:
 python3 scripts/api/test_runtime_ui_preparation.py --port 4374 --log target/ui-preparation-headless.log
 python3 scripts/api/test_runtime_ui_preparation.py --port 4375 --windowed --log target/ui-preparation-windowed.log
 python3 scripts/api/test_runtime_policy_transaction.py --port 4376 --log target/ui-policy-transaction.log
+```
+
+For the startup visibility rule, run the six authored policy checks in a
+production scene-test session. The `lander_controls` gate also checks the
+composed lander HUD is hidden before local possession and visible afterward:
+
+```bash
+SCENE_API_PORT_BASE=<free-port> ./scripts/run_scene_tests.sh --no-build --exact lander_controls -j 1
 ```
 
 `SetRhaiPolicy` creates a complete source policy through one compound document
@@ -386,6 +395,16 @@ switcher is a draggable window with a top-centre authored default; Settings ▸
 HUD also exposes a surface-specific reset that removes its per-Twin override.
 Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
+
+Native camera-feed windows and telemetry graph HUDs also persist their
+selection and logical-point size/position in per-project workspace state.
+Snapshots are kept per scene path and restored after the matching scene mounts;
+switching scenes retains each one's layout, capture waits for scene transitions
+to commit, and graph views wait for their scalar sources to publish. **Settings →
+Project → Restore cameras and graphs** defaults on and stores the project
+override as `ui.restore_view_state` in `.lunco/settings.json`. Keep capture and
+restore in the UI view owners, with the workspace-state adapter carrying
+typed snapshot records across process runs.
 
 Script-driven hint/objective/action cards belong to `lunco-workbench-guided-ui`.
 Omitting `hud` uses the calling script's card; unscripted API/REPL input uses
@@ -580,7 +599,8 @@ Useful diagnosis order:
 
 For the dataset consent surface, trace `DatasetScope::id()` through
 `ListDatasets`, the row/action scope, and `assets::request_required`.
-Use `engine` or `twin:<name>`; never pass a display label as the selector.
+Use `engine` or `twin:<source_identity>`; never pass a display label as the
+selector. UUID-backed Twins use `uuid-<simple-uuid>` as their source identity.
 UI admission validates source/owner lifetime, independently of loading status.
 Application-owned exposure namespaces retain owner-scoped callbacks; scene
 namespaces pin the live scene lifecycle. Simulation admission stays in the

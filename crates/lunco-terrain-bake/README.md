@@ -23,19 +23,20 @@ preview resample → apply the serializable `StampSpec`s) → a `HeightGrid`.
 
 | Item | Role |
 |------|------|
-| `dem` | GeoTIFF decode + `metadata.yaml` parse → `HeightGrid` (moved from terrain-surface). |
+| `dem` | GeoTIFF decode and embedded georeferencing → `HeightGrid`. |
 | `bake` | `crop_centered` / `resample` (pure, `HeightSource`-based). |
 | `stamp` | crater placement + stamp (`stamp_spec_craters`, deterministic from a seed). |
 | `DemBakeJob` / `StampSpec` | serializable bake inputs — so the worker reconstructs the SAME stamps without holding a `dyn TerrainLayer`. |
 | `worker_client` (wasm) | main-thread client over `lunco-worker-transport`: transfers the tif, drains coarse+full replies. |
-| `bin/dem_worker` (wasm) | the companion Worker binary: `decode_raw` once, then emit `BakeStage::Coarse` then `BakeStage::Full`. |
+| `bin/dem_worker` (wasm) | the companion worker owns content-keyed OPFS grid caching and full-precision DEM baking. |
 
 ## Progressive
 
-The worker decodes once, then emits a **coarse** preview grid (`COARSE_RES`) so the
+On a cache miss the worker decodes once, then emits a **coarse** preview grid (`COARSE_RES`) so the
 terrain + collider ring appear and rovers settle, then the **full** grid — which
 `lunco-terrain-surface` swaps in through its live re-stamp path (tiles refine
-near-camera-first, no despawn flash).
+near-camera-first, no despawn flash). A cache hit emits the exact full-precision
+grid. Cache hashing, encoding, decoding and OPFS I/O remain on the worker.
 
 Only the avian `Collider::heightfield` + Bevy `Mesh` derive stays in
 `lunco-terrain-surface`, where those types live. See

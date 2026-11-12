@@ -26,6 +26,7 @@ fn certify_dataset(scope, key, kind, visible, action, text) {
         if row != () {
             checks.push(t_eq(row.scope, scope, "row action retains the real scope"));
             checks.push(t_eq(row.action, action, "row action matches its phase"));
+            checks.push(t_eq(row.rebuild_action, "", "prepare and rebuild are not offered as duplicate actions"));
             checks.push(t_true((row.status+" "+row.detail).contains(text), "status retains progress or failure detail"));
         }
     }
@@ -36,6 +37,16 @@ fn certify_dataset(scope, key, kind, visible, action, text) {
     }
     if kind == "installed" && visible {
         checks.push(t_eq(consent.properties.title, "Data ready", "completion is explicit"));
+        if dataset.processed {
+            let row = ();
+            for candidate in consent.properties.rows {
+                if candidate.id == dataset.id { row = candidate; }
+            }
+            checks.push(t_true(row != (), "the installed processed dataset retains its UI row"));
+            if row != () {
+                checks.push(t_eq(row.rebuild_action, "rebuild", "a ready processed dataset offers explicit rebuild"));
+            }
+        }
     }
     t_report(checks);
 }

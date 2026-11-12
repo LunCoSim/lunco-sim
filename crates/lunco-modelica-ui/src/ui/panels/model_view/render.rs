@@ -499,6 +499,7 @@ fn render_unified_toolbar(
     let mut duplicate_clicked = false;
     let mut auto_arrange_clicked = false;
     let mut run_pause_clicked = false;
+    let mut graphs_clicked = false;
     let mut reset_clicked = false;
     let mut restart_clicked = false;
     let mut new_view_mode = view_mode;
@@ -655,6 +656,13 @@ fn render_unified_toolbar(
             .on_disabled_hover_text("Compiling — wait for the current build to finish");
         run_pause_clicked = r_run.clicked();
 
+        graphs_clicked = ui
+            .button("Graphs")
+            .on_hover_text(
+                "Open this model's results and live signals in a resizable bottom dock. Choose Variables and Runs in the plot.",
+            )
+            .clicked();
+
         // ⏩ Fast Run — batch to completion in the background → an Experiment
         // with plots. Not blocked by an in-flight run (extra runs queue
         // behind the concurrency cap; see the Experiments panel). Only an
@@ -765,6 +773,14 @@ fn render_unified_toolbar(
         // The whole setup-resolution path is owned by the typed observer and
         // only fires on a click.
         ctx.trigger(FastRunSetupRequested { doc });
+    }
+    if graphs_clicked {
+        ctx.trigger(OpenTab {
+            kind: crate::ui::panels::graphs::MODELICA_PLOT_KIND
+                .as_str()
+                .to_owned(),
+            instance: lunco_modelica_ui_core::DEFAULT_MODELICA_GRAPH_ID,
+        });
     }
     if compile_clicked {
         ctx.trigger(crate::ui::commands::CompileModel {

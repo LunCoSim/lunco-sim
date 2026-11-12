@@ -81,10 +81,11 @@ remains a generic tool API and requires its caller to provide a look.
 The authored vertex stage runs in the main, depth/normal, and native shadow
 passes. It selects Bevy's forward or prepass output interface using
 `PREPASS_PIPELINE`; the material group remains bound in depth-only passes so
-the same morph uniforms are available. CDLOD distance uses
-`view.lod_view_world_position`, the viewing camera's origin shared with its
-shadow cascades. Edge stitching and morph interpolation therefore describe the
-same surface in every pass. Bevy's view-uniform owner resolves a directional
+the same morph uniforms are available. Each consumed view owns its selected
+cover, stitch topology and morph context; a shared mesh bake does not select a
+second view's LOD. `view.lod_view_world_position` carries the parent viewing
+camera's origin into its shadow cascades. Color, prepass and shadow geometry
+therefore consume the same view context. Bevy's view-uniform owner resolves a directional
 shadow view's retained camera identity through a per-frame index of extracted
 cameras keyed by `MainEntity`. Main-world IDs cannot address render-world
 entities directly. Shared point/spot shadow origins retain their native owner.
@@ -128,7 +129,15 @@ inverse-transpose maps a local normal to world space; the reverse mapping uses
 the transpose of the mesh's local-to-world linear transform. This preserves the
 normal direction under nonuniform scale as well as rotation. The
 `terrain_normal_transform` GPU fixture checks that round trip on a rotated,
-nonuniformly scaled mesh.
+nonuniformly scaled mesh. It also verifies the authored-normal transition:
+when streamed terrain is resolved below the authored normal texture's texel
+size, geometric normals retain relief that the raster cannot represent. The
+authored normal weight transitions smoothly back as the pixel footprint grows;
+the texel size comes from the bound texture dimensions and terrain extent.
+Rapid per-pixel geometric-normal variation receives a bounded blend toward the
+raster to reduce shimmer while retaining at least half the geometric normal
+contribution. This does not change the authored normal weight on non-terrain
+geometry.
 
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
@@ -162,6 +171,25 @@ outside, the footprint grows with distance from coverage. Mip filtering averages
 the clamped edge before the spatial fade, preventing edge texels from stretching
 into long stripes. This is an appearance continuation, not additional measured
 coverage.
+For a registered regional DEM, streamed tiles retain the local crop's UV frame
+and fade its albedo, normal, surface, mineral and local heightfield-shadow maps
+over the registered blend width. Beyond that coverage, geometric normals and
+the terrain material remain in use; the local shadow raster does not represent
+regional occlusion. Physical solar visibility continues to query the composed
+surface independently of these render-only map weights.
+Within a registered overlap, the local normal map fades to the regional mesh
+normal before the crop edge, with a smooth per-edge transition. This retains
+center detail while avoiding a sharp change in shading at the map boundary.
+Derived local maps are keyed by the local grid and its modifiers, so changing
+only the exterior regional source can reuse them. Tile and physical-query
+caches retain the identity of the complete composed surface.
+An optional `inputs:regional_albedo_map` is an image registered to the regional
+DEM's centered footprint and projection. Its RGB stores linear-light
+coverage-premultiplied reflectance encoded as sRGB; alpha records measured
+coverage. The local color blends over this image within the overlapping crop,
+and missing regional samples do not erase local color. This input is an
+observation in its source's declared photometric geometry, so authors must
+choose and document a suitable reference product.
 `ShaderLookSourceInterface` belongs to the render binder's source-reflection
 path, independently of material binding and render readiness. Retiring a
 material or invalidating `ShaderLookReady` preserves those loaded-source facts.
@@ -179,6 +207,10 @@ The exterior also carries the site lunar photometry parameters and fades
 its direct-sun response to the body response. Shared PBR and terrain lighting
 helpers own lighting; no heightfield shadow march runs for the collar. The
 packed terrain uniform uses the shared 512-byte reflected parameter block.
+The continuation carries whether its surface map is authored or derived. It
+uses the same occlusion transfer as the site material before applying the
+spatial blend, so a derived map has the same indirect-light response on both
+sides of the crop boundary.
 
 A body fragment shader that accepts these local roles declares
 `//!@interface lunco.lunar-surface-continuation.v1` in WESL and authors the same
@@ -906,12 +938,55 @@ Remaining work, in dependency order:
 
 ### Mesh inspection
 
-`TerrainLodStatus.stream` reports selected-cover fulfilment and render-resource
-publication. Its `derived` object reads `TerrainDerivedStatus` directly:
-`active`, `ready`, `total`, and `pending` describe the optional surface/normal-map
-lifecycle. A fully prepared quality measurement requires no pending stream or
-derived work, a resident selected cover, and `derived.ready == derived.total`.
-These read-only facts do not add a simulation hold or change tile admission.
+`TerrainLodStatus.stream` reports aggregate selected-cover fulfilment and
+render-resource publication. `camera_cover` reports the per-view camera and source
+identities, local pose, clearance, selected depth, effective maximum depth,
+`spacing_m`, readiness/pin state, `wanted`, `resident`, `drawn`, and `budget_refused`.
+`contacts` reports the separate physical support lattice and readiness.
+
+Consumed camera/output snapshots are published after viewport reconciliation and
+mounted/path camera pose writers in `PostUpdate`. Main viewport, visible feeds and
+explicit captures contribute only while consumed. Each view selects its own
+restricted cover using its own projection and output pixels. Bakes share source-keyed
+geometry while draw topology, parent fallback, stitching and morph state remain
+view-scoped. A rover feed can resolve near terrain without changing another view's
+selected cover. Retiring an output withdraws its demand and all derived view state.
+
+Perspective projected error includes camera distance and FOV. Orthographic error
+uses finalized projection area and output pixels, independently of viewing-axis
+distance. Both projections use their finalized clip volume and full-source height
+enclosures to bound refinement. Projected posting density drives discovery at all
+ranges, so coarse probes cannot erase small features from distant telephoto views.
+The source enclosure is cached and computed by native preparation workers; an
+uncertain enclosure never certifies exclusion. Each view retains one conservative
+clip envelope with projection/pixel-error-based angular tolerances and hysteresis;
+invalidation and rejection consume that same envelope. Native lens/output changes
+remain exact admission changes. Orthographic tiles retain static parent-edge
+stitching and switch covers without distance morphing. Inspect `visual_foci` for
+the admitted projection, orthographic area/pixel density, or perspective FOV.
+
+Visual bands use visual tile spacing; physics bands retain the authored collider
+spacing. Odd visual posting counts keep the parent grid nested. A registered
+power-of-two expansion of the root increases effective visual depth by the exact
+extent ratio's logarithm, preserving local finest spacing independently of collider
+settings. Unsupported ratios/depths are rejected visibly. Configured tile budgets apply per consumed view; shared source bake admission,
+upload and cache byte budgets bound preparation and publication; refused refinement is explicit quality debt.
+
+An asynchronous cover can advance during camera motion when its exact source,
+scene and output leases remain valid. The next selection follows the finalized
+camera snapshot; exact pose equality on worker completion is unnecessary. Ready
+ancestors retain a disjoint cover until replacement mesh and material readiness.
+Retention is bounded in three dimensions per view/source. The optional forward
+selection bias samples a visual band at the position quantum and remains bounded
+so camera-ground coverage is retained.
+
+The `derived` object reads `TerrainDerivedStatus` directly: `active`, `ready`,
+`total`, and `pending` describe optional surface/normal maps. Settled measurements
+require admitted per-view covers plus no pending stream or derived work and
+`derived.ready == derived.total`. These facts do not add a physics hold and do not
+prove the rendered image. Production evidence, including simultaneous main/feed
+views and every render pass, is tracked in
+[the camera terrain review](../reviews/2026-11-12-camera-terrain-architecture.md).
 
 `TerrainLodStatus` exposes admitted continuation sources, material values, native
 corners, and corner spokes in the active physics frame. `include_geometry: true`

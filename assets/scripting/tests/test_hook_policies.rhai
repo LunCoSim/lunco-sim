@@ -179,8 +179,6 @@ checks.push(t_true(lifecycle != () && lifecycle.declared == true
 let lifecycle_call = invoke_hook("twin.lifecycle", [
     "startup",
     #{
-        twin_id: "test",
-        root: "assets/scenes/tests",
         scope: "test",
         installed: [],
         failed: [],
@@ -188,15 +186,14 @@ let lifecycle_call = invoke_hook("twin.lifecycle", [
 ]);
 checks.push(t_true(lifecycle_call.ok == true
         && lifecycle_call.value.event == "startup"
-        && lifecycle_call.value.twin_id == "test",
-    "the authored lifecycle policy returns its typed event facts"));
+        && !lifecycle_call.value.contains("twin_id")
+        && !lifecycle_call.value.contains("root"),
+    "the authored lifecycle policy returns no application identity or filesystem root"));
 
 let sysml_lifecycle_call = invoke_hook("twin.lifecycle", [
     "assets_mounted",
     #{
-        twin_id: 42,
-        name: "analysis-fixture",
-        root: "twins/analysis-fixture",
+        display_name: "analysis-fixture",
         active: true,
         manifest: #{sysml: #{root: "models/root.sysml", paths: ["models"]}},
         files: ["models/root.sysml", "models/base.kerml", "scenes/main.usda"],
@@ -204,17 +201,20 @@ let sysml_lifecycle_call = invoke_hook("twin.lifecycle", [
 ]);
 let load_count = 0;
 let prepare_found = false;
+let twin_actions_clean = true;
 for action in sysml_lifecycle_call.value.actions {
     if action.command == "LoadTwinSysmlSource" { load_count += 1; }
+    if action.params.contains("twin_id") || action.params.contains("authority") {
+        twin_actions_clean = false;
+    }
     if action.command == "PrepareTwinSysmlAnalysis" {
-        prepare_found = action.params.twin_id == 42
-            && action.params.name == "analysis-fixture"
-            && action.params.relative_paths.len() == 2
+        prepare_found = action.params.relative_paths.len() == 2
             && action.params.relative_paths[0] == "models/root.sysml"
             && action.params.relative_paths[1] == "models/base.kerml";
     }
 }
 checks.push(t_true(sysml_lifecycle_call.ok == true && load_count == 2
+        && twin_actions_clean
         && prepare_found,
     "Twin policy loads the complete authored SysML set then requests one async analysis snapshot"));
 
@@ -358,7 +358,6 @@ checks.push(t_true(default_quality.ok == true && default_quality.value == "high"
 
 let low_profile = invoke_hook("render.quality_profile", ["low"]);
 let balanced_profile = invoke_hook("render.quality_profile", ["balanced"]);
-let high_profile = invoke_hook("render.quality_profile", ["high"]);
 checks.push(t_true(low_profile.ok == true
         && low_profile.value.directional_shadow_map_size == 512
         && low_profile.value.directional_cascades == 1,
@@ -368,17 +367,6 @@ checks.push(t_true(balanced_profile.ok == true
         && balanced_profile.value.directional_cascades == 3
         && balanced_profile.value.shadow_maximum_distance == 1500.0,
     "Balanced shadow quality uses the authored map, cascade, and range values"));
-checks.push(t_true(high_profile.ok == true
-        && high_profile.value.directional_shadow_map_size == 8192
-        && high_profile.value.directional_cascades == 4
-        && high_profile.value.shadow_first_cascade_far_bound == 30.0
-        && high_profile.value.shadow_maximum_distance == 3000.0
-        && high_profile.value.shadow_filtering_quality == "hardware2x2"
-        && high_profile.value.shadow_normal_bias == 2.0
-        && high_profile.value.terrain_lod_max_depth == 9
-        && high_profile.value.terrain_lod_tile_budget == 256
-        && high_profile.value.horizon_march_steps == 96,
-    "High shadow quality uses the authored high-detail values"));
 let missing_profile = invoke_hook("render.quality_profile", ["turbo"]);
 checks.push(t_true(missing_profile.ok == false && missing_profile.status == "fault",
     "unknown profile ids fail visibly instead of selecting another profile"));

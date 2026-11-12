@@ -1,0 +1,25 @@
+#usda 1.0
+(
+    defaultPrim = "CameraRebaseTerrain"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+    doc = "Camera navigation across a WorldGrid origin-cell boundary on a 4000 m float64 flat DEM."
+)
+
+def Xform "CameraRebaseTerrain" (
+    prepend references = @lunco://scenes/tests/camera_flat_terrain.usda@</CameraFlatTerrain>
+)
+{
+    over "Terrain"
+    {
+        over "DEM"
+        {
+            asset lunco:layer:demSource = @fixtures/camera_rebase_terrain@
+        }
+    }
+    over "Avatar"
+    {
+        custom double3 xformOp:translate = (995.0, -1917.973, 0.0)
+        double3 lunco:cameraLookAt = (995.0, -1917.973, -1.0)
+    }
+}

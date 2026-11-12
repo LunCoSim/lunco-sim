@@ -6,7 +6,7 @@
 # leave holes in the Mathematical Operators block (U+2200-22FF),
 # which Modelica Blocks.MathBoolean's `∧` and `∨` sit inside.
 #
-# CI: lunco-assets download --bundle luncosim-native, then stage that bundle.
+# Native and web build scripts download and stage each declared bundle target.
 
 [dejavu_sans]
 name = "DejaVu Sans Regular"
@@ -24,8 +24,6 @@ url = "https://downloads.sourceforge.net/project/dejavu/dejavu/2.37/dejavu-fonts
 extract = "ttf/DejaVuSans.ttf"
 dest = "fonts/DejaVuSans.ttf"
 # Required by both desktop and browser bundles. The packager stages the
-# delivered file, never the upstream archive. Native app startup requests it
-# only when no bundled or cached copy is available.
+# delivered file, never the upstream archive.
 bundle = ["lunica-native", "luncosim-native", "lunica-web", "luncosim-web"]
-download_on_start = true
 sha256 = "fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"

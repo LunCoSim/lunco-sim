@@ -5,23 +5,39 @@
 //! snapshot and own the retained tree, layout, and styling. A template does not
 //! know whether a value came from a port, telemetry, physics, a script, or a
 //! derived engine capability.
+//!
+//! Twin-authored forms use the same retained HUI tree: put `tag:ui_form` and
+//! `tag:ui_field` on an `<input type="text">` or `<input type="number">`.
+//! Legacy `<text>` fields can opt in with `tag:ui_input="text|number"`.
+//! Use `tag:ui_value` for labels projected from the form state,
+//! `tag:ui_status="true"` for status text, and
+//! `tag:ui_scroll_area="vertical"` on a scrollable `<node>`. A button tagged
+//! with `ui_form` receives the current form snapshot as `parameters.fields`
+//! alongside its authored action tags. Values remain strings here so each Twin
+//! can own its validation and domain rules. Input fields can set an integer
+//! `tag:ui_tab_index`; the runtime adds them to the surface's keyboard tab order.
+//! Use `tag:class` for Flair CSS classes; the runtime maps it to Flair's
+//! `ClassList` component. A draggable window moves only when a pointer drag
+//! starts on a descendant tagged `tag:ui_drag_handle="true"`.
 use bevy::ecs::entity::EntityHashSet;
 use bevy::picking::Pickable;
 use bevy::picking::events::{PointerClick, PointerDrag};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
+use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems};
 use bevy::ui::picking_backend::{UiPickingCamera, UiPickingSettings};
 use bevy::window::PrimaryWindow;
 use bevy_egui::{PrimaryEguiContext, egui};
-use bevy_flair::prelude::{InlineStyle, StyleSheet, Styled};
+use bevy_flair::prelude::{ClassList, InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
     CompileContextEvent, FunctionBindings, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate,
     OnUiPress, Tags, TemplateProperties, UiId,
 };
 use lunco_assets_runtime::{JsonAssetContent, JsonAssetScopeChanged};
+use lunco_command_contracts::{Ack, OpId};
 use lunco_core::AppSceneExt;
-use lunco_exposure_core::EngineExposures;
+use lunco_exposure_core::{EngineExposures, ExposureValue};
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_viewport_core::SceneViewport;
@@ -31,7 +47,7 @@ use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
 use lunco_workbench_state::{RuntimeSurfaceLayout, RuntimeSurfaceLayouts};
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const RUNTIME_UI_MANIFEST_KIND: &str = "lunco.runtime-ui-manifest.v1";
 
@@ -61,6 +77,64 @@ pub struct RuntimeUiAction {
     pub parameters: HookValue,
     /// HUI node that emitted the action.
     pub source: Entity,
+}
+
+/// Values and operator status for a Twin-authored form embedded in HUI markup.
+/// Forms are keyed by the Twin that published them so a delayed action cannot
+/// read values from a different active Twin.
+#[derive(Resource, Default)]
+pub struct RuntimeUiForms {
+    owner_twin_id: Option<u64>,
+    forms: BTreeMap<String, RuntimeUiFormState>,
+    published_collections: HashSet<(String, String)>,
+}
+
+#[derive(Default)]
+struct RuntimeUiFormState {
+    values: BTreeMap<String, String>,
+    status: String,
+    needs_projection: bool,
+}
+
+#[derive(Component, Clone, Debug)]
+struct RuntimeUiTextInput {
+    owner_twin_id: u64,
+    form_id: String,
+    field_id: String,
+}
+
+#[derive(Component)]
+struct RuntimeUiScrollArea;
+
+/// Set or patch a Twin-authored HTML form's current values. Values are strings
+/// at the form boundary; Twin policy owns domain parsing and validation.
+#[lunco_core::Command(default)]
+pub struct SetRuntimeUiFormValues {
+    pub form_id: String,
+    pub values: BTreeMap<String, String>,
+}
+
+/// Replace one authored keyed collection with rows from the active Twin's
+/// presentation policy. The destination must be declared by the active
+/// runtime UI manifest; the command cannot publish arbitrary exposures.
+#[lunco_core::Command(default)]
+pub struct SetRuntimeUiCollectionData {
+    pub namespace: String,
+    pub source: String,
+    pub items: Vec<BTreeMap<String, String>>,
+}
+
+/// Set the inline status text for a Twin-authored HTML form.
+#[lunco_core::Command(default)]
+pub struct SetRuntimeUiFormStatus {
+    pub form_id: String,
+    pub status: String,
+}
+
+/// Read Twin-scoped form values for runtime integration tests and diagnostics.
+#[lunco_core::Command(default)]
+pub struct InspectRuntimeUiForm {
+    pub form_id: String,
 }
 
 /// Origin lifetime of semantic UI input. A deferred event cannot acquire the
@@ -144,14 +218,58 @@ struct RuntimeUiSurfaceReset {
 fn emit_runtime_ui_surface_drag(
     mut trigger: On<PointerDrag>,
     mut drags: MessageWriter<RuntimeUiSurfaceDragged>,
+    roots: Query<(Entity, &RuntimeUiSurface)>,
+    parents: Query<&ChildOf>,
+    tags: Query<&Tags>,
 ) {
-    if trigger.button == PointerButton::Primary {
-        drags.write(RuntimeUiSurfaceDragged {
-            entity: trigger.entity,
-            delta: trigger.delta,
-        });
-        trigger.propagate(false);
+    if trigger.button != PointerButton::Primary {
+        return;
     }
+    // This observer is scoped to the surface root. During event bubbling,
+    // `trigger.entity` is that root; preserve the original HUI hit target to
+    // determine whether the drag began on the authored handle.
+    let root = trigger.entity;
+    let hit = trigger.trigger().original_event_target;
+    if !roots.get(root).is_ok_and(|(_, surface)| surface.draggable)
+        || !is_runtime_ui_drag_handle(hit, root, &parents, &tags)
+    {
+        return;
+    }
+    drags.write(RuntimeUiSurfaceDragged {
+        entity: root,
+        delta: trigger.delta,
+    });
+    trigger.propagate(false);
+}
+
+/// Only authored drag handles move a window surface. Without this boundary,
+/// pointer drags bubble from every HUI child and make ordinary form controls
+/// move the entire panel while the user tries to edit or activate them.
+fn is_runtime_ui_drag_handle(
+    hit: Entity,
+    root: Entity,
+    parents: &Query<&ChildOf>,
+    tags: &Query<&Tags>,
+) -> bool {
+    let mut current = hit;
+    for _ in 0..64 {
+        if current == root {
+            return false;
+        }
+        if tags
+            .get(current)
+            .ok()
+            .and_then(|tags| tags.tags().get("ui_drag_handle"))
+            .is_some_and(|value| value == "true")
+        {
+            return true;
+        }
+        let Ok(parent) = parents.get(current) else {
+            return false;
+        };
+        current = parent.parent();
+    }
+    false
 }
 
 /// Reset a draggable runtime surface from a primary-button double click.
@@ -165,18 +283,20 @@ fn emit_runtime_ui_surface_reset(
     mut trigger: On<PointerClick>,
     roots: Query<(Entity, &RuntimeUiSurface)>,
     parents: Query<&ChildOf>,
+    tags: Query<&Tags>,
     mut resets: MessageWriter<RuntimeUiSurfaceReset>,
 ) {
     if trigger.button != PointerButton::Primary || trigger.count < 2 {
         return;
     }
-    let Some(entity) = runtime_ui_surface_ancestor(trigger.entity, &roots, &parents) else {
+    let hit = trigger.trigger().original_event_target;
+    let Some(entity) = runtime_ui_surface_ancestor(hit, &roots, &parents) else {
         return;
     };
     let Ok((_, surface)) = roots.get(entity) else {
         return;
     };
-    if !surface.draggable {
+    if !surface.draggable || !is_runtime_ui_drag_handle(hit, entity, &parents, &tags) {
         return;
     }
     resets.write(RuntimeUiSurfaceReset { entity });
@@ -212,16 +332,18 @@ fn register_dynamic_action(functions: &mut HtmlFunctions) {
                 return;
             };
             let action = tags.tags().get("action").cloned().unwrap_or_default();
-            let parameters = HookValue::Map(
-                tags.tags()
-                    .iter()
-                    .filter(|(key, _)| key.as_str() != "action")
-                    .map(|(key, value)| (key.clone(), HookValue::str(value.clone())))
-                    .collect(),
-            );
             let Some(scope) = authored_action_scope(&world, source) else {
                 return;
             };
+            let form_id = tags.tags().get("ui_form").map(String::as_str);
+            let form_values = form_id.and_then(|form_id| {
+                world
+                    .get_resource::<RuntimeUiForms>()
+                    .filter(|forms| forms.owner_twin_id == scope.owner_twin_id)
+                    .and_then(|forms| forms.forms.get(form_id))
+                    .map(|form| &form.values)
+            });
+            let parameters = runtime_ui_action_parameters(tags, form_values);
             world.trigger(RuntimeUiAction {
                 scope,
                 action,
@@ -230,6 +352,516 @@ fn register_dynamic_action(functions: &mut HtmlFunctions) {
             });
         },
     );
+}
+
+/// Bridge HUI's namespaced HTML class tag to Flair's retained class list.
+/// Plain `class="..."` is parsed as a Flair style attribute by HUI, so
+/// runtime-authored templates use `tag:class="..."` for CSS selectors.
+fn sync_runtime_ui_html_classes(
+    mut commands: Commands,
+    nodes: Query<(Entity, &Tags), Changed<Tags>>,
+) {
+    for (entity, tags) in &nodes {
+        if let Some(classes) = tags.tags().get("class") {
+            commands.entity(entity).insert(ClassList::new(classes));
+        } else {
+            // HUI can despawn a template node after this query but before the
+            // deferred class sync is applied. Treat that teardown race as a
+            // normal no-op instead of logging a stale-entity warning.
+            commands.entity(entity).try_remove::<ClassList>();
+        }
+    }
+}
+
+fn runtime_ui_action_parameters(
+    tags: &Tags,
+    form_values: Option<&BTreeMap<String, String>>,
+) -> HookValue {
+    let mut fields = tags
+        .tags()
+        .iter()
+        .filter(|(key, _)| key.as_str() != "action")
+        .map(|(key, value)| (key.clone(), HookValue::str(value.clone())))
+        .collect::<Vec<_>>();
+    if let Some(form_values) = form_values {
+        fields.push((
+            "fields".to_owned(),
+            HookValue::map(
+                form_values
+                    .iter()
+                    .map(|(key, value)| (key.clone(), HookValue::str(value.clone()))),
+            ),
+        ));
+    }
+    HookValue::Map(fields)
+}
+
+#[lunco_core::on_command(SetRuntimeUiFormValues)]
+fn on_set_runtime_ui_form_values(
+    trigger: On<SetRuntimeUiFormValues>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut forms: ResMut<RuntimeUiForms>,
+    mut exposures: Option<ResMut<EngineExposures>>,
+) -> Result<Ack, String> {
+    let owner = workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+        .ok_or_else(|| "SetRuntimeUiFormValues requires an active Twin".to_owned())?;
+    let event = trigger.event();
+    if event.form_id.trim().is_empty() || event.form_id.len() > 64 {
+        return Err("form_id must contain 1 to 64 characters".to_owned());
+    }
+    if event.values.len() > 64 {
+        return Err("a runtime HTML form may contain at most 64 values".to_owned());
+    }
+    for (field, value) in &event.values {
+        if field.trim().is_empty() || field.len() > 64 {
+            return Err("form field ids must contain 1 to 64 characters".to_owned());
+        }
+        if value.len() > 2048 {
+            return Err(format!("value for `{field}` exceeds 2048 characters"));
+        }
+    }
+    if forms.owner_twin_id != Some(owner) {
+        clear_runtime_ui_collections(&mut forms, exposures.as_deref_mut());
+        forms.forms.clear();
+        forms.owner_twin_id = Some(owner);
+    }
+    let form = forms.forms.entry(event.form_id.clone()).or_default();
+    form.values.extend(event.values.clone());
+    form.needs_projection = true;
+    Ok(Ack::new(OpId::new()))
+}
+
+#[lunco_core::on_command(SetRuntimeUiCollectionData)]
+fn on_set_runtime_ui_collection_data(
+    trigger: On<SetRuntimeUiCollectionData>,
+    workspace: Option<Res<WorkspaceResource>>,
+    surfaces: Query<&RuntimeUiSurface>,
+    manifest_state: Option<Res<RuntimeUiManifestState>>,
+    mut forms: ResMut<RuntimeUiForms>,
+    exposures: Option<ResMut<EngineExposures>>,
+) -> Result<Ack, String> {
+    let active_twin = workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .ok_or_else(|| "SetRuntimeUiCollectionData requires an active Twin".to_owned())?;
+    let owner = active_twin.raw();
+    let event = trigger.event();
+    if event.namespace.trim().is_empty() || event.namespace.len() > 96 {
+        return Err("namespace must contain 1 to 96 characters".to_owned());
+    }
+    if event.source.trim().is_empty() || event.source.len() > 64 {
+        return Err("source must contain 1 to 64 characters".to_owned());
+    }
+    // Validate against authored manifest data when available. Surface roots
+    // mount asynchronously after Twin startup, so commands from on_start must
+    // not depend on HUI having spawned the presentation tree yet.
+    let collection_in_manifest = manifest_state
+        .as_deref()
+        .map(|state| state.find_collection(Some(active_twin), &event.namespace, &event.source))
+        .transpose()?
+        .flatten();
+    let collection_key = match collection_in_manifest {
+        Some(collection_key) => collection_key,
+        None => surfaces.iter().find_map(|surface| {
+            (surface.namespace == event.namespace)
+                .then(|| {
+                    surface
+                        .collections
+                        .iter()
+                        .find(|collection| collection.source == event.source)
+                })
+                .flatten()
+                .map(|collection| collection.key.clone())
+        }),
+    };
+    let Some(collection_key) = collection_key else {
+        return Err(format!(
+            "`{}` is not a declared collection source on runtime surface `{}`",
+            event.source, event.namespace
+        ));
+    };
+    let rows = runtime_ui_collection_value(&collection_key, &event.items)?;
+    let Some(mut exposures) = exposures else {
+        return Err("EngineExposures is not available for runtime collection data".to_owned());
+    };
+    if forms.owner_twin_id != Some(owner) {
+        clear_runtime_ui_collections(&mut forms, Some(&mut exposures));
+        forms.forms.clear();
+        forms.owner_twin_id = Some(owner);
+    }
+    exposures
+        .writer(&event.namespace)
+        .property(&event.source, rows);
+    forms
+        .published_collections
+        .insert((event.namespace.clone(), event.source.clone()));
+    Ok(Ack::new(OpId::new()))
+}
+
+fn runtime_ui_collection_value(
+    key_field: &str,
+    items: &[BTreeMap<String, String>],
+) -> Result<ExposureValue, String> {
+    const MAX_ITEMS: usize = 128;
+    const MAX_FIELDS_PER_ITEM: usize = 32;
+    const MAX_TOTAL_BYTES: usize = 262_144;
+    if items.len() > MAX_ITEMS {
+        return Err(format!(
+            "a runtime UI collection may contain at most {MAX_ITEMS} rows"
+        ));
+    }
+    let mut seen = HashSet::with_capacity(items.len());
+    let mut total_bytes = 0usize;
+    let mut rows = Vec::with_capacity(items.len());
+    for (row_index, item) in items.iter().enumerate() {
+        if item.is_empty() || item.len() > MAX_FIELDS_PER_ITEM {
+            return Err(format!(
+                "collection row {} must contain 1 to {MAX_FIELDS_PER_ITEM} fields",
+                row_index + 1
+            ));
+        }
+        let Some(key) = item.get(key_field).filter(|key| !key.trim().is_empty()) else {
+            return Err(format!(
+                "collection row {} is missing its non-empty `{key_field}` key",
+                row_index + 1
+            ));
+        };
+        if !seen.insert(key.as_str()) {
+            return Err(format!("collection key `{key}` appears more than once"));
+        }
+        let mut fields = Vec::with_capacity(item.len());
+        for (name, value) in item {
+            if name.trim().is_empty() || name.len() > 64 {
+                return Err(format!(
+                    "collection row {} contains an invalid field name",
+                    row_index + 1
+                ));
+            }
+            if value.len() > 2048 {
+                return Err(format!("collection value `{name}` exceeds 2048 characters"));
+            }
+            total_bytes = total_bytes
+                .saturating_add(name.len())
+                .saturating_add(value.len());
+            if total_bytes > MAX_TOTAL_BYTES {
+                return Err(format!("collection data exceeds {MAX_TOTAL_BYTES} bytes"));
+            }
+            fields.push((name.clone(), ExposureValue::Text(value.clone())));
+        }
+        rows.push(ExposureValue::Map(fields));
+    }
+    Ok(ExposureValue::Array(rows))
+}
+
+fn clear_runtime_ui_collections(
+    forms: &mut RuntimeUiForms,
+    exposures: Option<&mut EngineExposures>,
+) {
+    let Some(exposures) = exposures else {
+        forms.published_collections.clear();
+        return;
+    };
+    for (namespace, source) in forms.published_collections.drain() {
+        if exposures.surfaces.contains_key(&namespace) {
+            exposures.writer(&namespace).remove_property(&source);
+        }
+    }
+}
+
+#[lunco_core::on_command(SetRuntimeUiFormStatus)]
+fn on_set_runtime_ui_form_status(
+    trigger: On<SetRuntimeUiFormStatus>,
+    workspace: Option<Res<WorkspaceResource>>,
+    mut forms: ResMut<RuntimeUiForms>,
+) -> Result<Ack, String> {
+    let owner = workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+        .ok_or_else(|| "SetRuntimeUiFormStatus requires an active Twin".to_owned())?;
+    if forms.owner_twin_id != Some(owner) {
+        return Err("SetRuntimeUiFormStatus does not own the active Twin form".to_owned());
+    }
+    let form = forms
+        .forms
+        .get_mut(&trigger.event().form_id)
+        .ok_or_else(|| "the requested runtime HTML form is not initialized".to_owned())?;
+    form.status = trigger.event().status.chars().take(500).collect();
+    Ok(Ack::new(OpId::new()))
+}
+
+#[lunco_core::on_command(InspectRuntimeUiForm)]
+fn on_inspect_runtime_ui_form(
+    trigger: On<InspectRuntimeUiForm>,
+    workspace: Option<Res<WorkspaceResource>>,
+    forms: Res<RuntimeUiForms>,
+) -> Result<Ack, String> {
+    let owner = workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+        .ok_or_else(|| "InspectRuntimeUiForm requires an active Twin".to_owned())?;
+    if forms.owner_twin_id != Some(owner) {
+        return Err("the active Twin has not initialized this HTML form".to_owned());
+    }
+    let form = forms
+        .forms
+        .get(&trigger.event().form_id)
+        .ok_or_else(|| "the requested runtime HTML form is not initialized".to_owned())?;
+    Ok(Ack::with_data(
+        OpId::new(),
+        lunco_hooks::HookValue::map([
+            ("form_id", HookValue::str(trigger.event().form_id.clone())),
+            ("field_count", HookValue::UInt(form.values.len() as u64)),
+            ("status", HookValue::str(form.status.clone())),
+            ("owner_twin_id", HookValue::UInt(owner)),
+            (
+                "fields",
+                HookValue::map(
+                    form.values
+                        .iter()
+                        .map(|(key, value)| (key.clone(), HookValue::str(value.clone()))),
+                ),
+            ),
+        ]),
+    ))
+}
+
+fn on_runtime_ui_form_owner_closed(
+    trigger: On<TwinClosed>,
+    mut forms: ResMut<RuntimeUiForms>,
+    mut exposures: Option<ResMut<EngineExposures>>,
+) {
+    if forms.owner_twin_id == Some(trigger.event().twin.raw()) {
+        clear_runtime_ui_collections(&mut forms, exposures.as_deref_mut());
+        *forms = RuntimeUiForms::default();
+    }
+}
+
+fn attach_runtime_ui_text_inputs(
+    mut commands: Commands,
+    candidates: Query<
+        (Entity, &Tags, &Text, Option<&TemplateProperties>),
+        Without<RuntimeUiTextInput>,
+    >,
+    roots: Query<(Entity, &RuntimeUiSurface)>,
+    parents: Query<&ChildOf>,
+    workspace: Option<Res<WorkspaceResource>>,
+    forms: Res<RuntimeUiForms>,
+) {
+    let Some(owner) = workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+    else {
+        return;
+    };
+    if forms.owner_twin_id != Some(owner) {
+        return;
+    }
+    for (entity, tags, text, properties) in &candidates {
+        let tags = tags.tags();
+        let (Some(form_id), Some(field_id)) = (tags.get("ui_form"), tags.get("ui_field")) else {
+            continue;
+        };
+        let kind = tags.get("ui_input").map(String::as_str).or_else(|| {
+            properties.and_then(|properties| properties.get("type").map(String::as_str))
+        });
+        let Some(kind) = kind else {
+            continue;
+        };
+        if form_id.is_empty() || field_id.is_empty() || !matches!(kind, "text" | "number") {
+            continue;
+        }
+        let Some(surface_root) = runtime_ui_surface_ancestor(entity, &roots, &parents) else {
+            continue;
+        };
+        let Ok((_, surface)) = roots.get(surface_root) else {
+            continue;
+        };
+        if !surface.mounted || !forms.forms.contains_key(form_id) {
+            continue;
+        }
+        let initial = forms.forms[form_id]
+            .values
+            .get(field_id)
+            .cloned()
+            .or_else(|| properties.and_then(|properties| properties.get("value").cloned()))
+            .unwrap_or_else(|| text.0.clone());
+        let mut editable = EditableText::new(initial);
+        editable.max_characters = tags
+            .get("ui_max_chars")
+            .and_then(|value| value.parse::<usize>().ok())
+            .or_else(|| match kind {
+                "text" => Some(256),
+                "number" => Some(32),
+                _ => None,
+            });
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
+            RuntimeUiTextInput {
+                owner_twin_id: owner,
+                form_id: form_id.clone(),
+                field_id: field_id.clone(),
+            },
+            bevy_ui_widgets::TextInput,
+            bevy_ui_widgets::SelectAllOnFocus,
+            editable,
+            bevy::text::TextCursorStyle {
+                color: Color::srgb(0.44, 0.85, 0.77),
+                ..default()
+            },
+            Pickable::default(),
+        ));
+        let tab_index = tags
+            .get("ui_tab_index")
+            .and_then(|value| value.parse::<i32>().ok());
+        if let Some(tab_index) = tab_index {
+            entity_commands.insert(bevy::input_focus::tab_navigation::TabIndex(tab_index));
+        }
+        if kind == "number" {
+            entity_commands.insert(EditableTextFilter::new(|character| {
+                character.is_ascii_digit() || matches!(character, '.' | '-')
+            }));
+        }
+        drop(entity_commands);
+        if tab_index.is_some() {
+            commands
+                .entity(surface_root)
+                .insert(bevy::input_focus::tab_navigation::TabGroup::default());
+        }
+    }
+}
+
+fn attach_runtime_ui_scroll_areas(
+    mut commands: Commands,
+    candidates: Query<(Entity, &Tags), (With<Node>, Without<RuntimeUiScrollArea>)>,
+    roots: Query<(Entity, &RuntimeUiSurface)>,
+    parents: Query<&ChildOf>,
+) {
+    for (entity, tags) in &candidates {
+        if tags.tags().get("ui_scroll_area").map(String::as_str) != Some("vertical") {
+            continue;
+        }
+        let Some(surface_root) = runtime_ui_surface_ancestor(entity, &roots, &parents) else {
+            continue;
+        };
+        if !roots
+            .get(surface_root)
+            .is_ok_and(|(_, surface)| surface.mounted)
+        {
+            continue;
+        }
+        commands.entity(entity).insert((
+            RuntimeUiScrollArea,
+            bevy_ui_widgets::ScrollArea,
+            Pickable::default(),
+        ));
+    }
+}
+
+fn enable_runtime_ui_scroll_area_overflow(mut areas: Query<&mut Node, With<RuntimeUiScrollArea>>) {
+    for mut node in &mut areas {
+        node.overflow.y = bevy::ui::OverflowAxis::Scroll;
+    }
+}
+
+fn apply_runtime_ui_form_values(
+    mut forms: ResMut<RuntimeUiForms>,
+    mut inputs: Query<(&RuntimeUiTextInput, &mut EditableText)>,
+    workspace: Option<Res<WorkspaceResource>>,
+) {
+    let Some(owner) = forms.owner_twin_id else {
+        return;
+    };
+    if workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+        != Some(owner)
+    {
+        return;
+    }
+    for (form_id, form) in &mut forms.forms {
+        if !form.needs_projection {
+            continue;
+        }
+        for (input, mut editable) in &mut inputs {
+            if input.owner_twin_id != owner || &input.form_id != form_id {
+                continue;
+            }
+            if let Some(value) = form.values.get(&input.field_id) {
+                editable.editor_mut().set_text(value);
+            }
+        }
+        form.needs_projection = false;
+    }
+}
+
+fn store_runtime_ui_form_input_changes(
+    mut forms: ResMut<RuntimeUiForms>,
+    inputs: Query<(&RuntimeUiTextInput, &EditableText), Changed<EditableText>>,
+    workspace: Option<Res<WorkspaceResource>>,
+) {
+    let Some(owner) = forms.owner_twin_id else {
+        return;
+    };
+    if workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+        != Some(owner)
+    {
+        return;
+    }
+    for (input, editable) in &inputs {
+        if input.owner_twin_id != owner {
+            continue;
+        }
+        let Some(form) = forms.forms.get_mut(&input.form_id) else {
+            continue;
+        };
+        form.values
+            .insert(input.field_id.clone(), editable.value().to_string());
+    }
+}
+
+fn update_runtime_ui_form_text(
+    forms: Res<RuntimeUiForms>,
+    mut texts: Query<(&Tags, &mut Text)>,
+    workspace: Option<Res<WorkspaceResource>>,
+) {
+    let Some(owner) = forms.owner_twin_id else {
+        return;
+    };
+    if workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(TwinId::raw)
+        != Some(owner)
+    {
+        return;
+    }
+    for (tags, mut text) in &mut texts {
+        let tags = tags.tags();
+        let Some(form) = tags.get("ui_form").and_then(|id| forms.forms.get(id)) else {
+            continue;
+        };
+        if tags.get("ui_status").map(String::as_str) == Some("true") {
+            if text.0 != form.status {
+                text.0.clone_from(&form.status);
+            }
+        } else if let Some(field) = tags.get("ui_value") {
+            if let Some(value) = form.values.get(field)
+                && text.0 != *value
+            {
+                text.0.clone_from(value);
+            }
+        }
+    }
 }
 
 /// Authored registration for runtime UI surfaces.
@@ -680,73 +1312,127 @@ impl Plugin for RuntimeUiPlugin {
         if !app.is_plugin_added::<bevy_ui_widgets::ScrollAreaPlugin>() {
             app.add_plugins(bevy_ui_widgets::ScrollAreaPlugin);
         }
+        if !app.is_plugin_added::<bevy_ui_widgets::TextInputPlugin>() {
+            app.add_plugins(bevy_ui_widgets::TextInputPlugin);
+        }
+        if !app.is_plugin_added::<bevy::input_focus::InputFocusPlugin>() {
+            app.add_plugins(bevy::input_focus::InputFocusPlugin);
+        }
+        if !app.is_plugin_added::<bevy::input_focus::tab_navigation::TabNavigationPlugin>() {
+            app.add_plugins(bevy::input_focus::tab_navigation::TabNavigationPlugin);
+        }
+        if !app.is_plugin_added::<bevy::input_focus::InputDispatchPlugin>() {
+            app.add_plugins(bevy::input_focus::InputDispatchPlugin);
+        }
+        if !app.is_plugin_added::<bevy::input_focus::pointer_focus::PointerFocusPlugin>() {
+            app.add_plugins(bevy::input_focus::pointer_focus::PointerFocusPlugin);
+        }
         app.add_plugins((
             bevy_hui::HuiPlugin,
             bevy_flair::FlairPlugin,
             RuntimeUiManifestPlugin,
-        ))
-        .add_observer(dispatch_runtime_ui_press)
-        .init_resource::<RuntimeSurfaceLayouts>()
-        .init_resource::<RuntimeUiRenderState>()
-        .init_resource::<RuntimeUiPresentationGeneration>()
-        .init_resource::<RuntimeUiRecordingContract>()
-        .init_resource::<RuntimeUiCaptureState>()
-        .init_resource::<RuntimeUiGates>()
-        .init_resource::<RuntimeUiCursorMirror>()
-        .add_systems(
-            PreUpdate,
-            (
-                mirror_runtime_ui_cursor.before(bevy::ui::UiSystems::Focus),
-                restore_runtime_ui_cursor.after(bevy::ui::UiSystems::Focus),
-            ),
-        )
-        // Asset-scope events publish validated source snapshots. Scene teardown
-        // clears resolved presentation while open source scopes remain reusable.
-        .init_scene_resource::<RuntimeUiManifestState>()
-        .add_observer(admit_runtime_ui_manifest)
-        .add_observer(retire_runtime_ui_manifest)
-        .add_systems(
-            Update,
-            (
-                sync_runtime_ui_manifest,
-                mount_runtime_ui_surfaces
-                    .after(sync_runtime_ui_manifest)
-                    .before(bevy_hui::HuiSystems::Build),
-                bind_runtime_ui_to_camera.after(sync_runtime_ui_manifest),
-                apply_runtime_ui_exposures
-                    .after(sync_runtime_ui_manifest)
-                    .after(bevy_hui::HuiSystems::Build)
-                    .before(bevy_hui::HuiSystems::Style),
-                apply_runtime_ui_surface_interactions
-                    .after(apply_runtime_ui_exposures)
-                    .before(bevy_hui::HuiSystems::Style),
-                reconcile_runtime_ui_collections
-                    .after(apply_runtime_ui_exposures)
-                    .after(bevy_hui::HuiSystems::Build)
-                    .before(bevy_hui::HuiSystems::Style),
-                register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
-                sync_runtime_ui_scrollbar_theme,
-                dismiss_runtime_ui,
+        ));
+        // HUI treats unsupported HTML tags as custom elements. Bind the
+        // standard `<input>` tag to Bevy UI text nodes so its `type`, `value`,
+        // `id`, and runtime form tags can use the same retained HTML pipeline.
+        app.world_mut()
+            .resource_mut::<bevy_hui::prelude::ComponentBindings>()
+            .register("input", |mut entity| {
+                entity.insert((Node::default(), Text::default()));
+            });
+        app.add_observer(dispatch_runtime_ui_press)
+            .init_resource::<RuntimeSurfaceLayouts>()
+            .init_resource::<RuntimeUiRenderState>()
+            .init_resource::<RuntimeUiPresentationGeneration>()
+            .init_resource::<RuntimeUiForms>()
+            .init_resource::<RuntimeUiRecordingContract>()
+            .init_resource::<RuntimeUiCaptureState>()
+            .init_resource::<RuntimeUiGates>()
+            .init_resource::<RuntimeUiCursorMirror>()
+            .add_systems(
+                PreUpdate,
+                (
+                    mirror_runtime_ui_cursor.before(bevy::ui::UiSystems::Focus),
+                    restore_runtime_ui_cursor.after(bevy::ui::UiSystems::Focus),
+                ),
             )
-                .in_set(lunco_core::RuntimeCycleSet::Ui),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                apply_runtime_ui_placement_after_style
-                    .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
-                    .after(bevy::ui::UiSystems::Propagate)
-                    .before(bevy::ui::UiSystems::Content),
-                update_runtime_ui_recording_contract.after(apply_runtime_ui_placement_after_style),
-                report_runtime_ui_readiness
-                    .after(update_runtime_ui_recording_contract)
-                    .after(apply_runtime_ui_placement_after_style)
-                    .after(bevy::ui::UiSystems::PostLayout),
+            // Asset-scope events publish validated source snapshots. Scene teardown
+            // clears resolved presentation while open source scopes remain reusable.
+            .init_scene_resource::<RuntimeUiManifestState>()
+            .add_observer(admit_runtime_ui_manifest)
+            .add_observer(retire_runtime_ui_manifest)
+            .add_observer(on_runtime_ui_form_owner_closed)
+            .add_systems(
+                Update,
+                (
+                    attach_runtime_ui_text_inputs
+                        .after(bevy_hui::HuiSystems::Build)
+                        .after(apply_runtime_ui_exposures),
+                    attach_runtime_ui_scroll_areas
+                        .after(bevy_hui::HuiSystems::Build)
+                        .after(apply_runtime_ui_exposures),
+                    apply_runtime_ui_form_values
+                        .after(attach_runtime_ui_text_inputs)
+                        .before(bevy_hui::HuiSystems::Style),
+                    update_runtime_ui_form_text
+                        .after(attach_runtime_ui_text_inputs)
+                        .before(bevy_hui::HuiSystems::Style),
+                    sync_runtime_ui_html_classes
+                        .after(bevy_hui::HuiSystems::Build)
+                        .before(bevy_hui::HuiSystems::Style),
+                ),
             )
-                .in_set(lunco_core::RuntimeCycleSet::Ui),
-        );
+            .add_systems(
+                PostUpdate,
+                store_runtime_ui_form_input_changes.after(EditableTextSystems),
+            )
+            .add_systems(
+                Update,
+                (
+                    sync_runtime_ui_manifest,
+                    mount_runtime_ui_surfaces
+                        .after(sync_runtime_ui_manifest)
+                        .before(bevy_hui::HuiSystems::Build),
+                    bind_runtime_ui_to_camera.after(sync_runtime_ui_manifest),
+                    apply_runtime_ui_exposures
+                        .after(sync_runtime_ui_manifest)
+                        .after(bevy_hui::HuiSystems::Build)
+                        .before(bevy_hui::HuiSystems::Style),
+                    apply_runtime_ui_surface_interactions
+                        .after(apply_runtime_ui_exposures)
+                        .before(bevy_hui::HuiSystems::Style),
+                    reconcile_runtime_ui_collections
+                        .after(apply_runtime_ui_exposures)
+                        .after(bevy_hui::HuiSystems::Build)
+                        .before(bevy_hui::HuiSystems::Style),
+                    register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
+                    sync_runtime_ui_scrollbar_theme,
+                    dismiss_runtime_ui,
+                )
+                    .in_set(lunco_core::RuntimeCycleSet::Ui),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    enable_runtime_ui_scroll_area_overflow
+                        .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+                        .before(bevy::ui::UiSystems::Content),
+                    apply_runtime_ui_placement_after_style
+                        .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+                        .after(bevy::ui::UiSystems::Propagate)
+                        .before(bevy::ui::UiSystems::Content),
+                    update_runtime_ui_recording_contract
+                        .after(apply_runtime_ui_placement_after_style),
+                    report_runtime_ui_readiness
+                        .after(update_runtime_ui_recording_contract)
+                        .after(apply_runtime_ui_placement_after_style)
+                        .after(bevy::ui::UiSystems::PostLayout),
+                )
+                    .in_set(lunco_core::RuntimeCycleSet::Ui),
+            );
         install_runtime_ui_style_handoff(app);
         install_runtime_ui_render_readiness(app);
+        register_runtime_ui_form_commands(app);
     }
 }
 
@@ -788,6 +1474,69 @@ impl lunco_core::SceneResource for RuntimeUiManifestState {
 impl RuntimeUiManifestState {
     pub fn manifest(&self) -> Option<&RuntimeUiManifest> {
         self.manifest.as_ref()
+    }
+
+    fn find_collection(
+        &self,
+        selected: Option<TwinId>,
+        namespace: &str,
+        source: &str,
+    ) -> Result<Option<Option<String>>, String> {
+        if self.selected == selected
+            && let Some(manifest) = &self.manifest
+        {
+            return Ok(Some(
+                manifest
+                    .surfaces
+                    .iter()
+                    .find(|surface| surface.namespace == namespace)
+                    .and_then(|surface| {
+                        surface
+                            .collections
+                            .iter()
+                            .find(|collection| collection.source == source)
+                    })
+                    .map(|collection| collection.key.clone()),
+            ));
+        }
+
+        // Before the first manifest reconciliation, the per-scope source
+        // cache is already the authoritative authored declaration. Merge it
+        // with the same Twin-over-application identity rule used by the live
+        // surface builder.
+        let mut surfaces = HashMap::new();
+        let mut scope_loaded = false;
+        if let Some(application) = self.scopes.get(&None) {
+            scope_loaded = true;
+            if let Some(manifest) = application.as_ref().map_err(Clone::clone)? {
+                for surface in &manifest.surfaces {
+                    surfaces.insert(surface.id.clone(), surface.clone());
+                }
+            }
+        }
+        if let Some(twin) = selected.and_then(|id| self.scopes.get(&Some(id))) {
+            scope_loaded = true;
+            if let Some(manifest) = twin.as_ref().map_err(Clone::clone)? {
+                for surface in &manifest.surfaces {
+                    surfaces.insert(surface.id.clone(), surface.clone());
+                }
+            }
+        }
+        if !scope_loaded {
+            return Ok(None);
+        }
+        Ok(Some(
+            surfaces
+                .values()
+                .find(|surface| surface.namespace == namespace)
+                .and_then(|surface| {
+                    surface
+                        .collections
+                        .iter()
+                        .find(|collection| collection.source == source)
+                })
+                .map(|collection| collection.key.clone()),
+        ))
     }
 
     pub fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
@@ -3070,8 +3819,607 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
         && node.overflow == Overflow::hidden()
 }
 
+lunco_core::register_commands!(
+    on_set_runtime_ui_form_values,
+    on_set_runtime_ui_collection_data,
+    on_set_runtime_ui_form_status,
+    on_inspect_runtime_ui_form
+);
+
+fn register_runtime_ui_form_commands(app: &mut App) {
+    register_all_commands(app);
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn runtime_ui_schedule_builds_with_bevy_ui_and_flair() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            bevy::window::WindowPlugin {
+                primary_window: None,
+                ..default()
+            },
+            bevy::ui::UiPlugin,
+            RuntimeUiPlugin,
+        ));
+        assert!(
+            app.world()
+                .resource::<bevy_hui::prelude::ComponentBindings>()
+                .contains_key("input")
+        );
+        app.finish();
+        app.cleanup();
+        app.world_mut()
+            .schedule_scope(PostUpdate, |world, schedule| {
+                schedule
+                    .initialize(world)
+                    .expect("runtime HTML and Flair PostUpdate schedule must build");
+            });
+    }
+
+    #[test]
+    fn authored_collection_publication_is_twin_scoped_typed_and_key_safe() {
+        use super::*;
+
+        let mut app = App::new();
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(41));
+        app.insert_resource(workspace)
+            .insert_resource(RuntimeUiForms::default())
+            .insert_resource(EngineExposures::default())
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>();
+        register_all_commands(&mut app);
+
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+                "id":"factory-studio",
+                "namespace":"factory-studio",
+                "template":"ui/factory_studio.html",
+                "stylesheet":"ui/factory_studio.css",
+                "collections":[{
+                    "source":"ingredient_rows",
+                    "container":"ingredient-rows",
+                    "template":"ui/factory_ingredient_row.html",
+                    "key":"row_key"
+                }],
+                "placement":{"mode":"window","anchor":"top_left","offset":[0,0],"width":640,"height":900}
+            }"#,
+        )
+        .unwrap();
+        let mut manifest_state = RuntimeUiManifestState::default();
+        manifest_state.scopes.insert(
+            Some(TwinId::new(41)),
+            Ok(Some(RuntimeUiManifest {
+                _kind: RUNTIME_UI_MANIFEST_KIND.to_owned(),
+                surfaces: vec![definition],
+            })),
+        );
+        app.insert_resource(manifest_state);
+
+        let row = |key: &str, field: &str| {
+            BTreeMap::from([
+                ("row_key".to_owned(), key.to_owned()),
+                ("material_field".to_owned(), field.to_owned()),
+            ])
+        };
+        app.world_mut().trigger(SetRuntimeUiCollectionData {
+            namespace: "factory-studio".to_owned(),
+            source: "ingredient_rows".to_owned(),
+            items: vec![
+                row("ingredient-1", "ingredient_1"),
+                row("ingredient-2", "ingredient_2"),
+            ],
+        });
+        let exposures = app.world().resource::<EngineExposures>();
+        let Some(ExposureValue::Array(rows)) = exposures
+            .surfaces
+            .get("factory-studio")
+            .and_then(|surface| surface.properties.get("ingredient_rows"))
+        else {
+            panic!("Rhai collection rows were not published as a typed exposure array");
+        };
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            collection_item_fields(&rows[1], "row_key").unwrap(),
+            vec![
+                ("material_field".to_owned(), "ingredient_2".to_owned()),
+                ("row_key".to_owned(), "ingredient-2".to_owned()),
+            ]
+        );
+        let published_revision = exposures.revision;
+
+        app.world_mut().trigger(SetRuntimeUiCollectionData {
+            namespace: "factory-studio".to_owned(),
+            source: "ingredient_rows".to_owned(),
+            items: vec![
+                row("duplicate", "ingredient_1"),
+                row("duplicate", "ingredient_2"),
+            ],
+        });
+        app.world_mut().trigger(SetRuntimeUiCollectionData {
+            namespace: "factory-studio".to_owned(),
+            source: "undeclared_rows".to_owned(),
+            items: Vec::new(),
+        });
+        assert_eq!(
+            app.world().resource::<EngineExposures>().revision,
+            published_revision,
+            "invalid keys and undeclared sources must not change the live collection"
+        );
+
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_twin = Some(TwinId::new(42));
+        app.world_mut().trigger(SetRuntimeUiFormValues {
+            form_id: "another_form".to_owned(),
+            values: BTreeMap::from([("name".to_owned(), "another twin".to_owned())]),
+        });
+        assert!(
+            !app.world()
+                .resource::<EngineExposures>()
+                .surfaces
+                .get("factory-studio")
+                .is_some_and(|surface| surface.properties.contains_key("ingredient_rows")),
+            "changing active Twin ownership must retire the previous Twin's rows"
+        );
+    }
+
+    #[test]
+    fn authored_collection_payload_limits_are_enforced_before_publication() {
+        use super::*;
+
+        let too_many_rows = (0..129)
+            .map(|index| BTreeMap::from([("row_key".to_owned(), format!("row-{index}"))]))
+            .collect::<Vec<_>>();
+        assert!(
+            runtime_ui_collection_value("row_key", &too_many_rows)
+                .unwrap_err()
+                .contains("at most 128")
+        );
+
+        let too_many_fields = BTreeMap::from_iter(
+            std::iter::once(("row_key".to_owned(), "ingredient-1".to_owned()))
+                .chain((0..32).map(|index| (format!("field-{index}"), "value".to_owned()))),
+        );
+        assert!(
+            runtime_ui_collection_value("row_key", &[too_many_fields])
+                .unwrap_err()
+                .contains("1 to 32 fields")
+        );
+
+        let oversized = BTreeMap::from([
+            ("row_key".to_owned(), "ingredient-1".to_owned()),
+            ("value".to_owned(), "x".repeat(2049)),
+        ]);
+        assert!(
+            runtime_ui_collection_value("row_key", &[oversized])
+                .unwrap_err()
+                .contains("exceeds 2048 characters")
+        );
+    }
+
+    #[test]
+    fn keyed_collection_reconciliation_reuses_rows_updates_fields_and_retires_removed_keys() {
+        use super::*;
+
+        let mut exposures = EngineExposures::default();
+        let first_rows = runtime_ui_collection_value(
+            "row_key",
+            &[
+                BTreeMap::from([
+                    ("row_key".to_owned(), "ingredient-1".to_owned()),
+                    ("material_value".to_owned(), "Sugar".to_owned()),
+                ]),
+                BTreeMap::from([
+                    ("row_key".to_owned(), "ingredient-2".to_owned()),
+                    ("material_value".to_owned(), "Vanilla".to_owned()),
+                ]),
+            ],
+        )
+        .unwrap();
+        exposures
+            .writer("factory-studio")
+            .property("ingredient_rows", first_rows);
+
+        let mut app = App::new();
+        app.insert_resource(exposures);
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+                "id":"factory-studio",
+                "namespace":"factory-studio",
+                "template":"ui/factory_studio.html",
+                "stylesheet":"ui/factory_studio.css",
+                "collections":[{
+                    "source":"ingredient_rows",
+                    "container":"ingredient-rows",
+                    "template":"ui/factory_ingredient_row.html",
+                    "key":"row_key"
+                }],
+                "placement":{"mode":"window","anchor":"top_left","offset":[0,0],"width":640,"height":900}
+            }"#,
+        )
+        .unwrap();
+        let mut surface = RuntimeUiSurface::from_definition(
+            &definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .unwrap();
+        surface.mounted = true;
+        let root = app
+            .world_mut()
+            .spawn((Node::default(), surface, Visibility::Visible))
+            .id();
+        let mut container_id = UiId::default();
+        *container_id = "ingredient-rows".to_owned();
+        let container = app
+            .world_mut()
+            .spawn((Node::default(), container_id, ChildOf(root)))
+            .id();
+        app.add_systems(Update, reconcile_runtime_ui_collections);
+        app.update();
+
+        let mut query = app
+            .world_mut()
+            .query::<(Entity, &RuntimeUiCollectionRow, &TemplateProperties)>();
+        let initial = query
+            .iter(app.world())
+            .map(|(entity, row, properties)| {
+                (
+                    row.key.clone(),
+                    (entity, properties.get("material_value").cloned()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(initial.len(), 2);
+        let retained_second = initial["ingredient-2"].0;
+
+        let next_rows = runtime_ui_collection_value(
+            "row_key",
+            &[
+                BTreeMap::from([
+                    ("row_key".to_owned(), "ingredient-2".to_owned()),
+                    ("material_value".to_owned(), "Cocoa".to_owned()),
+                ]),
+                BTreeMap::from([
+                    ("row_key".to_owned(), "ingredient-3".to_owned()),
+                    ("material_value".to_owned(), "Milk".to_owned()),
+                ]),
+            ],
+        )
+        .unwrap();
+        app.world_mut()
+            .resource_mut::<EngineExposures>()
+            .writer("factory-studio")
+            .property("ingredient_rows", next_rows);
+        app.update();
+
+        let updated = query
+            .iter(app.world())
+            .map(|(entity, row, properties)| {
+                (
+                    row.key.clone(),
+                    (entity, properties.get("material_value").cloned()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(updated.len(), 2);
+        assert!(!updated.contains_key("ingredient-1"));
+        assert_eq!(updated["ingredient-2"].0, retained_second);
+        assert_eq!(updated["ingredient-2"].1.as_deref(), Some("Cocoa"));
+        assert!(updated.contains_key("ingredient-3"));
+        assert_eq!(
+            app.world().get::<Children>(container).map(Children::len),
+            Some(2),
+            "the retained host should contain exactly the current ordered rows"
+        );
+    }
+
+    #[test]
+    fn authored_html_class_tags_update_flair_class_lists() {
+        use super::*;
+
+        let mut app = App::new();
+        app.add_systems(Update, sync_runtime_ui_html_classes);
+        let mut tags = Tags::default();
+        tags.insert("class".to_owned(), "section-title muted".to_owned());
+        let entity = app.world_mut().spawn(tags).id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<ClassList>(entity),
+            Some(&ClassList::new("section-title muted"))
+        );
+
+        app.world_mut()
+            .get_mut::<Tags>(entity)
+            .unwrap()
+            .insert("class".to_owned(), "field-label".to_owned());
+        app.update();
+        assert_eq!(
+            app.world().get::<ClassList>(entity),
+            Some(&ClassList::new("field-label"))
+        );
+
+        app.world_mut()
+            .get_mut::<Tags>(entity)
+            .unwrap()
+            .remove("class");
+        app.update();
+        assert!(app.world().get::<ClassList>(entity).is_none());
+    }
+
+    #[test]
+    fn authored_action_includes_current_form_values_and_button_tags() {
+        use super::*;
+        let mut tags = Tags::default();
+        tags.insert("action".to_owned(), "factory.recipe.choose".to_owned());
+        tags.insert("ui_form".to_owned(), "factory_recipe".to_owned());
+        tags.insert("field".to_owned(), "mixer".to_owned());
+        tags.insert("value".to_owned(), "Paddle".to_owned());
+        tags.insert("index".to_owned(), "4".to_owned());
+        let values = BTreeMap::from([
+            ("product_name".to_owned(), "Cocoa drink".to_owned()),
+            ("ingredient_count".to_owned(), "3".to_owned()),
+        ]);
+
+        let parameters = runtime_ui_action_parameters(&tags, Some(&values));
+        assert_eq!(
+            parameters.get("ui_form").and_then(HookValue::as_str),
+            Some("factory_recipe")
+        );
+        assert_eq!(
+            parameters.get("field").and_then(HookValue::as_str),
+            Some("mixer")
+        );
+        assert_eq!(
+            parameters.get("value").and_then(HookValue::as_str),
+            Some("Paddle")
+        );
+        assert_eq!(
+            parameters.get("index").and_then(HookValue::as_str),
+            Some("4")
+        );
+        assert!(parameters.get("action").is_none());
+        let fields = parameters.get("fields").unwrap();
+        assert_eq!(
+            fields.get("product_name").and_then(HookValue::as_str),
+            Some("Cocoa drink")
+        );
+        assert_eq!(
+            fields.get("ingredient_count").and_then(HookValue::as_str),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn authored_value_and_status_labels_follow_the_active_twins_form() {
+        use super::*;
+        let mut app = App::new();
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(23));
+        app.insert_resource(workspace);
+        let mut forms = RuntimeUiForms {
+            owner_twin_id: Some(23),
+            ..default()
+        };
+        forms.forms.insert(
+            "factory_recipe".to_owned(),
+            RuntimeUiFormState {
+                values: BTreeMap::from([("mixer".to_owned(), "Paddle".to_owned())]),
+                status: "Ready to run".to_owned(),
+                needs_projection: false,
+            },
+        );
+        app.insert_resource(forms);
+
+        let mut value_tags = Tags::default();
+        value_tags.insert("ui_form".to_owned(), "factory_recipe".to_owned());
+        value_tags.insert("ui_value".to_owned(), "mixer".to_owned());
+        let value_label = app
+            .world_mut()
+            .spawn((value_tags, Text::new("old mixer")))
+            .id();
+        let mut status_tags = Tags::default();
+        status_tags.insert("ui_form".to_owned(), "factory_recipe".to_owned());
+        status_tags.insert("ui_status".to_owned(), "true".to_owned());
+        let status_label = app
+            .world_mut()
+            .spawn((status_tags, Text::new("old status")))
+            .id();
+
+        app.add_systems(Update, update_runtime_ui_form_text);
+        app.update();
+
+        assert_eq!(app.world().get::<Text>(value_label).unwrap().0, "Paddle");
+        assert_eq!(
+            app.world().get::<Text>(status_label).unwrap().0,
+            "Ready to run"
+        );
+    }
+
+    #[test]
+    fn authored_text_inputs_round_trip_form_values_only_for_the_active_twin() {
+        use super::*;
+        let mut app = App::new();
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(23));
+        app.insert_resource(workspace);
+        let mut forms = RuntimeUiForms {
+            owner_twin_id: Some(23),
+            ..default()
+        };
+        forms.forms.insert(
+            "factory_recipe".to_owned(),
+            RuntimeUiFormState {
+                values: BTreeMap::from([("fraction_1".to_owned(), "0.5".to_owned())]),
+                ..default()
+            },
+        );
+        app.insert_resource(forms);
+        let input = RuntimeUiTextInput {
+            owner_twin_id: 23,
+            form_id: "factory_recipe".to_owned(),
+            field_id: "fraction_1".to_owned(),
+        };
+        let entity = app
+            .world_mut()
+            .spawn((input, EditableText::new("0.6")))
+            .id();
+        app.add_systems(PostUpdate, store_runtime_ui_form_input_changes);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<RuntimeUiForms>().forms["factory_recipe"].values["fraction_1"],
+            "0.6"
+        );
+
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_twin = Some(TwinId::new(24));
+        app.world_mut()
+            .get_mut::<EditableText>(entity)
+            .unwrap()
+            .editor_mut()
+            .set_text("0.9");
+        app.update();
+        assert_eq!(
+            app.world().resource::<RuntimeUiForms>().forms["factory_recipe"].values["fraction_1"],
+            "0.6",
+            "a retained input from the outgoing Twin must not update the next Twin's form"
+        );
+    }
+
+    #[test]
+    fn authored_input_fields_receive_text_input_and_pointer_focus_components() {
+        use super::*;
+
+        let mut app = App::new();
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(23));
+        app.insert_resource(workspace);
+        let mut forms = RuntimeUiForms {
+            owner_twin_id: Some(23),
+            ..default()
+        };
+        forms.forms.insert(
+            "factory_recipe".to_owned(),
+            RuntimeUiFormState {
+                values: BTreeMap::from([("ingredient_count".to_owned(), "2".to_owned())]),
+                ..default()
+            },
+        );
+        app.insert_resource(forms);
+
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+                "id":"factory-studio",
+                "namespace":"factory-studio",
+                "template":"ui/factory_studio.html",
+                "stylesheet":"ui/factory_studio.css",
+                "interactive":true,
+                "placement":{"mode":"window","anchor":"top_left","offset":[18,64],"width":560,"height":880}
+            }"#,
+        )
+        .unwrap();
+        let mut surface = RuntimeUiSurface::from_definition(
+            &definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .unwrap();
+        surface.mounted = true;
+        let root = app.world_mut().spawn(surface).id();
+        let mut tags = Tags::default();
+        tags.insert("ui_form".to_owned(), "factory_recipe".to_owned());
+        tags.insert("ui_field".to_owned(), "ingredient_count".to_owned());
+        tags.insert("ui_tab_index".to_owned(), "3".to_owned());
+        let field = app
+            .world_mut()
+            .spawn((
+                Text::default(),
+                tags,
+                TemplateProperties::default()
+                    .with("type", "number")
+                    .with("value", "2"),
+                ChildOf(root),
+            ))
+            .id();
+        app.add_systems(Update, attach_runtime_ui_text_inputs);
+
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<bevy_ui_widgets::TextInput>(field)
+                .is_some()
+        );
+        assert!(app.world().get::<Pickable>(field).is_some());
+        assert_eq!(
+            app.world()
+                .get::<bevy::text::TextCursorStyle>(field)
+                .unwrap()
+                .color,
+            Color::srgb(0.44, 0.85, 0.77),
+            "native inputs need a high-contrast visible caret"
+        );
+        assert_eq!(app.world().get::<EditableText>(field).unwrap().value(), "2");
+        assert_eq!(
+            app.world()
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(field),
+            Some(&bevy::input_focus::tab_navigation::TabIndex(3))
+        );
+    }
+
+    #[test]
+    fn form_value_commands_project_back_into_retained_text_inputs() {
+        use super::*;
+        let mut app = App::new();
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(23));
+        app.insert_resource(workspace);
+        let mut forms = RuntimeUiForms {
+            owner_twin_id: Some(23),
+            ..default()
+        };
+        forms.forms.insert(
+            "factory_recipe".to_owned(),
+            RuntimeUiFormState {
+                values: BTreeMap::from([("batch_kg".to_owned(), "750.0".to_owned())]),
+                needs_projection: true,
+                ..default()
+            },
+        );
+        app.insert_resource(forms);
+        let entity = app
+            .world_mut()
+            .spawn((
+                RuntimeUiTextInput {
+                    owner_twin_id: 23,
+                    form_id: "factory_recipe".to_owned(),
+                    field_id: "batch_kg".to_owned(),
+                },
+                EditableText::new("1000.0"),
+            ))
+            .id();
+        app.add_systems(Update, apply_runtime_ui_form_values);
+        app.update();
+
+        assert_eq!(
+            app.world().get::<EditableText>(entity).unwrap().value(),
+            "750.0"
+        );
+        assert!(!app.world().resource::<RuntimeUiForms>().forms["factory_recipe"].needs_projection);
+    }
+
     #[test]
     fn a_pending_descendant_image_invalidates_a_previously_ready_surface() {
         use super::*;
@@ -3610,7 +4958,7 @@ mod tests {
     }
 
     #[test]
-    fn drag_from_retained_child_moves_its_draggable_surface_root() {
+    fn only_explicit_drag_handle_moves_its_draggable_surface_root() {
         let mut app = App::new();
         app.add_message::<RuntimeUiSurfaceDragged>()
             .add_message::<RuntimeUiSurfaceReset>()
@@ -3663,9 +5011,12 @@ mod tests {
             .entity_mut(root)
             .observe(emit_runtime_ui_surface_drag);
         let button = app.world_mut().spawn(ChildOf(root)).id();
+        let mut handle_tags = Tags::default();
+        handle_tags.insert("ui_drag_handle".to_owned(), "true".to_owned());
+        let handle = app.world_mut().spawn((handle_tags, ChildOf(root))).id();
 
-        app.world_mut().trigger(PointerDrag {
-            entity: button,
+        let drag = |entity| PointerDrag {
+            entity,
             pointer: Pointer::new(
                 PointerId::Mouse,
                 Location {
@@ -3679,7 +5030,18 @@ mod tests {
             button: PointerButton::Primary,
             distance: Vec2::new(12.0, 18.0),
             delta: Vec2::new(12.0, 18.0),
-        });
+        };
+        app.world_mut().trigger(drag(button));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<RuntimeSurfaceLayouts>()
+                .get("view-switcher"),
+            None,
+            "a drag over a button or input must not move the whole surface"
+        );
+
+        app.world_mut().trigger(drag(handle));
         app.update();
 
         assert_eq!(

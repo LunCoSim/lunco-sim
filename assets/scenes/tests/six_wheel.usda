@@ -46,6 +46,7 @@ def Xform "SixWheelTest" (
     }
 
     def Camera "Avatar" (
+        active = false
         prepend apiSchemas = ["LunCoCameraAPI", "LunCoAvatarAPI"]
         prepend references = @lunco://components/cameras/lunar_surface_camera.usda@</LunarSurfaceCamera>
     )
@@ -57,19 +58,10 @@ def Xform "SixWheelTest" (
         )
         {
         }
-        uniform bool lunco:avatar = true
+        uniform bool lunco:avatar = false
         double3 lunco:cameraLookAt = (0.0, 0.5, 0.0)
         double3 xformOp:translate = (-5.0, 3.0, 10.0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
-    }
-
-    # The mounted rover camera is the sole presentation owner for this test.
-    # Keep the generic avatar prim available as inert scene data so the track
-    # never races a local-embodiment fallback during asynchronous projection.
-    over "Avatar"
-    {
-        bool active = false
-        uniform bool lunco:avatar = false
     }
 
     def Scope "CameraTrack" (
@@ -86,7 +78,7 @@ def Xform "SixWheelTest" (
         prepend references = @lunco://vessels/rovers/six_wheel_rover.usda@</SixWheelRover>
     )
     {
-        double3 xformOp:translate = (0, 1.0, 0)
+        double3 xformOp:translate = (0, 1.06, 0)
         uniform token[] xformOpOrder = ["xformOp:translate"]
     }
 

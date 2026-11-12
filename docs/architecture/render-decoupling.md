@@ -137,10 +137,22 @@ and `RenderGaveUp` as the `presentation-stopped` error through the existing
 `RuntimeDiagnostics` owner. Render warnings and failures appear in Recent
 Events without a floating viewport banner. API, authoring review and performance consumers read
 that same diagnostic; the renderer does not raise a simulation fault or change
-physics, camera quality or authored settings. A warning is replaced by the
-terminal error, rather than counted twice. Repair removes only this producer's
-findings. Scene teardown resets ordinary recovery; device loss survives that
-boundary and republishes after scene diagnostics clear.
+physics or authored settings. A shadow-map allocation OOM reduces only that
+map's effective runtime resolution by one power of two, retries rendering, and
+publishes an Error in Recent Events describing the requested and effective
+sizes. It repeats down to 64 pixels if necessary. The saved Graphics values and
+authored light state remain intact; changing that map size or retiring the
+scene clears the runtime override. This recovery keeps the viewport and
+workbench available when shadow allocation alone exhausted GPU memory. Other
+persistent render failures still replace their warning with the terminal error
+and stop presentation. Repair removes only this producer's findings. Scene
+teardown resets ordinary recovery; device loss survives that boundary and
+republishes after scene diagnostics clear.
+
+The `render-shadow` exposure reports `directional_map_size` and
+`point_map_size` as the effective live sizes; the corresponding
+`requested_directional_map_size` and `requested_point_map_size` retain the
+saved Graphics values while a runtime override is active.
 
 `EnginePerformance` retains application-frame timings, which can continue while
 presentation has stopped. A numeric FPS alone does not prove rendered output.
@@ -294,6 +306,9 @@ a matched measurement rather than an asset-count inference.
 `lunco-render-bevy` routes native point/spot `RootNonCameraView` entities from
 `Core3d` to `SharedShadowView` after Bevy prepares lights and applies its view
 commands. The route is refreshed when native preparation reinserts its label.
+The shared schedule is installed during plugin finish, before the pipelined
+render thread starts; local-light visibility configuration retains its own
+cleanup lifecycle.
 Custom schedule labels, output cameras and directional cascades retain their
 existing schedules. This continuous render mechanism requires no Rhai policy
 hook and does not change simulation admission or authoritative state.
@@ -546,7 +561,8 @@ doctrine applied to the last place that dodged it.
 
 `lunco-render` (render-free) and `lunco-materials` (render-free) hold the whole vocabulary.
 `lunco-render-bevy` is the material-binding crate. `lunco-render-recovery` owns the
-render-bound GPU error handler, adapter capability admission, and presentation gate. The
+render-bound GPU error handler, adapter capability admission, transient shadow
+resolution recovery, and presentation gate. The
 GUI-only `lunco-workbench` consumes those capabilities for its rendered shadow-settings
 surface, but neither recovery nor the workbench is reachable from the headless server.
 
@@ -827,17 +843,12 @@ main-world projected work, not proof that the GPU accepted a rectangle.
 Temporal filtering, camera jitter, sub-camera/custom projections and unknown
 material consumers retain the native raster. At the render consumer, PCSS or a
 native shadow viewport with a different allocation size also declines the crop.
-For an admitted directional view with a ready depth-clear pipeline, the renderer
-loads the existing native depth attachment and draws Bevy's fullscreen triangle
-at reverse-Z depth zero inside the same receiver rectangle immediately before
-the native early shadow pass. This clears every possible sampled texel, including
-when the native shadow phase contains no draws. The late pass loads the result.
-The view-to-rectangle admission is rebuilt each render frame; a missing pipeline
-or viewport mismatch leaves the native full clear in charge. The admitted
-pipeline is retained through the render pass, so pipeline-cache updates between
-preparation and rendering cannot remove the required clear. Point and spot
-attachments retain native clearing. Camera scheduling and native pass order stay
-the same, including the render-diagnostics wrapper.
+Native shadow attachments clear the full map before the early pass, including
+when the caster phase is empty. Receiver rectangles restrict rasterized draws,
+not the attachment clear, so a removed caster or a moving receiver cannot leave
+old depth in a later sampled region. The late pass loads the native result.
+Camera scheduling and native pass order stay the same, including the
+render-diagnostics wrapper.
 Every point/spot shadow phase explicitly restores the complete native scissor.
 The public native Shadow draw registry retains its IDs and type indices;
 each append-only draw delegate is wrapped once, including after GPU recovery.

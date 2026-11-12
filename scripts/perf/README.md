@@ -208,3 +208,32 @@ Validate every JIT-map row before attribution. In the current Cranelift writer,
 concurrent constructors can interleave the formatted fields of separate rows.
 A successfully completed capture does not make a malformed symbol map usable.
 These CPU samples attribute diagnostic work, not wall time or product FPS.
+
+## Plume ray-budget convergence
+
+`scripts/perf/plume_sampling.py` compares a selected total ray budget against
+512 samples and restores the selected value in side, axial and inside-volume
+views. It uses a fresh owned native window, first requires the production
+52-check conservation verdict, and authors a scratch fixture through the USD
+document API. It records the physical source's published f32 field and bounds
+at positive delivered power and disconnects that field only in the scratch
+copy. Budget changes use the native material setter; every captured field must
+still equal the recorded values. Restored images check repeatability. Acceptance
+requires at most 0.5 RMS and four peak 8-bit display levels versus the reference,
+and at most 0.25 RMS with one peak display level between the selected and
+restored views (allowing final GPU/display rounding). Captures and full-frame timings are diagnostic, not GPU
+kernel timings or a comparison with the retired renderer.
+
+```sh
+LUNCO_ASSET_ROOT="$PWD/assets" BEVY_ASSET_ROOT="$PWD" \
+LUNCOSIM_BIN="$PWD/target/debug/luncosim" \
+python3 scripts/perf/plume_sampling.py --port 4881 --samples 128 --maximize \
+  --output .cache/perf/plume-sampling
+```
+
+Keep the output ignored by Git. The receipt includes the binary hash and
+concurrent processes; use a quiet machine for performance acceptance. Inspect
+the images and convergence error before accepting a different default.
+
+`--maximize` uses the native desktop framebuffer. Read the recorded pixel size;
+startup window-placement flags do not prove a requested render resolution.

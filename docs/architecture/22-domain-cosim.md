@@ -108,11 +108,14 @@ Native external FMI 3 Co-Simulation import belongs to
 headless/windowed simulation composition. `LoadFmu` admits bounded archives
 as scene-owned participants on one native worker. Scalar Float64 samples use
 the existing `SimComponent` backend. Integer communication ticks consume the
-same master admission as physics and Modelica; native timestamps and Event
-Mode/early-return transactions are validated before publication through
-`SimulationCompletions`. Inputs are held over each explicit communication
-interval. Output dependencies and declared state-restoration capabilities are
-retained as facts; they do not constitute an implicit algebraic-loop solver.
+same master admission as physics and Modelica; native timestamps and exact
+communication endpoints are validated before publication through
+`SimulationCompletions`. This fixed-tick importer declines FMI Event Mode and
+early return, so the FMU handles internal events and an early endpoint request
+faults instead of being hidden inside the worker. Inputs are held over each
+explicit communication interval. Output dependencies and declared
+state-restoration capabilities are retained as facts; they do not constitute
+an implicit algebraic-loop solver.
 Modelica and external FMUs publish engineering facts through
 `lunco-port-core::ScalarPortContracts`. Source admission owns conversion into
 that immutable live contract; Modelica provenance remains in
@@ -542,8 +545,10 @@ winner; once selected, an owner refusal is terminal and cannot fall through to
 a shadowed port. Output-only owners do not shadow input writes. `ReleasePort`
 and `ReleaseControl` clear named or all local setpoint holds without writing
 values. `PortHolds` retains controller and authored-program setpoints in
-separate layers. `SetPorts` and live `SetModelInput` assign Twin/Simulation Rhai writes to the program
-layer; controller, UI, and external command writes use the controller layer.
+separate layers. `SetPorts` and live `SetModelInput` assign Twin-owned
+Lifecycle and Simulation Rhai writes to the program layer; lifecycle writes
+keep their `RuntimeClock::None` context and enter through the ordered input
+queue. Controller, UI, and external command writes use the controller layer.
 Controller input takes precedence over authored program guidance, which takes
 precedence over the wiring fabric. The input owner resolves this priority before
 committing immediate or queued writes, including unwired inputs. It validates
@@ -861,9 +866,17 @@ native Modelica and FMI 3 Co-Simulation backends share these master invariants:
 
 `lunco-fmi` loads and validates `modelDescription.xml`, preserves value
 references and scalar engineering contracts, and runs the FMI 3 Co-Simulation
-lifecycle on its native worker. `fmi3DoStep` can return before the requested
-communication point; early returns and Event Mode iteration remain private
-until the interval has completed. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
+lifecycle on its native worker. The importer declines Event Mode and early
+return; FMUs handle internal events. The importer requires `lastSuccessfulTime`
+to match the requested communication point within its timestamp tolerance.
+FMI permits that value to deviate from the requested endpoint even when
+`earlyReturn` is false; the owner faults such a response because the current
+master cannot synchronize all participants at the reported time. An early
+return or event-handling response also faults because the current master cannot
+synchronize participants at an intermediate time. Supporting those FMI
+features requires a master-visible
+intermediate communication point that reschedules the complete due participant
+set. See the [FMI 3.0.2 specification](https://fmi-standard.org/docs/3.0.2/).
 
 The FMU adapter uses the existing port/connection boundary and conservative
 scheduler. FMI Model Exchange requires a separate solver integration and is
@@ -902,8 +915,8 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 |---|---|---|
 | **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
 | **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
-| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | Named writes use the shared `PortRegistry`. External API, identified direct typed, local port-inspector, and non-Simulation Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl` commands enter the bounded session queue and commit at the next fixed tick. Simulation-clock Rhai and fixed-step controller writes stay in their owning pass; network ControlStream frames keep their per-vessel input path. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; release returns it to authored wiring without synthesizing values. |
-| **Modelica input injection** — discrete | `SetModelInput` | live API clients select a Modelica participant by `target_gid` from `ListEntities`; workbench clients select an editor document by `doc_id`. Live `SetModelInput` commands and local Modelica canvas writes are admitted to the shared next-fixed-tick queue, captured as typed Modelica changes, and applied through the shared layered input transaction. Simulation-clock Twin Rhai uses the program layer; controller/external input uses the controller layer. Editor-only models keep immediate document-owned writes; Simulation-clock Rhai writes remain derived behavior. |
+| **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | Named writes use the shared `PortRegistry`. External API, identified direct typed, local port-inspector, and non-Simulation Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl` commands enter the bounded session queue and commit at the next fixed tick. Twin-owned Lifecycle Rhai writes also enter that queue and retain authored-program ownership; Simulation-clock Rhai and fixed-step controller writes stay in their owning pass. Network ControlStream frames keep their per-vessel input path. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; release returns it to authored wiring without synthesizing values. |
+| **Modelica input injection** — discrete | `SetModelInput` | live API clients select a Modelica participant by `target_gid` from `ListEntities`; workbench clients select an editor document by `doc_id`. Live `SetModelInput` commands and local Modelica canvas writes are admitted to the shared next-fixed-tick queue, captured as typed Modelica changes, and applied through the shared layered input transaction. Twin-owned Lifecycle and Simulation Rhai use the program layer; controller/external input uses the controller layer. Editor-only models keep immediate document-owned writes; Simulation-clock Rhai writes remain derived behavior. |
 
 For a batch `RunExperiment`, the deferred command acknowledgement contains the
 exact `experiment_id` after registration; it does not wait for numerical

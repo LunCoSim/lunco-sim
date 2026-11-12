@@ -25,14 +25,11 @@ being re-supplied out of band.
 
 ## The frame we write
 
-A **local metric frame centred on the crop**, not a planetary projection. The
-sim works in scene metres with the crop centre at the origin, and the file says
-exactly that: a user-defined equirectangular projection on the target body's
-sphere, with its natural origin *at* the crop centre. Near its own origin,
-projected metres ARE local metres — the file's frame and the sim's frame are the
-same frame, no conversion, no sign to get wrong — while the projection
-parameters record *where on the body* the crop sits, which a bare local grid
-could not express.
+The crop is centred on a declared point on the body's sphere. The default
+equirectangular projection is locally metric at its centre. An explicitly
+selected orthographic projection instead represents the body's tangent plane
+across the crop, so regional data remains aligned with the simulator's ENU
+coordinates. Both GeoTIFFs carry their projection and centre.
 
 Spacing is **node-based**: samples are nodes, so an extent spans `res − 1`
 intervals. A crop of `win` source nodes at spacing `scale` spans
@@ -75,10 +72,9 @@ heightmap. Writes:
   - User-defined geographic CS on the body's sphere:
     `GeogSemiMajorAxis` = `GeogSemiMinorAxis` = body radius, angular units
     degrees, `GeogCitation` naming the body for a human (`"Moon 2000"`).
-  - User-defined projected CS: equirectangular, linear units metres,
-    `ProjStdParallel1` and `ProjCenterLat` = centre latitude,
-    `ProjCenterLong` = centre longitude. These are the standard
-    [equirectangular projection parameters](https://gdal.org/en/stable/proj_list/equirectangular.html).
+  - User-defined projected CS: equirectangular or orthographic, linear units
+    metres, `ProjCenterLat` and `ProjCenterLong` at the crop centre. The
+    equirectangular form also sets `ProjStdParallel1` to the centre latitude.
 
 ## Reader contract (`read_geo_tags`)
 
@@ -151,9 +147,10 @@ it today.
 
 `read_spherical_raster` reads standard projection GeoKeys, sphere axes,
 false origin, pixel scale and tiepoints. It handles north/south polar
-stereographic and equirectangular sources and normalizes PixelIsArea versus
+stereographic, equirectangular and orthographic sources and normalizes PixelIsArea versus
 PixelIsPoint registration. Unsupported projections and ellipsoids are explicit
-errors. The output crop uses the inverse of the same crop-centred
-equirectangular projection encoded by `write_geo_tags`, including its natural
-origin latitude; a crop crossing a pole is rejected. See
+errors. The output crop uses the inverse of the projection encoded by
+`write_geo_tags`: equirectangular by default, or orthographic when the recipe
+sets `output_projection = "orthographic"`. Equirectangular crops crossing a pole
+and orthographic crops extending beyond the tangent hemisphere are rejected. See
 [artifact processing](asset-processing.md) for the recipe and output lifecycle.

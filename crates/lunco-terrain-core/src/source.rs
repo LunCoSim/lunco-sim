@@ -17,6 +17,153 @@
 
 use crate::quadtree::Square;
 
+/// An affine height reference used by conservative surface enclosures.
+#[derive(Clone, Copy, Debug)]
+pub struct HeightPlane {
+    pub origin: [f64; 2],
+    pub height: f64,
+    pub gradient: [f64; 2],
+}
+
+impl HeightPlane {
+    pub fn horizontal(height: f64) -> Self {
+        Self {
+            origin: [0.0; 2],
+            height,
+            gradient: [0.0; 2],
+        }
+    }
+
+    pub fn height_at(self, x: f64, z: f64) -> f64 {
+        self.height
+            + self.gradient[0] * (x - self.origin[0])
+            + self.gradient[1] * (z - self.origin[1])
+    }
+
+    pub fn is_finite(self) -> bool {
+        self.origin
+            .into_iter()
+            .chain(self.gradient)
+            .chain([self.height])
+            .all(f64::is_finite)
+    }
+
+    /// The affine extrema lie at rectangle corners. Padding encloses the
+    /// arithmetic used by interval composition at this f64 boundary.
+    pub fn height_bounds(self, rect: [f64; 4]) -> [f64; 2] {
+        if !self.is_finite()
+            || rect.into_iter().any(|v| !v.is_finite())
+            || rect[0] > rect[2]
+            || rect[1] > rect[3]
+        {
+            return [f64::NAN; 2];
+        }
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for x in [rect[0], rect[2]] {
+            for z in [rect[1], rect[3]] {
+                let height = self.height_at(x, z);
+                lo = lo.min(height);
+                hi = hi.max(height);
+            }
+        }
+        let magnitude = self.height.abs()
+            + self.gradient[0].abs() * (rect[0].abs().max(rect[2].abs()) + self.origin[0].abs())
+            + self.gradient[1].abs() * (rect[1].abs().max(rect[3].abs()) + self.origin[1].abs());
+        let pad = 64.0 * f64::EPSILON * magnitude.max(1.0);
+        [lo - pad, hi + pad]
+    }
+}
+
+/// A height interval and an affine residual certificate for the same surface.
+/// Both facts are retained: scalar queries consume `height`, while geometric
+/// queries also retain slope correlation through `plane` and `residual`.
+#[derive(Clone, Copy, Debug)]
+pub struct HeightEnclosure {
+    pub height: [f64; 2],
+    pub plane: HeightPlane,
+    pub residual: [f64; 2],
+}
+
+impl HeightEnclosure {
+    pub fn from_bounds(height: [f64; 2]) -> Self {
+        Self {
+            height,
+            plane: HeightPlane::horizontal(0.0),
+            residual: height,
+        }
+    }
+
+    pub fn is_valid(self, rect: [f64; 4]) -> bool {
+        let ordered = |bounds: [f64; 2]| {
+            bounds[0].is_finite() && bounds[1].is_finite() && bounds[0] <= bounds[1]
+        };
+        if !self.plane.is_finite() || !ordered(self.height) || !ordered(self.residual) {
+            return false;
+        }
+        let projected = bounds_add(self.plane.height_bounds(rect), self.residual);
+        ordered(projected) && self.height[0] <= projected[1] && self.height[1] >= projected[0]
+    }
+
+    pub fn add_delta(self, delta: [f64; 2]) -> Self {
+        let height = bounds_add(self.height, delta);
+        let residual = bounds_add(self.residual, delta);
+        let pad = 64.0 * f64::EPSILON * height[0].abs().max(height[1].abs()).max(1.0);
+        Self {
+            height,
+            plane: self.plane,
+            residual: [residual[0] - pad, residual[1] + pad],
+        }
+    }
+
+    pub fn add_affine(self, delta: Self, rect: [f64; 4]) -> Self {
+        let origin = delta.plane.origin;
+        let plane = HeightPlane {
+            origin,
+            height: self.plane.height_at(origin[0], origin[1]) + delta.plane.height,
+            gradient: [
+                self.plane.gradient[0] + delta.plane.gradient[0],
+                self.plane.gradient[1] + delta.plane.gradient[1],
+            ],
+        };
+        let height = bounds_add(self.height, delta.height);
+        let residual = bounds_add(self.residual, delta.residual);
+        let magnitude = self
+            .plane
+            .height_bounds(rect)
+            .into_iter()
+            .chain(delta.plane.height_bounds(rect))
+            .chain(height)
+            .map(f64::abs)
+            .fold(1.0, f64::max);
+        let pad = 128.0 * f64::EPSILON * magnitude;
+        Self {
+            height,
+            plane,
+            residual: [residual[0] - pad, residual[1] + pad],
+        }
+    }
+}
+
+pub(crate) fn bounds_add(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [(a[0] + b[0]).next_down(), (a[1] + b[1]).next_up()]
+}
+
+pub(crate) fn bounds_mul(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    let values = [a[0] * b[0], a[0] * b[1], a[1] * b[0], a[1] * b[1]];
+    [
+        values.into_iter().fold(f64::INFINITY, f64::min).next_down(),
+        values
+            .into_iter()
+            .fold(f64::NEG_INFINITY, f64::max)
+            .next_up(),
+    ]
+}
+
+pub(crate) fn bounds_scale(a: [f64; 2], factor: f64) -> [f64; 2] {
+    bounds_mul(a, [factor; 2])
+}
+
 /// Authoritative elevation over the XZ plane. Implementations must be pure and
 /// deterministic: equal inputs always yield equal outputs, on every platform.
 pub trait HeightSource: Send + Sync {
@@ -323,6 +470,125 @@ pub(crate) fn vnoise(x: f64, z: f64, seed: u64) -> f64 {
     lerp(a, b, w) * 2.0 - 1.0 // [0,1] → [-1,1]
 }
 
+/// Within a lattice cell, value noise is bilinear in two independent monotone
+/// smoothstep coordinates. Rectangle extrema therefore occur at corners or
+/// lattice cuts. Small footprints need at most nine source evaluations; larger
+/// footprints retain the source's global range without enumerating cells.
+enum NoiseRectangle {
+    Global,
+    Local {
+        xs: [f64; 3],
+        nx: usize,
+        zs: [f64; 3],
+        nz: usize,
+    },
+}
+
+fn noise_rectangle(rect: [f64; 4]) -> Option<NoiseRectangle> {
+    if rect.iter().any(|value| !value.is_finite())
+        || rect[0] > rect[2]
+        || rect[1] > rect[3]
+        || rect
+            .iter()
+            .any(|value| value.floor() < i64::MIN as f64 || value.floor() >= i64::MAX as f64)
+    {
+        return None;
+    }
+    if rect[2].floor() - rect[0].floor() > 1.0 || rect[3].floor() - rect[1].floor() > 1.0 {
+        return Some(NoiseRectangle::Global);
+    }
+    let cuts = |low: f64, high: f64| {
+        let boundary = low.floor() + 1.0;
+        if low == high {
+            ([low; 3], 1)
+        } else if boundary > low && boundary < high {
+            ([low, boundary, high], 3)
+        } else {
+            ([low, high, high], 2)
+        }
+    };
+    let (xs, nx) = cuts(rect[0], rect[2]);
+    let (zs, nz) = cuts(rect[1], rect[3]);
+    Some(NoiseRectangle::Local { xs, nx, zs, nz })
+}
+
+pub(crate) fn vnoise_bounds(rect: [f64; 4], seed: u64) -> Option<[f64; 2]> {
+    let NoiseRectangle::Local { xs, nx, zs, nz } = noise_rectangle(rect)? else {
+        return Some([-1.0, 1.0]);
+    };
+    let mut bounds = [f64::INFINITY, f64::NEG_INFINITY];
+    for &x in &xs[..nx] {
+        for &z in &zs[..nz] {
+            let value = vnoise(x, z, seed);
+            bounds[0] = bounds[0].min(value);
+            bounds[1] = bounds[1].max(value);
+        }
+    }
+    let pad = 64.0 * f64::EPSILON;
+    Some([(bounds[0] - pad).max(-1.0), (bounds[1] + pad).min(1.0)])
+}
+
+/// Exact smoothstep derivative intervals inside each admitted noise cell.
+/// The two partials factor into independent one-dimensional intervals.
+pub(crate) fn vnoise_gradient_bounds(rect: [f64; 4], seed: u64) -> Option<[[f64; 2]; 2]> {
+    let NoiseRectangle::Local { xs, nx, zs, nz } = noise_rectangle(rect)? else {
+        return Some([[-3.0, 3.0]; 2]);
+    };
+    let smooth_bounds = |range: [f64; 2]| {
+        let pad = 32.0 * f64::EPSILON;
+        [
+            (smoothstep(range[0]) - pad).max(0.0),
+            (smoothstep(range[1]) + pad).min(1.0),
+        ]
+    };
+    let derivative_bounds = |range: [f64; 2]| {
+        let derivative = |t: f64| 6.0 * t * (1.0 - t);
+        let a = derivative(range[0]);
+        let b = derivative(range[1]);
+        let high = if range[0] <= 0.5 && range[1] >= 0.5 {
+            1.5
+        } else {
+            a.max(b)
+        };
+        let pad = 32.0 * f64::EPSILON;
+        [(a.min(b) - pad).max(0.0), (high + pad).min(1.5)]
+    };
+    let mut result = [[f64::INFINITY, f64::NEG_INFINITY]; 2];
+    for ix in 0..nx.saturating_sub(1).max(1) {
+        for iz in 0..nz.saturating_sub(1).max(1) {
+            let x = [xs[ix], xs[(ix + 1).min(nx - 1)]];
+            let z = [zs[iz], zs[(iz + 1).min(nz - 1)]];
+            let cell_x = x[0].floor();
+            let cell_z = z[0].floor();
+            let u = smooth_bounds([x[0] - cell_x, x[1] - cell_x]);
+            let w = smooth_bounds([z[0] - cell_z, z[1] - cell_z]);
+            let du = derivative_bounds([x[0] - cell_x, x[1] - cell_x]);
+            let dw = derivative_bounds([z[0] - cell_z, z[1] - cell_z]);
+            let (cx, cz) = (cell_x as i64, cell_z as i64);
+            let h00 = hash01(cx, cz, seed);
+            let h10 = hash01(cx + 1, cz, seed);
+            let h01 = hash01(cx, cz + 1, seed);
+            let h11 = hash01(cx + 1, cz + 1, seed);
+            let along_z = bounds_add([h10 - h00; 2], bounds_scale(w, (h11 - h01) - (h10 - h00)));
+            let along_x = bounds_add([h01 - h00; 2], bounds_scale(u, (h11 - h10) - (h01 - h00)));
+            let gradient = [
+                bounds_scale(bounds_mul(du, along_z), 2.0),
+                bounds_scale(bounds_mul(dw, along_x), 2.0),
+            ];
+            for axis in 0..2 {
+                result[axis][0] = result[axis][0].min(gradient[axis][0]);
+                result[axis][1] = result[axis][1].max(gradient[axis][1]);
+            }
+        }
+    }
+    for axis in &mut result {
+        let pad = 128.0 * f64::EPSILON * axis[0].abs().max(axis[1].abs()).max(1.0);
+        axis[0] -= pad;
+        axis[1] += pad;
+    }
+    Some(result)
+}
+
 /// Deterministic lattice hash → `[0, 1)`. SplitMix64-style avalanche on the
 /// mixed cell coordinates; no platform-dependent float ops in the hash itself.
 /// Shared with the over-zoom craterlet generator.
@@ -350,6 +616,112 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn height_enclosure_validates_finite_ordered_and_consistent_facts() {
+        let rect = [-1.0, -1.0, 1.0, 1.0];
+        assert!(HeightEnclosure::from_bounds([-2.0, 3.0]).is_valid(rect));
+        assert!(!HeightEnclosure::from_bounds([3.0, -2.0]).is_valid(rect));
+        assert!(!HeightEnclosure::from_bounds([f64::NAN, 3.0]).is_valid(rect));
+        assert!(
+            !HeightEnclosure {
+                height: [1.0, 2.0],
+                plane: HeightPlane::horizontal(0.0),
+                residual: [0.0; 2]
+            }
+            .is_valid(rect)
+        );
+        assert!(
+            !HeightEnclosure {
+                height: [0.0; 2],
+                plane: HeightPlane::horizontal(f64::INFINITY),
+                residual: [0.0; 2]
+            }
+            .is_valid(rect)
+        );
+    }
+
+    #[test]
+    fn noise_gradient_intervals_cover_cell_interiors_crossings_and_narrow_rectangles() {
+        for seed in [0, 424242, 0x9E37_79B9_7F4A_7C15] {
+            for rect in [
+                [0.13, 0.17, 0.91, 0.96],
+                [0.8, 0.9, 1.2, 1.3],
+                [-2.0, -3.0, 2.0, 4.0],
+            ] {
+                let bounds = vnoise_gradient_bounds(rect, seed).unwrap();
+                for iz in 0..9 {
+                    for ix in 0..9 {
+                        let x = rect[0] + (rect[2] - rect[0]) * (ix as f64 + 0.37) / 9.0;
+                        let z = rect[1] + (rect[3] - rect[1]) * (iz as f64 + 0.37) / 9.0;
+                        let eps = 1e-6;
+                        let measured = [
+                            (vnoise(x + eps, z, seed) - vnoise(x - eps, z, seed)) / (2.0 * eps),
+                            (vnoise(x, z + eps, seed) - vnoise(x, z - eps, seed)) / (2.0 * eps),
+                        ];
+                        for axis in 0..2 {
+                            assert!(
+                                measured[axis] >= bounds[axis][0] - 1e-8
+                                    && measured[axis] <= bounds[axis][1] + 1e-8,
+                                "{rect:?} axis{axis}: {} outside {:?}",
+                                measured[axis],
+                                bounds[axis]
+                            );
+                        }
+                    }
+                }
+            }
+            let narrow = vnoise_gradient_bounds([0.13, 0.17, 0.13001, 0.17001], seed).unwrap();
+            assert!(narrow.into_iter().all(|b| b[1] - b[0] < 0.001));
+            let origin = vnoise_gradient_bounds([0.0; 4], seed).unwrap();
+            assert!(
+                origin
+                    .into_iter()
+                    .all(|b| b[0] <= 0.0 && b[1] >= 0.0 && b[1] - b[0] < 1e-10)
+            );
+        }
+    }
+
+    #[test]
+    fn value_noise_rectangles_cover_lattice_crossings_and_retain_corner_extrema() {
+        for seed in [0, 424242, 0x9E37_79B9_7F4A_7C15] {
+            for rect in [
+                [0.13, 0.17, 0.91, 0.96],
+                [0.83, 0.91, 1.21, 1.14],
+                [-1.2, -0.13, -0.8, 0.27],
+                [-2.0, -3.0, 2.0, 4.0],
+                [0.0; 4],
+            ] {
+                let bounds = vnoise_bounds(rect, seed).unwrap();
+                for z in 0..=24 {
+                    for x in 0..=24 {
+                        let wx = rect[0] + (rect[2] - rect[0]) * x as f64 / 24.0;
+                        let wz = rect[1] + (rect[3] - rect[1]) * z as f64 / 24.0;
+                        let value = vnoise(wx, wz, seed);
+                        assert!(
+                            value >= bounds[0] && value <= bounds[1],
+                            "{rect:?}: {value} outside {bounds:?}"
+                        );
+                    }
+                }
+            }
+            let rect = [0.13, 0.17, 0.91, 0.96];
+            let bounds = vnoise_bounds(rect, seed).unwrap();
+            let corners = [
+                vnoise(rect[0], rect[1], seed),
+                vnoise(rect[0], rect[3], seed),
+                vnoise(rect[2], rect[1], seed),
+                vnoise(rect[2], rect[3], seed),
+            ];
+            assert!((bounds[0] - corners.into_iter().fold(f64::INFINITY, f64::min)).abs() < 1e-12);
+            assert!(
+                (bounds[1] - corners.into_iter().fold(f64::NEG_INFINITY, f64::max)).abs() < 1e-12
+            );
+        }
+        assert_eq!(vnoise_bounds([-2.0, -3.0, 2.0, 4.0], 0), Some([-1.0, 1.0]));
+        assert!(vnoise_bounds([f64::NAN, 0.0, 1.0, 1.0], 0).is_none());
+        assert!(vnoise_bounds([1.0, 0.0, 0.0, 1.0], 0).is_none());
+    }
 
     struct Ramp;
     impl HeightSource for Ramp {

@@ -27,12 +27,15 @@
 //! no dump, and no clue for the tester. Converting a crash into a silent
 //! infinite loop is worse than crashing.
 //!
-//! So a repeated error escalates through [`Ladder`]:
+//! A shadow-map allocation failure first retries with a smaller effective map
+//! and leaves an Error in Recent Events. Other repeated failures escalate
+//! through [`Ladder`]:
 //!
 //! | rung | when | what |
 //! |---|---|---|
 //! | `Healthy` | — | drop the bad frame, log rate-limited (transient skew) |
-//! | `PersistentFailure` | first render failure | preserve the authored and configured scene state and wait for a bounded give-up decision |
+//! | shadow-map OOM | allocation failed | reduce only the live map resolution by one power of two and report the degraded setting |
+//! | `PersistentFailure` | first unrecovered render failure | preserve the authored and configured scene state and wait for a bounded give-up decision |
 //! | `GaveUp` | still failing for the configured presentation grace period, or device lost | deactivate every camera, log once, loudly |
 //!
 //! `GaveUp` stops the null loop rather than the process: the sim, the API and
@@ -40,11 +43,10 @@
 //! *presentation* that is dead. Exiting would throw away a working session to
 //! report a rendering fault.
 //!
-//! The ladder is a pure state machine precisely so it can be tested without a
-//! GPU (see the tests at the bottom); the systems around it only apply what it
-//! decides. No quality setting is changed by this ladder. The user can choose
-//! a different explicit graphics configuration, or reload the scene, after a
-//! presentation failure.
+//! The ladder and shadow-resolution fallback are testable without a GPU. A
+//! fallback changes only the effective GPU map size for this scene; persisted
+//! Graphics settings and authored light state remain unchanged. Scene teardown
+//! or an explicit map-size change clears the runtime override.
 //!
 //! The one further mitigation, independent of the ladder, is
 //! [`install_wgpu_error_handler`], which replaces wgpu's default panic-on-uncaptured
@@ -96,6 +98,9 @@ pub struct RenderHealth {
     /// Out-of-memory specifically. Distinguished because it is a resource
     /// exhaustion the app can act on, not a bug in what we submitted.
     oom: AtomicU64,
+    /// Shadow-map resource implicated in an OOM and its invalid-view fallout.
+    /// The main world consumes this to lower that resource's live resolution.
+    shadow_map_fault: AtomicU8,
     /// The device is gone. Terminal — no rung of the ladder can recover it.
     device_lost: AtomicBool,
     /// Once presentation is abandoned, suppress the render-thread error storm.
@@ -126,6 +131,7 @@ impl RenderHealth {
         self.total.store(0, Ordering::Relaxed);
         self.shadow.store(0, Ordering::Relaxed);
         self.oom.store(0, Ordering::Relaxed);
+        self.shadow_map_fault.store(0, Ordering::Relaxed);
         self.presentation_stopped.store(false, Ordering::Relaxed);
         self.last_failure_kind
             .store(FailureKind::Other as u8, Ordering::Relaxed);
@@ -157,6 +163,88 @@ impl FailureKind {
             Self::ShadowMap => "a shadow-map allocation/validation fault",
             Self::OutOfMemory => "out of memory",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShadowMapResource {
+    Directional,
+    Point,
+}
+
+impl ShadowMapResource {
+    fn encode(self) -> u8 {
+        match self {
+            Self::Directional => 1,
+            Self::Point => 2,
+        }
+    }
+
+    fn decode(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Directional),
+            2 => Some(Self::Point),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Directional => "directional",
+            Self::Point => "point-light",
+        }
+    }
+}
+
+fn shadow_map_resource_from_description(description: &str) -> Option<ShadowMapResource> {
+    if description.contains("directional_light_shadow_map") {
+        Some(ShadowMapResource::Directional)
+    } else if description.contains("point_light_shadow_map") {
+        Some(ShadowMapResource::Point)
+    } else {
+        None
+    }
+}
+
+const MIN_RECOVERED_SHADOW_MAP_SIZE: usize = 64;
+
+fn next_shadow_map_size(current: usize, requested: usize) -> Option<usize> {
+    if current <= MIN_RECOVERED_SHADOW_MAP_SIZE {
+        return None;
+    }
+    let next = (current / 2)
+        .max(MIN_RECOVERED_SHADOW_MAP_SIZE)
+        .min(requested);
+    (next < current).then_some(next)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ShadowMapResolutionOverride {
+    requested_size: usize,
+    effective_size: usize,
+}
+
+/// Temporary GPU-resource resolutions selected after a shadow-map OOM. The
+/// persisted [`RenderingQualitySettings`] remain the source of the requested
+/// values and are restored when the user changes that map size or the scene is
+/// retired.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RenderShadowMapOverrides {
+    directional: Option<ShadowMapResolutionOverride>,
+    point: Option<ShadowMapResolutionOverride>,
+}
+
+impl RenderShadowMapOverrides {
+    fn directional_size(&self, requested: usize) -> usize {
+        self.directional
+            .filter(|override_| override_.requested_size == requested)
+            .map_or(requested, |override_| override_.effective_size)
+    }
+
+    fn point_size(&self, requested: usize) -> usize {
+        self.point
+            .filter(|override_| override_.requested_size == requested)
+            .map_or(requested, |override_| override_.effective_size)
     }
 }
 
@@ -284,9 +372,11 @@ pub enum RenderWarningKind {
     GraphicsSettings,
     /// The renderer is receiving repeated GPU failures.
     RuntimeFailure,
+    /// A shadow-map OOM caused a temporary runtime resolution reduction.
+    ShadowResourceDegraded,
 }
 
-/// Retained render warning published through RuntimeDiagnostics and Recent Events.
+/// Retained render diagnostic published through RuntimeDiagnostics and Recent Events.
 #[derive(Resource, Clone, Debug)]
 pub struct RenderWarning {
     /// Category used by the diagnostic projection.
@@ -315,16 +405,27 @@ fn publish_render_diagnostics(
             message: gave_up.reason.clone(),
         })
     } else {
-        warning.map(|warning| lunco_core::RuntimeDiagnostic {
-            code: match warning.kind {
-                RenderWarningKind::GraphicsSettings => "graphics-settings",
-                RenderWarningKind::RuntimeFailure => "rendering-degraded",
+        warning.map(|warning| {
+            let (code, severity) = match warning.kind {
+                RenderWarningKind::GraphicsSettings => {
+                    ("graphics-settings", lunco_core::DiagnosticSeverity::Warning)
+                }
+                RenderWarningKind::RuntimeFailure => (
+                    "rendering-degraded",
+                    lunco_core::DiagnosticSeverity::Warning,
+                ),
+                RenderWarningKind::ShadowResourceDegraded => (
+                    "shadow-resource-degraded",
+                    lunco_core::DiagnosticSeverity::Error,
+                ),
+            };
+            lunco_core::RuntimeDiagnostic {
+                code: code.into(),
+                severity,
+                producer: "render-recovery".into(),
+                subject: "renderer".into(),
+                message: warning.message.clone(),
             }
-            .into(),
-            severity: lunco_core::DiagnosticSeverity::Warning,
-            producer: "render-recovery".into(),
-            subject: "renderer".into(),
-            message: warning.message.clone(),
         })
     };
     if let (Some(finding), Some(mut bus)) = (finding.as_ref(), status_bus) {
@@ -544,6 +645,7 @@ pub fn install_wgpu_error_handler(app: &mut App) {
     app.insert_resource(RenderCapabilitiesHandle(capabilities.clone()));
     app.init_resource::<RenderCapabilities>();
     app.init_resource::<Ladder>();
+    app.init_resource::<RenderShadowMapOverrides>();
     app.init_resource::<PresentationState>();
     app.add_plugins(ExtractResourcePlugin::<PresentationState, RenderApp>::default());
     app.add_systems(
@@ -599,6 +701,7 @@ pub fn install_wgpu_error_handler(app: &mut App) {
 
 fn render_quality_changed(
     settings: Res<RenderingQualitySettings>,
+    shadow_overrides: Res<RenderShadowMapOverrides>,
     capabilities: Option<Res<RenderCapabilities>>,
     directional_map: Res<bevy::light::DirectionalLightShadowMap>,
     point_map: Res<bevy::light::PointLightShadowMap>,
@@ -608,6 +711,7 @@ fn render_quality_changed(
     rects: Query<(), Added<bevy::light::RectLight>>,
 ) -> bool {
     settings.is_changed()
+        || shadow_overrides.is_changed()
         || capabilities
             .as_ref()
             .is_some_and(|capabilities| capabilities.is_changed())
@@ -713,12 +817,14 @@ fn shadow_policy_signature(profile: lunco_render::RenderQualityProfile) -> u64 {
 
 /// Project the persisted quality choice onto the live shadow resources.
 ///
-/// This is change-driven: settings or a newly authored directional-light map
-/// must change before it runs. The selected settings are applied exactly as
-/// authored. Changing a setting is also the explicit re-arm for a pending
-/// persistent-failure timer.
+/// This is change-driven: settings, a runtime shadow-size override, or a newly
+/// authored light must change before it runs. Saved settings are applied
+/// exactly as authored unless an OOM recovery override is active for the
+/// matching map size. Changing that map size clears its override; changing a
+/// setting is also the explicit re-arm for a pending persistent-failure timer.
 fn apply_render_quality(
     settings: Res<RenderingQualitySettings>,
+    mut shadow_overrides: ResMut<RenderShadowMapOverrides>,
     capabilities: Option<Res<RenderCapabilities>>,
     mut directional_map: ResMut<bevy::light::DirectionalLightShadowMap>,
     mut point_map: ResMut<bevy::light::PointLightShadowMap>,
@@ -736,6 +842,17 @@ fn apply_render_quality(
     warning: Option<Res<RenderWarning>>,
     mut commands: Commands,
 ) {
+    if shadow_overrides.directional.is_some_and(|override_| {
+        override_.requested_size != settings.directional_shadow_map_size as usize
+    }) {
+        shadow_overrides.directional = None;
+    }
+    if shadow_overrides.point.is_some_and(|override_| {
+        override_.requested_size != settings.point_shadow_map_size as usize
+    }) {
+        shadow_overrides.point = None;
+    }
+
     if settings.is_changed() {
         let total = health.as_ref().map_or(0, |handle| handle.0.total());
         let device_lost = health.as_ref().is_some_and(|handle| handle.0.device_lost());
@@ -776,11 +893,14 @@ fn apply_render_quality(
         }
     }
 
-    if directional_map.size != profile.directional_shadow_map_size as usize {
-        directional_map.size = profile.directional_shadow_map_size as usize;
+    let directional_size =
+        shadow_overrides.directional_size(profile.directional_shadow_map_size as usize);
+    if directional_map.size != directional_size {
+        directional_map.size = directional_size;
     }
-    if point_map.size != profile.point_shadow_map_size as usize {
-        point_map.size = profile.point_shadow_map_size as usize;
+    let point_size = shadow_overrides.point_size(profile.point_shadow_map_size as usize);
+    if point_map.size != point_size {
+        point_map.size = point_size;
     }
 
     for (mut light, mut config, authored_ranges, preview_light) in &mut directional_lights {
@@ -954,6 +1074,13 @@ fn set_error_handler(
             } else {
                 FailureKind::Other
             };
+            if let Some(resource) = shadow_map_resource_from_description(&desc)
+                && (kind == FailureKind::OutOfMemory || health.oom.load(Ordering::Relaxed) > 0)
+            {
+                health
+                    .shadow_map_fault
+                    .store(resource.encode(), Ordering::Release);
+            }
             // Once an OOM has occurred, later validation fallout is a symptom
             // of that exhausted allocation, not a new shader diagnosis.
             if kind == FailureKind::OutOfMemory || health.oom.load(Ordering::Relaxed) == 0 {
@@ -1024,7 +1151,7 @@ fn set_error_handler(
                 // OOM on a shared-memory adapter is the reported root cause, and
                 // it is NOT a droppable frame: the resource that failed to
                 // allocate stays invalid for every frame after. Say so once, with
-                // the adapter, and let the ladder degrade.
+                // the adapter; the main-world owner retries at a smaller map.
                 wgpu::Error::OutOfMemory { .. } => {
                     let estimated_bytes = health.shadow_estimated_bytes.load(Ordering::Relaxed);
                     let budget_bytes = health.shadow_budget_bytes.load(Ordering::Relaxed);
@@ -1050,6 +1177,8 @@ fn shadow_hook_int(value: u64) -> lunco_hooks::HookValue {
 fn publish_shadow_facts(
     exposures: Option<&mut lunco_exposure_core::EngineExposures>,
     profile: lunco_render::RenderQualityProfile,
+    directional_map_size: usize,
+    point_map_size: usize,
     light_count: usize,
     directional_casters: usize,
     point_casters: usize,
@@ -1072,11 +1201,16 @@ fn publish_shadow_facts(
         "directional_cascade_layers",
         directional_cascade_layers as f64,
     );
+    writer.property("directional_map_size", directional_map_size as f64);
     writer.property(
-        "directional_map_size",
+        "requested_directional_map_size",
         profile.directional_shadow_map_size as f64,
     );
-    writer.property("point_map_size", profile.point_shadow_map_size as f64);
+    writer.property("point_map_size", point_map_size as f64);
+    writer.property(
+        "requested_point_map_size",
+        profile.point_shadow_map_size as f64,
+    );
     writer.property("estimated_bytes", required_bytes as f64);
     writer.property("budget_bytes", budget_bytes as f64);
     writer.property(
@@ -1140,8 +1274,9 @@ fn shadow_quality_policy_warning(
 }
 
 /// Report shadow-resource pressure before Bevy's PBR render preparation
-/// allocates its depth textures. The user's map sizes, cascade count, byte
-/// ceiling, and every authored `shadow_maps_enabled` value remain unchanged.
+/// allocates its depth textures. Saved map sizes, cascade count, byte ceiling,
+/// and authored `shadow_maps_enabled` values remain unchanged. A live map size
+/// may be lower only while a shadow allocation recovery override is active.
 /// This system is diagnostic only: an explicit graphics limit that cannot
 /// accommodate the live scene produces one StatusBus warning, never a selected
 /// subset of lights or a renderer-owned shadow omission.
@@ -1227,6 +1362,8 @@ fn apply_shadow_caster_policy(
     publish_shadow_facts(
         exposures.as_deref_mut(),
         profile,
+        directional_shadow_map.size,
+        point_shadow_map.size,
         light_count,
         enabled_directional_casters,
         enabled_point_casters,
@@ -1337,6 +1474,9 @@ pub fn reset_render_recovery(world: &mut World) {
     if let Some(mut budget) = world.get_resource_mut::<ShadowAdmissionState>() {
         *budget = ShadowAdmissionState::default();
     }
+    if let Some(mut overrides) = world.get_resource_mut::<RenderShadowMapOverrides>() {
+        *overrides = RenderShadowMapOverrides::default();
+    }
     // The render schedule is gated by this extracted state, not by camera
     // activation.  Clearing only the ladder would leave a successfully
     // reloaded scene permanently headless after the previous scene gave up.
@@ -1356,6 +1496,10 @@ pub fn reset_render_recovery(world: &mut World) {
 fn escalate_render_recovery(
     health: Res<RenderHealthHandle>,
     mut ladder: ResMut<Ladder>,
+    settings: Res<RenderingQualitySettings>,
+    mut shadow_overrides: ResMut<RenderShadowMapOverrides>,
+    directional_map: Res<bevy::light::DirectionalLightShadowMap>,
+    point_map: Res<bevy::light::PointLightShadowMap>,
     time: Res<Time>,
     mut presentation: ResMut<PresentationState>,
     mut commands: Commands,
@@ -1363,6 +1507,46 @@ fn escalate_render_recovery(
     mut cameras: Query<&mut bevy::camera::Camera>,
 ) {
     let h = &health.0;
+
+    if !h.device_lost()
+        && let Some(resource) =
+            ShadowMapResource::decode(h.shadow_map_fault.swap(0, Ordering::AcqRel))
+    {
+        let (current_size, requested_size, override_slot) = match resource {
+            ShadowMapResource::Directional => (
+                directional_map.size,
+                settings.directional_shadow_map_size as usize,
+                &mut shadow_overrides.directional,
+            ),
+            ShadowMapResource::Point => (
+                point_map.size,
+                settings.point_shadow_map_size as usize,
+                &mut shadow_overrides.point,
+            ),
+        };
+        if let Some(next_size) = next_shadow_map_size(current_size, requested_size) {
+            *override_slot = Some(ShadowMapResolutionOverride {
+                requested_size,
+                effective_size: next_size,
+            });
+            ladder.rearm(h.total(), false);
+            let estimated_bytes = h.shadow_estimated_bytes.load(Ordering::Relaxed);
+            let budget_bytes = h.shadow_budget_bytes.load(Ordering::Relaxed);
+            let message = format!(
+                "The GPU could not allocate the {current_size}px {} shadow map (estimated scene shadow storage {} MiB; configured ceiling {} MiB). LunCoSim is retrying at {next_size}px for this scene. Saved Graphics settings remain at {requested_size}px.",
+                resource.label(),
+                estimated_bytes / (1024 * 1024),
+                budget_bytes / (1024 * 1024),
+            );
+            error!("{message}");
+            commands.insert_resource(RenderWarning {
+                kind: RenderWarningKind::ShadowResourceDegraded,
+                message,
+            });
+            return;
+        }
+    }
+
     let kind = h.failure_kind();
     let action = ladder.step(h.total(), kind, h.device_lost(), time.elapsed_secs_f64());
 
@@ -1428,6 +1612,103 @@ fn escalate_render_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadow_map_oom_reduces_live_resolution_and_reaches_recent_events_as_error() {
+        let mut app = App::new();
+        app.init_resource::<lunco_core::RuntimeDiagnostics>();
+        app.init_resource::<lunco_status_core::status_bus::StatusBus>();
+        let mut settings = test_settings();
+        settings.directional_shadow_map_size = 8192;
+        app.insert_resource(settings);
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 8192 });
+        app.insert_resource(bevy::light::PointLightShadowMap { size: 2048 });
+        app.insert_resource(Time::<()>::default());
+        app.insert_resource(PresentationState::default());
+        app.insert_resource(RenderShadowMapOverrides::default());
+        app.insert_resource(Ladder::default());
+        let health = Arc::new(RenderHealth::default());
+        health
+            .shadow_map_fault
+            .store(ShadowMapResource::Directional.encode(), Ordering::Relaxed);
+        health
+            .shadow_estimated_bytes
+            .store(4 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        health
+            .shadow_budget_bytes
+            .store(5 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        app.insert_resource(RenderHealthHandle(health));
+        register_render_diagnostics(&mut app);
+        app.add_systems(Update, escalate_render_recovery);
+        let camera = app.world_mut().spawn(bevy::camera::Camera::default()).id();
+
+        app.update();
+
+        let overrides = app.world().resource::<RenderShadowMapOverrides>();
+        assert_eq!(
+            overrides.directional,
+            Some(ShadowMapResolutionOverride {
+                requested_size: 8192,
+                effective_size: 4096,
+            })
+        );
+        assert_eq!(
+            overrides.directional_size(8192),
+            4096,
+            "the render-quality projection must use the transient effective size"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<RenderingQualitySettings>()
+                .directional_shadow_map_size,
+            8192,
+            "the recovery must not rewrite persisted Graphics settings"
+        );
+        assert!(
+            app.world()
+                .get::<bevy::camera::Camera>(camera)
+                .unwrap()
+                .is_active
+        );
+        assert!(!app.world().resource::<PresentationState>().stopped);
+        assert!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .iter()
+                .any(|finding| finding.code == "shadow-resource-degraded"
+                    && finding.severity == lunco_core::DiagnosticSeverity::Error
+                    && finding.message.contains("retrying at 4096px"))
+        );
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .history()
+                .any(
+                    |event| event.level == lunco_status_core::status_bus::StatusLevel::Error
+                        && event.message.contains("retrying at 4096px")
+                )
+        );
+    }
+
+    #[test]
+    fn shadow_map_fault_names_and_resolution_steps_match_bevy_resources() {
+        assert_eq!(
+            shadow_map_resource_from_description(
+                "In Device::create_texture, label = 'directional_light_shadow_map_texture'"
+            ),
+            Some(ShadowMapResource::Directional)
+        );
+        assert_eq!(
+            shadow_map_resource_from_description(
+                "point_light_shadow_map_array_texture_view is invalid"
+            ),
+            Some(ShadowMapResource::Point)
+        );
+        assert_eq!(next_shadow_map_size(8192, 8192), Some(4096));
+        assert_eq!(next_shadow_map_size(8192, 2048), Some(2048));
+        assert_eq!(next_shadow_map_size(64, 8192), None);
+    }
 
     #[test]
     fn render_diagnostics_follow_recovery_and_scene_lifetime() {
@@ -1777,6 +2058,7 @@ mod tests {
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.init_resource::<Ladder>();
+        app.init_resource::<RenderShadowMapOverrides>();
         app.add_systems(Update, apply_render_quality.run_if(render_quality_changed));
 
         let directional = app
@@ -1844,6 +2126,11 @@ mod tests {
                 },
             ))
             .id();
+        let late_rect_intensity = app
+            .world()
+            .get::<bevy::light::RectLight>(late_rect)
+            .unwrap()
+            .intensity;
         app.update();
 
         let late_directional_light = app
@@ -1876,7 +2163,7 @@ mod tests {
             .world()
             .get::<bevy::light::RectLight>(late_rect)
             .unwrap();
-        assert_eq!(late_rect_light.intensity, 10_000.0);
+        assert_eq!(late_rect_light.intensity, late_rect_intensity);
         assert_eq!(late_rect_light.range, 30.0);
     }
 
@@ -1887,6 +2174,7 @@ mod tests {
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.init_resource::<Ladder>();
+        app.init_resource::<RenderShadowMapOverrides>();
         app.add_systems(Update, apply_render_quality.run_if(render_quality_changed));
 
         let distant = app
@@ -2012,6 +2300,7 @@ mod tests {
         app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
         app.insert_resource(bevy::light::PointLightShadowMap { size: 1024 });
         app.init_resource::<Ladder>();
+        app.init_resource::<RenderShadowMapOverrides>();
         app.add_systems(Update, apply_render_quality.run_if(render_quality_changed));
 
         let unauthored = app

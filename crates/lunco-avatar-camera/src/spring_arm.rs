@@ -23,6 +23,12 @@ use lunco_camera_core::follow_policy::{FollowFacts as F, FollowPlan, resolve_fol
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct FollowPolicyContext<'w, 's> {
+    terrain: lunco_terrain_surface::GridSurfaceQuery<'w, 's>,
+    drawn: lunco_terrain_surface::DrawTerrainQuery<'w, 's>,
+    targets: ResMut<'w, lunco_terrain_surface::TerrainCameraTargets>,
+    active_frame: Option<Res<'w, lunco_spatial::ActivePhysicsFrame>>,
+    collision_settings: Res<'w, lunco_avatar_policy::AvatarCollisionSettings>,
+    terrain_budget: Option<Res<'w, lunco_terrain_surface::SurfaceOcclusionBudget>>,
     subjects: Query<
         'w,
         's,
@@ -70,6 +76,7 @@ pub(crate) fn spring_arm_system(
             &ChildOf,
             Option<&SurfaceRelativeMode>,
             &mut CameraZoomInput,
+            &Projection,
         ),
         (
             With<Embodiment>,
@@ -101,7 +108,7 @@ pub(crate) fn spring_arm_system(
     let dt = time.delta_secs();
     collision_filters.refresh(&joints, &mut topology);
 
-    for (avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom) in
+    for (avatar_ent, mut tf, mut cell, mut arm, child_of, surface_mode, mut zoom, projection) in
         q_avatar.iter_mut()
     {
         if q_dragging.get(arm.target).is_ok() {
@@ -137,21 +144,71 @@ pub(crate) fn spring_arm_system(
             200.0,
         );
 
-        let filter = collision_filters.filter_for(arm.target, &q_children);
-        let probe = tf.rotation.mul_vec3(Vec3::Z).as_dvec3();
-        let obstruction = spatial_query
-            .as_ref()
-            .and_then(|query| {
-                query.cast_ray_in_grid(
-                    child_of.0,
-                    GridPos(target_pos),
-                    Dir3::new(probe.as_vec3()).ok()?,
-                    arm.distance,
-                    true,
-                    filter,
-                )
-            })
-            .map(|hit| f64::from(hit.distance));
+        let mut filter = collision_filters
+            .filter_for(arm.target, &q_children)
+            .clone();
+        filter
+            .excluded_entities
+            .extend(policy.terrain.native_terrain_colliders());
+        let radius = match policy.collision_settings.camera_radius(projection) {
+            Ok(radius) => radius,
+            Err(error) => {
+                policy.report(Some(error));
+                continue;
+            }
+        };
+        let Some(native) = spatial_query.as_ref() else {
+            policy.report(Some("camera follow has no native volume query".into()));
+            continue;
+        };
+        let Some(frame) = policy.active_frame.as_deref().map(|frame| frame.0) else {
+            policy.report(Some("camera follow has no active physics frame".into()));
+            continue;
+        };
+        let Some(to_physics) = lunco_spatial::coords::grid_transform_between_grids(
+            child_of.0, frame, &q_parents, &q_grids, &q_spatial,
+        ) else {
+            policy.report(Some("camera follow cannot resolve physics frame".into()));
+            continue;
+        };
+        let Some(to_source) = lunco_spatial::coords::grid_transform_between_grids(
+            frame, child_of.0, &q_parents, &q_grids, &q_spatial,
+        ) else {
+            policy.report(Some("camera follow cannot resolve source frame".into()));
+            continue;
+        };
+        let shape = match crate::locomotion::camera_collider(radius) {
+            Ok(shape) => shape,
+            Err(error) => {
+                policy.report(Some(error));
+                continue;
+            }
+        };
+        let probe = match Dir3::new(tf.rotation * Vec3::Z) {
+            Ok(probe) => probe,
+            Err(_) => {
+                policy.report(Some(
+                    "camera follow has an invalid obstruction direction".into(),
+                ));
+                continue;
+            }
+        };
+        let obstruction = match native.cast_shape_in_grid(
+            child_of.0,
+            &shape,
+            GridPos(target_pos),
+            Quat::IDENTITY,
+            probe,
+            arm.distance,
+            policy.collision_settings.skin_m,
+            &filter,
+        ) {
+            Ok(hit) => hit.map(|hit| f64::from(hit.distance)),
+            Err(error) => {
+                policy.report(Some(error));
+                continue;
+            }
+        };
         let damping = arm.damping.unwrap_or(defaults.damping);
         let base = FollowPlan {
             distance: arm.distance,
@@ -237,7 +294,6 @@ pub(crate) fn spring_arm_system(
                 continue;
             }
         };
-        policy.report(None);
         // Angles narrow only at the render quaternion boundary.
         let yaw = plan.yaw.rem_euclid(std::f64::consts::TAU) as f32;
         let pitch = plan.pitch as f32;
@@ -271,15 +327,12 @@ pub(crate) fn spring_arm_system(
         };
 
         let next_rotation = tf.rotation.slerp(desired_rot, plan.rotation_alpha as f32);
-        if tf.rotation != next_rotation {
-            tf.rotation = next_rotation;
-        }
-
-        let offset = tf.rotation.mul_vec3(Vec3::Z).as_dvec3() * plan.distance;
+        let offset = next_rotation.mul_vec3(Vec3::Z).as_dvec3() * plan.distance;
         let vertical_offset: DVec3 = if surface_mode.is_some() {
             let Some(up) = surface_axes.map(|(_, _, up)| up).or_else(|| {
                 gravity_up_in_grid(child_of.0, &gravity, &q_parents, &q_grids, &q_spatial)
             }) else {
+                policy.report(Some("camera follow has no surface-relative up axis".into()));
                 continue;
             };
             up.as_dvec3() * plan.height
@@ -292,61 +345,98 @@ pub(crate) fn spring_arm_system(
             })
             .unwrap_or(DVec3::new(plan.focus_x, 0.0, plan.focus_z));
         let vertical_offset = vertical_offset + lateral_focus;
-        // The focus offset itself may cross a ceiling. Resolve it from the
-        // subject center before casting the camera boom, with the same filter.
-        let focus_length = vertical_offset.length();
-        let focus_offset = spatial_query
-            .as_ref()
-            .and_then(|query| {
-                query.cast_ray_in_grid(
-                    child_of.0,
-                    GridPos(target_pos),
-                    Dir3::new(vertical_offset.as_vec3()).ok()?,
-                    focus_length,
-                    true,
-                    filter,
-                )
-            })
-            .map(|hit| vertical_offset * ((f64::from(hit.distance) - 0.1).max(0.0) / focus_length))
-            .unwrap_or(vertical_offset);
-        let ray_origin = target_pos + focus_offset;
-        let desired_pos = ray_origin + offset;
-        let ray_dir = (desired_pos - ray_origin).normalize_or(DVec3::Y);
-        let ray_len = desired_pos.distance(ray_origin);
-        let castable = ray_origin.is_finite() && ray_len.is_finite();
-        let hit = match &spatial_query {
-            Some(spatial_query) if castable => spatial_query.cast_ray_in_grid(
-                child_of.0,
-                GridPos(ray_origin),
-                Dir3::new(ray_dir.as_vec3()).unwrap_or(Dir3::Y),
-                ray_len,
-                true,
-                filter,
-            ),
-            _ => None,
-        };
-
-        let desired_len = ray_len;
-        let target_len = match hit {
-            Some(hit_data) => ((f64::from(hit_data.distance) - 0.5).min(desired_len)).max(0.0),
-            None => desired_len,
-        };
         let Some(current_pos) =
             grid_absolute_seeded(avatar_ent, Some(&cell), &tf, &q_parents, &q_grids)
                 .map(|position| position.0)
         else {
+            policy.report(Some(
+                "camera follow cannot resolve its current grid pose".into(),
+            ));
             continue;
         };
-        let current_len = current_pos.distance(ray_origin);
-        // Never ease through geometry. Recovery alone is interpolated.
-        let final_len = resolve_camera_arm_length(current_len, target_len, plan.position_alpha);
-        let final_pos = ray_origin + ray_dir * final_len;
+        let resolved = (|| -> Result<DVec3, crate::locomotion::CameraMotionError> {
+            let solve = |origin: DVec3, delta: DVec3| {
+                crate::locomotion::cast_camera_source_step(
+                    to_physics.transform_position(origin),
+                    to_physics.transform_vector(delta),
+                    radius,
+                    &policy.collision_settings,
+                    &policy.terrain,
+                    policy
+                        .terrain_budget
+                        .as_deref()
+                        .map_or(0, |budget| budget.max_intervals),
+                    native,
+                    &filter,
+                )
+                .map(|motion| to_source.transform_position(motion.position))
+            };
+            let ray_origin = solve(target_pos, vertical_offset)?;
+            let desired_pos = solve(ray_origin, offset)?;
+            let boom = desired_pos - ray_origin;
+            let target_len = boom.length();
+            let current_len = current_pos.distance(ray_origin);
+            let final_len = resolve_camera_arm_length(current_len, target_len, plan.position_alpha);
+            let candidate = if target_len > 0.0 {
+                ray_origin + boom * (final_len / target_len)
+            } else {
+                ray_origin
+            };
+            // The boom certifies visibility from the subject. A separate sweep
+            // certifies the camera's actual damped/swinging travel this frame.
+            crate::locomotion::resolve_camera_segment(
+                avatar_ent,
+                frame,
+                to_physics.transform_position(current_pos),
+                to_physics.transform_vector(candidate - current_pos),
+                radius,
+                &policy.collision_settings,
+                &policy.terrain,
+                policy
+                    .terrain_budget
+                    .as_deref()
+                    .map_or(0, |budget| budget.max_intervals),
+                &policy.drawn,
+                &mut policy.targets,
+                native,
+                &filter,
+            )
+            .map(|point| to_source.transform_position(point))
+        })();
+        let final_pos = match resolved {
+            Ok(position) => {
+                policy.report(None);
+                position
+            }
+            Err(crate::locomotion::CameraMotionError::Invalid(error)) => {
+                policy.report(Some(error));
+                continue;
+            }
+            Err(crate::locomotion::CameraMotionError::Preparation { reason, .. }) => {
+                if let Some(diagnostics) = policy.diagnostics.as_deref_mut() {
+                    diagnostics.replace_producer(
+                        "camera-follow",
+                        [lunco_core::RuntimeDiagnostic {
+                            code: "camera-terrain-preparing".into(),
+                            severity: lunco_core::DiagnosticSeverity::Info,
+                            producer: "camera-follow".into(),
+                            subject: "SpringArmCamera".into(),
+                            message: reason,
+                        }],
+                    );
+                }
+                continue;
+            }
+        };
 
+        // The boom's translation and orientation form one admitted rig pose.
+        // Preparation must not advance the orbit while its movement is held.
         let (new_cell, new_tf) =
-            local_pose_to_grid_storage(grid, final_pos, tf.rotation.as_dquat());
+            local_pose_to_grid_storage(grid, final_pos, next_rotation.as_dquat());
         cell.set_if_neq(new_cell);
-        if tf.translation != new_tf.translation {
+        if tf.translation != new_tf.translation || tf.rotation != new_tf.rotation {
             tf.translation = new_tf.translation;
+            tf.rotation = new_tf.rotation;
         }
     }
 }

@@ -111,6 +111,7 @@ impl ShaderTexture {
             TextureLayer::Albedo
             | TextureLayer::Mineral
             | TextureLayer::ContinuationAlbedo
+            | TextureLayer::RegionalAlbedo
             | TextureLayer::DetailAlbedo => Some(Rgba8MipMode::SrgbColor),
             TextureLayer::Surface
             | TextureLayer::ContinuationSurface

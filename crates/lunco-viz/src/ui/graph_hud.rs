@@ -38,7 +38,7 @@ pub struct SetGraphHud {
 }
 
 /// The HUD owns its grid through scene teardown; signal history stays shared.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct GraphHud {
     visible: bool,
     grid: Option<u64>,
@@ -66,6 +66,7 @@ impl Default for GraphHud {
 pub(crate) struct GraphHuds {
     instances: BTreeMap<u64, GraphHud>,
     next_id: u64,
+    revision: u64,
 }
 
 impl Default for GraphHuds {
@@ -73,11 +74,91 @@ impl Default for GraphHuds {
         Self {
             instances: BTreeMap::new(),
             next_id: PRIMARY_HUD,
+            revision: 0,
         }
     }
 }
 
 impl SceneResource for GraphHuds {}
+
+/// One graph HUD's selected channels and window layout.
+#[derive(Clone, Debug)]
+pub struct GraphHudSnapshot {
+    pub id: u64,
+    pub visible: bool,
+    pub columns: u32,
+    pub signals: Vec<SignalGridEntry>,
+    pub width: f32,
+    pub height: f32,
+    pub position: Option<[f32; 2]>,
+}
+
+/// Capture persisted graph selections through the grid and plot owners.
+pub fn workspace_snapshots(world: &World) -> Vec<GraphHudSnapshot> {
+    let (Some(huds), Some(grids), Some(plots), Some(signals)) = (
+        world.get_resource::<GraphHuds>(),
+        world.get_resource::<SignalGrids>(),
+        world.get_resource::<VisualizationRegistry>(),
+        world.get_resource::<SignalRegistry>(),
+    ) else {
+        return Vec::new();
+    };
+    huds.instances
+        .iter()
+        .map(|(id, hud)| {
+            let grid = hud.grid;
+            let columns = grid.and_then(|grid| grids.columns(grid)).unwrap_or(1);
+            let selected = grid
+                .and_then(|grid| grids.plots(grid))
+                .into_iter()
+                .flatten()
+                .filter_map(|plot| plots.get(*plot))
+                .filter_map(|config| {
+                    let binding = config.inputs.first()?;
+                    let persisted = binding.persisted_source.as_ref();
+                    let target_gid = persisted
+                        .and_then(|source| source.entity)
+                        .or_else(|| signals.global_owner(&binding.source))?;
+                    let caption = LinePlotStyle::load(config)
+                        .caption
+                        .unwrap_or_else(|| config.title.clone());
+                    Some(SignalGridEntry {
+                        target_gid,
+                        signal: persisted.map_or_else(
+                            || binding.source.path.clone(),
+                            |source| source.path.clone(),
+                        ),
+                        caption,
+                    })
+                })
+                .collect();
+            GraphHudSnapshot {
+                id: *id,
+                visible: hud.visible,
+                columns,
+                signals: selected,
+                width: hud.size.x,
+                height: hud.size.y,
+                position: hud.position.map(|position| [position.x, position.y]),
+            }
+        })
+        .collect()
+}
+
+/// Cheap change signal for per-project workspace persistence.
+pub fn workspace_revision(world: &World) -> u64 {
+    world
+        .get_resource::<GraphHuds>()
+        .map_or(0, |huds| huds.revision)
+}
+
+/// Current HUD identities, used to map newly restored windows.
+pub fn workspace_ids(world: &World) -> Vec<u64> {
+    world
+        .get_resource::<GraphHuds>()
+        .map(|huds| huds.instances.keys().copied().collect())
+        .unwrap_or_default()
+}
 
 /// Add an independent, initially empty telemetry HUD. Returns its instance id.
 #[Command(default)]
@@ -103,6 +184,7 @@ fn on_create_graph_hud(_: On<CreateGraphHud>, mut huds: ResMut<GraphHuds>) -> Re
             ..Default::default()
         },
     );
+    huds.revision = huds.revision.wrapping_add(1);
     Ok(Ack::with_data(
         OpId::new(),
         lunco_api_core::api_value!({"hud": id}),
@@ -120,6 +202,7 @@ fn on_remove_graph_hud(
         .instances
         .remove(&trigger.hud)
         .ok_or("graph HUD is unavailable")?;
+    huds.revision = huds.revision.wrapping_add(1);
     if let Some(grid) = hud.grid {
         grids.remove(grid, &mut plots);
     }
@@ -138,7 +221,8 @@ fn on_set_graph_hud(
 ) -> Result<Ack, String> {
     let request = trigger.event();
     let id = request.hud.unwrap_or(PRIMARY_HUD);
-    let mut hud = match huds.instances.get(&id) {
+    let previous = huds.instances.get(&id).cloned();
+    let mut hud = match previous.as_ref() {
         Some(hud) => hud.clone(),
         None if request.hud.is_none() && huds.instances.len() < MAX_HUDS => GraphHud::default(),
         None => return Err("graph HUD is unavailable; create it before selecting its id".into()),
@@ -168,6 +252,9 @@ fn on_set_graph_hud(
         &known_colours,
     )?;
     huds.instances.insert(id, hud);
+    if previous.as_ref() != huds.instances.get(&id) {
+        huds.revision = huds.revision.wrapping_add(1);
+    }
     huds.next_id = huds.next_id.max(id + 1);
     Ok(Ack::new(OpId::new()))
 }
@@ -348,10 +435,16 @@ pub(crate) fn on_graph_hud_measured(trigger: On<GraphHudMeasured>, mut huds: Res
     if !trigger.rect.is_finite() {
         return;
     }
-    hud.size = trigger.rect.size();
-    hud.position = Some(trigger.rect.min);
+    let size = trigger.rect.size();
+    let position = Some(trigger.rect.min);
+    if hud.size == size && hud.position == position {
+        return;
+    }
+    hud.size = size;
+    hud.position = position;
     hud.apply_size = false;
     hud.apply_position = false;
+    huds.revision = huds.revision.wrapping_add(1);
 }
 
 /// Construct the ordinary native grid entry from a live channel's identity.
@@ -841,6 +934,10 @@ pub fn draw_graph_hud(world: &mut World, state: &mut SystemState<EguiContexts>) 
         return;
     };
     let theme = world.resource::<lunco_theme::Theme>();
+    let scene_path = world
+        .get_resource::<lunco_workbench_core::scene::CurrentScenePath>()
+        .map(|path| path.0.clone())
+        .unwrap_or_default();
     let padding = theme.spacing.window_padding;
     let frame = lunco_theme::hud_window_frame(theme);
     let bounds = viewport.shrink(padding);
@@ -853,7 +950,7 @@ pub fn draw_graph_hud(world: &mut World, state: &mut SystemState<EguiContexts>) 
     let mut intents = Vec::new();
     for (index, (id, hud)) in huds.iter().enumerate() {
         let size = hud.size.min(bounds.size());
-        let window_id = egui::Id::new(("lunco_graph_hud", id));
+        let window_id = egui::Id::new(("lunco_graph_hud", scene_path.as_str(), id));
         let mut window = egui::Window::new(format!("Telemetry {id}"))
             .id(window_id)
             .title_bar(false)

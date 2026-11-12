@@ -158,10 +158,20 @@ pub struct SetProjectPhysicsEscapeGuard {
     pub value: Option<bool>,
 }
 
+/// Request a local project override for restoring camera and graph views.
+#[lunco_core::Command(default)]
+pub struct SetProjectViewStateRestoration {
+    /// Twin whose project settings are being edited.
+    pub twin: u64,
+    /// Explicit override or the default-enabled behavior.
+    pub value: Option<bool>,
+}
+
 #[derive(Clone, Copy)]
 enum ProjectSettingField {
     SceneLoadDefault,
     FiniteWorldEscapeGuard,
+    ViewStateRestoration,
 }
 
 impl ProjectSettingField {
@@ -169,6 +179,7 @@ impl ProjectSettingField {
         match self {
             Self::SceneLoadDefault => SCENE_SECTION,
             Self::FiniteWorldEscapeGuard => crate::physics_escape_settings::PHYSICS_SECTION,
+            Self::ViewStateRestoration => crate::ui_settings::UI_SECTION,
         }
     }
 
@@ -178,6 +189,7 @@ impl ProjectSettingField {
             Self::FiniteWorldEscapeGuard => {
                 crate::physics_escape_settings::FINITE_WORLD_ESCAPE_GUARD_FIELD
             }
+            Self::ViewStateRestoration => crate::ui_settings::RESTORE_VIEW_STATE_FIELD,
         }
     }
 }
@@ -253,6 +265,25 @@ fn set_project_physics_escape_guard(
     )
 }
 
+#[lunco_core::on_command(SetProjectViewStateRestoration)]
+fn set_project_view_state_restoration(
+    trigger: On<SetProjectViewStateRestoration>,
+    mut workspace: ResMut<crate::WorkspaceResource>,
+    mut pending: ResMut<PendingProjectSettingsWrites>,
+    opens: Res<crate::open::PendingTwinOpens>,
+    active: Res<lunco_core::ActiveCommandId>,
+) -> lunco_core::CommandOutcome {
+    start_project_bool_write(
+        trigger.event().twin,
+        ProjectSettingField::ViewStateRestoration,
+        trigger.event().value,
+        &mut workspace,
+        &mut pending,
+        opens.settings_revision.clone(),
+        active.get(),
+    )
+}
+
 fn start_project_bool_write(
     twin_raw: u64,
     field: ProjectSettingField,
@@ -308,6 +339,11 @@ fn start_project_bool_write(
                 lunco_settings::read_optional_section::<crate::ProjectPhysicsEscapeSettings>(
                     &path,
                 )?;
+            }
+            ProjectSettingField::ViewStateRestoration => {
+                // The typed UI preference reader already defaults malformed
+                // optional values during Twin open. The field writer can
+                // replace an invalid value without disturbing sibling fields.
             }
         }
         lunco_settings::write_optional_field(&path, field.section(), field.field(), value.as_ref())
@@ -374,6 +410,11 @@ fn poll_project_settings_writes(
                             project.finite_world_escape_guard = write.value;
                         }
                     }
+                    ProjectSettingField::ViewStateRestoration => {
+                        if let Some(project) = workspace.project_ui_settings.get_mut(&id) {
+                            project.restore_view_state = write.value;
+                        }
+                    }
                 }
             }
         }
@@ -430,7 +471,11 @@ pub(crate) fn install(app: &mut App) {
     register_all_commands(app);
 }
 
-lunco_core::register_commands!(set_project_scene_loading, set_project_physics_escape_guard);
+lunco_core::register_commands!(
+    set_project_scene_loading,
+    set_project_physics_escape_guard,
+    set_project_view_state_restoration
+);
 
 #[cfg(test)]
 mod tests {

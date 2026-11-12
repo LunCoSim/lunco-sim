@@ -235,7 +235,7 @@ fn forget_backed_document_on_closed(
     let doc = trigger.event().doc;
     let coords = backed.coords_of(doc);
     if let Some(name) = backed.forget_document(doc) {
-        if let Err(error) = twins.unregister_name(&name) {
+        if let Err(error) = twins.unregister_authority(&name) {
             warn!("[usd] could not unregister closed preview Twin `{name}`: {error}");
         }
     } else if let Some((name, rel)) = coords {

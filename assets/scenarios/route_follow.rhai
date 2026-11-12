@@ -68,7 +68,14 @@ fn simulation_dependencies(me, ctx) {
     if targets == () || targets.len() != 1 {
         throw "route program must have exactly one subject while resolving its Modelica dependency";
     }
-    #{ modelica_entities: [find_path_in_document(result.doc_id, targets[0])], entity_reads: [], entity_writes: [],
+    // Dependency planning declares the subject by its owning stage identity;
+    // document association may still be settling at this lifecycle boundary.
+    let subject = find_path_in_stage(me, targets[0]);
+    if subject < 0 {
+        throw "route subject has no live entity while resolving its Modelica dependency: "
+            + targets[0];
+    }
+    #{ modelica_entities: [subject], entity_reads: [], entity_writes: [],
        query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "SensorOccupants", "InspectSelection",
                      "InspectUsdDocument", "TerrainHeights"],
        required_inputs: [] }
@@ -128,7 +135,7 @@ fn route_subject_state_for(me, state) {
             error: "the route document is not synchronized" };
     }
     if state.subject_path != () {
-        let cached = find_path_in_document(doc, state.subject_path);
+        let cached = find_path_in_stage(me, state.subject_path);
         if cached >= 0 {
             return #{ subject: cached, path: state.subject_path,
                 retryable: false, error: "" };
@@ -147,7 +154,7 @@ fn route_subject_state_for(me, state) {
         return #{ subject: -1, retryable: false,
             error: "the authored inputs:subject relationship is unavailable" };
     }
-    let subject = find_path_in_document(doc, targets[0]);
+    let subject = find_path_in_stage(me, targets[0]);
     if subject < 0 {
         return #{ subject: -1, retryable: true,
             error: "the route subject has no live projection" };
@@ -475,7 +482,7 @@ fn mark_initial_route_occupancy(me, state) {
     }
     if next.path == () { return #{ ok: true, state: state }; }
     let point = next.path;
-    let sensor = find_path_in_document(state.route_document, point + "/Trigger");
+    let sensor = find_path_in_stage(me, point + "/Trigger");
     if sensor < 0 {
         return route_failure("the route sensor has no live projection: " + point);
     }
@@ -533,7 +540,7 @@ fn drive_current_point(me, state) {
         return #{ result: result, state: state };
     }
     let subject_state = route_subject_state_for(me, state);
-    let subject = route_subject_for(me, state);
+    let subject = subject_state.subject;
     if subject < 0 {
         let failure = route_failure(subject_state.error);
         failure.retryable = subject_state.retryable;
@@ -553,7 +560,7 @@ fn drive_current_point(me, state) {
     if state.commanded_path == point && state.commanded_view_key == state.route_view_key {
         return #{ result: #{ ok: true }, state: state };
     }
-    let target = find_path_in_document(state.route_document, point);
+    let target = find_path_in_stage(me, point);
     let position = if target >= 0 { world_pos(target) } else { () };
     if position == () {
         return #{

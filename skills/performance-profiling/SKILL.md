@@ -2263,12 +2263,10 @@ A shader reload conservatively retires its crop admission for that asset's
 lifetime. Restart an owned process before clean FPS acceptance after shader
 editing, and inspect its camera's `DirectionalShadowRaster` projection facts.
 Require native GPU timing and image equality as well as projected texel counts.
-The admitted receiver rectangle also bounds a depth-only clear immediately before
-the native directional shadow pass. Qualify the combined clear and shadow span,
-including empty phases and clear-pipeline readiness; native full clears remain
-the owner when the rectangle is unavailable. Point/spot shadows retain native
-clears. Capture moving cameras and transitions between admitted and unbounded
-views so stale depth cannot be hidden by a single stationary screenshot.
+Native shadow passes clear the full attachment before cropped directional draws.
+Qualify the combined clear and shadow span and include empty phases. Capture
+moving cameras and transitions between admitted and unbounded views so stale
+depth cannot be hidden by a single stationary screenshot.
 
 For a same-process raster A/B control, use the authored
 `scenarios/tests/shadow_receiver_crop.rhai::set_shadow_test_control` helper on

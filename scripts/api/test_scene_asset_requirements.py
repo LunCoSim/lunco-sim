@@ -103,7 +103,7 @@ def main():
             if "TESTS_FAIL" in result or "TESTS_OK" not in result:raise RuntimeError(result)
             (output/"policy-verdict.txt").write_text(result)
             execute(session,"OpenTwin",path=str(twin))
-            def rows():return [row for row in execute(session,"ListDatasets")["datasets"] if row["scope"].startswith("twin:SceneDataProbe")]
+            def rows():return [row for row in execute(session,"ListDatasets")["datasets"] if row["scope"].startswith("twin:")]
             catalog=wait_for(lambda: rows() or None,"Twin catalog");scope=catalog[0]["scope"]
             def selected(keys):return sorted(row["key"] for row in rows() if row["required_for_scene"])==keys
             wait_for(lambda:selected(list("abcd")),"first scene requirements")
@@ -207,7 +207,10 @@ def main():
             execute(session,"RunRhai",code=f'let r=assets::require("twin://{authority}/data/other.bin");if !r.ok {{throw r.error;}}')
             wait_for(lambda:selected(["a","b","c","d","other","script_library"]),"explicit runtime URI use")
             verdict(f'certify_scene_dependencies({json.dumps(scope)},["a","b","c","d","other","script_library"],true);')
-            execute(session,"LoadScene",path=f"twin://{authority}/second.usda")
+            scene_uri=execute(session,"InspectWorkbenchNavigation")["scene_path"]
+            if not scene_uri.endswith("/first.usda"):
+                raise RuntimeError(f"expected the stable first-scene URI, got {scene_uri!r}")
+            execute(session,"LoadScene",path=scene_uri.rsplit("/",1)[0]+"/second.usda")
             wait_for(lambda:selected(["other"]),"second scene requirements")
             verdict(f'certify_scene_dependencies({json.dumps(scope)},["other"],true);')
             session.capture_screenshot(output/"second-scene.png")

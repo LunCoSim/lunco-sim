@@ -15,14 +15,11 @@
 //! [`Quadtree::selected`] (the geomorph window for one leaf). Sharing these means the
 //! incremental cover refines under the SAME metric rather than a copy that can drift.
 //!
-//! **Selection metric — distance-range, not screen-space-error.** A node refines when
-//! the focus is within `range_factor · error` of it. The `range_factor` is computed
-//! once from a *canonical* screen metric ([`Quadtree::from_screen_metric`])
-//! — fixed pixel-error + FOV — so the selected set depends only on world geometry,
-//! never on a client's resolution or camera FOV. That is what lets the physics tile
-//! ring (driven by a rover's world position at a fixed depth) be **identical across
-//! peers and the headless server** (networked determinism). Screen-space-error, by
-//! contrast, is view-dependent and would diverge the tile set per client.
+//! Perspective selection compares nearest node distance to the error range from
+//! the consumed output's physical pixels and field of view. Orthographic
+//! selection compares projected error directly to its pixel threshold, independent
+//! of camera distance. The caller clips orthographic nodes against the admitted
+//! camera footprint. Physics uses its own fixed-depth node selection.
 //!
 //! `geometric_error(depth)` is 3D-Tiles-compatible (`rootError / 2^depth`), so the
 //! same numbers can later be authored into a 3D-Tiles-style implicit-quadtree
@@ -164,9 +161,17 @@ pub struct Selected {
     pub morph_end: f64,
 }
 
+/// Projection law used by visual error selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionMetric {
+    Perspective,
+    Orthographic,
+}
+
 /// A CDLOD quadtree over a square, origin-centred terrain region.
 #[derive(Debug, Clone, Copy)]
 pub struct Quadtree {
+    pub projection_metric: ProjectionMetric,
     /// Half side length of the root region (e.g. DEM `half_extent`).
     pub root_half_extent: f64,
     /// Deepest subdivision level (finest detail). `0` = root only.
@@ -188,6 +193,7 @@ impl Quadtree {
         root_geometric_error: f64,
     ) -> Self {
         Quadtree {
+            projection_metric: ProjectionMetric::Perspective,
             root_half_extent,
             max_depth,
             range_factor,
@@ -244,6 +250,28 @@ impl Quadtree {
         quadtree
     }
 
+    /// Orthographic error is projected in pixels per metre and is independent
+    /// of camera distance. Distance morphing is disabled for these covers;
+    /// zoom-driven cover transitions retain the normal exact topology stitches.
+    pub fn from_orthographic_metric(
+        root_half_extent: f64,
+        max_depth: u8,
+        root_geometric_error: f64,
+        pixels_per_metre: f64,
+        target_pixel_error: f64,
+    ) -> Self {
+        assert!(pixels_per_metre.is_finite() && pixels_per_metre > 0.0);
+        assert!(target_pixel_error.is_finite() && target_pixel_error > 0.0);
+        let mut quadtree = Self::new(
+            root_half_extent,
+            max_depth,
+            pixels_per_metre / target_pixel_error,
+            root_geometric_error,
+        );
+        quadtree.projection_metric = ProjectionMetric::Orthographic;
+        quadtree
+    }
+
     /// Geometric error (m) of a node at `depth` (3D-Tiles-compatible: halves per level).
     pub fn geometric_error(&self, depth: u8) -> f64 {
         self.root_geometric_error / (1u64 << depth) as f64
@@ -293,6 +321,9 @@ impl Quadtree {
 
     /// Nearest 3D distance to a node's square lifted by its sampled height range.
     pub fn focus_distance(&self, coord: QuadCoord, focus: [f64; 3], height_range: [f64; 2]) -> f64 {
+        if self.projection_metric == ProjectionMetric::Orthographic {
+            return 1.0;
+        }
         self.region(coord)
             .distance_to_height_range(focus, height_range)
     }
@@ -300,7 +331,11 @@ impl Quadtree {
     /// The leaf's CDLOD geomorph window from its parent's measured refine range.
     /// The root has no parent and uses `f64::INFINITY`.
     pub fn selected(&self, coord: QuadCoord, parent_refine_range: f64) -> Selected {
-        let morph_end = parent_refine_range;
+        let morph_end = if self.projection_metric == ProjectionMetric::Orthographic {
+            f64::INFINITY
+        } else {
+            parent_refine_range
+        };
         let morph_start = if morph_end.is_finite() {
             self.morph_ratio * morph_end
         } else {
@@ -314,7 +349,7 @@ impl Quadtree {
         }
     }
 
-    /// Constrain an exact visual cover to explicit physical-support nodes.
+    /// Constrain an exact visual cover to explicitly required view nodes.
     /// Required nodes refine coarser ancestors and preserve finer camera leaves, keeping
     /// full geometry at every camera distance. Other leaves retain their normal
     /// morph windows. This operation never changes physics selection.
@@ -339,8 +374,8 @@ impl Quadtree {
                 self.force_refine(&mut cover, target, node_error);
             }
         }
-        // Apply pins after all splits: a finer camera constraint can split a
-        // required physical leaf and every resulting child still owns contact.
+        // Apply pins after all splits so every descendant of a required node
+        // retains full geometry under the same view contract.
         for leaf in cover.values_mut() {
             if required.iter().any(|target| {
                 leaf.coord.depth >= target.depth
@@ -406,11 +441,6 @@ impl Quadtree {
             // Children's geomorph window ends where THIS node would refine —
             // the same band the error-driven walk would have assigned them.
             let refine_range = self.range_factor * node_error(cur.coord, cur.region).max(0.0);
-            let morph_start = if refine_range.is_finite() {
-                self.morph_ratio * refine_range
-            } else {
-                f64::INFINITY
-            };
             let d = cur.coord.depth + 1;
             let mut next: Option<Selected> = None;
             for (ox, oz) in [(0u32, 0u32), (1, 0), (0, 1), (1, 1)] {
@@ -420,12 +450,7 @@ impl Quadtree {
                     z: cur.coord.z * 2 + oz,
                 };
                 let is_target_path = covers(cc, target);
-                let s = Selected {
-                    coord: cc,
-                    region: self.region(cc),
-                    morph_start,
-                    morph_end: refine_range,
-                };
+                let s = self.selected(cc, refine_range);
                 if is_target_path {
                     next = Some(s);
                 } else {
@@ -441,6 +466,39 @@ impl Quadtree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orthographic_error_tracks_zoom_and_never_distance_morphs() {
+        let wide = Quadtree::from_orthographic_metric(100.0, 8, 10.0, 2.0, 2.0);
+        let zoomed = Quadtree::from_orthographic_metric(100.0, 8, 10.0, 20.0, 2.0);
+        for eye in [[0.0, 1.0, 0.0], [0.0, 1.0e12, 0.0], [1.0e12, -4.0, 0.0]] {
+            assert_eq!(wide.focus_distance(QuadCoord::ROOT, eye, [-1.0, 1.0]), 1.0);
+        }
+        assert!(wide.error_refine_range(0.2) < 1.0);
+        assert!(zoomed.error_refine_range(0.2) > 1.0);
+        let leaf = zoomed.selected(QuadCoord::ROOT.children()[0], 12.0);
+        assert!(leaf.morph_start.is_infinite() && leaf.morph_end.is_infinite());
+        let mut cover = vec![zoomed.selected(QuadCoord::ROOT, f64::INFINITY)];
+        let required = QuadCoord {
+            depth: 3,
+            x: 2,
+            z: 2,
+        };
+        zoomed.constrain_selection(&mut cover, &[required], &|_, _| 1.0);
+        assert!(
+            cover
+                .iter()
+                .all(|leaf| leaf.morph_start.is_infinite() && leaf.morph_end.is_infinite()),
+            "mandatory splits and their neighbours share the projection's morph contract"
+        );
+        let perspective = Quadtree::new(100.0, 8, 2.0, 10.0);
+        assert_eq!(
+            perspective
+                .selected(QuadCoord::ROOT.children()[0], 12.0)
+                .morph_end,
+            12.0
+        );
+    }
 
     #[test]
     fn node_distance_uses_its_height_range_and_signed_camera_altitude() {
@@ -523,6 +581,15 @@ mod tests {
         // Tighter pixel error → larger range_factor (refine sooner / from farther).
         let tight = Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4, 1.0, 0.55);
         assert!(tight.range_factor > q.range_factor);
+        let higher_resolution =
+            Quadtree::from_screen_metric(8000.0, 6, 8000.0, 2160.0, FRAC_PI_4, 2.0, 0.55);
+        let zoomed =
+            Quadtree::from_screen_metric(8000.0, 6, 8000.0, 1080.0, FRAC_PI_4 * 0.5, 2.0, 0.55);
+        let range = q.error_refine_range(1.0);
+        assert_eq!(higher_resolution.error_refine_range(1.0), 2.0 * range);
+        assert!(zoomed.error_refine_range(1.0) > 2.0 * range);
+        assert!(q.focus_distance(QuadCoord::ROOT, [0.0, range * 0.5, 0.0], [0.0; 2]) < range);
+        assert!(q.focus_distance(QuadCoord::ROOT, [0.0, range * 1.5, 0.0], [0.0; 2]) > range);
     }
 
     #[test]
@@ -551,8 +618,8 @@ mod tests {
         let target = q.node_containing(3, [1234.5, -2345.6]);
         let mut selected = vec![q.selected(QuadCoord::ROOT, f64::INFINITY)];
         q.constrain_selection(&mut selected, &[target], &|_, _| 0.05);
-        let contact = selected.iter().find(|s| s.coord == target).unwrap();
-        assert!(contact.morph_end.is_infinite());
+        let required = selected.iter().find(|s| s.coord == target).unwrap();
+        assert!(required.morph_end.is_infinite());
         let area: f64 = selected.iter().map(|s| s.region.side().powi(2)).sum();
         assert!((area - (2.0 * q.root_half_extent).powi(2)).abs() < 1e-3);
         let finer = q.node_containing(q.max_depth, q.region(target).center);

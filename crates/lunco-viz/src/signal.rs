@@ -12,8 +12,8 @@
 
 pub use lunco_signal::{
     DEFAULT_CAPACITY, PersistedSignalRef, ScalarHistory, ScalarHistorySnapshot, ScalarSample,
-    SignalExposure, SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalType,
-    TelemetryFocus,
+    SignalDescriptorsChanged, SignalExposure, SignalMeta, SignalPresentation, SignalRef,
+    SignalRegistry, SignalType, TelemetryFocus,
 };
 
 /// Convert an authored or generated identifier into the operator spelling used

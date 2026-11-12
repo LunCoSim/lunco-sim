@@ -556,13 +556,10 @@ fn copy_registered_hook(hook: &Arc<lunco_hooks::RegisteredHook>) -> lunco_hooks:
 fn invoke_twin_lifecycle(
     event: &str,
     twin_id: lunco_workspace::TwinId,
-    root: &Path,
     report: &PolicyLoadReport,
     phase: lunco_core::RuntimePhase,
 ) -> LifecyclePolicyReport {
     let context = HookValue::map([
-        ("twin_id", HookValue::str(twin_id.raw().to_string())),
-        ("root", HookValue::str(root.display().to_string())),
         ("scope", HookValue::str(report.scope.clone())),
         (
             "installed",
@@ -606,10 +603,9 @@ fn invoke_twin_lifecycle_context(
     }
     let runtime_context = lunco_core::RuntimeExecutionContext {
         target_twin_id: None,
-        route: Some(lunco_core::RuntimeRoute::twin_owned(
+        route: Some(lunco_core::RuntimeRoute::twin(
             lunco_core::RuntimeCycle::Lifecycle,
             0,
-            twin_id.raw(),
         )),
         phase,
         clock: lunco_core::RuntimeClock::None,
@@ -666,13 +662,21 @@ fn invoke_twin_lifecycle_context(
 /// Notify the installed application policy that one JSON asset scope is loading.
 pub fn handle_application_json_scope_loading(
     trigger: On<lunco_assets_runtime::JsonAssetScopeLoading>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut commands: Commands,
 ) {
     let scope = trigger.event();
-    let provider = match asset_menu_provider(scope.twin_id, scope.twin_name.as_deref()) {
+    let provider = match asset_menu_provider(scope.twin_id, scope.twin_display_name.as_deref()) {
         Ok(provider) => provider,
         Err(error) => {
             warn!("[application-assets] invalid JSON scope: {error}");
+            return;
+        }
+    };
+    let asset_root_uri = match stable_asset_uri(&scope.asset_root_uri, roots.as_deref()) {
+        Ok((uri, _)) => uri,
+        Err(error) => {
+            warn!("[application-assets] {error}");
             return;
         }
     };
@@ -680,8 +684,8 @@ pub fn handle_application_json_scope_loading(
         "json_scope_loading",
         &provider,
         scope.twin_id,
-        scope.twin_name.clone(),
-        scope.asset_root_uri.clone(),
+        scope.twin_display_name.clone(),
+        asset_root_uri,
         HookValue::map([("has_json_assets", HookValue::Bool(scope.asset_count != 0))]),
         &mut commands,
     );
@@ -691,47 +695,63 @@ pub fn handle_application_json_scope_loading(
 /// policy, replacing that scope's complete menu contribution.
 pub fn handle_application_json_scope_changed(
     trigger: On<lunco_assets_runtime::JsonAssetScopeChanged>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut commands: Commands,
 ) {
     let scope = trigger.event();
-    let provider = match asset_menu_provider(scope.twin_id, scope.twin_name.as_deref()) {
+    let provider = match asset_menu_provider(scope.twin_id, scope.twin_display_name.as_deref()) {
         Ok(provider) => provider,
         Err(error) => {
             warn!("[application-assets] invalid JSON scope: {error}");
             return;
         }
     };
-    let assets = HookValue::Array(
-        scope
-            .assets
-            .iter()
-            .map(|asset| {
-                let (persisted_result, text, error) = match &asset.content {
-                    lunco_assets_runtime::JsonAssetContent::PersistedResult => {
-                        (true, HookValue::Unit, HookValue::Unit)
-                    }
-                    lunco_assets_runtime::JsonAssetContent::Source(Ok(text)) => {
-                        (false, HookValue::str(text.clone()), HookValue::Unit)
-                    }
-                    lunco_assets_runtime::JsonAssetContent::Source(Err(error)) => {
-                        (false, HookValue::Unit, HookValue::str(error.clone()))
-                    }
-                };
-                HookValue::map([
-                    ("asset_uri", HookValue::str(asset.asset_uri.clone())),
-                    ("persisted_result", HookValue::Bool(persisted_result)),
-                    ("text", text),
-                    ("error", error),
-                ])
-            })
-            .collect(),
-    );
+    let asset_root_uri = match stable_asset_uri(&scope.asset_root_uri, roots.as_deref()) {
+        Ok((uri, _)) => uri,
+        Err(error) => {
+            warn!("[application-assets] {error}");
+            return;
+        }
+    };
+    let assets = scope
+        .assets
+        .iter()
+        .map(|asset| {
+            let (asset_uri, redaction) = stable_asset_uri(&asset.asset_uri, roots.as_deref())?;
+            let (persisted_result, text, error) = match &asset.content {
+                lunco_assets_runtime::JsonAssetContent::PersistedResult => {
+                    (true, HookValue::Unit, HookValue::Unit)
+                }
+                lunco_assets_runtime::JsonAssetContent::Source(Ok(text)) => {
+                    (false, HookValue::str(text.clone()), HookValue::Unit)
+                }
+                lunco_assets_runtime::JsonAssetContent::Source(Err(error)) => (
+                    false,
+                    HookValue::Unit,
+                    HookValue::str(sanitize_source_error(error, redaction.as_ref())),
+                ),
+            };
+            Ok(HookValue::map([
+                ("asset_uri", HookValue::str(asset_uri)),
+                ("persisted_result", HookValue::Bool(persisted_result)),
+                ("text", text),
+                ("error", error),
+            ]))
+        })
+        .collect::<Result<Vec<_>, String>>();
+    let assets = match assets {
+        Ok(assets) => HookValue::Array(assets),
+        Err(error) => {
+            warn!("[application-assets] {error}");
+            return;
+        }
+    };
     apply_application_asset_policy(
         "json_scope_changed",
         &provider,
         scope.twin_id,
-        scope.twin_name.clone(),
-        scope.asset_root_uri.clone(),
+        scope.twin_display_name.clone(),
+        asset_root_uri,
         assets,
         &mut commands,
     );
@@ -741,14 +761,28 @@ pub fn handle_application_json_scope_changed(
 /// newly completed scene.
 pub fn handle_application_scene_asset_lifecycle(
     trigger: On<lunco_core::SceneTransitionCompleted>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut commands: Commands,
 ) {
     let (event, path, root_prim) = match &trigger.event().transition {
         lunco_core::SceneTransition::Load { path, root_prim }
         | lunco_core::SceneTransition::Restart {
             path, root_prim, ..
-        } => ("scene_loaded", Some(path.clone()), Some(root_prim.clone())),
+        }
+        | lunco_core::SceneTransition::RuntimeReset { path, root_prim } => {
+            ("scene_loaded", Some(path.clone()), Some(root_prim.clone()))
+        }
         lunco_core::SceneTransition::Clear => ("scene_cleared", None, None),
+    };
+    let path = match path {
+        Some(path) => match stable_asset_uri(&path, roots.as_deref()) {
+            Ok((uri, _)) => Some(uri),
+            Err(error) => {
+                warn!("[application-assets] {error}");
+                return;
+            }
+        },
+        None => None,
     };
     let payload = HookValue::map([
         ("path", path.clone().map_or(HookValue::Unit, HookValue::str)),
@@ -768,6 +802,26 @@ pub fn handle_application_scene_asset_lifecycle(
     );
 }
 
+fn stable_asset_uri(
+    reference: &str,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<(String, Option<(String, String)>), String> {
+    let uri = lunco_assets_core::asset_path::source_uri_for_address(reference, roots)
+        .map_err(|_| "asset source could not be resolved to its stable URI".to_owned())?;
+    let redaction = lunco_assets_core::parse_twin_uri(reference)
+        .zip(lunco_assets_core::parse_twin_uri(&uri))
+        .filter(|((source, _), (stable, _))| source != stable)
+        .map(|((source, _), (stable, _))| (source.to_owned(), stable.to_owned()));
+    Ok((uri, redaction))
+}
+
+fn sanitize_source_error(error: &str, redaction: Option<&(String, String)>) -> String {
+    redaction.map_or_else(
+        || error.to_owned(),
+        |(source, stable)| error.replace(source, stable),
+    )
+}
+
 /// Run the application Rhai policy whenever the admitted scene menu facts change.
 pub fn handle_application_scene_catalog_facts(
     trigger: On<lunco_scripting_rhai_core::ui_bridge::ApplicationSceneCatalogChanged>,
@@ -782,13 +836,10 @@ pub fn handle_application_scene_catalog_facts(
         HookValue::map([
             ("id", HookValue::str(twin.id.to_string())),
             (
-                "authority",
-                twin.authority
-                    .as_ref()
-                    .map_or(HookValue::Unit, |authority| {
-                        HookValue::str(authority.clone())
-                    }),
+                "source_identity",
+                HookValue::str(twin.source_identity.clone()),
             ),
+            ("source_ready", HookValue::Bool(twin.source_ready)),
             (
                 "name",
                 twin.name
@@ -1016,15 +1067,15 @@ fn parse_script_workbench_navigation_entries(
 
 fn asset_menu_provider(
     twin_id: Option<lunco_workspace::TwinId>,
-    twin_name: Option<&str>,
+    twin_display_name: Option<&str>,
 ) -> Result<String, &'static str> {
-    match (twin_id, twin_name) {
+    match (twin_id, twin_display_name) {
         (None, None) => Ok("application:json-assets".to_owned()),
         (Some(twin_id), Some(name)) if !name.is_empty() => {
             Ok(format!("twin:{}:json-assets", twin_id.raw()))
         }
-        (Some(_), _) => Err("Twin JSON scope is missing its asset authority"),
-        (None, Some(_)) => Err("application JSON scope cannot have a Twin authority"),
+        (Some(_), _) => Err("Twin JSON scope is missing its workspace identity"),
+        (None, Some(_)) => Err("application JSON scope cannot have a Twin identity"),
     }
 }
 
@@ -1032,12 +1083,12 @@ fn apply_application_asset_policy(
     event: &str,
     provider: &str,
     twin_id: Option<lunco_workspace::TwinId>,
-    twin_name: Option<String>,
+    twin_display_name: Option<String>,
     asset_root_uri: String,
     payload: HookValue,
     commands: &mut Commands,
 ) {
-    let scope_name = twin_name
+    let scope_name = twin_display_name
         .as_deref()
         .unwrap_or("application assets")
         .to_owned();
@@ -1058,8 +1109,8 @@ fn apply_application_asset_policy(
             }),
         ),
         (
-            "twin_name",
-            twin_name.map_or(HookValue::Unit, |name| HookValue::str(name)),
+            "twin_display_name",
+            twin_display_name.map_or(HookValue::Unit, |name| HookValue::str(name)),
         ),
         ("asset_root_uri", HookValue::str(asset_root_uri)),
         ("payload", payload),
@@ -1635,9 +1686,7 @@ fn plan_twin_asset_loading_for(
             .collect(),
     );
     let context = HookValue::map([
-        ("twin_id", HookValue::Int(twin_id.raw() as i64)),
-        ("name", HookValue::str(mounted.name.clone())),
-        ("root", HookValue::str(twin.root.display().to_string())),
+        ("display_name", HookValue::str(mounted.display_name.clone())),
         (
             "active",
             HookValue::Bool(workspace.active_twin == Some(twin_id)),
@@ -1722,6 +1771,16 @@ fn plan_twin_asset_loading_for(
                 return;
             }
         };
+        if params.get("twin_id").is_some() || params.get("authority").is_some() {
+            registry.lifecycle = LifecyclePolicyReport {
+                status: "fault".into(),
+                error: Some(format!(
+                    "Twin loading policy action {index} cannot supply application-owned identity"
+                )),
+                ..report
+            };
+            return;
+        }
         parsed.push(TwinPolicyCommand {
             twin: twin_id,
             command: command.to_owned(),
@@ -1738,14 +1797,7 @@ fn plan_twin_asset_loading_for(
                 .params
                 .get("relative_path")
                 .and_then(HookValue::as_str)
-                == Some(explicit)
-            && selected[0]
-                .params
-                .get("twin_id")
-                .and_then(HookValue::as_i64)
-                == Some(twin_id.raw() as i64)
-            && selected[0].params.get("name").and_then(HookValue::as_str)
-                == Some(mounted.name.as_str());
+                == Some(explicit);
         if !valid {
             registry.lifecycle = LifecyclePolicyReport {
                 status: "fault".into(),
@@ -1806,8 +1858,18 @@ pub fn apply_twin_policy_commands(world: &mut World) {
         if !current {
             continue;
         }
+        let params = match action.params {
+            HookValue::Map(fields) => fields,
+            _ => {
+                warn!(
+                    "[twin-loading] policy command `{}` has invalid params",
+                    action.command
+                );
+                continue;
+            }
+        };
         let context = lunco_core::RuntimeExecutionContext {
-            target_twin_id: None,
+            target_twin_id: Some(action.twin.raw()),
             route: Some(lunco_core::RuntimeRoute::application(
                 lunco_core::RuntimeCycle::Command,
             )),
@@ -1825,7 +1887,8 @@ pub fn apply_twin_policy_commands(world: &mut World) {
             producer: None,
         };
         let _scope = lunco_scripting_bridge_core::WorldScope::enter(world, context);
-        let result = lunco_scripting_bridge_core::cmd_value(&action.command, action.params);
+        let result =
+            lunco_scripting_bridge_core::cmd_value(&action.command, HookValue::Map(params));
         match result.get("ok").and_then(HookValue::as_bool) {
             Some(true) => {}
             _ => {
@@ -3034,11 +3097,10 @@ fn start_twin_policy_load(
         TwinPolicyLifecycleEvent::Reload
     } else {
         if let Some(previous_id) = registry.active_twin {
-            if let Some(previous) = workspace.twin(previous_id) {
+            if workspace.twin(previous_id).is_some() {
                 registry.lifecycle = invoke_twin_lifecycle(
                     "close",
                     previous_id,
-                    &previous.root,
                     &registry.status,
                     lunco_core::RuntimePhase::Stop,
                 );
@@ -3224,7 +3286,6 @@ fn complete_twin_policy_load(
     registry.lifecycle = invoke_twin_lifecycle(
         event.as_str(),
         twin_id,
-        &twin.root,
         &report,
         lunco_core::RuntimePhase::Start,
     );
@@ -3239,10 +3300,13 @@ fn complete_twin_policy_load(
             plan_twin_asset_loading_for(&mounted, workspace, registry, pending_commands);
         }
     } else if notify_mounted_after_ready {
-        if let Some(name) = roots.and_then(|roots| roots.name_for_root(&twin.root).ok().flatten()) {
+        if let Some(name) =
+            roots.and_then(|roots| roots.authority_for_root(&twin.root).ok().flatten())
+        {
             commands.trigger(lunco_assets_runtime::TwinAssetMounted {
                 twin: twin_id,
-                name,
+                authority: name,
+                display_name: twin.display_name(),
             });
         }
     }
@@ -3392,7 +3456,6 @@ pub fn wind_down_policies_on_twin_closed(
     registry.lifecycle = invoke_twin_lifecycle(
         "close",
         twin_id,
-        &trigger.event().root,
         &registry.status,
         lunco_core::RuntimePhase::Stop,
     );

@@ -12,8 +12,8 @@ identity, URI, storage, discovery, and embedded-source APIs remain in
 
 ## What This Crate Does
 
-- **Composes the dataset lifecycle** — manifest-selected startup downloads,
-  user-requested download and processing, cancellation, and installed status
+- **Composes the dataset lifecycle** — user-requested download and processing,
+  cancellation, and installed status
 - **Provides the Bevy worker boundary** used by the GUI application
 - **Provides the `lunco-assets` CLI**, which composes the download and processing
   crates without making ordinary runtime asset readers link them
@@ -114,22 +114,22 @@ url = "https://github.com/modelica/ModelicaStandardLibrary/archive/refs/tags/v4.
 dest = "library"
 ```
 
-Engine-owned assets may opt into `download_on_start = true`. Native startup
-queues one normal download request after the engine manifests are fully scanned
-when the delivered file is missing. A failed or cancelled request is left for
-the Settings menu's explicit retry or the next application launch. This field
-is rejected in Twin manifests and on `package_only` assets.
+All runtime downloads begin from an explicit request. Build-time bundle targets
+are downloaded and staged by the native and web packaging scripts.
 
 ## Cache Directory
 
-All worktrees and Twins share the OS-global cache returned by `cache_dir()`:
+All worktrees and Twins share the global cache returned by `cache_dir()`:
 
 ```
-~/.cache/lunco/            # Linux; OS equivalent on macOS/Windows
+~/.lunco/cache/
 ├── textures/               (downloaded and processed)
 ├── library/                (extracted source library)
 └── processed/              (reproducible generated outputs)
 ```
+
+Twin-owned downloads and derived products live under `<twin>/.cache`; engine
+datasets and explicit `shared = true` Twin datasets live in the shared cache.
 
 The user configuration path is owned by `lunco-settings`; it is not another
 asset-cache path. `settings.json` contains the shared `DownloadSettings`

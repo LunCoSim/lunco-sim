@@ -199,7 +199,9 @@ subscriptions, drop samples before resolving scene identity; with subscriptions
 on other documents, perform the lightweight document lookup and drop the hit
 before coordinate conversion or terrain work. For an active interaction, a
 fallback terrain raycast runs at most once per pointer per picking frame;
-direct analytic surface hits do not need that fallback. Queue one typed hook
+direct analytic surface hits do not need that fallback. Treat a terrain query
+error as unresolved input, not a clear ray: hide stale placement previews,
+reject the commit, and report the owning diagnostic. Queue one typed hook
 after resolution with the subscription's exact scene-bound `ToolHookBinding`
 lease. Refreshing context replaces that lease; clear and teardown despawn it so
 already queued samples also reject. Do not dispatch retained subscriptions by

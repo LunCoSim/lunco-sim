@@ -2028,6 +2028,8 @@ pub fn poll_domain_projection_tasks(
 /// scene-to-document link used by the standard Modelica UI and API.
 pub fn sync_generated_network_documents(
     mut workspace: Option<ResMut<lunco_workspace::WorkspaceResource>>,
+    mut source_roots: Option<ResMut<lunco_modelica_source_roots::SourceRootRegistry>>,
+    channels: Option<Res<lunco_modelica_runtime::ModelicaChannels>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
     mut commands: Commands,
@@ -2059,20 +2061,35 @@ pub fn sync_generated_network_documents(
             continue;
         }
         // Generated documents use the same source-aware class resolver as
-        // authored Modelica documents. Request every referenced bundled root
-        // asynchronously; the canvas shows an explicit loading state until
-        // the shared engine publishes the generic completion notification.
-        if let Some(handle) = lunco_modelica_core::engine_resource::global_engine_handle() {
-            let mut roots: BTreeSet<String> = source.source_roots.iter().cloned().collect();
-            roots.extend(
-                source
-                    .members
-                    .iter()
-                    .filter_map(|(_, _, class)| class.split('.').next())
-                    .map(str::to_string),
-            );
-            for root in roots {
-                let _ = handle.ensure_source_root_async(&root);
+        // authored Modelica documents. The source-root registry owns identity,
+        // load state, and dispatch to the Modelica worker.
+        let mut roots: BTreeSet<String> = source.source_roots.iter().cloned().collect();
+        roots.extend(
+            source
+                .members
+                .iter()
+                .filter_map(|(_, _, class)| class.split('.').next())
+                .map(str::to_string),
+        );
+        if !roots.is_empty() {
+            let admission = match (source_roots.as_deref_mut(), channels.as_deref()) {
+                (Some(registry), Some(channels)) => {
+                    lunco_modelica_source_roots::admit_compile_roots(registry, roots, channels)
+                }
+                (None, _) => Err("Modelica source-root registry is unavailable".to_owned()),
+                (_, None) => Err("Modelica worker channel is unavailable".to_owned()),
+            };
+            if let Err(error) = admission {
+                let detail = format!(
+                    "generated Modelica source {} could not admit its dependency roots: {error}",
+                    source.doc_uri
+                );
+                bevy::log::warn!("[ModelicaLibrary] {detail}");
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "modelica-generated-source-admission-failed",
+                    detail,
+                );
             }
         }
         let document = if !model.document.is_unassigned()

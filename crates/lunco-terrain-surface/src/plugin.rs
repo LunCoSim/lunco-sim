@@ -30,6 +30,10 @@ pub struct TerrainSurfacePlugin;
 
 impl Plugin for TerrainSurfacePlugin {
     fn build(&self, app: &mut App) {
+        {
+            use lunco_core::AppSceneExt;
+            app.init_scene_resource::<crate::stream_viz::TerrainCameraTargets>();
+        }
         use lunco_settings::AppSettingsExt;
         app.init_resource::<lunco_physics::PhysicsInitializationExternalValidator>();
         app.world_mut()
@@ -37,6 +41,7 @@ impl Plugin for TerrainSurfacePlugin {
             .0 = true;
         lunco_settings::ensure_download_settings(app);
         app.register_settings_section::<lunco_settings::TerrainSettings>();
+        app.register_type::<lunco_settings::TerrainSettings>();
         app.register_type::<crate::georef::TerrainGeoref>();
         app.register_type::<crate::georef::FlatSiteSurface>();
         // Terrain layer realization uses this shared quality setting in GUI
@@ -211,9 +216,13 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         app.init_resource::<lunco_render::RenderingQualitySettings>();
         crate::stream_viz::register_all_commands(app);
         app.add_observer(crate::stream_viz::invalidate_removed_shader_look_ready);
+        app.add_observer(crate::stream_viz::cancel_terrain_view_preparation);
         app.init_resource::<crate::stream_viz::LodMeshCache>();
-        app.init_resource::<crate::stream_viz::TerrainStreamStatus>();
-        app.init_resource::<crate::stream_viz::TerrainDetailDemands>();
+        {
+            use lunco_core::AppSceneExt;
+            app.init_scene_resource::<crate::stream_viz::TerrainStreamStatus>();
+            app.init_scene_resource::<crate::stream_viz::TerrainDetailDemands>();
+        }
         app.init_resource::<lunco_viewport_core::SceneViewport>();
         app.init_resource::<crate::stream_viz::TerrainStreamFrameDriven>();
         app.init_resource::<crate::stream_viz::TerrainStreamCadence>();
@@ -252,8 +261,6 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
             (
                 (
                     crate::stream_viz::cancel_removed_terrain_preparation,
-                    crate::stream_viz::mark_terrain_visual_foci,
-                    crate::stream_viz::collect_terrain_detail_demands,
                     crate::stream_viz::update_lod_tiles,
                     crate::stream_viz::retire_terrain_tiles,
                 )
@@ -264,6 +271,12 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
                 crate::stream_viz::despawn_orphaned_lod_tiles,
             )
                 .in_set(lunco_core::RuntimeCycleSet::Visualization),
+        );
+        app.add_systems(
+            PostUpdate,
+            crate::stream_viz::collect_terrain_detail_demands
+                .in_set(crate::stream_viz::TerrainPresentationSet::PublishDemands)
+                .after(lunco_render::camera::SceneViewDemandSet::Publish),
         );
         // Camera cover selection is presentation work at a wall-clock cadence.
         // Tile completion and residency commits remain in Update so the active

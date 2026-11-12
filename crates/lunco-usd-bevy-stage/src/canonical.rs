@@ -1270,6 +1270,12 @@ impl CanonicalStages {
         self.by_asset.get_mut(&asset)
     }
 
+    /// Retire the live stage when its scene is replaced. The next stage is
+    /// built from the replacement asset's prepared source and has a new lease.
+    pub fn retire(&mut self, asset: bevy::asset::AssetId<crate::UsdStageAsset>) {
+        self.by_asset.remove(&asset);
+    }
+
     /// Bind a prepared snapshot to the live stage only when the caller has
     /// built that stage from the same recipe. The binding remains current until
     /// a live edit advances the stage generation.

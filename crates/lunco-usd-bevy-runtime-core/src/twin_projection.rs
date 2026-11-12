@@ -71,7 +71,7 @@ use lunco_usd_document::document::UsdOp;
 /// A default-twin-scene document waiting for its base source text to finish
 /// loading through the twin source.
 struct PendingTwinDoc {
-    /// In-flight raw-source load of `twin://<name>/<rel>`.
+    /// In-flight raw-source load of `twin://<authority>/<rel>`.
     handle: Handle<UsdSourceBytes>,
     twin: lunco_workspace::TwinId,
     /// Twin name (the `twin://` first segment).
@@ -84,6 +84,7 @@ struct PendingTwinDoc {
     /// publication. The admitted Twin ID owns retirement of this request.
     root: PathBuf,
     doc: Option<DocumentId>,
+    deferred_scene_load: Option<(String, String)>,
     failure_reported: bool,
     stage: TwinDocPreparationStage,
     capacity_revision: Option<u64>,
@@ -337,6 +338,7 @@ impl PendingTwinDocs {
             abs_path,
             root,
             doc: None,
+            deferred_scene_load: None,
             failure_reported: false,
             stage: TwinDocPreparationStage::AwaitingSource,
             capacity_revision: None,
@@ -354,6 +356,32 @@ impl PendingTwinDocs {
         if self.items.iter().any(|item| item.handle.id() == id) {
             self.failed.insert(id, error);
         }
+    }
+
+    /// Hold an early scene request until its default Twin document has published
+    /// the exact stage-input lease used by asynchronous asset loading.
+    pub(crate) fn defer_scene_load(
+        &mut self,
+        internal_path: &str,
+        public_path: String,
+        root_prim: String,
+    ) -> bool {
+        let Some((authority, relative_path)) = lunco_assets_core::parse_twin_uri(internal_path)
+        else {
+            return false;
+        };
+        let Some(item) = self.items.iter_mut().rev().find(|item| {
+            item.name == authority
+                && item.rel == relative_path
+                && !matches!(
+                    item.stage,
+                    TwinDocPreparationStage::Finished | TwinDocPreparationStage::Failed
+                )
+        }) else {
+            return false;
+        };
+        item.deferred_scene_load = Some((public_path, root_prim));
+        true
     }
 
     #[cfg(test)]
@@ -543,7 +571,10 @@ fn evaluate_reference_composition_policy(
     let coordinator = world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
         .ok_or_else(|| "the scene transition coordinator is unavailable".to_owned())?;
-    evaluate_incomplete_composition_policy(&scene_path, diagnostics, coordinator)
+    let roots = world.get_resource::<lunco_assets_core::TwinRoots>();
+    let stable_scene_path = crate::scene::stable_source_address(&scene_path, roots)
+        .unwrap_or_else(|_| "scene source unavailable".to_owned());
+    evaluate_incomplete_composition_policy(&stable_scene_path, diagnostics, coordinator, roots)
 }
 
 /// Validate a captured reference closure through its installed Rhai policy.
@@ -622,13 +653,24 @@ pub(crate) fn reset_scene_projection_state(
 fn report_twin_doc_load_failed(
     empty_reason: &mut EmptyViewportReason,
     commands: &mut Commands,
+    twin_roots: &TwinRoots,
     twin_path: &str,
     detail: impl Into<String>,
 ) {
-    let detail = detail.into();
-    warn!("[usd-e1b] {detail}");
-    empty_reason.0 = Some(format!("`{twin_path}` could not be loaded: {detail}"));
-    lunco_core::trigger_runtime_error(commands, TWIN_SCENE_LOAD_FAILED, detail);
+    let source_uri =
+        lunco_assets_core::asset_path::source_uri_for_address(twin_path, Some(twin_roots))
+            .unwrap_or_else(|_| "Twin scene".to_owned());
+    let detail = twin_roots
+        .stable_source_text(&detail.into())
+        .unwrap_or_else(|_| "Twin scene preparation failed".to_owned());
+    warn!("[usd-e1b] Twin scene source `{source_uri}` could not be loaded: {detail}");
+    empty_reason.0 =
+        Some("Twin scene could not be loaded. See application logs for details.".into());
+    lunco_core::trigger_runtime_error(
+        commands,
+        TWIN_SCENE_LOAD_FAILED,
+        "Twin scene could not be loaded. See application logs for details.",
+    );
 }
 
 /// Transfer source-asset lifecycle events into the pending document transaction.
@@ -836,6 +878,7 @@ pub(crate) fn drain_pending_twin_docs(
                         report_twin_doc_load_failed(
                             &mut empty_reason,
                             &mut commands,
+                            &twin_roots,
                             &lunco_assets_core::twin_uri(&item.name, &item.rel),
                             "dirty resident USD source belongs to a different runtime owner",
                         );
@@ -849,16 +892,24 @@ pub(crate) fn drain_pending_twin_docs(
                             report_twin_doc_load_failed(
                                 &mut empty_reason,
                                 &mut commands,
+                                &twin_roots,
                                 &lunco_assets_core::twin_uri(&item.name, &item.rel),
                                 "the source asset is not valid USD; refusing to mount a stale document",
                             );
                             item.stage = TwinDocPreparationStage::Finished;
                             continue;
                         }
-                        OpenOutcome::KeptDirty => warn!(
-                            "[usd-e1b] `{}` has unsaved edits — keeping them; NOT re-reading from disk",
-                            lunco_assets_core::twin_uri(&item.name, &item.rel)
-                        ),
+                        OpenOutcome::KeptDirty => {
+                            let path = lunco_assets_core::twin_uri(&item.name, &item.rel);
+                            let source_uri = lunco_assets_core::asset_path::source_uri_for_address(
+                                &path,
+                                Some(&twin_roots),
+                            )
+                            .unwrap_or_else(|_| "Twin scene".to_owned());
+                            warn!(
+                                "[usd-e1b] `{source_uri}` has unsaved edits; keeping the document"
+                            );
+                        }
                         OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
                     }
                     if let Some(workspace) = workspace.as_deref_mut()
@@ -886,6 +937,7 @@ pub(crate) fn drain_pending_twin_docs(
                         report_twin_doc_load_failed(
                             &mut empty_reason,
                             &mut commands,
+                            &twin_roots,
                             &lunco_assets_core::twin_uri(&item.name, &item.rel),
                             "the USD document closed before its Twin source was prepared",
                         );
@@ -903,6 +955,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &lunco_assets_core::twin_uri(&item.name, &item.rel),
                         format!("USDA preparation failed: {error}"),
                     );
@@ -924,6 +977,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &lunco_assets_core::twin_uri(&item.name, &item.rel),
                         "the USD document closed before its Twin source was prepared",
                     );
@@ -944,6 +998,7 @@ pub(crate) fn drain_pending_twin_docs(
                         report_twin_doc_load_failed(
                             &mut empty_reason,
                             &mut commands,
+                            &twin_roots,
                             &twin_path,
                             format!("native USD layer preparation failed: {error}"),
                         );
@@ -957,6 +1012,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &twin_path,
                         error,
                     );
@@ -965,12 +1021,33 @@ pub(crate) fn drain_pending_twin_docs(
                 }
                 wake.wake();
                 backed.mark_initial_projection(doc, generation);
+                let source_uri = match lunco_assets_core::asset_path::source_uri_for_address(
+                    &twin_path,
+                    Some(&twin_roots),
+                ) {
+                    Ok(source_uri) => source_uri,
+                    Err(error) => {
+                        report_twin_doc_load_failed(
+                            &mut empty_reason,
+                            &mut commands,
+                            &twin_roots,
+                            &twin_path,
+                            format!("cannot resolve the mounted Twin source: {error}"),
+                        );
+                        item.stage = TwinDocPreparationStage::Failed;
+                        continue;
+                    }
+                };
                 info!(
-                    "[usd-e1b] default scene `{twin_path}` is doc-backed ({doc}) — mounting native layers"
+                    "[usd-e1b] default scene `{source_uri}` is doc-backed ({doc}) — mounting native layers"
                 );
+                let (scene_uri, root_prim) = item
+                    .deferred_scene_load
+                    .take()
+                    .unwrap_or((source_uri, String::new()));
                 commands.trigger(LoadScene {
-                    path: twin_path,
-                    root_prim: String::new(),
+                    path: scene_uri,
+                    root_prim,
                 });
                 item.stage = TwinDocPreparationStage::Finished;
             }
@@ -1006,6 +1083,7 @@ pub(crate) fn drain_pending_twin_docs(
                 report_twin_doc_load_failed(
                     &mut empty_reason,
                     &mut commands,
+                    &twin_roots,
                     &twin_path,
                     format!("the Twin source asset failed to load: {error}"),
                 );
@@ -1028,6 +1106,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &twin_path,
                         "the source asset emitted a ready event without a stored value",
                     );
@@ -1041,6 +1120,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &twin_path,
                         "USD preparation operation id exhausted",
                     );
@@ -1077,6 +1157,7 @@ pub(crate) fn drain_pending_twin_docs(
                         report_twin_doc_load_failed(
                             &mut empty_reason,
                             &mut commands,
+                            &twin_roots,
                             &twin_path,
                             "USD source preparation requires a worker transport on this host",
                         );
@@ -1094,6 +1175,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &twin_path,
                         "the USD document closed before its Twin source was prepared",
                     );
@@ -1108,6 +1190,7 @@ pub(crate) fn drain_pending_twin_docs(
                     report_twin_doc_load_failed(
                         &mut empty_reason,
                         &mut commands,
+                        &twin_roots,
                         &twin_path,
                         "USD preparation operation id exhausted",
                     );
@@ -1152,6 +1235,7 @@ pub(crate) fn drain_pending_twin_docs(
                         report_twin_doc_load_failed(
                             &mut empty_reason,
                             &mut commands,
+                            &twin_roots,
                             &twin_path,
                             "USD source serialization requires a worker transport on this host",
                         );
@@ -1213,7 +1297,10 @@ fn write_twin_overlay(
     generation: u64,
 ) -> bool {
     let _span = bevy::log::info_span!("usd_twin_overlay_serialize_publish").entered();
+    let roots = world.resource::<TwinRoots>().clone();
     let root_id = lunco_assets_core::twin_uri(name, rel);
+    let source_uri = lunco_assets_core::asset_path::source_uri_for_address(&root_id, Some(&roots))
+        .unwrap_or_else(|_| "Twin scene".to_owned());
     let input = world
         .resource::<DocumentRegistry<UsdDocument>>()
         .host(doc)
@@ -1226,17 +1313,22 @@ fn write_twin_overlay(
     let input = match input {
         Ok(input) => input,
         Err(error) => {
-            warn!("[usd-e1b] {error}");
+            let detail = roots
+                .stable_source_text(&error)
+                .unwrap_or_else(|_| "Twin overlay preparation failed".to_owned());
+            warn!("[usd-e1b] Twin scene `{source_uri}` overlay preparation failed: {detail}");
             return false;
         }
     };
-    let roots = world.resource::<TwinRoots>().clone();
     let server = world.resource::<AssetServer>().clone();
     let result = world
         .resource_mut::<DocBackedTwinScenes>()
         .publish_stage_input(doc, &roots, &server, input);
     if let Err(error) = result {
-        warn!("[usd-e1b] {error}");
+        let detail = roots
+            .stable_source_text(&error)
+            .unwrap_or_else(|_| "Twin overlay publication failed".to_owned());
+        warn!("[usd-e1b] Twin scene `{source_uri}` overlay publication failed: {detail}");
         return false;
     }
     world
@@ -1319,7 +1411,11 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 .resource::<lunco_core::SceneTransitionCoordinator>()
                 .active()
                 .is_some_and(|transition| {
-                    matches!(transition, lunco_core::SceneTransition::Restart { .. })
+                    matches!(
+                        transition,
+                        lunco_core::SceneTransition::Restart { .. }
+                            | lunco_core::SceneTransition::RuntimeReset { .. }
+                    )
                 })
         {
             continue;
@@ -1602,12 +1698,20 @@ fn refresh_dependent_stage_assets(
             .collect()
     };
 
-    let candidate_roots: Vec<&str> = candidates
+    let roots = world.get_resource::<TwinRoots>();
+    let public_layer = roots
+        .and_then(|roots| roots.stable_source_text(layer_id).ok())
+        .unwrap_or_else(|| "Twin source layer".to_owned());
+    let candidate_roots: Vec<String> = candidates
         .iter()
-        .map(|(_, root_id)| root_id.as_str())
+        .map(|(_, root_id)| {
+            roots
+                .and_then(|roots| roots.stable_source_text(root_id).ok())
+                .unwrap_or_else(|| "Twin stage".to_owned())
+        })
         .collect();
     info!(
-        "[usd-live] component layer changed: doc={changed_doc} layer={layer_id} dependent_candidates={} roots={candidate_roots:?}",
+        "[usd-live] component layer changed: doc={changed_doc} layer={public_layer} dependent_candidates={} roots={candidate_roots:?}",
         candidate_roots.len()
     );
 
@@ -2417,7 +2521,7 @@ fn retain_dependent_stage_plan_failure(
     mut pending: PendingDependentStageRefresh,
     error: String,
 ) {
-    pending.plan_failure = Some(error);
+    pending.plan_failure = Some(stable_runtime_detail(world, &error));
     pending.work_key = None;
     pending.submitted_revision = None;
     pending.capacity_revision = None;
@@ -2426,6 +2530,17 @@ fn retain_dependent_stage_plan_failure(
         .resource_mut::<PendingDependentStageRefreshes>()
         .by_stage
         .insert(stage, pending);
+}
+
+fn stable_runtime_detail(world: &World, detail: &str) -> String {
+    world
+        .get_resource::<TwinRoots>()
+        .map(|roots| {
+            roots
+                .stable_source_text(detail)
+                .unwrap_or_else(|_| "asset source operation failed".to_owned())
+        })
+        .unwrap_or_else(|| lunco_assets_core::redact_opaque_twin_authorities(detail))
 }
 
 fn submit_pending_dependent_stage_refreshes(world: &mut World) {
@@ -3912,6 +4027,7 @@ pub(crate) fn report_stage_projection_reset_failure(
     detail: String,
 ) {
     const PRODUCER: &str = "usd-stage-projection-reset";
+    let detail = stable_runtime_detail(world, &detail);
     let subject = format!("{stage_id:?}");
     let active_stage = {
         let mut roots = world.query_filtered::<&UsdPrimPath, With<UsdSceneRoot>>();
@@ -3948,6 +4064,7 @@ fn report_dependent_stage_plan_failure(
     detail: &str,
 ) {
     const PRODUCER: &str = "usd-dependent-stage-plan";
+    let detail = stable_runtime_detail(world, detail);
     let subject = format!("{stage_id:?}");
     let mut diagnostics =
         world.get_resource_or_insert_with(lunco_core::RuntimeDiagnostics::default);
@@ -3959,7 +4076,7 @@ fn report_dependent_stage_plan_failure(
         severity: lunco_core::DiagnosticSeverity::Error,
         producer: PRODUCER.to_owned(),
         subject: subject.clone(),
-        message: detail.to_owned(),
+        message: detail.clone(),
     });
     diagnostics
         .findings

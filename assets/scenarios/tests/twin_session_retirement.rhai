@@ -404,14 +404,14 @@ fn verify_catalog_retirement(retired_paths) {
 }
 
 fn verify_spawn_catalog_source(spawnable_paths, non_spawnable_paths) {
-    let authority = twin_name();
-    if authority.is_empty() || spawnable_paths.is_empty() {
-        throw "catalog source check requires a mounted Twin and a positive asset";
+    let source_identity = twin_source_identity();
+    if source_identity.is_empty() || spawnable_paths.is_empty() {
+        throw "catalog source check requires an open Twin and a positive asset";
     }
     let palette = query("ListSpawnCatalog");
     let checks = [];
     for relative in spawnable_paths + non_spawnable_paths {
-        let path = "twin://" + authority + "/" + relative;
+        let path = "twin://" + source_identity + "/" + relative;
         let found = false;
         for entry in palette.entries {
             if entry.source.path == path { found = true; }
@@ -437,21 +437,21 @@ fn verify_sysml_retirement(ids) {
     report_verdict(checks, "SysML registry retirement", "TWIN_SYSML_RETIREMENT")
 }
 
-// The active scripting name must address the current mount's semantic source
-// set, including after the same root is reopened under a fresh authority.
-fn verify_twin_source_scope(retired_authority) {
-    let authority = twin_name();
-    let current = query("AnalyzeSysml", #{path: "twin://" + authority, tables: []});
-    let checks = [t_true(authority != "" && current != () && current.ok == true,
-        "the active scripting authority resolves its mounted SysML source set")];
-    if retired_authority != "" {
-        let retired = query("AnalyzeSysml", #{path: "twin://" + retired_authority, tables: []});
-        checks.push(t_true(authority != retired_authority,
-            "reopening publishes a fresh scripting authority"));
+// The active scripting identity is a stable source address and remains the
+// same when that Twin is reopened under a new internal mount lease.
+fn verify_twin_source_scope(previous_identity) {
+    let source_identity = twin_source_identity();
+    let current = query("AnalyzeSysml", #{path: "twin://" + source_identity, tables: []});
+    let checks = [t_true(source_identity != "" && current != () && current.ok == true,
+        "the active stable source identity resolves its SysML source set")];
+    if previous_identity != "" && previous_identity == source_identity {
+        checks.push(t_true(true,
+            "reopening the same Twin preserves its stable source identity"));
+    } else if previous_identity != "" {
+        let retired = query("AnalyzeSysml", #{path: "twin://" + previous_identity, tables: []});
         checks.push(t_true(retired != () && retired.ok == false
-            && retired.errors != () && retired.errors.len() > 0
-            && retired.errors[0].contains("not mounted"),
-            "the retired source authority remains rejected"));
+            && retired.errors != () && retired.errors.len() > 0,
+            "a closed Twin's stable source identity is no longer admitted"));
     }
     report_verdict(checks, "Twin scripting source scope", "TWIN_SCRIPT_SOURCE_SCOPE")
 }

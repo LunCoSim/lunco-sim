@@ -220,7 +220,7 @@ fn load_ready_scenario(
     }
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
     commands.trigger(LoadScene {
-        path: mount.path,
+        path: mount.source_uri,
         root_prim: String::new(),
     });
     *last_loaded = Some(remote.clone());
@@ -1169,8 +1169,8 @@ mod startup_guard_tests {
         let root = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let roots = TwinRoots::default();
-        let name = roots.register("startup", root.path()).unwrap();
-        let foreign = roots.register("other", other.path()).unwrap();
+        let name = roots.register_authority("startup", root.path()).unwrap();
+        let foreign = roots.register_authority("other", other.path()).unwrap();
         let mut app = App::new();
         app.insert_resource(roots)
             .add_message::<AppExit>()

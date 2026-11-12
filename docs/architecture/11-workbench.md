@@ -195,22 +195,28 @@ private dock layout.
    Timeline, etc. Collapsible to zero height.
 8. **Status bar (bottom strip)** — sim time, speed, selected entity,
    celestial body, FPS, and the latest status event. Warnings and errors
-   identify their level and source in the strip; the history popup keeps
-   discrete state transitions in one responsive level/source/message/action
-   row inside a compact popup sized to roughly half the parent
-   window (clamped to 420–960 logical px); the popup owns a fixed width while
-   its vertical history viewport fills that width, and each message column
-   uses the remaining inner width after action controls.
+   identify their level and source in the strip. The history popup presents
+   retained discrete events in a selectable plain-text log by default, ordered
+   newest first; one read-only multiline editor holds the complete text so
+   Shift-click and drag selection can span entries. Dragging against the top or
+   bottom edge scrolls the log while the selection continues through offscreen
+   events. `Copy all` beside the title copies the complete log, including
+   diagnostic detail. The
+   `Event controls` view retains the level/source/message/action rows inside a
+   compact popup sized to roughly half the parent window (clamped to 420–960
+   logical px); the popup owns a fixed width while its vertical history viewport
+   fills that width, and each message column uses the remaining inner width
+   after action controls.
    The popup opens automatically for a new terminal RuntimeFault. Its
    explanation includes the complete owner-issued fault diagnostic in the
-   shared history; selecting that row expands the complete message. Compile failures explain
-   why simulation did not start and list unmatched Modelica unknowns when
-   Rumoca can identify them. Step failures list Modelica values that were not
-   produced by the failed step, their last accepted values, and sample and
-   target times. Ordinary
+   shared history; selecting that row in `Event controls` expands the complete
+   message. Compile failures explain why simulation did not start and list
+   unmatched Modelica unknowns when Rumoca can identify them. Step failures
+   list Modelica values that were not produced by the failed step, their last
+   accepted values, and sample and target times. Ordinary
    warnings and non-terminal errors remain in history without opening the
-   popup. The history uses one uniquely identified scroll area.
-   Diagnostic rows
+   popup. The selectable log and event controls use separate uniquely
+   identified scroll areas. In the controls view, diagnostic rows
    expand or collapse their complete diagnostics when the row is clicked
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed
@@ -219,8 +225,10 @@ private dock layout.
    tight, it shortens the metric text and scales it to remain on one row; its
    rolling raw frame-time samples come from the shared
    `EngineHealthSnapshot`, so the graph remains live before a Twin is active.
-   The loaded-scene chip appears only while a Twin is active, and the metric
-   line uses one formatter in both states. Active progress entries use the same StatusBus reader
+   The loaded-scene name appears beside recent status events on the left, only
+   while a Twin is active; it uses the authored USD display name when present
+   and the filename otherwise. The metric line stays at the right edge. Active
+   progress entries use the same StatusBus reader
    while they belong on the visible surface. Consecutive identical discrete snapshots
    are coalesced by StatusBus before the renderers read them. Warning and error rows
    copy the unmodified message without depending on the window width; attention rows
@@ -243,6 +251,9 @@ private dock layout.
    transition is admitted or active. This prevents camera-driven terrain streaming from
    reopening the scene-loading notice after the scene has loaded. Completion removes the
    compact notice; an expanded history popup remains open until the user closes it.
+   The persisted Terrain setting “Record terrain streaming in Recent Events” is off
+   by default. It controls completed streaming messages; live progress and warning
+   events remain available regardless of the setting.
    The notice and the history popup never stack.
 
 Modelica file opening, duplication, and library drill-in hold document-scoped
@@ -496,7 +507,7 @@ plans; `lunco-workbench-layout` materializes them through the same dock owner.
 | Analyze (`analysis`) | Inspect and compare simulation signals | Live scene center; Graphs below the scene; Telemetry above Entities left; Ports right |
 | Build (`rover_build`) | Compose the live scene | Entities above Twin sources; scene center; Inspector/Environment above Spawn |
 | Editor (`editor`) | Edit an explicitly opened document | Twin browser/Prims tabs left; empty center until a document or tool is opened; Inspector/Requirements tabs above change History right |
-| Lunica (`modelica_analyze`) | Engineer continuous models | Twin browser above Components left; model workspace or open model views center; selected-component Inspector right; Welcome remains available from View |
+| Lunica (`modelica_analyze`) | Engineer continuous models | Twin browser above Components left; model workspace or open model views center; selected-component Inspector right; Graphs opens on demand in a resizable bottom dock; Welcome remains available from View |
 
 Lunica's Components filters and grouped sections derive their library roots and
 immediate packages from the admitted Modelica class index. Every indexed root
@@ -505,13 +516,21 @@ appear only when all of their authored classes exist in that index. When none
 match, Welcome continues to expose indexed library examples and bundled
 LunCoSim demos.
 
+When no Modelica view is open, the workspace start surface centers its paired
+primary actions. They use the same size and responsive layout as Welcome,
+stacking when a narrow panel cannot fit them side by side.
+
 Optional panel contributions still use `Panel::visible_in_perspective`, for
 example requirement details in Editor. Terrain is a specialist preset available under View → Perspectives, without
 a pinned title-bar tab. Compact windows collapse pinned tasks into one picker.
 
 Use the title-bar tabs or **View → Perspectives** to select a task. **View →
 Build / Analyze / Editor / Lunica / General** contains optional panels. The
-canonical Graphs menu action activates Analyze when that workflow is available.
+canonical Graphs menu action activates Lunica. In a Modelica view, the
+**Graphs** toolbar button opens the same canonical plot in a resizable bottom
+dock without changing the active perspective or replacing the central model
+workspace. Analyze continues to open Graphs with Telemetry and Ports for signal
+inspection and comparison.
 **Help → Perspective help** reads the current registry, including Twin-defined
 tasks. **View → Reset Layout** reapplies the current definition.
 Selecting the active task is idempotent. Reopening an authored initial instance
@@ -629,8 +648,9 @@ The layout's viewport visibility is also an explicit perspective contract.
 Perspectives with a central editor surface keep the scene hidden unless their
 slot intent includes `ViewportPanel` or their authored definition sets
 `scene_visible`. Analyze uses the same central `ViewportPanel` as Build, with
-Graphs in the bottom dock. A host without a live viewport keeps Graphs in the
-center. A full-window presentation perspective such as luncosim's View also sets
+Graphs in the bottom dock. Lunica opens Graphs on demand below the model
+workspace. A host without a live viewport keeps Graphs in the center. A
+full-window presentation perspective such as luncosim's View also sets
 `Perspective::scene_visible_when_docked()` so focused tutorial or user panels
 can be painted over the live scene without turning the scene camera off.
 
@@ -910,8 +930,8 @@ restart:
   geometry**) → one shared `<OS config dir>/lunco/settings.json` via `lunco-settings`
   (§9b). No new file per feature.
 - **Per-project volatile UI state** (active perspective, open-document
-  list, dock arrangements, per-editor presentation views, and positions of
-  authored draggable runtime windows) → **global storage keyed by
+  list, dock arrangements, per-editor presentation views, camera feeds,
+  telemetry graph selections, and their window positions and sizes) → **global storage keyed by
   a hash of the project path**, *not* written into the Twin folder:
   `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
   `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
@@ -919,7 +939,29 @@ restart:
   read or written only while a Twin is active. With no active Twin, the host
   uses its startup windows and does not load or save a shared no-folder
   session.
-The `lunco-workbench-window` crate restores the global `WindowGeometry` settings section before the main `Window` is created (default size is configured via `DEFAULT_WINDOW_{WIDTH,HEIGHT}` constants). The `lunco-workbench-state` crate owns volatile per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies only the layout-provider adapter used for dock capture and restore. Snapshot reads, file refreshes, serialization, and writes run on Bevy's task pool through the existing `lunco-storage` boundary, so disk work does not block the UI thread. Shutdown waits for an in-flight workspace write before honoring `AppExit`. Runtime-authored `window` surfaces that declare `draggable` store only their validated logical top-left override there; the manifest remains the default geometry and visibility authority, and stale surface ids are discarded during manifest reconciliation.
+`Settings → Project → Restore cameras and graphs` controls runtime view
+restoration; it defaults on and is stored in the project's
+`.lunco/settings.json` under `ui.restore_view_state`. Typed view snapshots are
+kept per loaded scene path, so moving between scenes in a project retains each
+scene's camera source/resolution and window geometry, plus graph signal
+selections and window geometry. Capture waits until scene transitions finish,
+so teardown cannot replace the outgoing scene's layout with empty state.
+Restore keeps unmatched scene snapshots queued, then waits for the matching
+scene to mount and graph sources to publish. Pending graph selections are
+rechecked on signal descriptor changes; admitted scalar channels can open before
+their first sample and display the plot's waiting state. Retired or invalid
+owners are logged and left closed. The
+`lunco-workbench-window` crate restores global `WindowGeometry` settings before
+the main `Window` is created. The `lunco-workbench-state` crate owns volatile
+per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies
+the dock adapter and the UI host supplies the typed camera/graph adapter.
+Snapshot reads, serialization, and writes run on Bevy's task pool through the
+existing `lunco-storage` boundary, so disk work does not block the UI thread.
+Shutdown waits for an in-flight workspace write before honoring `AppExit`.
+Runtime-authored `window` surfaces that declare `draggable` store only their
+validated logical top-left override there; the manifest remains the default
+geometry and visibility authority, and stale surface ids are discarded during
+manifest reconciliation.
 
 An explicit host launch may provide a one-shot
 `lunco-workbench-state::WorkspaceStateRestorePolicy` initial perspective. The
@@ -1072,6 +1114,11 @@ actual dimensions before queued user intents so a size preset remains pending.
 Each instance scopes its picker cache and UI identity separately. Scene teardown
 releases every HUD-owned grid and plot, including while hidden. These native
 windows use the measured View scene area and exclude offline capture.
+Settings → HUD includes **+ Add camera view** with the current view count and
+eight-view limit, so the first view can be opened without an existing camera
+window. The action uses `CreateCameraFeed`; the new view then uses its toolbar
+to select a live camera. The automatic-HUD inventory is collapsed until
+requested, keeping user-controlled settings in view.
 The submenu also edits the existing `OverlaySettings`, `PerfHudSettings`,
 and `InputOverlaySettings` resources and the active Twin's generic
 `ui.camera_status` value. It also removes the `celestial-view` entry from the

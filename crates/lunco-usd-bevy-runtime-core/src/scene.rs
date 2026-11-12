@@ -35,10 +35,54 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
+/// Reset scene-owned runtime state while keeping the mounted source and Twin open.
+#[Command(default)]
+pub struct ResetSceneRuntime {}
+
+#[on_command(ResetSceneRuntime)]
+fn on_reset_scene_runtime(
+    _trigger: On<ResetSceneRuntime>,
+    mut coordinator: ResMut<SceneTransitionCoordinator>,
+) {
+    match coordinator.admit(SceneTransitionRequest::runtime_reset()) {
+        SceneTransitionAdmission::AlreadyActive => {
+            info!("[scene-runtime-reset] reset is already in progress — no-op");
+        }
+        SceneTransitionAdmission::Queued => {
+            info!("[scene-runtime-reset] queued behind the active scene transaction");
+        }
+        SceneTransitionAdmission::Admitted => {
+            info!("[scene-runtime-reset] admitted for the next scene lifecycle phase");
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum IncompleteCompositionDecision {
     AllowPartial,
     RejectScene,
+}
+
+pub(crate) fn stable_source_address(
+    reference: &str,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<String, String> {
+    lunco_assets_core::asset_path::source_uri_for_address(reference, roots)
+        .map_err(|_| "asset source could not be resolved to its stable URI".to_owned())
+}
+
+pub(crate) fn stable_source_detail(
+    detail: &str,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> String {
+    roots.map_or_else(
+        || lunco_assets_core::redact_opaque_twin_authorities(detail),
+        |roots| {
+            roots
+                .stable_source_text(detail)
+                .unwrap_or_else(|_| "asset source operation failed".to_owned())
+        },
+    )
 }
 
 fn incomplete_composition_decision(
@@ -82,6 +126,7 @@ pub(crate) fn evaluate_incomplete_composition_policy(
     path: &str,
     diagnostics: &[lunco_usd_compose::recipe::StageDependencyDiagnostic],
     coordinator: &SceneTransitionCoordinator,
+    roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<IncompleteCompositionDecision, String> {
     let context =
         incomplete_composition_runtime_context(path, coordinator).map_err(str::to_owned)?;
@@ -89,26 +134,49 @@ pub(crate) fn evaluate_incomplete_composition_policy(
         diagnostics
             .iter()
             .map(|diagnostic| {
-                HookValue::map([
+                Ok(HookValue::map([
                     (
                         "referring_layer",
-                        HookValue::str(&diagnostic.referring_layer),
+                        HookValue::str(stable_composition_reference(
+                            &diagnostic.referring_layer,
+                            roots,
+                        )?),
                     ),
-                    ("dependency", HookValue::str(&diagnostic.dependency)),
-                ])
+                    (
+                        "dependency",
+                        HookValue::str(stable_composition_reference(
+                            &diagnostic.dependency,
+                            roots,
+                        )?),
+                    ),
+                ]))
             })
-            .collect(),
+            .collect::<Result<Vec<_>, String>>()?,
     );
     let facts = HookValue::map([
-        ("scene_path", HookValue::str(path)),
+        (
+            "scene_path",
+            HookValue::str(stable_composition_reference(path, roots)?),
+        ),
         ("missing_dependencies", missing_dependencies),
     ]);
     let result =
         lunco_hooks::invoke_with_context(INCOMPLETE_COMPOSITION_POLICY_HOOK, &[facts], context)
             .ok_or_else(|| "required Rhai policy is unavailable".to_owned())?
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| stable_source_detail(&error.to_string(), roots))?;
     incomplete_composition_decision(&result)
         .map_err(|error| format!("malformed policy result: {error}"))
+}
+
+fn stable_composition_reference(
+    reference: &str,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<String, String> {
+    if lunco_assets_core::parse_twin_uri(reference).is_some() {
+        stable_source_address(reference, roots)
+    } else {
+        Ok(stable_source_detail(reference, roots))
+    }
 }
 
 /// Scene transition transaction: set when a scene load is dispatched, cleared
@@ -179,8 +247,10 @@ fn publish_loaded_scene_stage_outcomes(
         if let AssetEvent::LoadedWithDependencies { id } = event
             && *id == in_flight.stage_id
         {
-            if matches!(coordinator.active(), Some(SceneTransition::Restart { .. }))
-                && let (Some(server), Some(backed)) = (asset_server.as_deref(), backed.as_deref())
+            if matches!(
+                coordinator.active(),
+                Some(SceneTransition::Restart { .. } | SceneTransition::RuntimeReset { .. })
+            ) && let (Some(server), Some(backed)) = (asset_server.as_deref(), backed.as_deref())
                 && let Some(path) = server.get_path(*id)
                 && let Some((name, rel)) =
                     lunco_assets_core::split_twin_rel(&path.path().to_string_lossy())
@@ -222,6 +292,7 @@ fn publish_loaded_scene_stage_outcomes(
 fn publish_failed_scene_stage_outcomes(
     mut events: MessageReader<AssetLoadFailedEvent<UsdStageAsset>>,
     in_flight: Option<Res<SceneLoadInFlight>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut outcomes: MessageWriter<SceneStageAssetOutcome>,
 ) {
     let Some(in_flight) = in_flight else {
@@ -233,7 +304,7 @@ fn publish_failed_scene_stage_outcomes(
             outcomes.write(SceneStageAssetOutcome::Failed {
                 transition_id: in_flight.transition_id,
                 stage_id: event.id,
-                error: event.error.to_string(),
+                error: stable_source_detail(&event.error.to_string(), roots.as_deref()),
             });
         }
     }
@@ -244,6 +315,7 @@ fn record_scene_load_terminal_outcome(
     mut outcomes: MessageReader<SceneStageAssetOutcome>,
     in_flight: Option<Res<SceneLoadInFlight>>,
     coordinator: Res<SceneTransitionCoordinator>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     stages: Option<Res<Assets<UsdStageAsset>>>,
     q_awaiting: Query<&UsdPrimPath, With<UsdSceneAwaitingStage>>,
     q_projecting: Query<&UsdPrimPath, With<UsdSceneProjectionQueued>>,
@@ -297,6 +369,8 @@ fn record_scene_load_terminal_outcome(
         warn!("[scene] ignoring stage outcome without an active scene transaction");
         return;
     };
+    let display_path = stable_source_address(&g.path, roots.as_deref())
+        .unwrap_or_else(|_| "scene source unavailable".to_owned());
     if coordinator.active_id() != Some(g.transition_id) {
         warn!(
             "[scene] ignoring stale stage outcome for transaction {}",
@@ -306,7 +380,9 @@ fn record_scene_load_terminal_outcome(
     }
     if !matches!(
         &transition,
-        SceneTransition::Load { .. } | SceneTransition::Restart { .. }
+        SceneTransition::Load { .. }
+            | SceneTransition::Restart { .. }
+            | SceneTransition::RuntimeReset { .. }
     ) {
         let error = "scene load outcome arrived for a non-load transition".to_string();
         warn!("[scene] {error}");
@@ -406,22 +482,25 @@ fn record_scene_load_terminal_outcome(
             &g.path,
             missing_dependencies,
             &coordinator,
+            roots.as_deref(),
         ) {
             Ok(IncompleteCompositionDecision::AllowPartial) => None,
             Ok(IncompleteCompositionDecision::RejectScene) => {
                 let first_missing = missing_dependencies
                     .first()
-                    .map(ToString::to_string)
+                    .map(|diagnostic| {
+                        stable_source_detail(&diagnostic.to_string(), roots.as_deref())
+                    })
                     .unwrap_or_else(|| "no dependency details were supplied".to_owned());
                 Some(format!(
                     "scene `{}` was rejected by the `{INCOMPLETE_COMPOSITION_POLICY_HOOK}` policy with {} unresolved USD composition dependencies; first: {first_missing}",
-                    g.path,
+                    display_path,
                     missing_dependencies.len()
                 ))
             }
             Err(policy_error) => Some(format!(
                 "scene `{}` could not be admitted because `{INCOMPLETE_COMPOSITION_POLICY_HOOK}` failed: {policy_error}",
-                g.path
+                display_path
             )),
         };
         if let Some(error) = admission_error {
@@ -446,7 +525,7 @@ fn record_scene_load_terminal_outcome(
         error!(
             "[scene] `{}` finished loading with no DirectionalLight — author a \\
              UsdLux DistantLight or a celestial site anchor",
-            g.path
+            display_path
         );
     }
     pending.outcome = None;
@@ -513,8 +592,9 @@ pub(crate) fn install_scene_lifecycle(app: &mut App) {
 /// workers or make an unrelated interactive document disappear.
 #[Command(default)]
 pub struct LoadScene {
-    /// Root-qualified USD address (`lunco://…` or `twin://…`). Filesystem paths
-    /// are opened through `OpenFile`, not this scene-mount command.
+    /// Root-qualified USD address (`lunco://…` or stable
+    /// `twin://<source-identity>/…`). Internal mount authorities are rejected;
+    /// filesystem paths are opened through `OpenFile`.
     pub path: String,
     /// Optional override for the prim to spawn. Empty (default) reads
     /// `defaultPrim` from the stage's metadata header. A missing `defaultPrim`
@@ -531,19 +611,13 @@ pub struct LoadScene {
 // [`scene::clear_scene_entities`], [`scene::spawn_scene_root_world`],
 // [`SceneLoadInFlight`] — as its public mount API.
 
-/// Reload the CURRENTLY-ACTIVE scene from disk — the "restart" verb.
+/// Reload the active scene from its authoritative source.
 ///
-/// [`LoadScene`] deliberately no-ops when asked to load the scene that is already
-/// active (same path + root), so it cannot pick up on-disk edits to the LIVE
-/// scene. `RestartScene` always clears the current scene's entities, force-reloads
-/// its stage asset from disk (busting the asset cache), and respawns a single
-/// fresh root — so editing a `.usda` then `restart_scene()` shows the change with
-/// no duplicate instances. `reset_document` is interpreted by the document layer:
-/// it is false for the normal preserve-edits restart and true only after the UI
-/// has confirmed a full reset. The lifecycle mechanic still targets whichever
-/// scene is loaded.
-/// Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
-/// wanted (`restart_scene(); pause();`).
+/// This operation keeps the active Twin and mount authority. A file-backed Twin
+/// document is read and parsed before teardown; a rejected source refresh leaves
+/// the current scene mounted. On success, the stage asset is force-reloaded and
+/// the same root prim is projected again. Use [`ResetSceneRuntime`] to restart
+/// scene-owned runtime state from the already mounted stage without reading disk.
 #[Command(default)]
 pub struct RestartScene {
     /// Discard the active file document's authored and runtime layers before
@@ -571,95 +645,81 @@ fn on_restart_scene(
     }
 }
 
-pub(crate) fn execute_admitted_restart_scene(
+pub(crate) fn execute_admitted_runtime_reset(
     trigger: On<SceneTransitionAdmitted>,
     asset_server: Res<AssetServer>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
     mut commands: Commands,
     q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
     scene: SceneEntities,
     mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
 ) {
-    let SceneTransitionRequest::Restart { reset_document } = &trigger.event().request else {
+    if trigger.event().request != SceneTransitionRequest::RuntimeReset {
         return;
-    };
+    }
 
-    // Every loaded prim shares the scene's stage handle. REUSE that handle (not a
-    // freshly-resolved path) so the exact same asset — INCLUDING its source scheme
-    // (`twin://…`, `lunco://…`) — is respawned. Resolving via `.path()` would
-    // drop the scheme and load a *different* raw-file asset, breaking twin routing
-    // (avatar/camera setup, composed runtime edits) and leaving a stale camera.
-    let Some((_, upp, _)) = q_usd.iter().find(|(entity, _, is_scene_root)| {
-        *is_scene_root
-            && mount_state
-                .as_deref()
-                .is_none_or(|state| state.contains_root(*entity))
-    }) else {
-        warn!("[restart-scene] no scene is loaded — nothing to restart");
+    let active_root = mount_state
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+        .and_then(|root| q_usd.get(root).ok())
+        .filter(|(_, _, is_root)| *is_root);
+    let Some((_root, prim, _)) = active_root else {
         coordinator.finish_noop();
+        lunco_core::trigger_runtime_error(
+            &mut commands,
+            "scene-runtime-reset-no-active-scene",
+            "ResetSceneRuntime requires a committed active scene",
+        );
         return;
     };
-    let handle = upp.stage_handle.clone();
-    // Full asset path WITH source scheme (owned, so `reload` doesn't need a
-    // `'static` borrow), for the reload key + the scene-root label. `None` only
-    // for a document-backed stage with no registered path — still respawnable
-    // from the handle, just unlabelled.
-    let asset_path = asset_server.get_path(handle.id()).map(|p| p.into_owned());
-    let label = asset_path
-        .as_ref()
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "restarted-scene".to_string());
-    info!("[restart-scene] reloading `{}` from disk", label);
-
-    // Reject late events and deferred projections from the outgoing root while
-    // its recursive despawn is still queued.
+    let stage_handle = prim.stage_handle.clone();
+    let asset_path = match asset_server.get_path(stage_handle.id()) {
+        Some(path) => match stable_source_address(&path.to_string(), roots.as_deref()) {
+            Ok(path) => path,
+            Err(error) => {
+                coordinator.finish_noop();
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "scene-runtime-reset-source-unavailable",
+                    error,
+                );
+                return;
+            }
+        },
+        None => format!("memory-stage:{:?}", stage_handle.id()),
+    };
+    let root_prim = prim.path.clone();
+    let stage_id = stage_handle.id();
+    let transition = SceneTransition::RuntimeReset {
+        path: asset_path.clone(),
+        root_prim: root_prim.clone(),
+    };
+    let transition_id = coordinator.start(transition.clone());
     if let Some(state) = mount_state.as_deref_mut() {
         state.begin_replacement();
     }
-
-    // Restart is an explicit replacement transaction. Cancel the old load
-    // identity before reclaiming its parked entities.
     commands.remove_resource::<SceneLoadInFlight>();
-    let transition = SceneTransition::Restart {
-        path: label.clone(),
-        root_prim: String::new(),
-        reset_document: *reset_document,
-    };
-    let transition_id = coordinator.start(transition.clone());
+    commands.remove_resource::<FailedSceneLoad>();
     commands.insert_resource(SceneLoadInFlight {
         transition_id,
-        path: label.clone(),
-        stage_id: handle.id(),
+        path: asset_path.clone(),
+        stage_id: stage_handle.id(),
     });
     commands.trigger(lunco_core::SceneTransitionStarted {
         id: transition_id,
-        transition,
+        transition: transition.clone(),
     });
-    let stage_id = handle.id();
-
-    // Despawn the old scene + free worker-side state (shared with `ClearScene`).
-    // Every scene-authored entity (incl. the Embodiment camera) carries `UsdPrimPath`,
-    // so `try_despawn` (hierarchy-recursive) tears the old camera down here — no
-    // stale window camera survives into the fresh scene.
     clear_scene_entities(&mut commands, &scene);
-
-    // Defer the asset reload itself as well as the respawn. Higher layers may
-    // refresh a doc-backed Twin's composed overlay while handling this same
-    // command; doing the read in this queued phase makes that refreshed source
-    // the one this stage reload consumes, without making this sim-layer module
-    // depend on the document registry.
     commands.queue(move |world: &mut World| {
-        let reload_expected = asset_path.is_some();
-        if let Some(ap) = asset_path {
-            world.resource::<AssetServer>().reload(ap);
-        }
-        spawn_scene_root_with_stage(world, &label, "", handle);
-        if !reload_expected {
-            world.write_message(SceneStageAssetOutcome::Loaded {
-                transition_id,
-                stage_id,
-            });
-        }
+        spawn_scene_root_with_stage(world, &asset_path, &root_prim, stage_handle);
+        world
+            .resource_mut::<lunco_usd_bevy_twin::TwinProjectionWake>()
+            .wake();
+        world.write_message(SceneStageAssetOutcome::Loaded {
+            transition_id,
+            stage_id,
+        });
     });
 }
 
@@ -746,6 +806,7 @@ pub(crate) fn on_scene_transition_intent(
                 reset_document: *reset_document,
             });
         }
+        SceneTransitionRequest::RuntimeReset => commands.trigger(ResetSceneRuntime {}),
     }
 }
 
@@ -780,26 +841,47 @@ pub(crate) fn on_scene_transition_failed(
     trigger: On<SceneTransitionFailed>,
     mut coordinator: ResMut<SceneTransitionCoordinator>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut commands: Commands,
 ) {
     if coordinator.fail(trigger.event().id) {
         let event = trigger.event();
-        let subject = match &event.transition {
-            SceneTransition::Load { path, .. } | SceneTransition::Restart { path, .. } => {
-                path.clone()
-            }
+        let internal_subject = match &event.transition {
+            SceneTransition::Load { path, .. }
+            | SceneTransition::Restart { path, .. }
+            | SceneTransition::RuntimeReset { path, .. } => path.clone(),
             transition => format!("{transition:?}"),
         };
-        faults.raise("scene-load-failed", None, &subject, &event.error);
+        let roots = roots.as_deref();
+        let subject =
+            lunco_assets_core::asset_path::source_uri_for_address(&internal_subject, roots)
+                .unwrap_or_else(|_| {
+                    if lunco_assets_core::parse_twin_uri(&internal_subject).is_some() {
+                        "Twin scene".to_owned()
+                    } else {
+                        internal_subject.clone()
+                    }
+                });
+        let detail = match (
+            lunco_assets_core::parse_twin_uri(&internal_subject),
+            lunco_assets_core::parse_twin_uri(&subject),
+        ) {
+            (Some((authority, _)), Some((source_identity, _))) if authority != source_identity => {
+                stable_source_detail(&event.error, roots)
+            }
+            (Some(_), _) => "Twin scene failed to load. See application logs for details.".into(),
+            _ => event.error.clone(),
+        };
+        faults.raise("scene-load-failed", None, &subject, &detail);
         lunco_core::trigger_runtime_error(
             &mut commands,
             "scene-load-failed",
-            format!("Could not load `{subject}`: {}", event.error),
+            format!("Could not load `{subject}`: {detail}"),
         );
         warn!(
             "[scene] transition {} failed: {}",
             trigger.event().id.get(),
-            trigger.event().error
+            stable_source_detail(&trigger.event().error, roots)
         );
     } else {
         warn!(
@@ -1131,6 +1213,17 @@ pub fn spawn_scene_root_with_stage(
     handle: Handle<UsdStageAsset>,
 ) -> Option<Entity> {
     let asset_path = label.to_string();
+    let display_label =
+        stable_source_address(label, world.get_resource::<lunco_assets_core::TwinRoots>())
+            .unwrap_or_else(|_| {
+                if lunco_assets_core::parse_twin_uri(label).is_some() {
+                    "Twin scene".to_owned()
+                } else if label.starts_with("memory-stage:") {
+                    "In-memory scene".to_owned()
+                } else {
+                    label.to_owned()
+                }
+            });
     let root_prim = resolve_root_prim(&asset_path, root_prim_in);
     let new_id = handle.id();
 
@@ -1141,7 +1234,7 @@ pub fn spawn_scene_root_with_stage(
         {
             info!(
                 "[scene] `{}` @ `{}` already loaded — no-op",
-                asset_path, root_prim
+                display_label, root_prim
             );
             return None;
         }
@@ -1183,7 +1276,7 @@ pub fn spawn_scene_root_with_stage(
         .is_some_and(|load| load.stage_id == new_id && load.path == asset_path);
     let root = world
         .spawn((
-            Name::new(format!("Scene:{}", asset_path)),
+            Name::new(format!("Scene:{display_label}")),
             UsdSceneRoot,
             scene_grid,
             Transform::default(),
@@ -1220,7 +1313,7 @@ pub fn spawn_scene_root_with_stage(
     });
     info!(
         "[scene] spawned `{}` @ `{}` (entity {})",
-        asset_path, root_prim, root
+        display_label, root_prim, root
     );
     Some(root)
 }
@@ -1252,7 +1345,7 @@ pub fn resolve_root_prim(_asset_path: &str, override_in: &str) -> String {
     String::new()
 }
 
-register_commands!(on_clear_scene, on_restart_scene,);
+register_commands!(on_clear_scene, on_restart_scene, on_reset_scene_runtime,);
 
 #[cfg(test)]
 mod tests {

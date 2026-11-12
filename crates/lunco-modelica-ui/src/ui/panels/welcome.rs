@@ -410,45 +410,24 @@ impl Panel for WelcomePanel {
             // ── Get Started ────────────────────────────────
             ui.vertical_centered(|ui| {
                 ui.set_max_width(560.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_sized(
-                            [272.0, 44.0],
-                            egui::Button::new(
-                                egui::RichText::new("➕  New Model")
-                                    .text_style(lunco_theme::TypographyRole::Button.text_style())
-                                    .strong(),
-                            ),
-                        )
-                        .on_hover_text("Create a new untitled model (Ctrl+N)")
-                        .clicked()
-                    {
-                        create_new = true;
-                    }
-                    let (label, hover) = if cfg!(target_arch = "wasm32") {
-                        ("Open File", "Pick a .mo file to open")
+                let secondary = if cfg!(target_arch = "wasm32") {
+                    ("Open File", "Pick a .mo file to open")
+                } else {
+                    ("Open Folder", "Pick a folder of .mo files to browse")
+                };
+                let (create_clicked, open_clicked) = super::render_start_actions(
+                    ui,
+                    ("➕  New Model", "Create a new untitled model (Ctrl+N)"),
+                    secondary,
+                );
+                create_new = create_clicked;
+                if open_clicked {
+                    if cfg!(target_arch = "wasm32") {
+                        open_file = true;
                     } else {
-                        ("Open Folder", "Pick a folder of .mo files to browse")
-                    };
-                    if ui
-                        .add_sized(
-                            [272.0, 44.0],
-                            egui::Button::new(
-                                egui::RichText::new(label)
-                                    .text_style(lunco_theme::TypographyRole::Button.text_style())
-                                    .strong(),
-                            ),
-                        )
-                        .on_hover_text(hover)
-                        .clicked()
-                    {
-                        if cfg!(target_arch = "wasm32") {
-                            open_file = true;
-                        } else {
-                            open_folder = true;
-                        }
+                        open_folder = true;
                     }
-                });
+                }
             });
 
             ui.add_space(32.0);

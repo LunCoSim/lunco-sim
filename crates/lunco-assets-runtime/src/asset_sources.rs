@@ -23,7 +23,7 @@ const TWIN_ASSET_UNMOUNT_FAILED: &str = "twin-asset-unmount-failed";
 pub struct TwinRootsPlugin;
 
 /// A workspace Twin has an addressable `twin://` authority and its exact
-/// assigned name is ready for consumers that must load through that source.
+/// assigned authority is ready for consumers that must load through that source.
 ///
 /// [`lunco_workspace::TwinAdded`] announces workspace ownership, while this
 /// event announces the asset boundary's stronger postcondition. Consumers must
@@ -34,8 +34,10 @@ pub struct TwinAssetMounted {
     /// Workspace identity of the mounted Twin.
     pub twin: lunco_workspace::TwinId,
     /// Exact mount-local source authority assigned by [`TwinRoots`]. Consumers
-    /// use it for all loads; it is distinct from the stable logical source name.
-    pub name: String,
+    /// use it for all loads; it is distinct from both display and source identity.
+    pub authority: String,
+    /// Human-readable name from the manifest or folder.
+    pub display_name: String,
 }
 
 impl Plugin for TwinRootsPlugin {
@@ -74,12 +76,14 @@ fn register_twin_root(
         }
     };
     info!(
-        "[twin-roots] mounted `{assigned}` at {}",
+        "[twin-roots] mounted Twin `{}` at {}",
+        twin.display_name(),
         twin.root.display()
     );
     commands.trigger(TwinAssetMounted {
         twin: twin_id,
-        name: assigned,
+        authority: assigned,
+        display_name: twin.display_name(),
     });
 }
 
@@ -103,8 +107,9 @@ fn unregister_twin_root(
 ///
 /// | Scheme | Resolves to | Notes |
 /// |---|---|---|
-/// | `lunco://` | the runtime `assets/` root, its packed cache, then the shared cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
-/// | `twin://<name>/…` | open Twin roots | Twin scenes AND downloaded scenarios — native fs + web OPFS, via `lunco_storage` |
+/// | `lunco://` | the runtime `assets/` root, then the shared global cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
+/// | `twin://<source-identity>/…` | the currently mounted Twin source resolved at admission | stable user-facing scene and asset addresses |
+/// | `twin://<authority>/…` | one exact live mount | internal asset reads only |
 ///
 /// `lunco://` is path-derived and stateless; `twin://` is separate only because
 /// its reader is stateful (it shares [`TwinRoots`] with the resource).
@@ -178,7 +183,7 @@ pub fn register_lunco_asset_sources(app: &mut App) -> std::io::Result<TwinRoots>
     let roots = twin_roots.clone();
     schemes
         .register(lunco_assets_core::TWIN_SCHEME, move |rest| {
-            // `twin://<name>/<rel>` — the name selects the root, so this handler is
+            // `twin://<authority>/<rel>` — the authority selects the mounted root, so this handler is
             // stateful where `lunco://`'s is constant.
             let invalid = || {
                 lunco_assets_core::SchemeRegistryError::AssetResolution(format!(
@@ -236,7 +241,7 @@ mod tests {
             |trigger: On<TwinAssetMounted>, mut mounted: ResMut<MountedAuthorities>| {
                 mounted
                     .0
-                    .push((trigger.event().twin, trigger.event().name.clone()));
+                    .push((trigger.event().twin, trigger.event().authority.clone()));
             },
         );
         app.update();
@@ -250,7 +255,7 @@ mod tests {
 
         let roots = app.world().resource::<TwinRoots>();
         let assigned = roots
-            .name_for_root(&root)
+            .authority_for_root(&root)
             .expect("read Twin registry")
             .expect("workspace Twin is mounted in the asset source");
         assert_eq!(roots.root_for(&assigned), Ok(Some(root.clone())));
@@ -271,7 +276,7 @@ mod tests {
         assert!(
             app.world()
                 .resource::<TwinRoots>()
-                .names()
+                .authorities()
                 .expect("read Twin registry")
                 .is_empty()
         );

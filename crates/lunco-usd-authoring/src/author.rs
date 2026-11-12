@@ -52,24 +52,7 @@ pub struct SnapshotRestorePlan {
 /// replacement. Normal path-addressed edits use [`open_doc_stage`] directly
 /// and do not pass through this formatter.
 pub fn data_to_usda(data: &sdf::Data) -> Result<String> {
-    ensure_usda_serializable(data)?;
     usda::TextWriter::write_to_string(data).map_err(|e| anyhow!("serialize layer to USDA: {e}"))
-}
-
-/// Refuse a demonstrated native-writer contract violation before publishing
-/// USDA. OpenUSD 0.8.0 writes the internal inheritance field as `inheritPaths`,
-/// which Pixar's USDA parser rejects. The owning SDK must fix serialization;
-/// the application does not rewrite its output or substitute another writer.
-pub fn ensure_usda_serializable(data: &sdf::Data) -> Result<()> {
-    if let Some((path, _)) = data
-        .iter()
-        .find(|(_, spec)| spec.get(sdf::FieldKey::InheritPaths.as_str()).is_some())
-    {
-        return Err(anyhow!(
-            "OpenUSD 0.8.0 cannot serialize inheritance at {path} as standard USDA; native writer emits inheritPaths instead of inherits"
-        ));
-    }
-    Ok(())
 }
 
 /// Parse USDA `text` into a single root layer's [`sdf::Data`] (no composition).
@@ -95,9 +78,6 @@ pub fn layer_bytes(identifier: &str, data: &sdf::Data) -> Result<Vec<u8>> {
             format: format.format_id(),
         }
         .into());
-    }
-    if format.format_id() == "usda" {
-        ensure_usda_serializable(data)?;
     }
     Ok(format.write_bytes(data)?.bytes.as_ref().to_vec())
 }

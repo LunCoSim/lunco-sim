@@ -136,6 +136,9 @@ pub(crate) fn publish_sun_visibility(
     memo.samples.retain(|probe, _| probes.contains(*probe));
     memo.terrain_bounds
         .retain(|terrain, _| terrains.contains(*terrain));
+    for cache in memo.terrain_bounds.values_mut() {
+        cache.begin_batch();
+    }
     let selected_paths: std::collections::HashSet<_> = probes
         .iter()
         .flat_map(|(_, _, paths, _)| paths.0.iter().cloned())
@@ -326,7 +329,11 @@ pub(crate) fn publish_sun_visibility(
                                 key.direction,
                                 *budget,
                                 &mut remaining_intervals,
-                                memo.terrain_bounds.entry(key.terrain).or_default(),
+                                memo.terrain_bounds.entry(key.terrain).or_insert_with(|| {
+                                    let mut cache = crate::SurfaceOcclusionCache::default();
+                                    cache.begin_batch();
+                                    cache
+                                }),
                             )
                             .map_err(|reason| {
                                 format!(

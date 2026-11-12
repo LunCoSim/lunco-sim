@@ -65,6 +65,15 @@ camera's authoritative f64 pose into `WorldGrid` and updates the anchor's
 moving the semantic world root, site frame, camera hierarchy, or avatar
 identity.
 
+The same camera owner publishes `RenderOriginController` on the anchor, binding
+its camera and `WorldGrid`. Near-ground draw admission uses the spatial owner's
+`RenderPrecisionQuery` with that exact lease. Its coordinate certificate includes
+the native maximum origin remainder, nested-grid narrowing and GPU affine
+arithmetic on both sides of a possible cell change. A small camera displacement
+does not imply a small render-origin displacement. Shared ancestor rounding is a
+common translation; differing grid branches contribute relative error. Unknown
+controller motion or an unsupported hierarchy remains unavailable to admission.
+
 The world shell validates this ownership and archetype contract every frame.
 It also requires exactly one valid `WorldRoot` and exactly one direct-child
 `WorldGrid`; an absent, duplicate, malformed, or misparented singleton is
@@ -310,16 +319,21 @@ tree update can then skip stationary bounds. Pose calculation, normalization,
 signed-zero representation and non-finite diagnostics retain their owners.
 
 The local avatar is a kinematic camera embodiment, not an authored rigid body.
-Its keyboard and wheel movement uses Avian's `MoveAndSlide` with one capsule
-shape against the standard colliders projected from the composed USD stage.
+Its keyboard and wheel movement uses checked Avian sphere casts and native
+multi-plane slide projection against standard prop colliders from composed USD.
+The sphere includes the camera near-plane footprint. The full-source terrain
+sweep excludes native DEM realizations, and the retained draw-geometry query
+checks presentation independently of physical support residency.
 The controller converts the avatar pose and requested displacement from its
 source Grid into `ActivePhysicsFrame` with
 `grid_transform_between_grids`, performs the shape move there, then converts
 the solved position back through `Grid::translation_to_grid`. This keeps camera
 movement on the same f64 frame and collision ownership as the physics scene;
 it does not change Avian's fixed-tick or substep configuration. The existing
-physical collision-layer contract excludes only authored non-physical layers
-such as triggers and celestial helpers.
+physical collision-layer contract excludes authored non-physical layers such as
+triggers and celestial helpers. Missing preparation holds the requested movement;
+invalid state or exhausted capacity produces a diagnostic. Lateral input never
+creates an automatic upward step.
 
 Collision is enabled by default. The only opt-out is the explicit Twin-scoped
 boolean setting `avatar.allow_through_soil`, read directly from the active

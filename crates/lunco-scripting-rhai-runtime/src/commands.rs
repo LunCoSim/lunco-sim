@@ -686,40 +686,40 @@ fn resolve_embedded_scenario_twin_owner(
     workspace: Option<&lunco_workspace::WorkspaceResource>,
     twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
 ) -> Result<Option<lunco_scripting::TwinOwnedScript>, String> {
-    let Some((stage_twin_name, _)) = stage_source.and_then(lunco_assets_core::parse_twin_uri)
+    let Some((stage_authority, _)) = stage_source.and_then(lunco_assets_core::parse_twin_uri)
     else {
         return resolve_scenario_twin_owner(workspace, None, source_asset, true);
     };
 
-    if let Some((source_twin_name, _)) = source_asset.and_then(lunco_assets_core::parse_twin_uri)
-        && source_twin_name != stage_twin_name
+    if let Some((source_authority, _)) = source_asset.and_then(lunco_assets_core::parse_twin_uri)
+        && source_authority != stage_authority
     {
         return Err(format!(
-            "embedded scenario asset belongs to Twin `{source_twin_name}`, but its USD scene belongs to Twin `{stage_twin_name}`"
+            "embedded scenario asset authority `{source_authority}` differs from its USD scene authority `{stage_authority}`"
         ));
     }
 
     let workspace = workspace.ok_or_else(|| {
-        format!("Twin-backed USD scene `{stage_twin_name}` has no workspace owner")
+        format!("Twin-backed USD scene authority `{stage_authority}` has no workspace owner")
     })?;
     let twin_roots = twin_roots.ok_or_else(|| {
-        format!("Twin-backed USD scene `{stage_twin_name}` has no Twin asset registry")
+        format!("Twin-backed USD scene authority `{stage_authority}` has no Twin asset registry")
     })?;
     let mut owner = None;
     for (twin_id, twin) in workspace.twins() {
-        let authority = twin_roots.name_for_root(&twin.root).map_err(|error| {
-            format!("cannot resolve Twin `{stage_twin_name}` authority: {error}")
-        })?;
-        if authority.as_deref() == Some(stage_twin_name) {
+        let authority = twin_roots
+            .authority_for_root(&twin.root)
+            .map_err(|error| format!("cannot resolve workspace Twin authority: {error}"))?;
+        if authority.as_deref() == Some(stage_authority) {
             if owner.replace(twin_id).is_some() {
                 return Err(format!(
-                    "Twin scene authority `{stage_twin_name}` resolves to more than one workspace Twin"
+                    "Twin scene authority `{stage_authority}` resolves to more than one workspace Twin"
                 ));
             }
         }
     }
     let owner = owner.ok_or_else(|| {
-        format!("Twin scene authority `{stage_twin_name}` has no open workspace Twin")
+        format!("Twin scene authority `{stage_authority}` has no open workspace Twin")
     })?;
     resolve_scenario_twin_owner(workspace.into(), Some(owner.raw()), source_asset, true)
 }

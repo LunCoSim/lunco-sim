@@ -310,7 +310,7 @@ fn build_view_model(
             ..Default::default()
         };
     };
-    let name = match roots.name_for_root(&twin.root) {
+    let name = match roots.authority_for_root(&twin.root) {
         Ok(Some(name)) => name,
         Ok(None) => {
             return SysmlRequirementsViewModel {

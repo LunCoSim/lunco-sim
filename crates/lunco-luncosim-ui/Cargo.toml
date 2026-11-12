@@ -154,6 +154,7 @@ lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }
 lunco-usd-ui = { path = "../lunco-usd-ui" }
 lunco-usd-viewport-runtime = { path = "../lunco-usd-viewport-runtime" }
+lunco-viewport-core = { path = "../lunco-viewport-core" }
 lunco-usd-viewport-ui = { path = "../lunco-usd-viewport-ui" }
 lunco-luncosim-presentation = { path = "../lunco-luncosim-presentation" }
 lunco-web = { workspace = true }

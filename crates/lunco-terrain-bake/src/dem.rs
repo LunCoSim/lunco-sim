@@ -95,6 +95,14 @@ pub fn decode_geotiff_f64(bytes: &[u8]) -> Result<(usize, usize, Vec<f64>), DemE
 /// not "simplify" that away: a non-finite value reaching the crop path is
 /// invalid terrain and must not become an invented surface.
 pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
+    height_grid_and_transform(bytes).map(|(grid, _)| grid)
+}
+
+/// Decode the measured grid together with its crop-adjusted georeferencing.
+/// Boundary-connected nodata is trimmed symmetrically from both products.
+pub fn height_grid_and_transform(
+    bytes: &[u8],
+) -> Result<(HeightGrid, lunco_geotiff::GeoTransform), DemError> {
     let (w, h, mut heights) = decode_geotiff_f64(bytes)?;
     if w != h {
         return Err(DemError::NonSquare {
@@ -106,7 +114,7 @@ pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
     // The raster states its own extent. No fallback: a raster with no
     // georeferencing cannot be placed, and a guessed extent would put terrain
     // silently at the wrong scale.
-    let geo = read_geotiff_transform(bytes).map_err(DemError::NoGeoreferencing)?;
+    let mut geo = read_geotiff_transform(bytes).map_err(DemError::NoGeoreferencing)?;
 
     if !heights.iter().any(|v| v.is_finite()) {
         return Err(DemError::AllNoData);
@@ -132,6 +140,9 @@ pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
         },
     )?;
     if res < w {
+        let trim = (w - res) / 2;
+        geo.origin_x_m += trim as f64 * geo.pixel_size_m;
+        geo.origin_y_m -= trim as f64 * geo.pixel_size_m;
         heights = crop_centred(&heights, w, res);
     }
     debug_assert!(heights.iter().all(|v| v.is_finite()));
@@ -140,11 +151,14 @@ pub fn height_grid_from_geotiff(bytes: &[u8]) -> Result<HeightGrid, DemError> {
     // be re-derived from the NEW sample count, not scaled from the old one.
     let half_extent = (geo.pixel_size_m * (res as f64 - 1.0) * 0.5) as f32;
 
-    Ok(HeightGrid {
-        res,
-        half_extent,
-        heights,
-    })
+    Ok((
+        HeightGrid {
+            res,
+            half_extent,
+            heights,
+        },
+        geo,
+    ))
 }
 
 /// Side length of the largest **centred** square window containing no nodata.
@@ -261,6 +275,10 @@ pub enum DemError {
     Tiff(tiff::TiffError),
     /// The TIFF sample format isn't a supported numeric height type.
     UnsupportedSamples,
+    /// The requested raster window is invalid.
+    InvalidWindow,
+    /// The raster buffer could not be allocated.
+    Allocation,
     SizeMismatch {
         expected: usize,
         got: usize,
@@ -291,6 +309,8 @@ impl fmt::Display for DemError {
         match self {
             DemError::Tiff(e) => write!(f, "failed to decode heightmap GeoTIFF: {e}"),
             DemError::UnsupportedSamples => write!(f, "unsupported TIFF sample format for heights"),
+            DemError::InvalidWindow => write!(f, "invalid TIFF sample window"),
+            DemError::Allocation => write!(f, "cannot allocate TIFF sample window"),
             DemError::SizeMismatch { expected, got } => {
                 write!(f, "decoded {got} samples, expected {expected} (w*h)")
             }
@@ -328,6 +348,8 @@ impl From<lunco_geotiff::GrayDecodeError> for DemError {
         match e {
             lunco_geotiff::GrayDecodeError::Tiff(e) => DemError::Tiff(e),
             lunco_geotiff::GrayDecodeError::UnsupportedSamples => DemError::UnsupportedSamples,
+            lunco_geotiff::GrayDecodeError::InvalidWindow => DemError::InvalidWindow,
+            lunco_geotiff::GrayDecodeError::Allocation => DemError::Allocation,
         }
     }
 }
@@ -449,6 +471,27 @@ mod tests {
         assert_eq!(grid.height_at(-1.0, 1.0), 20.0);
         assert_eq!(grid.height_at(1.0, 1.0), 30.0);
         assert_eq!(grid.height_at(0.0, 0.0), 15.0);
+    }
+
+    #[test]
+    fn trimmed_grid_adjusts_its_georeferenced_sample_origin() {
+        let mut data = vec![f32::NAN; 25];
+        for z in 1..4 {
+            for x in 1..4 {
+                data[z * 5 + x] = (z * 5 + x) as f32;
+            }
+        }
+        let (grid, geo) = height_grid_and_transform(&encode_dem(5, &data, 8.0)).unwrap();
+        assert_eq!(grid.res, 3);
+        assert_eq!(grid.half_extent, 2.0);
+        assert_eq!(
+            (geo.origin_x_m, geo.origin_y_m, geo.pixel_size_m),
+            (-2.0, 2.0, 2.0)
+        );
+        assert_eq!(
+            grid.heights,
+            vec![6.0, 7.0, 8.0, 11.0, 12.0, 13.0, 16.0, 17.0, 18.0]
+        );
     }
 
     #[test]

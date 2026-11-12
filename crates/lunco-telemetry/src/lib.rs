@@ -88,7 +88,7 @@ pub struct TelemetrySettings {
     /// silently shortens that window instead of costing memory, which is the
     /// failure mode that looks like "the plot keeps eating my history".
     ///
-    /// Costs 16 B per sample: 24 KB per channel, ~188 MiB at the 8192-channel cap.
+    /// Costs 16 B per sample: 24 KB per channel, ~281 MiB at the default cap.
     pub default_retention: usize,
     /// Maximum number of queued sample notifications delivered during one app frame.
     /// The queue can hold at most this many samples per permitted fixed step.
@@ -109,11 +109,10 @@ impl Default for TelemetrySettings {
             // channel. Model state uses this policy through the Modelica runtime
             // projection; authored channels use it when they omit their own rate.
             default_rate_hz: 5.0,
-            // The Traverse scene publishes more than 4096 physics and Modelica
-            // channels once its remote stations and antenna mechanisms are live.
-            // Keep the complete scene plus headroom so ordinary telemetry is not
-            // silently truncated by enumeration order.
-            max_channels: 8192,
+            // Keep measured production scenes above 8,192 channels plus headroom.
+            // Histories allocate as samples arrive; the configured cap remains
+            // an explicit backpressure guard and persisted user values win.
+            max_channels: 12288,
             default_retention: 1500,
             max_sample_deliveries_per_update: default_max_sample_deliveries_per_update(),
             enabled: true,
@@ -1798,10 +1797,10 @@ mod tests {
     }
 
     #[test]
-    fn default_channel_cap_covers_the_current_scene_budget() {
+    fn settings_default_channel_cap_covers_the_current_scene_budget() {
         assert_eq!(
             TelemetrySettings::default().max_channels,
-            8192,
+            12288,
             "the default must retain a full multi-rover scene with headroom"
         );
     }
@@ -1823,6 +1822,13 @@ mod tests {
             restored.max_sample_deliveries_per_update,
             default_max_sample_deliveries_per_update()
         );
+
+        let mut saved = TelemetrySettings::default();
+        saved.max_channels = 8192;
+        let mut restored: TelemetrySettings =
+            serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+        restored.migrate_persisted();
+        assert_eq!(restored.max_channels, 8192);
 
         let missing_current_deadband = serde_json::json!({
             "default_rate_hz": 5.0,

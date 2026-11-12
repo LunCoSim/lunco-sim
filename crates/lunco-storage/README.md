@@ -2,12 +2,9 @@
 
 **I/O abstraction for LunCoSim.**
 
-A small crate that defines the [`Storage`] trait and ships the handles
-used everywhere a document is read or written: the native filesystem
-today, IndexedDB / OPFS / File-System-Access / HTTPS / IPFS tomorrow.
-Higher-level crates (`lunco-doc`, `lunco-workspace`, `lunco-twin`) go
-through this trait, so they compile unchanged when the app grows a
-browser or remote-twin backend.
+A small crate that defines the [`Storage`] trait and shared storage handles.
+It provides native filesystem and browser local storage backends, plus an
+asynchronous OPFS backend for browser binary assets and caches.
 
 Headless, UI-free, ECS-free. Pulling `lunco-storage` into a crate does
 not pull in bevy or egui.
@@ -19,7 +16,7 @@ not pull in bevy or egui.
 │   Storage (trait)  │   ←    │   FileStorage         │  (native, this crate)
 │                    │        └───────────────────────┘
 │  read / write      │        ┌───────────────────────┐
-│  exists            │   ←    │   OpfsStorage         │  (future, wasm)
+│  exists            │        │   OpfsStorage         │  (async, wasm)
 │  is_writable       │        └───────────────────────┘
 │  pick_open         │        ┌───────────────────────┐
 │  pick_save         │   ←    │   IdbStorage          │  (future, wasm)
@@ -36,10 +33,9 @@ not pull in bevy or egui.
       · Http(url)                — feature-stub
 ```
 
-Only the `File` and `Memory` variants are live; the rest are declared
-behind feature flags (`fsa_stub`, `idb_stub`, `opfs_stub`, `http_stub`)
-so consumers can keep their match arms exhaustive without waiting for
-the backend to ship.
+`OpfsStorage` uses inherent async methods rather than the `Send` trait, with
+File handles mapped into the browser's origin-private filesystem. The other
+declared handle variants are backend stubs.
 
 ## Usage
 
@@ -93,6 +89,8 @@ I/O and belongs on an existing worker, never the UI thread.
 `OpfsStorage` exposes asynchronous `read_directory` with the same File-handle
 mapping and sorted direct-child results as native storage. Callers bound catalog
 processing and metadata reads; directory enumeration returns the complete list.
+OPFS access works from both a browser window and a dedicated worker; the DEM
+worker uses it to load and persist its derived grid cache off the page thread.
 
 Native file URI conversion belongs to `file_uri_to_path` and
 `file_path_to_uri`. They delegate URL parsing and encoding to `url`, including

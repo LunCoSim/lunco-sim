@@ -1,11 +1,11 @@
 // Typed operations referenced by the Rhai-authored Scenarios menu.
 fn load(args) {
     if args.open_twin == true {
-        return cmd("OpenTwinScene", #{
-            twin_id: args.twin_id,
-            name: args.authority,
-            relative_path: args.relative_path
-        });
+        let params = #{ relative_path: args.relative_path };
+        if args.contains("twin_id") && args.twin_id != () {
+            params.twin_id = args.twin_id;
+        }
+        return cmd("OpenTwinScene", params);
     }
     cmd("LoadScene", #{ path: args.uri, root_prim: "" })
 }
@@ -26,5 +26,5 @@ fn open_downloaded(args) {
         scene: args.scene
     });
     if mounted == () || !mounted.ok { throw "downloaded scenario could not be mounted"; }
-    cmd("LoadScene", #{ path: mounted.value.path, root_prim: "" });
+    cmd("LoadScene", #{ path: mounted.value.source_uri, root_prim: "" });
 }

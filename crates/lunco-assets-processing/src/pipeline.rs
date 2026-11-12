@@ -78,7 +78,6 @@ pub(crate) fn process(
     source: &Path,
     config: &ProcessConfig,
     output: &Path,
-    cache: &Path,
     owner: Option<&Path>,
     control: &ProcessControl,
     registry: &ProcessorRegistry,
@@ -88,7 +87,7 @@ pub(crate) fn process(
         .pipeline
         .as_ref()
         .ok_or_else(|| invalid("kind=\"pipeline\" requires [process.pipeline]"))?;
-    let paths = pipeline::input_paths(declared, source, cache, owner)?;
+    let paths = pipeline::input_paths(declared, source, owner)?;
     let output_identity =
         lunco_storage::FilePathIdentity::prepare(output).map_err(|e| invalid(e.to_string()))?;
     for path in paths.values() {
@@ -573,7 +572,6 @@ output = "pixels.png"
             &product,
             &cfg,
             &source,
-            dir.path(),
             Some(dir.path())
         ));
         std::fs::write(
@@ -585,7 +583,6 @@ output = "pixels.png"
             &product,
             &cfg,
             &source,
-            dir.path(),
             Some(dir.path())
         ));
         assert!(run(&cfg).unwrap_err().to_string().contains("rejected"));

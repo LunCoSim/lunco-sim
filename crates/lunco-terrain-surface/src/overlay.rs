@@ -24,7 +24,7 @@
 
 use bevy::prelude::*;
 use lunco_core::{Command, on_command, register_commands};
-use lunco_materials::ShaderLook;
+use lunco_materials::{ParamValue, ShaderLook};
 
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::DemHeightField;
@@ -256,23 +256,24 @@ pub fn sync_terrain_overlay(
         let terrains = look_queries.p0();
         let mut updates = Vec::new();
         for (tiles, height_field, maps, authored, shadow, template) in terrains.iter() {
-            for (entity, depth, morph_start, morph_end) in tiles.tile_material_specs() {
-                updates.push((
-                    entity,
-                    crate::stream_viz::tile_look(
-                        template,
-                        depth,
-                        morph_start,
-                        morph_end,
-                        maps,
-                        height_field.0.half_extent(),
-                        authored,
-                        shadow,
-                        &diagnostic,
-                        u,
-                    ),
-                    u.mode > 0.5,
-                ));
+            for (entity, depth, morph_start, morph_end, stitch_edges) in tiles.tile_material_specs()
+            {
+                let mut replacement = crate::stream_viz::tile_look(
+                    template,
+                    depth,
+                    morph_start,
+                    morph_end,
+                    maps,
+                    height_field.0.half_extent(),
+                    height_field.0.regional_map_blend_m(),
+                    height_field.0.regional_uv_scale(),
+                    authored,
+                    shadow,
+                    &diagnostic,
+                    u,
+                );
+                replacement.set_value("stitch_edges", ParamValue::Vec4(stitch_edges));
+                updates.push((entity, replacement, u.mode > 0.5));
             }
         }
         updates

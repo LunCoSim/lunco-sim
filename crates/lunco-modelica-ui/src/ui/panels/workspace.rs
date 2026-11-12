@@ -2,7 +2,9 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
-use lunco_workbench_core::{Panel, PanelCtx, PanelId, PanelMenuGroup, PanelSlot};
+use lunco_workbench_core::{
+    Panel, PanelCtx, PanelId, PanelMenuGroup, PanelScrollPolicy, PanelSlot,
+};
 
 /// Stable id for the Modelica workspace start panel.
 pub const MODELICA_WORKSPACE_PANEL_ID: PanelId = PanelId("modelica_workspace");
@@ -27,6 +29,10 @@ impl Panel for ModelicaWorkspacePanel {
         PanelSlot::Center
     }
 
+    fn scroll_policy(&self) -> PanelScrollPolicy {
+        PanelScrollPolicy::SelfManaged
+    }
+
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let theme = ctx
             .resource::<lunco_theme::Theme>()
@@ -44,35 +50,37 @@ impl Panel for ModelicaWorkspacePanel {
         let mut open_file = false;
         let mut open_welcome = false;
 
-        ui.vertical_centered(|ui| {
-            ui.set_max_width(560.0);
-            ui.add_space(theme.spacing.item_spacing * 6.0);
-            ui.heading(
-                egui::RichText::new(if has_model_view {
-                    "Modelica workspace"
-                } else {
-                    "No Modelica model open"
-                })
-                .text_style(lunco_theme::TypographyRole::Title.text_style()),
-            );
-            ui.add_space(theme.spacing.item_spacing);
-            ui.label(
-                egui::RichText::new(if has_model_view {
-                    "Open another source from Twin, or create a model. Model views open in center tabs."
-                } else {
-                    "Choose a model in the Twin browser, open a Modelica file, or start a new model."
-                })
-                .color(theme.tokens.text_subdued),
-            );
-            ui.add_space(theme.spacing.item_spacing * 2.0);
-            ui.horizontal(|ui| {
-                create_model = ui.button("New Model").clicked();
-                open_file = ui.button("Open Modelica File…").clicked();
+        ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(560.0);
+                ui.heading(
+                    egui::RichText::new(if has_model_view {
+                        "Modelica workspace"
+                    } else {
+                        "No Modelica model open"
+                    })
+                    .text_style(lunco_theme::TypographyRole::Title.text_style()),
+                );
+                ui.add_space(theme.spacing.item_spacing);
+                ui.label(
+                    egui::RichText::new(if has_model_view {
+                        "Open another source from Twin, or create a model. Model views open in center tabs."
+                    } else {
+                        "Choose a model in the Twin browser, open a Modelica file, or start a new model."
+                    })
+                    .color(theme.tokens.text_subdued),
+                );
+                ui.add_space(theme.spacing.item_spacing * 2.0);
+                (create_model, open_file) = super::render_start_actions(
+                    ui,
+                    ("New Model", "Create a new untitled Modelica model"),
+                    ("Open Modelica File…", "Choose a Modelica source file to open"),
+                );
+                ui.add_space(theme.spacing.item_spacing);
+                if ui.link("Learning paths and examples").clicked() {
+                    open_welcome = true;
+                }
             });
-            ui.add_space(theme.spacing.item_spacing);
-            if ui.link("Learning paths and examples").clicked() {
-                open_welcome = true;
-            }
         });
 
         if create_model {

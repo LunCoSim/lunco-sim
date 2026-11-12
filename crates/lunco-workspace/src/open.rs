@@ -634,6 +634,7 @@ struct PreparedTwinSettings {
     project_scene: crate::ProjectSceneSettings,
     twin_load_default: Option<bool>,
     project_physics_escape: crate::ProjectPhysicsEscapeSettings,
+    project_ui: crate::ProjectUiSettings,
 }
 
 fn prepare_twin_open(twin: TwinMode) -> PreparedTwinOpen {
@@ -658,6 +659,7 @@ fn prepare_twin_settings(twin: &TwinMode) -> Result<PreparedTwinSettings, TwinEr
                 project_scene: Default::default(),
                 twin_load_default: None,
                 project_physics_escape: Default::default(),
+                project_ui: Default::default(),
             });
         }
     };
@@ -680,6 +682,7 @@ fn prepare_twin_settings(twin: &TwinMode) -> Result<PreparedTwinSettings, TwinEr
             path: crate::scene_settings::project_settings_path(root),
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
         })?;
+    let project_ui = crate::ui_settings::read_project_ui_settings(root);
     crate::twin_physics_escape_guard_setting(twin.manifest.as_ref()).map_err(|error| {
         TwinError::Io {
             path: root.join(lunco_twin::MANIFEST_FILENAME),
@@ -690,6 +693,7 @@ fn prepare_twin_settings(twin: &TwinMode) -> Result<PreparedTwinSettings, TwinEr
         project_scene: project,
         twin_load_default,
         project_physics_escape,
+        project_ui,
     })
 }
 
@@ -892,6 +896,9 @@ pub fn drain_pending_twin_opens(
                     workspace
                         .project_physics_escape_settings
                         .insert(twin_id, settings.project_physics_escape);
+                    workspace
+                        .project_ui_settings
+                        .insert(twin_id, settings.project_ui);
                     workspace.scene_loading_decisions.insert(twin_id, decision);
                     if let Some(rel) = &entry.scene {
                         workspace.scene_overrides.insert(twin_id, rel.clone());

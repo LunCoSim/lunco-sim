@@ -2,12 +2,11 @@
 //!
 //! Runs inside a Web Worker with its own wasm linear memory. Receives a bake job
 //! ({ id, job: bincode `DemBakeJob`, site: id bytes, tif: transferred
-//! GeoTIFF `ArrayBuffer` }) from the main page, decodes the GeoTIFF ONCE, then
-//! emits two `postMessage` replies — a coarse preview grid, then the full-res
-//! grid — each as { header: bincode `BakeReplyHeader`, heights: transferred f64
-//! `ArrayBuffer` }. This moves the ~15-30 s decode + crater stamp off the page's
-//! main thread; it calls the SAME `lunco_terrain_bake::finish_bake` the native
-//! async task uses.
+//! GeoTIFF `ArrayBuffer` }) from the main page. It computes a content key and
+//! reads the OPFS cache off-thread. On a miss it decodes once, emits a coarse
+//! preview then the full grid, and writes the full-precision cache; on a hit it
+//! emits the full grid. Replies carry a bincode `BakeReplyHeader` and transferred
+//! f64 heights. The worker calls the shared `finish_bake` implementation.
 //!
 //! Mirrors `lunica_worker`: a separate wasm-bindgen bin (own linear memory), no
 //! atomics / SharedArrayBuffer. The native build gets an inert stub `main`.
@@ -130,23 +129,46 @@ mod wasm {
             _ => return post_error(id, BakeStage::Coarse, "message missing tif".into()),
         };
 
-        // ONE decode shared by both stages (the expensive GeoTIFF parse).
-        let raw = match decode_raw(&tif) {
-            Ok(v) => v,
-            Err(e) => return post_error(id, BakeStage::Coarse, e),
-        };
-        drop(tif);
-
-        // Coarse preview first (fast → terrain + collider appear)
-        let baked_coarse = finish_bake(&raw, &site_id, &job, BakeStage::Coarse);
-        post_baked(id, &baked_coarse);
-
-        // Yield to the event loop so the coarse preview message is dispatched immediately,
-        // then refine the full grid in the background.
         wasm_bindgen_futures::spawn_local(async move {
+            // Hash, decode and persist the full-precision cache on this worker,
+            // never on the page thread. Cache misses and corrupt optional data
+            // take the same decode path as an uncached request.
+            let key = lunco_terrain_bake::grid_cache_key(site_id.as_bytes(), &tif, &job);
+            let key_hex = lunco_precompute::key_hex(key);
+            let namespace = lunco_terrain_bake::DEM_GRID_CACHE_NAMESPACE;
+            if let Some(blob) = lunco_storage::opfs_blob::read(namespace, &key_hex).await {
+                if let Some((grid, native_res)) = lunco_terrain_bake::decode_grid_blob(&blob) {
+                    let res = grid.res;
+                    let baked = BakedGrid {
+                        base_grid: lunco_obstacle_field::field::HeightGrid {
+                            res: 0,
+                            half_extent: grid.half_extent,
+                            heights: Vec::new(),
+                        },
+                        grid,
+                        site: site_id,
+                        native_res,
+                        res,
+                        base_key: 0,
+                        stage: BakeStage::Full,
+                    };
+                    post_baked(id, &baked);
+                    return;
+                }
+            }
+            let raw = match decode_raw(&tif) {
+                Ok(v) => v,
+                Err(e) => return post_error(id, BakeStage::Coarse, e),
+            };
+            drop(tif);
+            let baked_coarse = finish_bake(&raw, &site_id, &job, BakeStage::Coarse);
+            post_baked(id, &baked_coarse);
             yield_to_event_loop().await;
             let baked_full = finish_bake(&raw, &site_id, &job, BakeStage::Full);
             post_baked(id, &baked_full);
+            let blob =
+                lunco_terrain_bake::encode_grid_blob(&baked_full.grid, baked_full.native_res);
+            lunco_storage::opfs_blob::write(namespace, &key_hex, &blob).await;
         });
     }
 

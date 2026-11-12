@@ -4,10 +4,8 @@
 //! library". Where the bytes actually sit is a resolution detail, deliberately
 //! not part of the address:
 //!
-//! 1. `assets/<rel>` — git-tracked, authored content
-//! 2. `assets/.cache/<rel>` — the PACKED cache: binaries shipped inside the
-//!    distribution, so a packaged build carries its own payload
-//! 3. `<cache>/<rel>` — the shared machine-wide pool, filled by the downloader
+//! 1. `assets/<rel>` — authored and packaged content
+//! 2. `<cache>/<rel>` — the shared machine-wide pool, filled by the downloader
 //!
 //! Large binaries stay out of git; they are resolved into the library rather
 //! than addressed by a machine-local cache path, so authored USD remains
@@ -145,7 +143,7 @@ fn read_asset_bytes_inner(
         )
     })?;
     if let Some((_, path)) = resolve_native_asset(
-        &crate::asset_read_roots(root),
+        &crate::engine_asset_read_roots(root),
         &relative,
         Some(lunco_storage::StorageEntryKind::File),
     )? {
@@ -409,20 +407,34 @@ mod tests {
     }
 
     #[test]
-    fn library_reads_an_explicit_package_cache_before_the_shared_cache() {
-        let package_assets = tempfile::tempdir().expect("temporary package assets root");
-        let packed = package_assets.path().join(".cache/scenes/base");
-        lunco_storage::ensure_directory_sync(&packed).expect("packed cache directory");
-        lunco_storage::write_file_sync(&packed.join("lunar_surface.usda"), b"packed package asset")
-            .expect("packed asset");
+    fn engine_library_ignores_an_assets_local_cache() {
+        let engine_assets = tempfile::tempdir().expect("temporary engine assets root");
+        let global_cache = tempfile::tempdir().expect("temporary shared asset cache");
+        let stale_local = engine_assets.path().join(".cache/scenes/base");
+        lunco_storage::ensure_directory_sync(&stale_local).expect("local cache directory");
+        lunco_storage::write_file_sync(
+            &stale_local.join("lunar_surface.usda"),
+            b"stale local copy",
+        )
+        .expect("local cache asset");
+        let shared = global_cache.path().join("scenes/base/lunar_surface.usda");
+        lunco_storage::ensure_directory_sync(shared.parent().unwrap())
+            .expect("shared cache directory");
+        lunco_storage::write_file_sync(&shared, b"shared cached asset")
+            .expect("shared cache asset");
+        let roots =
+            crate::engine_asset_read_roots_with_shared(engine_assets.path(), global_cache.path());
 
         assert_eq!(
-            read_asset_bytes(
-                "lunco://scenes/base/lunar_surface.usda",
-                Some(package_assets.path())
+            resolve_native_asset(
+                &roots,
+                Path::new("scenes/base/lunar_surface.usda"),
+                Some(lunco_storage::StorageEntryKind::File),
             )
-            .expect("explicit package cache asset"),
-            b"packed package asset"
+            .expect("resolve shared cache asset")
+            .expect("shared asset exists")
+            .1,
+            shared
         );
     }
 
@@ -507,8 +519,8 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
-/// Build the `lunco://` [`AssetSourceBuilder`] from the authored library root,
-/// its packed cache, and the shared cache in [`crate::asset_read_roots`] order.
+/// Build the `lunco://` [`AssetSourceBuilder`] from the engine library and
+/// shared cache in [`crate::engine_asset_read_roots`] order.
 ///
 /// Only the authored `assets/` tree is watched. Cache roots are read-only
 /// materialized artifacts and can contain tens of thousands of directories;
@@ -516,7 +528,7 @@ pub fn read_asset_file_string(path: &Path) -> std::io::Result<String> {
 /// authoring and can exhaust the process' watch quota before the app starts.
 pub fn lunco_asset_source(assets_dir: &Path) -> AssetSourceBuilder {
     let watch_root = assets_dir.to_string_lossy().into_owned();
-    let reader_roots = crate::asset_read_roots(assets_dir);
+    let reader_roots = crate::engine_asset_read_roots(assets_dir);
     AssetSourceBuilder::new(move || {
         #[cfg(not(target_arch = "wasm32"))]
         return Box::new(crate::NativeAssetReader::new(reader_roots.clone()))
@@ -620,16 +632,6 @@ mod browser_transport_tests {
             assert!(matches!(missing, Err(AssetReaderError::NotFound(_))));
         }
 
-        let mut stream =
-            ErasedAssetReader::read(readers[1].as_ref(), Path::new("cache # % 月.txt"))
-                .await
-                .expect("read packed-cache fallback through the same mapper");
-        let mut bytes = Vec::new();
-        Reader::read_to_end(stream.as_mut(), &mut bytes)
-            .await
-            .expect("read packed-cache payload");
-        assert_eq!(bytes, b"packed-cache");
-
         let settings = lunco_settings::DownloadSettings::default();
         for (filename, expected) in fixtures {
             let url = crate::asset_path::web_url(&format!("http-path-fixture/default/{filename}"));
@@ -643,10 +645,8 @@ mod browser_transport_tests {
 
 /// Reads each root in turn, moving on only when the asset is absent there.
 ///
-/// Order is priority: authored content wins over the packed cache, which wins
-/// over the shared pool. So a file committed under `assets/` is never silently
-/// replaced by whatever a download left behind, and a distribution's own
-/// payload is never shadowed by a stale copy in the machine-wide cache.
+/// Order is priority: shipped/authored content wins over the shared pool. A
+/// file committed under `assets/` is never silently replaced by a download.
 ///
 /// Only [`AssetReaderError::NotFound`] falls through. A genuine I/O failure —
 /// permissions, a truncated HTTP response — propagates immediately, because
@@ -811,7 +811,7 @@ mod native_resolution_contract_tests {
         let roots = vec![authored, cached];
         let reader = crate::NativeAssetReader::new(roots.clone());
         let mounts = crate::TwinRoots::default();
-        let authority = mounts.register("owner", &roots[0]).unwrap();
+        let authority = mounts.register_authority("owner", &roots[0]).unwrap();
         let scope = mounts.read_scope(&authority).unwrap();
         for name in [&authority, "owner"] {
             assert_eq!(
@@ -831,7 +831,7 @@ mod native_resolution_contract_tests {
                 .kind(),
             std::io::ErrorKind::InvalidInput
         );
-        mounts.unregister_name(&authority).unwrap();
+        mounts.unregister_authority(&authority).unwrap();
         assert!(mounts.read_scope(&authority).is_err());
 
         let selected = resolve_native_asset(

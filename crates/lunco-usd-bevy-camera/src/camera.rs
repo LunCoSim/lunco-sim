@@ -34,7 +34,7 @@
 //! follower; ordinary cameras retain their authored USD hierarchy.
 
 use bevy::prelude::*;
-use lunco_camera_core::CameraPoseMode;
+use lunco_camera_core::{AdaptiveNearPlane, CameraPoseMode};
 use lunco_usd_bevy_stage::read::read_vec3_f64;
 use openusd::sdf::{Path as SdfPath, Value};
 use openusd_schemas::geom::{self, tokens};
@@ -172,7 +172,7 @@ pub fn instantiate_camera_prim(
         return CameraProjectionOutcome::NotCamera;
     }
 
-    let Some((projection, h_fov)) = read_projection(reader, sdf_path) else {
+    let Some((projection, h_fov, source_clipping)) = read_projection(reader, sdf_path) else {
         // The prim remains a USD camera identity, but it must not enter a
         // render role with an invalid Bevy projection. The failed marker makes
         // the terminal state visible to scene/UI diagnostics; no heuristic
@@ -381,6 +381,11 @@ pub fn instantiate_camera_prim(
     // bridge and makes headless camera projection data available immediately.
     let mut camera = commands.entity(entity);
     camera.try_insert((projection, pose));
+    if let Some(source_clipping) = source_clipping.filter(|_| is_avatar) {
+        camera.try_insert(source_clipping);
+    } else {
+        camera.try_remove::<AdaptiveNearPlane>();
+    }
     if is_viewport || is_sensor {
         camera.try_insert((
             lunco_render::scene_camera_look_with_profile(camera_exposure, quality),
@@ -489,8 +494,8 @@ fn read_camera_look_at(
 
 /// Build a Bevy `Projection` from a `UsdGeomCamera`'s film-back + clip attrs.
 ///
-/// Returns the projection plus, for perspective, the **horizontal** FOV
-/// derived from `horizontalAperture` — the window aspect isn't known here, so
+/// Returns the projection, the perspective **horizontal** FOV, and source clip floors.
+/// The FOV is derived from `horizontalAperture` — the window aspect isn't known here, so
 /// the caller conforms the vertical FOV against it (expandAperture).
 ///
 /// `None` means an authored camera attribute is malformed or outside the USD
@@ -500,16 +505,19 @@ fn read_camera_look_at(
 fn read_projection(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     path: &SdfPath,
-) -> Option<(Projection, Option<f32>)> {
+) -> Option<(Projection, Option<f32>, Option<AdaptiveNearPlane>)> {
     // `clippingRange` is a `float2` (accept `double2` authoring too).
-    let meters_per_unit = StageMetrics::from_reader(reader).ok()?.meters_per_unit as f32;
+    let meters_per_unit = StageMetrics::from_reader(reader).ok()?.meters_per_unit;
     let clipping_value = reader.attr_value(path, tokens::CLIPPING_RANGE);
     let resolved_clipping = clipping_value
         .clone()
-        .and_then(|value| value.get::<[f32; 2]>())
+        .and_then(|value| value.get::<[f64; 2]>())
         .or_else(|| {
-            clipping_value
-                .and_then(|value| value.get::<[f64; 2]>().map(|[n, f]| [n as f32, f as f32]))
+            clipping_value.and_then(|value| {
+                value
+                    .get::<[f32; 2]>()
+                    .map(|[n, f]| [f64::from(n), f64::from(f)])
+            })
         });
     let clipping = match resolved_clipping {
         Some(range) => Some(range),
@@ -526,7 +534,7 @@ fn read_projection(
     // canonical metre frame, so the resolved USD range (including a schema
     // fallback) is scaled from the stage's declared units.
     let [near, far] = clipping
-        .unwrap_or([DEFAULT_NEAR, DEFAULT_FAR])
+        .unwrap_or([f64::from(DEFAULT_NEAR), f64::from(DEFAULT_FAR)])
         .map(|value| value * meters_per_unit);
     if !(near.is_finite() && far.is_finite() && near > 0.0 && far > near) {
         error!(
@@ -535,6 +543,11 @@ fn read_projection(
         );
         return None;
     }
+
+    let source_clipping = AdaptiveNearPlane::new(near, far)?;
+    // USD values and unit conversion above remain native f64. This is the
+    // explicit rendering boundary, rounded upward to retain both source floors.
+    let (near, far) = lunco_camera_core::math::projection_clip_range(near, far)?;
 
     let projection = read_usd_camera_projection(reader, path)?;
     let is_ortho = projection == geom::Projection::Orthographic;
@@ -560,9 +573,16 @@ fn read_projection(
             Projection::Orthographic(OrthographicProjection {
                 near,
                 far,
-                scaling_mode: ortho_scaling_mode(h_aperture, v_aperture, meters_per_unit),
+                scaling_mode: ortho_scaling_mode(h_aperture, v_aperture, {
+                    let render_units = meters_per_unit as f32;
+                    if !render_units.is_finite() || render_units <= 0.0 {
+                        return None;
+                    }
+                    render_units
+                }),
                 ..OrthographicProjection::default_3d()
             }),
+            None,
             None,
         ))
     } else {
@@ -591,6 +611,7 @@ fn read_projection(
                 ..default()
             }),
             h_fov,
+            Some(source_clipping),
         ))
     }
 }
@@ -834,7 +855,7 @@ mod tests {
         let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
-        let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
+        let (projection, _, _) = read_projection(&stage.view(), &path).expect("valid camera");
         let Projection::Perspective(perspective) = projection else {
             panic!("camera defaults to perspective");
         };
@@ -851,12 +872,103 @@ mod tests {
         let stage = lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe)
             .expect("build camera");
         let path = SdfPath::new("/Camera").unwrap();
-        let (projection, _) = read_projection(&stage.view(), &path).expect("valid camera");
+        let (projection, _, _) = read_projection(&stage.view(), &path).expect("valid camera");
         let Projection::Perspective(perspective) = projection else {
             panic!("camera defaults to perspective");
         };
         assert!((perspective.near - 0.01).abs() < 1e-6);
         assert!((perspective.far - 10_000.0).abs() < 1e-3);
+    }
+
+    fn project_valid_camera(
+        stage: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStage>,
+        entity: Res<CameraEntity>,
+        mut commands: Commands,
+    ) {
+        let path = SdfPath::new("/Camera").unwrap();
+        assert_eq!(
+            instantiate_camera_prim(
+                &stage.view(),
+                &path,
+                Some(tokens::CAMERA),
+                &mut commands,
+                entity.0,
+                lunco_render::RenderQualityProfile::default()
+            ),
+            CameraProjectionOutcome::Projected
+        );
+    }
+
+    #[test]
+    fn clipping_source_reprojection_retains_f64_and_retires_orthographic_adaptation() {
+        let mut app = App::new();
+        let entity = app.world_mut().spawn_empty().id();
+        app.insert_resource(CameraEntity(entity))
+            .add_systems(Update, project_valid_camera);
+        for near in [0.010000000123_f64, 0.002000000321_f64] {
+            let text = format!(
+                "#usda 1.0\n(metersPerUnit = 1)\ndef Camera \"Camera\" (prepend apiSchemas = [\"LunCoCameraAPI\", \"LunCoAvatarAPI\"])\n{{\n    bool lunco:avatar = true\n    token lunco:cameraRole = \"viewport\"\n    double2 clippingRange = ({near:.15}, 1000000.000123)\n}}\n"
+            );
+            let recipe = lunco_usd_compose::recipe::StageRecipe::from_source("camera.usda", &text);
+            let stage =
+                lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe).unwrap();
+            app.insert_non_send(stage);
+            app.update();
+            let source = app.world().get::<AdaptiveNearPlane>(entity).unwrap();
+            assert_eq!(source.source_near_m, near);
+            assert_eq!(source.source_far_m, 1_000_000.000123);
+            let Projection::Perspective(projection) =
+                app.world().get::<Projection>(entity).unwrap()
+            else {
+                panic!("perspective expected")
+            };
+            assert!(
+                f64::from(projection.near) >= near
+                    && f64::from(projection.far) >= source.source_far_m
+            );
+        }
+        let recipe = lunco_usd_compose::recipe::StageRecipe::from_source(
+            "camera.usda",
+            "#usda 1.0\n(metersPerUnit = 1)\ndef Camera \"Camera\" (prepend apiSchemas = [\"LunCoCameraAPI\", \"LunCoAvatarAPI\"])\n{\n    bool lunco:avatar = true\n    token lunco:cameraRole = \"viewport\"\n    token projection = \"orthographic\"\n}\n",
+        );
+        app.insert_non_send(
+            lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe).unwrap(),
+        );
+        app.update();
+        assert!(app.world().get::<AdaptiveNearPlane>(entity).is_none());
+        assert!(matches!(
+            app.world().get::<Projection>(entity),
+            Some(Projection::Orthographic(_))
+        ));
+    }
+
+    #[test]
+    fn fixed_and_mounted_sensor_cameras_keep_source_clipping_without_adaptation() {
+        let mut app = App::new();
+        let entity = app.world_mut().spawn_empty().id();
+        app.insert_resource(CameraEntity(entity))
+            .add_systems(Update, project_valid_camera);
+        for (role, pose) in [("viewport", "authored"), ("sensor", "mounted")] {
+            let text = format!(
+                "#usda 1.0\n(metersPerUnit = 1)\ndef Camera \"Camera\" (prepend apiSchemas = [\"LunCoCameraAPI\"])\n{{\n    token lunco:cameraRole = \"{role}\"\n    token lunco:cameraPose = \"{pose}\"\n    float2 clippingRange = (0.02, 200)\n}}\n"
+            );
+            let recipe = lunco_usd_compose::recipe::StageRecipe::from_source("camera.usda", &text);
+            app.insert_non_send(
+                lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe).unwrap(),
+            );
+            // Reprojection retires an adaptive marker from an earlier avatar role.
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(AdaptiveNearPlane::new(0.1, 1_000.0).unwrap());
+            app.update();
+            assert!(app.world().get::<AdaptiveNearPlane>(entity).is_none());
+            let Projection::Perspective(projection) =
+                app.world().get::<Projection>(entity).unwrap()
+            else {
+                panic!("perspective expected")
+            };
+            assert_eq!((projection.near, projection.far), (0.02_f32, 200.0));
+        }
     }
 
     #[test]

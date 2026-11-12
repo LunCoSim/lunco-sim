@@ -1585,6 +1585,267 @@ pub fn grid_absolute_pose_to_render(
     )
 }
 
+/// A live, single-admission certificate for native origin rebasing.
+///
+/// The reader validates the coordinate partition and controller synchronously.
+/// The result is not reusable after an ECS mutation.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderCoordinateCertificate {
+    /// World-space error covering native f32 narrowing and the GPU affine dot
+    /// products, both before and after the proposed origin rebase.
+    pub error_m: f64,
+    /// Bound on the mesh translation submitted after native origin propagation.
+    pub translation_bound_m: f64,
+    /// Error of the shader's world-position/eye distance, including the
+    /// coordinate envelope after rebasing and its subtract/dot/sqrt operations.
+    pub distance_error_m: f64,
+}
+
+/// Read-only admission at the spatial owner. It deliberately does not borrow
+/// `Transform`: interactive pose writers use this reader while holding their
+/// camera's mutable local transform. The native grid/LFO state is the last
+/// propagated presentation snapshot.
+#[derive(SystemParam)]
+pub struct RenderPrecisionQuery<'w, 's> {
+    grids: Query<'w, 's, &'static Grid>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    globals: Query<'w, 's, &'static GlobalTransform>,
+    origins: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static crate::world::RenderOriginController,
+            &'static ChildOf,
+        ),
+        With<crate::world::OriginAnchor>,
+    >,
+}
+
+fn rounding_gamma(operations: u32, unit: f64) -> f64 {
+    let total = f64::from(operations) * unit;
+    total / (1.0 - total)
+}
+
+fn narrowing_bound(magnitude: f64) -> f64 {
+    // Round-to-nearest, including the subnormal interval. Use a bound in
+    // terms of the rounded value so it also applies to a retained GT.
+    let unit = f64::from(f32::EPSILON) * 0.5;
+    unit / (1.0 - unit) * magnitude + f64::from(f32::from_bits(1))
+}
+
+fn matrix_norm_bound(matrix: bevy::math::DMat3) -> f64 {
+    let matrix = bevy::math::DMat3::from_cols(
+        matrix.x_axis.abs(),
+        matrix.y_axis.abs(),
+        matrix.z_axis.abs(),
+    );
+    let one = matrix
+        .x_axis
+        .element_sum()
+        .max(matrix.y_axis.element_sum())
+        .max(matrix.z_axis.element_sum());
+    let infinity = (matrix.x_axis + matrix.y_axis + matrix.z_axis).max_element();
+    (one * infinity).sqrt()
+}
+
+impl RenderPrecisionQuery<'_, '_> {
+    fn grid_path(&self, mut grid: Entity, root: Entity) -> Result<Vec<Entity>, &'static str> {
+        let mut path = Vec::new();
+        for _ in 0..MAX_SPATIAL_HIERARCHY_DEPTH {
+            if path.contains(&grid) {
+                return Err("render precision grid ancestry contains a cycle");
+            }
+            self.grids
+                .get(grid)
+                .map_err(|_| "render precision ancestry is not grid-direct")?;
+            path.push(grid);
+            if grid == root {
+                return Ok(path);
+            }
+            grid = self
+                .parents
+                .get(grid)
+                .map_err(|_| "render precision grid is outside the origin partition")?
+                .parent();
+        }
+        Err("render precision grid ancestry exceeds the spatial depth limit")
+    }
+
+    fn branch_error(&self, path: &[Entity], origin_travel: f64) -> Result<f64, &'static str> {
+        let mut error = 0.0;
+        for entity in path {
+            let grid = self
+                .grids
+                .get(*entity)
+                .map_err(|_| "render precision grid lease retired")?;
+            let maximum = f64::from(grid.maximum_distance_from_origin())
+                .max(f64::from(grid.cell_edge_length()) * 0.5);
+            let origin = grid.local_floating_origin();
+            let linear = matrix_norm_bound(origin.grid_transform().matrix3);
+            let cell = origin.cell();
+            // Stay strictly inside the exact-integer interval: a native
+            // upstream float-to-cell split can already round 2^53+1 to 2^53.
+            // Check in the integer domain before this reader narrows again.
+            if [cell.x, cell.y, cell.z]
+                .into_iter()
+                .any(|value| (value as i128).unsigned_abs() >= (1u128 << 53))
+            {
+                return Err("render precision origin cell exceeds exact double integer range");
+            }
+            let coordinate =
+                grid.cell_to_float(&cell).length() + maximum * 3.0f64.sqrt() + origin_travel;
+            if !maximum.is_finite()
+                || maximum <= 0.0
+                || !linear.is_finite()
+                || !coordinate.is_finite()
+            {
+                return Err("render precision grid has invalid native bounds");
+            }
+            // Each native child-origin propagation narrows a bounded remainder
+            // once. Its fixed affine translation uses two 3-term dot products
+            // (14 rounded multiply/add operations); the cell product contributes
+            // one more. Static rotations are shared by current/future poses.
+            let arithmetic = rounding_gamma(15, f64::EPSILON * 0.5) * coordinate;
+            error += linear * (narrowing_bound(maximum * 3.0f64.sqrt()) + arithmetic);
+        }
+        Ok(error)
+    }
+
+    /// Certify f32 coordinate operations for a proposed motion of the camera
+    /// that owns the origin. Ancestor poses and terrain geometry are fixed by
+    /// the caller's live scene lease; independent controller/mount motion is
+    /// unavailable rather than presumed stationary.
+    pub fn certify(
+        &self,
+        camera: Entity,
+        reference_grid: Entity,
+        geometry_grid: Entity,
+        eye_start: DVec3,
+        eye_end: DVec3,
+        mesh: bevy::math::DMat4,
+        local_magnitude: DVec3,
+    ) -> Result<RenderCoordinateCertificate, &'static str> {
+        let (_, controller, anchor_parent) = self
+            .origins
+            .single()
+            .map_err(|_| "render precision requires one live origin controller")?;
+        if controller.camera != camera || anchor_parent.parent() != controller.world_grid {
+            return Err(
+                "render precision origin-controller lease does not match the proposed camera",
+            );
+        }
+        let camera_grid = self
+            .parents
+            .get(camera)
+            .map_err(|_| "render precision camera has no grid parent")?
+            .parent();
+        let root = self
+            .grids
+            .get(controller.world_grid)
+            .map_err(|_| "render precision origin grid retired")?;
+        let reference = self.grid_path(reference_grid, controller.world_grid)?;
+        let geometry = self.grid_path(geometry_grid, controller.world_grid)?;
+        let camera_path = self.grid_path(camera_grid, controller.world_grid)?;
+        let maximum = f64::from(root.maximum_distance_from_origin())
+            .max(f64::from(root.cell_edge_length()) * 0.5);
+        if !maximum.is_finite()
+            || maximum <= 0.0
+            || !eye_start.is_finite()
+            || !eye_end.is_finite()
+            || !mesh.is_finite()
+            || !local_magnitude.is_finite()
+        {
+            return Err("render precision input exceeds its finite coordinate domain");
+        }
+        let controller_pose = self
+            .globals
+            .get(camera)
+            .map_err(|_| "render precision controller pose has not propagated")?
+            .translation()
+            .as_dvec3();
+        let travel = eye_start.distance(eye_end);
+        let root_radius = maximum * 3.0f64.sqrt();
+        // The root origin is the controller's CELL, not its exact translation.
+        // This cube remains valid at either side of a native cell transition.
+        let origin_travel = travel + 2.0 * root_radius;
+        let camera_error =
+            self.branch_error(&camera_path[..camera_path.len() - 1], origin_travel)?;
+        let eye_bound = root_radius + camera_error + controller_pose.distance(eye_start);
+        let mut camera_relative_path = camera_path
+            .iter()
+            .filter(|grid| !reference.contains(grid))
+            .copied()
+            .collect::<Vec<_>>();
+        camera_relative_path.extend(
+            reference
+                .iter()
+                .filter(|grid| !camera_path.contains(grid))
+                .copied(),
+        );
+        let camera_relative_error =
+            2.0 * self.branch_error(&camera_relative_path, origin_travel)?;
+        let mut relative_path = geometry
+            .iter()
+            .filter(|grid| !reference.contains(grid))
+            .copied()
+            .collect::<Vec<_>>();
+        relative_path.extend(
+            reference
+                .iter()
+                .filter(|grid| !geometry.contains(grid))
+                .copied(),
+        );
+        // Shared LFO narrowing is a common translation and cancels in the
+        // source-frame geometry. Only the two branches can deform that relation.
+        let differential = 2.0 * self.branch_error(&relative_path, origin_travel)?;
+        let translation = mesh.w_axis.truncate();
+        let separation = translation
+            .distance(eye_start)
+            .max(translation.distance(eye_end));
+        let translation_bound = eye_bound
+            + separation
+            + differential
+            + narrowing_bound(translation.length())
+            + narrowing_bound(controller_pose.length());
+        let linear_sum = mesh.x_axis.truncate().abs() * local_magnitude.x
+            + mesh.y_axis.truncate().abs() * local_magnitude.y
+            + mesh.z_axis.truncate().abs() * local_magnitude.z;
+        // Each affine dot-product term encounters at most one multiply and
+        // three adds (multiplication of the translation by 1 is exact).
+        // WGSL permits either adjacent rounded value, so GPU arithmetic uses
+        // a full epsilon; native Rust narrowing above uses round-to-nearest.
+        let gpu = rounding_gamma(4, f64::from(f32::EPSILON))
+            * (linear_sum.length() + translation.length().max(translation_bound));
+        let error_m = differential
+            + narrowing_bound(translation.length())
+            + narrowing_bound(translation_bound)
+            + narrowing_bound(eye_bound)
+            + camera_relative_error
+            + gpu;
+        // WGSL distance inherits length/subtraction, dot and sqrt. Its sqrt
+        // inherits inverseSqrt (2 ULP) followed by division (2.5 ULP).
+        // Twelve full-epsilon stages conservatively cover those allowances,
+        // subtraction and the dot-product path, including contractions.
+        // Coordinate errors are included once before this stage.
+        let world_bound = linear_sum.length() + translation.length().max(translation_bound);
+        let distance_error_m = error_m
+            + rounding_gamma(12, f64::from(f32::EPSILON))
+                * (world_bound + eye_bound + world_bound + eye_bound);
+        if !error_m.is_finite()
+            || !distance_error_m.is_finite()
+            || translation_bound > f64::from(f32::MAX)
+        {
+            return Err("render precision certificate exceeds the GPU coordinate range");
+        }
+        Ok(RenderCoordinateCertificate {
+            error_m,
+            translation_bound_m: translation_bound,
+            distance_error_m,
+        })
+    }
+}
+
 /// Absolute world position of `entity`, seeded with an explicit
 /// `(initial_cell, initial_tf)`. See [`world_pose_seeded`] (returns the full
 /// pose); this returns the position only.
@@ -2141,5 +2402,464 @@ mod tests {
 
         assert!((first.0 - second.0).length() < 1e-9);
         assert!(first.1.abs_diff_eq(second.1, 1e-9));
+    }
+}
+
+#[cfg(test)]
+mod render_precision_tests {
+    use super::*;
+    use crate::world::{OriginAnchor, RenderOriginController};
+    use bevy::ecs::system::SystemState;
+    use big_space::plugin::BigSpaceMinimalPlugins;
+
+    fn certificate(
+        world: &mut World,
+        camera: Entity,
+        frame: Entity,
+        geometry: Entity,
+        eye: DVec3,
+        end: DVec3,
+        matrix: bevy::math::DMat4,
+        magnitude: DVec3,
+    ) -> Result<RenderCoordinateCertificate, &'static str> {
+        let mut state = SystemState::<RenderPrecisionQuery>::new(world);
+        state
+            .get(world)
+            .unwrap()
+            .certify(camera, frame, geometry, eye, end, matrix, magnitude)
+    }
+
+    #[test]
+    fn native_nested_rebase_stays_inside_coordinate_certificate() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(BigSpaceMinimalPlugins);
+        let root = crate::world::ensure_world_root(app.world_mut());
+        let outer = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::ZERO,
+                Transform::from_xyz(700.25, 12.5, 60.75).with_rotation(Quat::from_rotation_y(0.37)),
+                GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let inner = app
+            .world_mut()
+            .spawn((
+                Grid::new(800.0, 30.0),
+                CellCoord::ZERO,
+                Transform::from_xyz(300.125, 9.25, -40.5)
+                    .with_rotation(Quat::from_rotation_x(-0.23)),
+                GlobalTransform::default(),
+                ChildOf(outer),
+            ))
+            .id();
+        let mesh = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_xyz(20.25, 1.5, 8.75),
+                GlobalTransform::default(),
+                ChildOf(inner),
+            ))
+            .id();
+        let start = DVec3::new(1099.75, 18.125, -20.25);
+        let camera = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::from_translation(start.as_vec3()),
+                GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let anchor = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<OriginAnchor>>();
+            query.single(world).unwrap()
+        };
+        app.world_mut()
+            .entity_mut(anchor)
+            .insert(RenderOriginController {
+                camera,
+                world_grid: root,
+            });
+        app.update();
+        let vertex = Vec3::new(2.125, 4.25, -8.5);
+        // Every proposal straddles a native root-cell boundary in one or more
+        // axes. The second also crosses the nested grids' own remainder cells.
+        for end in [
+            DVec3::new(1100.25, 18.125, -20.25),
+            DVec3::new(3100.25, -1200.5, 2020.25),
+        ] {
+            let old_eye = app
+                .world()
+                .get::<GlobalTransform>(camera)
+                .unwrap()
+                .translation()
+                .as_dvec3();
+            let old_matrix = app
+                .world()
+                .get::<GlobalTransform>(mesh)
+                .unwrap()
+                .to_matrix()
+                .as_dmat4();
+            let old_point = old_matrix.transform_point3(vertex.as_dvec3());
+            let old_position = {
+                let grid = app.world().get::<Grid>(root).unwrap();
+                grid.grid_position_double(
+                    app.world().get::<CellCoord>(camera).unwrap(),
+                    app.world().get::<Transform>(camera).unwrap(),
+                )
+            };
+            let delta = end - old_position;
+            let proof = certificate(
+                app.world_mut(),
+                camera,
+                root,
+                inner,
+                old_eye,
+                old_eye + delta,
+                old_matrix,
+                vertex.abs().as_dvec3(),
+            )
+            .unwrap();
+            let (cell, translation) = app
+                .world()
+                .get::<Grid>(root)
+                .unwrap()
+                .translation_to_grid(end);
+            app.world_mut()
+                .entity_mut(camera)
+                .insert((cell, Transform::from_translation(translation)));
+            app.world_mut()
+                .entity_mut(anchor)
+                .insert((cell, Transform::from_translation(translation)));
+            app.update();
+            let new_eye = app
+                .world()
+                .get::<GlobalTransform>(camera)
+                .unwrap()
+                .translation()
+                .as_dvec3();
+            let new_transform = app.world().get::<GlobalTransform>(mesh).unwrap();
+            let gpu_point = new_transform
+                .to_matrix()
+                .transform_point3(vertex)
+                .as_dvec3();
+            let expected = old_point - old_eye - delta;
+            let actual = gpu_point - new_eye;
+            assert!(
+                actual.distance(expected) <= proof.error_m,
+                "native relative rebase error={} certificate={proof:?}",
+                actual.distance(expected)
+            );
+            assert!(new_transform.translation().as_dvec3().length() <= proof.translation_bound_m);
+            if delta.length() < 1.0 {
+                assert!(
+                    proof.error_m < 0.002,
+                    "ordinary nested rebases must fit millimetre-scale skin: {proof:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_astronomical_same_grid_rebase_keeps_common_origin_error_out_of_skin() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(BigSpaceMinimalPlugins);
+        let root = crate::world::ensure_world_root(app.world_mut());
+        let spawn_grid = |world: &mut World, parent: Entity, position: DVec3, rotation: Quat| {
+            let (cell, local) = world
+                .get::<Grid>(parent)
+                .unwrap()
+                .translation_to_grid(position);
+            world
+                .spawn((
+                    Grid::new(2_000.0, 100.0),
+                    cell,
+                    Transform::from_translation(local).with_rotation(rotation),
+                    GlobalTransform::default(),
+                    ChildOf(parent),
+                ))
+                .id()
+        };
+        let solar = spawn_grid(app.world_mut(), root, DVec3::ZERO, Quat::IDENTITY);
+        let emb = spawn_grid(
+            app.world_mut(),
+            solar,
+            DVec3::new(1.499_503_713_25e11, -3.021_497_125e7, 1.056_075_311_9e10),
+            Quat::from_rotation_y(0.13),
+        );
+        let moon = spawn_grid(
+            app.world_mut(),
+            emb,
+            DVec3::new(-2.901_733_71e8, 1.337_411e7, 2.402_119_3e8),
+            Quat::from_rotation_y(0.61),
+        );
+        let site = spawn_grid(
+            app.world_mut(),
+            moon,
+            DVec3::new(3.001_373e5, -1.700_217_9e6, 1.003_791e5),
+            Quat::from_rotation_y(0.37) * Quat::from_rotation_x(-0.23),
+        );
+        let camera = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(site),
+            ))
+            .id();
+        let mesh = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(site),
+            ))
+            .id();
+        let root_pose = |world: &mut World, entity: Entity| {
+            let mut state = SystemState::<(
+                Query<&ChildOf>,
+                Query<&Grid>,
+                Query<(Option<&CellCoord>, &Transform)>,
+            )>::new(world);
+            let (parents, grids, spatial) = state.get(world).unwrap();
+            pose_in_grid(entity, root, &parents, &grids, &spatial).unwrap()
+        };
+        let write_local = |world: &mut World, entity: Entity, position: DVec3| {
+            let (cell, local) = world
+                .get::<Grid>(site)
+                .unwrap()
+                .translation_to_grid(position);
+            world
+                .entity_mut(entity)
+                .insert((cell, Transform::from_translation(local)));
+        };
+        let initial = DVec3::new(-380.125, -1910.25, -380.375);
+        write_local(app.world_mut(), camera, initial);
+        let (initial_root, rotation) = root_pose(app.world_mut(), camera);
+        let edge = f64::from(app.world().get::<Grid>(root).unwrap().cell_edge_length());
+        // Align a short local movement across an actual WorldGrid origin-cell
+        // boundary while retaining all non-round astronomical ancestor poses.
+        let boundary = (initial_root.x / edge).floor() * edge + edge * 0.5;
+        let start = initial + rotation.inverse() * DVec3::X * (boundary - 0.25 - initial_root.x);
+        write_local(app.world_mut(), camera, start);
+        write_local(app.world_mut(), mesh, start + DVec3::new(20.25, 1.5, -8.75));
+        let root_start = root_pose(app.world_mut(), camera).0;
+        assert!(root_start.length() > 1e11);
+        let anchor = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<OriginAnchor>>();
+            query.single(world).unwrap()
+        };
+        let (old_cell, old_local) = app
+            .world()
+            .get::<Grid>(root)
+            .unwrap()
+            .translation_to_grid(root_start);
+        app.world_mut().entity_mut(anchor).insert((
+            old_cell,
+            Transform::from_translation(old_local),
+            RenderOriginController {
+                camera,
+                world_grid: root,
+            },
+        ));
+        app.update();
+        let old_eye = app
+            .world()
+            .get::<GlobalTransform>(camera)
+            .unwrap()
+            .translation()
+            .as_dvec3();
+        let old_matrix = app
+            .world()
+            .get::<GlobalTransform>(mesh)
+            .unwrap()
+            .to_matrix()
+            .as_dmat4();
+        let old_position = app.world().get::<Grid>(site).unwrap().grid_position_double(
+            app.world().get::<CellCoord>(camera).unwrap(),
+            app.world().get::<Transform>(camera).unwrap(),
+        );
+        let end = old_position + rotation.inverse() * DVec3::X * 0.5;
+        let (end_cell, end_local) = app
+            .world()
+            .get::<Grid>(site)
+            .unwrap()
+            .translation_to_grid(end);
+        let stored_end = app
+            .world()
+            .get::<Grid>(site)
+            .unwrap()
+            .grid_position_double(&end_cell, &Transform::from_translation(end_local));
+        let delta = app
+            .world()
+            .get::<Grid>(site)
+            .unwrap()
+            .local_floating_origin()
+            .grid_transform()
+            .transform_vector3(stored_end - old_position);
+        let vertex = Vec3::new(2.125, 4.25, -8.5);
+        let proof = certificate(
+            app.world_mut(),
+            camera,
+            site,
+            site,
+            old_eye,
+            old_eye + delta,
+            old_matrix,
+            vertex.abs().as_dvec3(),
+        )
+        .unwrap();
+        assert!(
+            proof.error_m < 0.002,
+            "common solar-to-site origin rounding cannot consume the camera skin: {proof:?}"
+        );
+        app.world_mut()
+            .entity_mut(camera)
+            .insert((end_cell, Transform::from_translation(end_local)));
+        let root_end = root_pose(app.world_mut(), camera).0;
+        let (new_cell, new_local) = app
+            .world()
+            .get::<Grid>(root)
+            .unwrap()
+            .translation_to_grid(root_end);
+        assert_ne!(
+            old_cell, new_cell,
+            "the test must exercise a real native origin rebase"
+        );
+        app.world_mut()
+            .entity_mut(anchor)
+            .insert((new_cell, Transform::from_translation(new_local)));
+        app.update();
+        let new_eye = app
+            .world()
+            .get::<GlobalTransform>(camera)
+            .unwrap()
+            .translation()
+            .as_dvec3();
+        let new_mesh = app.world().get::<GlobalTransform>(mesh).unwrap();
+        let gpu_point = new_mesh.to_matrix().transform_point3(vertex).as_dvec3();
+        let expected = old_matrix.transform_point3(vertex.as_dvec3()) - old_eye - delta;
+        assert!(
+            (gpu_point - new_eye).distance(expected) <= proof.error_m,
+            "actual native astronomical rebase must remain enclosed by {proof:?}"
+        );
+        assert!(new_mesh.translation().as_dvec3().length() <= proof.translation_bound_m);
+    }
+
+    #[test]
+    fn precision_certificate_rejects_unknown_controller_and_exposes_insufficient_skin() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(BigSpaceMinimalPlugins);
+        let root = crate::world::ensure_world_root(app.world_mut());
+        let camera = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let other = app
+            .world_mut()
+            .spawn((
+                CellCoord::ZERO,
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        let anchor = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<OriginAnchor>>();
+            query.single(world).unwrap()
+        };
+        app.world_mut()
+            .entity_mut(anchor)
+            .insert(RenderOriginController {
+                camera,
+                world_grid: root,
+            });
+        app.update();
+        assert!(
+            certificate(
+                app.world_mut(),
+                other,
+                root,
+                root,
+                DVec3::ZERO,
+                DVec3::X,
+                bevy::math::DMat4::IDENTITY,
+                DVec3::ONE
+            )
+            .is_err()
+        );
+        let proof = certificate(
+            app.world_mut(),
+            camera,
+            root,
+            root,
+            DVec3::ZERO,
+            DVec3::X,
+            bevy::math::DMat4::IDENTITY,
+            DVec3::splat(1e7),
+        )
+        .unwrap();
+        assert!(
+            proof.error_m > 0.002,
+            "large local vertices cannot receive a millimetre precision certificate"
+        );
+        let huge = app
+            .world_mut()
+            .spawn((
+                Grid::new(2_000.0, 100.0),
+                CellCoord::new((1i64 << 53) + 1, 0, 0),
+                Transform::default(),
+                GlobalTransform::default(),
+                ChildOf(root),
+            ))
+            .id();
+        app.update();
+        assert!(
+            certificate(
+                app.world_mut(),
+                camera,
+                root,
+                huge,
+                DVec3::ZERO,
+                DVec3::X,
+                bevy::math::DMat4::IDENTITY,
+                DVec3::ONE
+            )
+            .is_err(),
+            "2^53+1 must fail before integer-to-f64 rounding hides the lost bit"
+        );
+        app.world_mut()
+            .entity_mut(anchor)
+            .remove::<RenderOriginController>();
+        assert!(
+            certificate(
+                app.world_mut(),
+                camera,
+                root,
+                root,
+                DVec3::ZERO,
+                DVec3::X,
+                bevy::math::DMat4::IDENTITY,
+                DVec3::ONE
+            )
+            .is_err()
+        );
     }
 }

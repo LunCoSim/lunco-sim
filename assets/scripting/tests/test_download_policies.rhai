@@ -31,7 +31,6 @@ let provisioning = invoke_hook("assets.provision", [#{
         id: "twin/test/texture",
         key: "texture",
         name: "Texture",
-        download_on_start: false,
         required_for_scene: true, recommended: false,
         processed: false,
         inputs_ready: false,inputs:[#{id:"source",name:"Texture",url:"https://example.invalid/texture.png",state:"missing",error:()}],
@@ -58,7 +57,7 @@ for state in [
     #{kind: "failed", detail: "checksum mismatch"},
     #{kind: "cancelled", detail: ()},
 ] {
-    facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain", download_on_start: false,
+    facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain",
         required_for_scene: true, recommended: false, processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",state:"missing",error:()}], state: state}];
     let view = provisioned_view(facts);
     checks.push(t_true(view.visible && view.rows.len() == 1,
@@ -77,7 +76,7 @@ facts.datasets[0].inputs_ready=true;
 facts.datasets[0].inputs[0].state="ready";
 facts.datasets[0].state = #{kind: "missing", detail: ()};
 let pending=provisioned_view(facts).rows[0];
-checks.push(t_true(pending.status.contains("Downloaded") && pending.action=="process" && pending.action_label=="Prepare", "downloaded sources offer preparation without another transfer"));
+checks.push(t_true(pending.status.contains("Downloaded") && pending.action=="process" && pending.action_label=="Prepare" && pending.rebuild_action=="", "stale or missing output offers preparation without a duplicate rebuild action"));
 checks.push(t_eq(pending.source_url,"https://example.invalid/terrain.tif","the source link preserves the authored address"));
 facts.datasets[0].state = #{kind: "installed", detail: ()};
 let complete = provisioned_view(facts);
@@ -85,6 +84,7 @@ checks.push(t_true(complete.visible && complete.rows.len() == 1
     && complete.title == "Data ready" && complete.actions[0].action == "dismiss",
     "completed downloads retain an explicit completion view"));
 checks.push(t_true(complete.rows[0].stages_display=="none" && complete.rows[0].min_height=="80px","ready rows use compact summaries"));
+checks.push(t_eq(complete.rows[0].rebuild_action,"rebuild","only an installed processed artifact offers forced rebuild"));
 facts.simulation=#{pending:[],world_hold:false,blockers:[],playing:false,fault:()};
 let paused=provisioned_view(facts);
 checks.push(t_true(paused.simulation_status=="Simulation paused" && paused.actions[0].action=="dismiss","completion preserves intentional pause and never starts transport"));
@@ -110,17 +110,16 @@ checks.push(t_true(provisioned_view(facts).visible,
 facts.datasets[0].required_for_scene=false;
 facts.datasets[0].recommended=true;
 checks.push(t_true(!provisioned_view(facts).visible && provisioned_view(facts).rows.len()==0,
-    "recommendations for other scenes do not trigger startup consent"));
+    "recommendations for other scenes do not open consent"));
 facts.include_optional=true;
 let optional=provisioned_view(facts);
 checks.push(t_true(optional.rows.len()==1 && optional.rows[0].label.starts_with("Recommended"), "optional Twin data remains available in Settings"));
 facts.datasets[0].name="DejaVu Sans Regular";
 facts.datasets[0].recommended=false;
-facts.datasets[0].download_on_start=true;
-facts.datasets[0].state=#{kind:"installed",detail:()};
-let startup_font=provisioned_view(facts);
-checks.push(t_eq(startup_font.rows[0].label,"DejaVu Sans Regular",
-    "a startup-installed application font is not presented as optional"));
+let optional_font=provisioned_view(facts);
+checks.push(t_true(optional_font.rows.len()==1
+    && optional_font.rows[0].label.starts_with("Optional · DejaVu Sans Regular"),
+    "the fallback font uses the ordinary explicit-download label"));
 facts.include_optional=false;
 facts.datasets[0].required_for_scene=true;
 facts.datasets[0].state = #{kind: "downloading", detail: (), bytes_done: 1048576, bytes_total: 0};

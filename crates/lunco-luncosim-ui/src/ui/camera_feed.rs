@@ -1,4 +1,5 @@
 //! Independent camera windows over the capture owner's live render targets.
+use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
 use lunco_capture::camera_feed::{
@@ -12,6 +13,11 @@ use lunco_core::{
     markers::{Callsign, CatalogEntryId},
 };
 use lunco_render::camera_image::{CameraImageEffects, CameraImageMode};
+use lunco_workbench_core::scene::CurrentScenePath;
+use lunco_workbench_state::{
+    WorkspaceCameraViewState, WorkspaceGraphSignalState, WorkspaceGraphViewState,
+    WorkspaceRuntimeViewSnapshot, WorkspaceStateViewProvider,
+};
 use std::collections::BTreeMap;
 
 /// Open live image controls. Omitted source follows the selected main camera.
@@ -22,6 +28,296 @@ pub struct ShowCameraImageSettings {
 pub(super) fn install(app: &mut App) {
     register_all_commands(app);
     app.mark_client_local::<ShowCameraImageSettings>();
+    app.init_resource::<PendingRuntimeViewRestore>()
+        .init_resource::<SignalDescriptorRestoreCursor>()
+        .add_systems(Update, restore_pending_runtime_views)
+        .add_observer(reset_runtime_view_restore_after_transition)
+        .add_observer(clear_runtime_view_restore_on_twin_closed);
+    lunco_workbench_state::install_workspace_state_view_provider(app, RuntimeViewStateProvider);
+}
+
+fn clear_runtime_view_restore_on_twin_closed(
+    trigger: On<lunco_workspace::TwinClosed>,
+    mut pending: ResMut<PendingRuntimeViewRestore>,
+) {
+    if trigger.event().was_active {
+        pending.0 = None;
+    }
+}
+
+fn reset_runtime_view_restore_after_transition(
+    _: On<lunco_core::SceneTransitionCompleted>,
+    mut pending: ResMut<PendingRuntimeViewRestore>,
+) {
+    if let Some(pending) = pending.0.as_mut() {
+        pending.progress_scene_path = None;
+        pending.cameras_restored = false;
+        pending.graphs_restored.clear();
+        pending.graph_retry_requested = true;
+    }
+}
+
+#[derive(Resource, Default)]
+struct SignalDescriptorRestoreCursor(MessageCursor<lunco_viz::SignalDescriptorsChanged>);
+
+fn signal_descriptors_changed(world: &mut World) -> bool {
+    world.resource_scope(|world, mut cursor: Mut<SignalDescriptorRestoreCursor>| {
+        world
+            .get_resource::<Messages<lunco_viz::SignalDescriptorsChanged>>()
+            .is_some_and(|messages| cursor.0.read(messages).next().is_some())
+    })
+}
+
+fn restore_pending_runtime_views(world: &mut World) {
+    let signal_descriptors_changed = signal_descriptors_changed(world);
+    let Some(mut pending) = world.resource_mut::<PendingRuntimeViewRestore>().0.take() else {
+        return;
+    };
+    let mut retry_graphs = pending.take_graph_retry(signal_descriptors_changed);
+    if world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .is_some_and(|scene| scene.active().is_some() || scene.has_admitted())
+    {
+        world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
+        return;
+    }
+    let current_path = world
+        .get_resource::<CurrentScenePath>()
+        .map(|path| path.0.as_str())
+        .unwrap_or_default();
+    let Some(snapshot) = pending
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.scene_path == current_path)
+    else {
+        pending.progress_scene_path = None;
+        pending.cameras_restored = false;
+        pending.graphs_restored.clear();
+        pending.graph_retry_requested = false;
+        world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
+        return;
+    };
+    if !world
+        .get_resource::<lunco_core::SceneMountState>()
+        .is_some_and(|mount| mount.active_root().is_some())
+    {
+        pending.graph_retry_requested = true;
+        world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
+        return;
+    }
+
+    if pending.progress_scene_path.as_deref() != Some(current_path) {
+        pending.progress_scene_path = Some(current_path.to_owned());
+        pending.cameras_restored = false;
+        pending.graphs_restored.clear();
+        retry_graphs = true;
+    }
+
+    if !pending.cameras_restored {
+        restore_camera_views(world, &snapshot.camera_views);
+        pending.cameras_restored = true;
+    }
+
+    if retry_graphs {
+        for view in &snapshot.graph_views {
+            if pending.graphs_restored.contains(&view.id) {
+                continue;
+            }
+            match graph_view_sources_readiness(world, view) {
+                GraphViewSourcesReadiness::Ready => {
+                    restore_graph_view(world, view);
+                    pending.graphs_restored.insert(view.id);
+                }
+                GraphViewSourcesReadiness::Waiting => {}
+                GraphViewSourcesReadiness::Invalid(reason) => {
+                    warn!(
+                        "[workspace-view-state] graph view {} cannot be restored: {}; leaving that view closed",
+                        view.id, reason
+                    );
+                    pending.graphs_restored.insert(view.id);
+                }
+            }
+        }
+    }
+
+    world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
+}
+
+fn restore_camera_views(world: &mut World, views: &[WorkspaceCameraViewState]) {
+    for (index, view) in views.iter().enumerate() {
+        let source = view.source.map(GlobalEntityId::from_raw);
+        if source.is_some_and(|source| {
+            !world
+                .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+                .is_some_and(|registry| registry.resolve(&source).is_some())
+        }) {
+            warn!(
+                "[workspace-view-state] camera view {} references an unavailable camera {}; leaving that view closed",
+                view.id,
+                source.map_or(0, |source| source.get())
+            );
+            continue;
+        }
+        let before = world
+            .resource::<CameraFeeds>()
+            .instances
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        world.trigger(CreateCameraFeed {});
+        let Some(id) = world
+            .resource::<CameraFeeds>()
+            .instances
+            .keys()
+            .find(|id| !before.contains(id))
+            .copied()
+        else {
+            warn!(
+                "[workspace-view-state] camera feed capacity prevented restoring view {}",
+                view.id
+            );
+            continue;
+        };
+        world.trigger(SetCameraFeed {
+            feed: Some(id),
+            source,
+            label: view.label.clone(),
+            width: None,
+            height: None,
+            minimum_scene_items: None,
+        });
+        if let Some(source) = source {
+            if world
+                .resource::<CameraFeeds>()
+                .instances
+                .get(&id)
+                .is_none_or(|feed| feed.source != Some(source))
+            {
+                world.trigger(RemoveCameraFeed { feed: id });
+                warn!(
+                    "[workspace-view-state] camera view {} could not bind to camera {}",
+                    view.id,
+                    source.get()
+                );
+                continue;
+            }
+        }
+        world.trigger(SetCameraFeedResolution {
+            feed: id,
+            match_window: view.match_window,
+            width: Some(view.width),
+            height: Some(view.height),
+        });
+        if view.position.is_some() || view.size.is_some() {
+            let position = view.position.unwrap_or([
+                16.0 + (index % 3) as f32 * 445.0,
+                640.0 + (index / 3) as f32 * 310.0,
+            ]);
+            let size = view.size.unwrap_or([420.0, 300.0]);
+            let layout = CameraFeedWindowLayout { position, size };
+            if !layout
+                .position
+                .iter()
+                .chain(layout.size.iter())
+                .all(|value| value.is_finite())
+                || size[0] < 360.0
+                || size[1] < 180.0
+            {
+                warn!(
+                    "[workspace-view-state] camera view {} has invalid saved window geometry; using the default layout",
+                    view.id
+                );
+                continue;
+            }
+            let mut state = world.resource_mut::<CameraFeedUiState>();
+            state.layouts.insert(id, layout);
+            state.bump_revision();
+        }
+    }
+}
+
+enum GraphViewSourcesReadiness {
+    Ready,
+    Waiting,
+    Invalid(String),
+}
+
+fn graph_view_sources_readiness(
+    world: &World,
+    view: &WorkspaceGraphViewState,
+) -> GraphViewSourcesReadiness {
+    let Some(entities) = world.get_resource::<lunco_api::registry::ApiEntityRegistry>() else {
+        return GraphViewSourcesReadiness::Waiting;
+    };
+    let Some(signals) = world.get_resource::<lunco_viz::SignalRegistry>() else {
+        return GraphViewSourcesReadiness::Waiting;
+    };
+    for signal in &view.signals {
+        let target = GlobalEntityId::from_raw(signal.target);
+        let Some(entity) = entities.resolve(&target) else {
+            return GraphViewSourcesReadiness::Invalid(format!(
+                "owner {} is unavailable",
+                target.get()
+            ));
+        };
+        let source = lunco_viz::SignalRef::new(entity, signal.signal.clone());
+        match signals.signal_type(&source) {
+            None => return GraphViewSourcesReadiness::Waiting,
+            Some(lunco_viz::SignalType::Scalar) if !signals.is_active(&source) => {
+                return GraphViewSourcesReadiness::Invalid(format!(
+                    "scalar channel `{}` has no active publisher",
+                    signal.signal
+                ));
+            }
+            Some(lunco_viz::SignalType::Scalar) if signals.scalar_history(&source).is_some() => {}
+            Some(lunco_viz::SignalType::Scalar) => {
+                return GraphViewSourcesReadiness::Waiting;
+            }
+            Some(_) => {
+                return GraphViewSourcesReadiness::Invalid(format!(
+                    "channel `{}` is not scalar",
+                    signal.signal
+                ));
+            }
+        }
+    }
+    GraphViewSourcesReadiness::Ready
+}
+
+fn restore_graph_view(world: &mut World, view: &WorkspaceGraphViewState) {
+    let before = lunco_viz::graph_hud_workspace_ids(world)
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    world.trigger(lunco_viz::CreateGraphHud {});
+    let Some(id) = lunco_viz::graph_hud_workspace_ids(world)
+        .into_iter()
+        .find(|id| !before.contains(id))
+    else {
+        warn!(
+            "[workspace-view-state] graph HUD capacity prevented restoring view {}",
+            view.id
+        );
+        return;
+    };
+    world.trigger(lunco_viz::SetGraphHud {
+        hud: Some(id),
+        visible: Some(view.visible),
+        signals: Some(
+            view.signals
+                .iter()
+                .map(|signal| lunco_viz::SignalGridEntry {
+                    target_gid: GlobalEntityId::from_raw(signal.target),
+                    signal: signal.signal.clone(),
+                    caption: signal.caption.clone(),
+                })
+                .collect(),
+        ),
+        columns: (!view.signals.is_empty()).then_some(view.columns),
+        width: Some(view.width),
+        height: Some(view.height),
+        x: view.position.map(|position| position[0]),
+        y: view.position.map(|position| position[1]),
+    });
 }
 #[on_command(ShowCameraImageSettings)]
 fn show_image_settings(
@@ -53,11 +349,187 @@ pub(super) struct CameraFeedUiState {
     searches: BTreeMap<u64, String>,
     main_open: bool,
     main_source: Option<GlobalEntityId>,
+    layouts: BTreeMap<u64, CameraFeedWindowLayout>,
+    revision: u64,
 }
 impl SceneResource for CameraFeedUiState {}
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CameraFeedWindowLayout {
+    position: [f32; 2],
+    size: [f32; 2],
+}
+
+impl CameraFeedUiState {
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+}
+
+#[derive(Resource, Default)]
+struct PendingRuntimeViewRestore(Option<PendingRuntimeViews>);
+
+struct PendingRuntimeViews {
+    snapshots: Vec<WorkspaceRuntimeViewSnapshot>,
+    progress_scene_path: Option<String>,
+    cameras_restored: bool,
+    graphs_restored: std::collections::BTreeSet<u64>,
+    graph_retry_requested: bool,
+}
+
+impl PendingRuntimeViews {
+    fn take_graph_retry(&mut self, signal_descriptors_changed: bool) -> bool {
+        let retry = self.graph_retry_requested || signal_descriptors_changed;
+        self.graph_retry_requested = false;
+        retry
+    }
+}
+
+struct RuntimeViewStateProvider;
+
+impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
+    fn revision(&self, world: &World) -> u64 {
+        if !project_view_state_enabled(world) {
+            return 0;
+        }
+        let mut revision = 0xcbf2_9ce4_8422_2325u64;
+        if let Some(path) = world.get_resource::<CurrentScenePath>() {
+            hash_bytes(&mut revision, path.0.as_bytes());
+        }
+        if let Some(feeds) = world.get_resource::<CameraFeeds>() {
+            revision = revision
+                .wrapping_mul(0x100_0000_01b3)
+                .wrapping_add(feeds.allocation_revision);
+            for (id, feed) in &feeds.instances {
+                hash_u64(&mut revision, *id);
+                hash_u64(&mut revision, feed.source.map_or(0, |source| source.get()));
+                hash_bytes(&mut revision, feed.label.as_bytes());
+                hash_u64(&mut revision, u64::from(feed.width));
+                hash_u64(&mut revision, u64::from(feed.height));
+                hash_u64(&mut revision, u64::from(feed.match_window));
+            }
+        }
+        if let Some(state) = world.get_resource::<CameraFeedUiState>() {
+            hash_u64(&mut revision, state.revision);
+        }
+        hash_u64(
+            &mut revision,
+            lunco_viz::graph_hud_workspace_revision(world),
+        );
+        revision
+    }
+
+    fn capture(&self, world: &World) -> Option<WorkspaceRuntimeViewSnapshot> {
+        if !project_view_state_enabled(world) {
+            return None;
+        }
+        if world
+            .get_resource::<lunco_core::SceneTransitionCoordinator>()
+            .is_some_and(|scene| scene.active().is_some() || scene.has_admitted())
+        {
+            return None;
+        }
+        let scene_path = world
+            .get_resource::<CurrentScenePath>()
+            .map(|path| path.0.clone())
+            .filter(|path| !path.is_empty())?;
+        let camera_views = world
+            .get_resource::<CameraFeeds>()
+            .map(|feeds| {
+                feeds
+                    .instances
+                    .iter()
+                    .map(|(id, feed)| {
+                        let layout = world
+                            .get_resource::<CameraFeedUiState>()
+                            .and_then(|state| state.layouts.get(id));
+                        WorkspaceCameraViewState {
+                            id: *id,
+                            source: feed.source.map(|source| source.get()),
+                            label: feed.label.clone(),
+                            width: feed.width,
+                            height: feed.height,
+                            match_window: feed.match_window,
+                            position: layout.map(|layout| layout.position),
+                            size: layout.map(|layout| layout.size),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let graph_views = lunco_viz::graph_hud_workspace_snapshots(world)
+            .into_iter()
+            .map(|hud| WorkspaceGraphViewState {
+                id: hud.id,
+                visible: hud.visible,
+                columns: hud.columns,
+                signals: hud
+                    .signals
+                    .into_iter()
+                    .map(|signal| WorkspaceGraphSignalState {
+                        target: signal.target_gid.get(),
+                        signal: signal.signal,
+                        caption: signal.caption,
+                    })
+                    .collect(),
+                width: hud.width,
+                height: hud.height,
+                position: hud.position,
+            })
+            .collect();
+        Some(WorkspaceRuntimeViewSnapshot {
+            scene_path,
+            camera_views,
+            graph_views,
+        })
+    }
+
+    fn restore(&self, world: &mut World, snapshots: Vec<WorkspaceRuntimeViewSnapshot>) {
+        let snapshots = if project_view_state_enabled(world) {
+            snapshots
+        } else {
+            Vec::new()
+        };
+        world.resource_mut::<PendingRuntimeViewRestore>().0 =
+            (!snapshots.is_empty()).then_some(PendingRuntimeViews {
+                snapshots,
+                progress_scene_path: None,
+                cameras_restored: false,
+                graphs_restored: std::collections::BTreeSet::new(),
+                graph_retry_requested: true,
+            });
+    }
+}
+
+fn project_view_state_enabled(world: &World) -> bool {
+    world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|workspace| workspace.active_twin)
+        .and_then(|id| {
+            world
+                .resource::<lunco_workspace::WorkspaceResource>()
+                .project_ui_settings(id)
+        })
+        .is_none_or(|settings| settings.restore_view_state())
+}
+
+fn hash_u64(hash: &mut u64, value: u64) {
+    for byte in value.to_le_bytes() {
+        *hash ^= u64::from(byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
+fn hash_bytes(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
 pub(super) fn draw_camera_feed(
     mut contexts: EguiContexts,
+    scene_path: Res<CurrentScenePath>,
     feeds: Res<CameraFeeds>,
     images: Res<Assets<Image>>,
     theme: Res<lunco_theme::Theme>,
@@ -75,9 +547,15 @@ pub(super) fn draw_camera_feed(
     mut state: ResMut<CameraFeedUiState>,
     mut commands: Commands,
     selection: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
-    presentations: Query<&lunco_render::camera_image::CameraImagePresentation>,
     authored_images: Query<(&bevy_hui::prelude::Tags, &InheritedVisibility)>,
 ) {
+    let previous_layout_count = state.layouts.len();
+    state
+        .layouts
+        .retain(|id, _| feeds.instances.contains_key(id));
+    if previous_layout_count != state.layouts.len() {
+        state.bump_revision();
+    }
     state
         .last_match_request
         .retain(|id, _| feeds.instances.contains_key(id));
@@ -162,11 +640,13 @@ pub(super) fn draw_camera_feed(
             return;
         };
         let mut open = true;
+        let layout = state.layouts.get(id).copied();
         // At most eight views: this is a bounded rendering/layout conversion.
         let column = (index % 3) as f32;
         let row = (index / 3) as f32;
-        egui::Window::new(&title).id(egui::Id::new(("live-camera-feed",id)))
-            .default_size(egui::vec2(420.0,300.0)).min_size(egui::vec2(360.0,180.0)).default_pos(egui::pos2(16.0+column*445.0,640.0+row*310.0))
+        let response = egui::Window::new(&title).id(egui::Id::new(("live-camera-feed", scene_path.0.as_str(), id)))
+            .default_size(layout.map_or(egui::vec2(420.0,300.0), |layout| egui::vec2(layout.size[0], layout.size[1]))).min_size(egui::vec2(360.0,180.0)).default_pos(layout.map_or(egui::pos2(16.0+column*445.0,640.0+row*310.0), |layout| egui::pos2(layout.position[0], layout.position[1])))
+            .constrain_to(ctx.content_rect())
             .title_bar(false).collapsible(false).order(lunco_theme::HudTier::ORDER)
             .frame(lunco_theme::hud_window_frame(&theme)).resizable(true).show(ctx,|ui| {
                 ui.horizontal(|ui| {ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
@@ -222,13 +702,6 @@ pub(super) fn draw_camera_feed(
                     }).response.on_hover_text(&title);
                 });});
                 ui.add_space(theme.spacing.window_padding);
-                if feed.source.is_some() {
-                    let caption=if feed.image_ready(&presentations) {
-                        format!("{:?} · {} × {}",feed.effects.mode,feed.width,feed.height)
-                    }else{"Preparing image…".into()};
-                    ui.add(egui::Label::new(caption).truncate()).on_hover_text(
-                        "Image settings must finish rendering before capture. Shader diagnostics appear in Recent Events.");
-                }
                 let available=ui.available_size();
                 if feed.match_window && available.x>0.0 && available.y>0.0 {
                     // Logical UI points become physical render-target pixels only here.
@@ -248,6 +721,23 @@ pub(super) fn draw_camera_feed(
                 } else {ui.weak("Select a camera to start this view.");}
 
             });
+        if let Some(response) = response {
+            let rect = response.response.rect;
+            let measured = CameraFeedWindowLayout {
+                position: [rect.min.x, rect.min.y],
+                size: [rect.width(), rect.height()],
+            };
+            if measured
+                .position
+                .iter()
+                .chain(measured.size.iter())
+                .all(|value| value.is_finite())
+                && state.layouts.get(id) != Some(&measured)
+            {
+                state.layouts.insert(*id, measured);
+                state.bump_revision();
+            }
+        }
         if !open {
             commands.trigger(RemoveCameraFeed { feed: *id });
         }
@@ -387,4 +877,91 @@ fn image_controls(
         return false;
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph_view(target: u64, signal: &str) -> WorkspaceGraphViewState {
+        WorkspaceGraphViewState {
+            id: 9,
+            visible: true,
+            columns: 1,
+            signals: vec![WorkspaceGraphSignalState {
+                target,
+                signal: signal.into(),
+                caption: signal.into(),
+            }],
+            width: 480.0,
+            height: 320.0,
+            position: Some([24.0, 32.0]),
+        }
+    }
+
+    #[test]
+    fn graph_restore_accepts_an_admitted_empty_scalar_and_rejects_retired_sources() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        let owner_gid = GlobalEntityId::from_raw(42);
+        let signal = lunco_viz::SignalRef::new(owner, "late_sensor");
+        let mut entities = lunco_api::registry::ApiEntityRegistry::default();
+        entities.assign(owner, owner_gid);
+        let mut signals = lunco_viz::SignalRegistry::default();
+        signals.admit_scalar(&signal, 8, 1).unwrap();
+        assert_eq!(signals.scalar_history(&signal).unwrap().len(), 0);
+        world.insert_resource(entities);
+        world.insert_resource(signals);
+
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(42, "late_sensor")),
+            GraphViewSourcesReadiness::Ready
+        ));
+
+        world
+            .resource_mut::<lunco_viz::SignalRegistry>()
+            .deactivate_signal(&signal);
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(42, "late_sensor")),
+            GraphViewSourcesReadiness::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn graph_restore_waits_for_unpublished_signals_and_reports_missing_owners() {
+        let mut world = World::new();
+        let owner = world.spawn_empty().id();
+        let owner_gid = GlobalEntityId::from_raw(42);
+        let mut entities = lunco_api::registry::ApiEntityRegistry::default();
+        entities.assign(owner, owner_gid);
+        world.insert_resource(entities);
+        world.insert_resource(lunco_viz::SignalRegistry::default());
+
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(42, "late_sensor")),
+            GraphViewSourcesReadiness::Waiting
+        ));
+        assert!(matches!(
+            graph_view_sources_readiness(&world, &graph_view(404, "late_sensor")),
+            GraphViewSourcesReadiness::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn graph_restore_retries_only_after_a_request_or_signal_descriptor_change() {
+        let mut pending = PendingRuntimeViews {
+            snapshots: Vec::new(),
+            progress_scene_path: None,
+            cameras_restored: false,
+            graphs_restored: Default::default(),
+            graph_retry_requested: true,
+        };
+
+        assert!(pending.take_graph_retry(false));
+        assert!(!pending.take_graph_retry(false));
+        assert!(pending.take_graph_retry(true));
+        assert!(!pending.take_graph_retry(false));
+        pending.graph_retry_requested = true;
+        assert!(pending.take_graph_retry(false));
+    }
 }

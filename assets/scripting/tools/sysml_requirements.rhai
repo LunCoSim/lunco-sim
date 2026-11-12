@@ -1875,7 +1875,7 @@ fn source() {
 /// session is source-backed and read-only; Rhai must not manufacture a second
 /// requirement-value table or read `.sysml` files directly.
 fn model() {
-    let name = twin_name();
+    let name = twin_source_identity();
     if name == "" { return (); }
     sysml_model("twin://" + name)
 }
@@ -1958,7 +1958,7 @@ fn _paged_twin_source(path) {
 
 fn _source_projection(names, requirement_names, verification_names,
                       include_constraints, include_twin_contract) {
-    let name = twin_name();
+    let name = twin_source_identity();
     if name == "" { return #{ok: false, error: "active Twin is unavailable"}; }
     if type_of(names) != "array" {
         return #{ok: false, error: "SysML attribute selector must be an array"};

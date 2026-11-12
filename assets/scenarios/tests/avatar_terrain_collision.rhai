@@ -5,6 +5,11 @@
 
 const HOLD_S = 1.5;
 
+fn simulation_dependencies(me, ctx) {
+    #{modelica_entities: [], entity_reads: [find_path("/AvatarTerrainCollision/Avatar")],
+      entity_writes: [], query_reads: [], required_inputs: []}
+}
+
 fn fail(message) {
     report_verdict([message], "AVATAR TERRAIN COLLISION", "AVATAR_TERRAIN_COLLISION");
 }
@@ -41,10 +46,19 @@ fn on_tick(me, ctx) {
     cmd("SimulateIntent", #{ intent: "yaw_left", held: false, target: this.avatar });
     let end = world_pos(this.avatar);
     let moved_down = this.start[1] - end[1];
+    let radius = get(this.avatar, "CameraCollisionEnvelope.radius_m");
+    let skin = get(this.avatar, "CameraCollisionEnvelope.skin_m");
+    let tolerance = get(this.avatar, "CameraCollisionEnvelope.sweep_tolerance_m");
+    if radius == () || skin == () || tolerance == () {
+        throw "camera collision envelope was not published";
+    }
+    let clearance = radius + skin;
+    let uncertainty = max(0.005, 4.0 * tolerance);
     let checks = [];
     checks.push(t_true(moved_down > 1.0, "avatar did not move down through its control path"));
-    checks.push(t_true(end[1] > 0.75, "avatar capsule entered the ground collider"));
-    checks.push(t_true(end[1] < 1.2, "avatar did not settle against the ground collider"));
+    checks.push(t_true(end[1] >= clearance - uncertainty, "camera volume stays above the ground collider"));
+    checks.push(t_true(clearance < 0.05 && end[1] <= clearance + uncertainty,
+        "camera reaches its declared low ground clearance"));
     checks.push(t_bounded(end, 100.0, "avatar left the bounded collision fixture"));
     print("[avatar-terrain-collision] start_y=" + r4(this.start[1]) +
         " end_y=" + r4(end[1]) + " moved_down=" + r4(moved_down));

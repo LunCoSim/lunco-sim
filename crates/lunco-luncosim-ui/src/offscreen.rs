@@ -91,12 +91,16 @@ impl Plugin for LunCoSimOffscreenPlugin {
         app.add_systems(Startup, setup_offscreen_target);
         app.add_systems(
             Update,
-            (
-                retarget_cameras_to_offscreen,
-                activate_offscreen_camera,
-                maintain_offscreen_render_camera,
-            )
-                .chain(),
+            (retarget_cameras_to_offscreen, activate_offscreen_camera).chain(),
+        );
+        app.add_systems(
+            PostUpdate,
+            maintain_offscreen_render_camera
+                .in_set(bevy::transform::TransformSystems::Propagate)
+                .after(lunco_viewport_core::SceneViewportSet::Reconcile)
+                .after(lunco_usd_bevy_camera::camera_path::CameraPathSet)
+                .after(lunco_usd_bevy_camera::camera_mount::follow_mounted_cameras)
+                .before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms),
         );
 
         // Keep the windowless render contract observable at the render boundary: the main world
@@ -445,6 +449,8 @@ fn maintain_offscreen_render_camera(
             Option<&CellCoord>,
             Option<&bevy::light::Skybox>,
             Option<&bevy::light::GeneratedEnvironmentMapLight>,
+            Option<&bevy::camera::visibility::RenderLayers>,
+            Option<&lunco_render::camera::SceneViewLayers>,
         ),
         (
             With<lunco_render::SceneCamera>,
@@ -464,10 +470,19 @@ fn maintain_offscreen_render_camera(
         Option<&mut bevy::light::Skybox>,
         Option<&mut bevy::light::GeneratedEnvironmentMapLight>,
         Option<&bevy::light::EnvironmentMapLight>,
+        Option<&bevy::camera::visibility::RenderLayers>,
+        Option<&lunco_render::camera::SceneViewLayers>,
+        Option<&lunco_render::camera::SceneViewDemand>,
     )>,
     mut commands: Commands,
 ) {
-    let Some(target) = target else { return };
+    let Some(target) = target else {
+        for (entity, _, _, _, mut camera, ..) in &mut mirrors {
+            camera.is_active = false;
+            commands.entity(entity).try_despawn();
+        }
+        return;
+    };
     let mut source_iter = sources.iter_mut().filter(|(_, camera, target, ..)| {
         camera.is_active && matches!(target, bevy::camera::RenderTarget::Image(_))
     });
@@ -484,11 +499,21 @@ fn maintain_offscreen_render_camera(
         cell,
         source_skybox,
         source_environment,
+        source_layers,
+        source_view_layers,
     )) = source_iter.next()
     else {
+        for (entity, _, _, _, mut camera, ..) in &mut mirrors {
+            camera.is_active = false;
+            commands.entity(entity).try_despawn();
+        }
         return;
     };
     if source_iter.next().is_some() {
+        for (entity, _, _, _, mut camera, ..) in &mut mirrors {
+            camera.is_active = false;
+            commands.entity(entity).try_despawn();
+        }
         warn!(
             "[offscreen] selected authored SceneCamera is ambiguous; no image render camera was created"
         );
@@ -522,13 +547,32 @@ fn maintain_offscreen_render_camera(
         mut mirror_skybox,
         mut mirror_environment,
         mirror_derived_environment,
+        mirror_layers,
+        mirror_view_layers,
+        mirror_demand,
     ) in &mut mirrors
     {
         if mirror.0 != source {
             camera.is_active = false;
+            commands.entity(mirror_entity).try_despawn();
             continue;
         }
         found = true;
+        let demand = lunco_render::camera::SceneViewDemand {
+            source,
+            output: lunco_render::camera::SceneViewOutput::Capture { id: 0 },
+        };
+        if mirror_demand != Some(&demand) {
+            commands.entity(mirror_entity).insert(demand);
+        }
+        let base = source_view_layers
+            .map(|view| view.base.clone())
+            .or_else(|| source_layers.cloned())
+            .unwrap_or_default();
+        let layers = mirror_view_layers.map_or(base.clone(), |view| base.with(view.layer));
+        if mirror_layers != Some(&layers) {
+            commands.entity(mirror_entity).insert(layers);
+        }
         // Preserve change detection while the physical image is held. Bevy's
         // path tracer resets accumulation on Changed<GlobalTransform>; writing
         // an identical pose every render submission would reset every sample.
@@ -576,6 +620,11 @@ fn maintain_offscreen_render_camera(
         let mut entity = commands.spawn((
             Camera3d::default(),
             OffscreenRenderCamera(source),
+            lunco_core::SceneOwned,
+            lunco_render::camera::SceneViewDemand {
+                source,
+                output: lunco_render::camera::SceneViewOutput::Capture { id: 0 },
+            },
             bevy::camera::RenderTarget::Image(target.0.clone().into()),
             *source_transform,
             projection.clone(),
@@ -583,6 +632,12 @@ fn maintain_offscreen_render_camera(
             *source_tonemapping,
             *source_msaa,
         ));
+        entity.try_insert(
+            source_view_layers
+                .map(|view| view.base.clone())
+                .or_else(|| source_layers.cloned())
+                .unwrap_or_default(),
+        );
         if let Some(source_skybox) = source_skybox {
             entity.try_insert(source_skybox.clone());
         }

@@ -20,7 +20,9 @@ fn report_saved(me) {
     for doc in documents.open_documents {
         if doc.doc_id == this.doc {
             if doc.dirty || doc.origin.kind != "file" || !doc.origin.writable
-                || doc.runtime_context.kind != "local_twin" || doc.runtime_context.twin != twin.twin_id {
+                || doc.runtime_context.kind != "local_twin"
+                || doc.runtime_context.contains("twin")
+                || doc.runtime_context.contains("twin_id") {
                 return false;
             }
             // Save-As changes the file origin before the new Twin is admitted.

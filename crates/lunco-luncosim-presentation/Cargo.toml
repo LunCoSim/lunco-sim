@@ -8,6 +8,7 @@ description = "LunCoSim application presentation bridges and streamed-terrain vi
 [dependencies]
 bevy = { workspace = true, features = ["bevy_asset", "bevy_mesh", "bevy_light", "bevy_camera"] }
 big_space = { workspace = true }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-capture = { path = "../lunco-capture", features = ["api"] }
 lunco-celestial-spatial = { path = "../lunco-celestial-spatial" }
 lunco-cosim-core = { path = "../lunco-cosim-core" }
@@ -16,6 +17,7 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-environment = { path = "../lunco-environment" }
 lunco-modelica-runtime = { path = "../lunco-modelica-runtime" }
 lunco-render = { path = "../lunco-render" }
+lunco-settings = { path = "../lunco-settings" }
 lunco-status-core = { path = "../lunco-status-core" }
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
 lunco-time = { path = "../lunco-time" }

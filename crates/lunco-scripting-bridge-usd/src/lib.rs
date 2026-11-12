@@ -50,6 +50,57 @@ pub fn find_path(path: &str) -> i64 {
     .unwrap_or(-1)
 }
 
+/// `find_path_in_stage(source_gid, path)` — first live entity gid for `path` in
+/// the exact mounted scene containing `source_gid`, or `-1`. Multiple mounts
+/// can share one stage asset, so matching stays within the source's scene root.
+/// Preview projections are excluded. This identity boundary is available
+/// before the live stage has a document association.
+pub fn find_path_in_stage(source_gid: u64, path: &str) -> i64 {
+    with_world(|world| {
+        let source = resolve_entity(world, source_gid)?;
+        let stage = world
+            .get::<lunco_usd_bevy_scene::UsdPrimPath>(source)?
+            .stage_handle
+            .id();
+        let mut state: bevy::ecs::system::SystemState<(
+            Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+            Query<&ChildOf>,
+            Query<Entity>,
+            Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
+        )> = bevy::ecs::system::SystemState::new(world);
+        let (scene_roots, child_of, scene_entities, prims) = state.get(world).ok()?;
+        let source_root = lunco_usd_bevy_scene::scene_root_ancestor(
+            source,
+            &scene_roots,
+            &child_of,
+            &scene_entities,
+        )
+        .ok()??;
+        let api_entities = world.get_resource::<ApiEntityRegistry>()?;
+        prims
+            .iter()
+            .filter(|(entity, prim)| {
+                prim.stage_handle.id() == stage
+                    && prim.path == path
+                    && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+                    && lunco_usd_bevy_scene::scene_root_ancestor(
+                        *entity,
+                        &scene_roots,
+                        &child_of,
+                        &scene_entities,
+                    )
+                    .ok()
+                    .flatten()
+                        == Some(source_root)
+            })
+            .filter_map(|(entity, _)| api_entities.api_id_for(entity))
+            .min_by_key(|id| id.get())
+            .map(|id| id.get() as i64)
+    })
+    .flatten()
+    .unwrap_or(-1)
+}
+
 /// `find_path_in_document(doc_id, path)` — first entity gid for `path` in the
 /// live stage owned by `doc_id`, or `-1` when that prim has no live projection.
 /// USD paths are only unique inside their composed stage, so editing a

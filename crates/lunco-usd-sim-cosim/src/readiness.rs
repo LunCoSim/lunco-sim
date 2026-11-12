@@ -88,6 +88,7 @@ fn track_scene_load(
     in_flight: Option<Res<SceneLoadInFlight>>,
     awaiting: Query<(), With<UsdSceneAwaitingStage>>,
     wait: Option<Res<SceneLoadWait>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut registry: ResMut<ReadinessRegistry>,
     mut commands: Commands,
 ) {
@@ -95,9 +96,10 @@ fn track_scene_load(
     let loading = scene_still_loading(stage_loading);
     match (loading, wait) {
         (true, None) => {
-            let label = in_flight
-                .map(|g| g.path.clone())
-                .unwrap_or_else(|| "deferred prims".into());
+            let label = in_flight.map_or_else(
+                || "deferred prims".into(),
+                |load| scene_load_label(&load.path, roots.as_deref()),
+            );
             let ticket = registry.begin(Subject::World, kinds::SCENE_LOAD, label);
             commands.insert_resource(SceneLoadWait { ticket });
         }
@@ -107,6 +109,23 @@ fn track_scene_load(
         }
         _ => {}
     }
+}
+
+/// Readiness labels are presented through status surfaces, so scene asset
+/// leases must be converted to the stable source URI before they cross this
+/// boundary.
+fn scene_load_label(path: &str, roots: Option<&lunco_assets_core::TwinRoots>) -> String {
+    if lunco_assets_core::parse_twin_uri(path).is_some() {
+        return roots
+            .and_then(|roots| {
+                lunco_assets_core::asset_path::source_uri_for_address(path, Some(roots)).ok()
+            })
+            .unwrap_or_else(|| "Twin scene".into());
+    }
+    if path.starts_with("memory-stage:") {
+        return "In-memory scene".into();
+    }
+    path.to_owned()
 }
 
 fn scene_still_loading(stage_loading: bool) -> bool {

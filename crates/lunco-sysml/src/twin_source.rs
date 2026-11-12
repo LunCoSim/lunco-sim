@@ -29,7 +29,8 @@ pub const SYSML_TWIN_SOURCE_LOAD_FAILED: &str = "sysml-twin-source-load-failed";
 struct PendingSysmlSource {
     handle: Handle<SysmlSource>,
     twin_id: lunco_workspace::TwinId,
-    twin_name: String,
+    twin_authority: String,
+    twin_display_name: String,
     relative_path: String,
     absolute_path: PathBuf,
     twin_root: PathBuf,
@@ -72,10 +73,8 @@ impl PendingSysmlSources {
 /// operation; source-set selection belongs to the Twin policy.
 #[lunco_core::Command(default)]
 pub struct LoadTwinSysmlSource {
-    /// Workspace identity of the Twin whose source authority was mounted.
+    /// Workspace identity of the Twin that owns the source.
     pub twin_id: u64,
-    /// Exact `twin://` authority returned by the asset owner.
-    pub name: String,
     /// Indexed `.sysml` or `.kerml` path relative to the Twin root.
     pub relative_path: String,
 }
@@ -125,17 +124,12 @@ fn load_twin_sysml_source(
             request.relative_path
         ));
     }
-    let mounted_root = roots
+    let authority = roots
         .as_deref()
         .ok_or_else(|| "TwinRoots is not installed".to_owned())?
-        .root_for(&request.name)
-        .map_err(|error| error.to_string())?;
-    if mounted_root.as_deref() != Some(twin.root.as_path()) {
-        return Err(format!(
-            "Twin asset authority `{}` does not belong to Twin {}",
-            request.name, request.twin_id
-        ));
-    }
+        .authority_for_root(&twin.root)
+        .map_err(|_| "Twin asset source is unavailable".to_owned())?
+        .ok_or_else(|| "Twin asset source is unavailable".to_owned())?;
     let asset_server = asset_server.ok_or_else(|| "AssetServer is not installed".to_owned())?;
     let twin_root = twin.root.clone();
     if pending
@@ -148,7 +142,7 @@ fn load_twin_sysml_source(
         ));
     }
 
-    let uri = twin_uri(&request.name, &request.relative_path);
+    let uri = twin_uri(&authority, &request.relative_path);
     let path = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
         .map_err(|error| format!("invalid Twin SysML source address: {error}"))?;
     let handle = asset_server.load::<SysmlSource>(path);
@@ -165,7 +159,8 @@ fn load_twin_sysml_source(
     pending.items.push(PendingSysmlSource {
         handle,
         twin_id,
-        twin_name: request.name.clone(),
+        twin_authority: authority,
+        twin_display_name: twin.display_name(),
         relative_path: request.relative_path.clone(),
         absolute_path: twin_root.join(relative),
         twin_root,
@@ -230,13 +225,13 @@ pub(crate) fn drain_pending_sysml_sources(
                 .is_some_and(|twin| twin.root == item.twin_root)
         }) && roots.as_deref().is_some_and(|roots| {
             roots
-                .root_for(&item.twin_name)
+                .root_for(&item.twin_authority)
                 .is_ok_and(|root| root.as_ref() == Some(&item.twin_root))
         });
         if !current {
             warn!(
-                "[sysml] refusing retired Twin source `{}/{}`",
-                item.twin_name, item.relative_path
+                "[sysml] refusing retired Twin source `{}/{}` ({})",
+                item.twin_display_name, item.relative_path, item.twin_authority
             );
             continue;
         }
@@ -244,7 +239,7 @@ pub(crate) fn drain_pending_sysml_sources(
         if let Some(error) = failed.get(&id) {
             report_source_error(
                 &mut commands,
-                &item.twin_name,
+                &item.twin_display_name,
                 format!("{}: {error}", item.relative_path),
             );
             continue;
@@ -256,7 +251,7 @@ pub(crate) fn drain_pending_sysml_sources(
         let Some(source) = assets.get(&item.handle) else {
             report_source_error(
                 &mut commands,
-                &item.twin_name,
+                &item.twin_display_name,
                 format!(
                     "{} emitted a ready event without a stored SysML source asset",
                     item.relative_path
@@ -278,7 +273,7 @@ pub(crate) fn drain_pending_sysml_sources(
         {
             report_source_error(
                 &mut commands,
-                &item.twin_name,
+                &item.twin_display_name,
                 format!(
                     "{} has dirty source belonging to a different runtime owner",
                     item.relative_path
@@ -303,21 +298,21 @@ pub(crate) fn drain_pending_sysml_sources(
             });
         }
         info!(
-            "[sysml] opened Twin source `{}/{}` as document {:?} ({outcome:?})",
-            item.twin_name, item.relative_path, document
+            "[sysml] opened Twin source `{}/{}` ({}) as document {:?} ({outcome:?})",
+            item.twin_display_name, item.relative_path, item.twin_authority, document
         );
         match outcome {
             OpenOutcome::KeptUnparsable => {
                 report_source_error(
                     &mut commands,
-                    &item.twin_name,
+                    &item.twin_display_name,
                     format!("{} is not a valid SysML source", item.relative_path),
                 );
             }
             OpenOutcome::KeptDirty => {
                 warn!(
                     "[sysml] `{}/{}` has unsaved edits; keeping the dirty document",
-                    item.twin_name, item.relative_path
+                    item.twin_display_name, item.relative_path
                 );
             }
             OpenOutcome::Allocated | OpenOutcome::Refreshed => {}
@@ -414,9 +409,9 @@ pub(crate) fn sync_workspace_on_sysml_doc_closed(
     }
 }
 
-fn report_source_error(commands: &mut Commands, twin_name: &str, detail: impl Into<String>) {
+fn report_source_error(commands: &mut Commands, display_name: &str, detail: impl Into<String>) {
     let detail = detail.into();
-    let message = format!("Twin `{twin_name}` SysML source load failed: {detail}");
+    let message = format!("Twin `{display_name}` SysML source load failed: {detail}");
     error!("[sysml] {message}");
     lunco_core::trigger_runtime_error(commands, SYSML_TWIN_SOURCE_LOAD_FAILED, message);
 }

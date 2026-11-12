@@ -55,7 +55,7 @@ def main():
             verdicts.append({"code":code,"stdout":result})
             (output/"verdicts.json").write_text(json.dumps(verdicts,indent=2))
         execute(session,"OpenTwin",path=str(twin))
-        rows=wait_for(lambda:[r for r in execute(session,"ListDatasets").get("datasets",[]) if r["scope"].startswith("twin:SummerSpaceSchool")],"school manifest")
+        rows=wait_for(lambda:[r for r in execute(session,"ListDatasets").get("datasets",[]) if r["scope"].startswith("twin:")],"school manifest")
         scope=rows[0]["scope"]
         def held():
             report=execute(session,"RunRhai",code='let found=false;for b in clock_snapshot().simulation_progress.blockers {if b.owner=="SceneDatasets" || (b.owner=="TerrainPreparation" && b.reason.contains("apollo15_dtm")) {found=true;}} print(found);')

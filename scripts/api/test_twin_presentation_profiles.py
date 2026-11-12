@@ -40,12 +40,12 @@ def main():
                 raise RuntimeError(f'Authored verdict failed: {output}')
             print(output.strip(), flush=True)
         def open_fixture(name, fault=None):
-            previous = rhai('twin_name()')
+            previous = rhai('twin_source_identity()')
             q('OpenTwin', path=str(fixture / name))
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 state = q('GetReadiness')
-                if rhai('twin_name()') != previous:
+                if rhai('twin_source_identity()') != previous:
                     if fault and state['faulted'] and state['fault']['kind'] == fault: return
                     if not fault and state['ready']: return
                 time.sleep(.1)

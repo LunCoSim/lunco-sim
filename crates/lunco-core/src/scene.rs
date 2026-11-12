@@ -113,6 +113,9 @@ pub enum SceneTransition {
         root_prim: String,
         reset_document: bool,
     },
+    /// Rebuild runtime state from the currently mounted in-memory stage.
+    /// The asset source, document layers, and Twin lifetime remain unchanged.
+    RuntimeReset { path: String, root_prim: String },
 }
 
 /// A request for a scene transition before the scene owner has resolved its
@@ -127,6 +130,7 @@ pub enum SceneTransitionRequest {
     Load { path: String, root_prim: String },
     Clear,
     Restart { reset_document: bool },
+    RuntimeReset,
 }
 
 impl SceneTransitionRequest {
@@ -143,6 +147,11 @@ impl SceneTransitionRequest {
 
     pub const fn restart(reset_document: bool) -> Self {
         Self::Restart { reset_document }
+    }
+
+    /// Reset scene-owned runtime state while retaining the mounted source.
+    pub const fn runtime_reset() -> Self {
+        Self::RuntimeReset
     }
 
     fn matches(&self, active: &SceneTransition) -> bool {
@@ -162,6 +171,7 @@ impl SceneTransitionRequest {
                     ..
                 },
             ) => reset_document == active_reset,
+            (Self::RuntimeReset, SceneTransition::RuntimeReset { .. }) => true,
             _ => false,
         }
     }
@@ -395,6 +405,12 @@ impl SceneTransitionIntent {
             request: SceneTransitionRequest::Restart { reset_document },
         }
     }
+
+    pub const fn runtime_reset() -> Self {
+        Self {
+            request: SceneTransitionRequest::RuntimeReset,
+        }
+    }
 }
 
 /// Published immediately before an accepted scene transition tears down the
@@ -544,6 +560,41 @@ mod tests {
             SceneTransitionRequest::Restart {
                 reset_document: true
             }
+        );
+    }
+
+    #[test]
+    fn runtime_reset_and_source_reload_are_distinct_serial_transitions() {
+        let mut coordinator = SceneTransitionCoordinator::default();
+        coordinator.admit(SceneTransitionRequest::load(
+            "twin://authority/scene.usda",
+            "",
+        ));
+        coordinator.take_admitted();
+        let loaded = coordinator.start(SceneTransition::load("twin://authority/scene.usda", ""));
+        assert!(coordinator.complete(loaded));
+
+        assert_eq!(
+            coordinator.admit(SceneTransitionRequest::runtime_reset()),
+            SceneTransitionAdmission::Admitted
+        );
+        coordinator.take_admitted();
+        let reset = coordinator.start(SceneTransition::RuntimeReset {
+            path: "twin://authority/scene.usda".into(),
+            root_prim: "".into(),
+        });
+        assert_eq!(
+            coordinator.admit(SceneTransitionRequest::runtime_reset()),
+            SceneTransitionAdmission::AlreadyActive
+        );
+        assert_eq!(
+            coordinator.admit(SceneTransitionRequest::restart(false)),
+            SceneTransitionAdmission::Queued
+        );
+        assert!(coordinator.complete(reset));
+        assert_eq!(
+            coordinator.take_admitted(),
+            Some(SceneTransitionRequest::restart(false))
         );
     }
 

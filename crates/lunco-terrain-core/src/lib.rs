@@ -56,11 +56,11 @@ pub use modifier::{
     BodyCurvature, BrushModifier, FlattenModifier, HeightModifier, LayeredHeightSource,
 };
 pub use overzoom::Overzoom;
-pub use quadtree::{QuadCoord, Quadtree, Selected, Square};
+pub use quadtree::{ProjectionMetric, QuadCoord, Quadtree, Selected, Square};
 pub use quantize::{QuantizedHeightSource, quantize};
 pub use source::{
-    AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource, HeightSource,
-    normal_at_bounded, square_boundary_height_at, square_boundary_posting_spacing,
+    AnalyticHeightSource, BoundedHeightSource, CompositeHeightSource, HeightEnclosure, HeightPlane,
+    HeightSource, normal_at_bounded, square_boundary_height_at, square_boundary_posting_spacing,
     square_boundary_sample_coordinate, square_boundary_sample_interval,
 };
 pub use tile::{TileCoord, TileGrid};

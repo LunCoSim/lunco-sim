@@ -135,11 +135,9 @@ failure fact is consumed by authored `lint_usd.rhai` policy.
   `cargo check -p lunco-networking --lib -j 4`. The final production binary
   rebuilt with `cargo build -p lunco-luncosim --bin luncosim -j 4`.
 - A native USDC layer containing inheritance was saved, closed, reopened, and
-  inspected through the owned document API. Three authored Rhai assertions
-  passed on port 4154: native inspection, authored spec statistics, and the
-  explicit USDA snapshot rejection. The settled binary run emitted no
-  `scene-file-preparation-failed` diagnostic. Source display, preview mounting,
-  and session text snapshots still report the native inheritance-writer guard.
+  inspected through the owned document API. Authored Rhai assertions on port
+  4154 covered native inspection and authored spec statistics. The settled
+  binary run emitted no `scene-file-preparation-failed` diagnostic.
 - `ASSEMBLY_EDITOR_PROPOSAL`: PASS, fifteen authored checks, in the windowed
   production Editor on owned port 4159. The SysML unit resolver preserves exact
   scale evidence when a compatible approximate conversion reaches the same
@@ -167,8 +165,7 @@ failure fact is consumed by authored `lint_usd.rhai` policy.
   text_writer_roundtrip inheritance_list_ops_use_the_standard_usda_keyword -j 4`,
   covering all five inheritance list operators. The writer mapping's Pixar
   OpenUSD 26.08 schema check matched all 55 root prim names and 54 inheritance
-  opinions. Cargo still uses published
-  0.8.0; publication of the SDK commit is awaiting explicit user authorization.
+  opinions. The pinned SDK now includes the writer mapping.
 - The canonical snapshot codec/session/captured-edit mechanism check passed.
   The production binary rebuilt after fast-forwarding the checkout to main's
   Rumoca integration `126b79827`, retaining its session edit-target fix.
@@ -515,18 +512,7 @@ validate runtime material intent and do not establish GPU appearance.
 
 ## Required remaining work
 
-1. The upstream 0.8.0 USDA writer emits the internal `inheritPaths` name instead
-   of the standard `inherits` keyword. Pixar OpenUSD 26.08 rejects its output.
-   The same mapping remains in the inspected upstream head
-   `3659932e5d7ebf4ff4422ad5eeff582fe182dc1a`. The authoring owner rejects this
-   serialization before publishing/writing it. There is no output-rewriting
-   shim or alternate text writer. The canonical schema source was restored
-   exactly through the document API and remains Pixar-readable. Its obsolete
-   generator comment cannot be updated through a structural save until this
-   native writer defect is fixed; current generation instructions are in the
-   runbooks. A fixed native library must replace the guard and its rejection
-   assertion with successful interoperability coverage.
-2. `author::compose_layers` and its dependent-layer projection consumer remain.
+1. `author::compose_layers` and its dependent-layer projection consumer remain.
    Document reads and text previews use the native stage. Dependent bytes now use the native
    codec selected by the exact source identity, including USDC. Mount validation, deletion
    guards, ambient authoring and read-only composed-text previews use native
@@ -538,7 +524,7 @@ validate runtime material intent and do not establish GPU appearance.
    `ListOp::combined_with`. The nested dictionary regression preserves weaker
    keys and stronger scalar opinions through this pure Sdf-data seam.
    This review does not claim that all reinvention or fallback paths are gone.
-3. USDZ exists in the native SDK, but package paths and package-layer provenance
+2. USDZ exists in the native SDK, but package paths and package-layer provenance
    are not wired through the application's storage/source-document boundary.
    The migrated loaders advertise `.usd`, `.usda`, and `.usdc` only.
    Native `usdz::open_package`, `package_contains`, and `package_entry` already

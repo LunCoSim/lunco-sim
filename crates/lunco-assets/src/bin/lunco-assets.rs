@@ -293,8 +293,11 @@ fn process_filtered(
                 .map_err(|e| e.to_string())?;
             let source = lunco_assets_datasets::source_read_path(
                 entry,
-                &entry_cache_root(entry, twin_root),
-                &lunco_assets_core::asset_read_roots(&owner),
+                &if twin_root.is_some() {
+                    lunco_assets_core::asset_read_roots(&owner)
+                } else {
+                    lunco_assets_core::engine_asset_read_roots(&owner)
+                },
             );
             let source_path = match source {
                 Ok(path) => path,
@@ -341,7 +344,7 @@ fn process_filtered(
             process::process_asset(
                 &source_path,
                 &cfg,
-                &entry_cache_root(entry, twin_root),
+                &entry_owner_cache_root(entry, twin_root),
                 twin_root,
                 &process::ProcessControl::unrestricted()
                     .with_force(force)
@@ -365,10 +368,14 @@ fn process_filtered(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn entry_cache_root(entry: &AssetEntry, twin_root: Option<&std::path::Path>) -> std::path::PathBuf {
-    twin_root
-        .map(|root| lunco_assets_datasets::DatasetScope::twin_cache_root(root, entry.shared))
-        .unwrap_or_else(lunco_assets_core::cache_dir)
+fn entry_owner_cache_root(
+    entry: &AssetEntry,
+    twin_root: Option<&std::path::Path>,
+) -> std::path::PathBuf {
+    let local_cache = twin_root
+        .map(lunco_assets_core::twin_cache_dir)
+        .unwrap_or_else(lunco_assets_core::cache_dir);
+    lunco_assets_datasets::dataset_cache_root(&local_cache, entry.shared)
 }
 
 /// Process one engine manifest group (`assets/manifests/<group>.toml`).
@@ -430,10 +437,19 @@ fn process_for_twin(
 /// Validate the same authored/cache selection used by the runtime registry.
 #[cfg(not(target_arch = "wasm32"))]
 fn verify_twin(root: &std::path::Path, only_key: Option<&str>) -> Result<(), String> {
-    let contract =
-        lunco_twin::TwinManifest::read(&root.join("twin.toml")).map_err(|e| e.to_string())?;
+    let twin = match lunco_twin::TwinMode::open(root).map_err(|e| e.to_string())? {
+        lunco_twin::TwinMode::Twin(twin) | lunco_twin::TwinMode::Folder(twin) => twin,
+        lunco_twin::TwinMode::Orphan(path) => {
+            return Err(format!(
+                "Twin verification requires a folder: {}",
+                path.display()
+            ));
+        }
+    };
+    let source_identity = lunco_assets_core::logical_twin_source_identity(&twin);
+    let display_name = twin.display_name();
     let mut registry = lunco_assets_datasets::DatasetRegistry::default();
-    registry.scan_twin(&contract.name, root);
+    registry.scan_twin(&source_identity, None, &display_name, root);
     let failures = registry.take_pending_failures();
     if !failures.is_empty() {
         return Err(failures.join("\n"));
@@ -449,12 +465,24 @@ fn verify_twin(root: &std::path::Path, only_key: Option<&str>) -> Result<(), Str
     for entry in selected {
         if !entry.state.is_installed() {
             return Err(format!(
-                "{}: {} is incomplete or stale",
+                "{}: artifact '{}' in Twin '{}' is incomplete or stale",
                 entry.key,
-                entry.artifact_uri()
+                entry.artifact_rel,
+                entry.scope.label()
             ));
         }
-        println!("  verified {}", entry.artifact_uri());
+        let artifact = entry
+            .installed_artifact()
+            .map_err(|error| format!("{}: {error}", entry.key))?
+            .ok_or_else(|| {
+                format!(
+                    "{}: artifact '{}' in Twin '{}' became unavailable during verification",
+                    entry.key,
+                    entry.artifact_rel,
+                    entry.scope.label()
+                )
+            })?;
+        println!("  verified {}", artifact.display());
     }
     Ok(())
 }

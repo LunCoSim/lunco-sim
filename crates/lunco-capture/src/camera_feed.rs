@@ -232,7 +232,12 @@ fn remove_camera_feed(
 fn set_camera_feed(
     trigger: On<SetCameraFeed>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    sources: Query<(&Projection, Option<&Exposure>, Option<&RenderLayers>)>,
+    sources: Query<(
+        &Projection,
+        Option<&Exposure>,
+        Option<&RenderLayers>,
+        Option<&lunco_render::camera::SceneViewLayers>,
+    )>,
     settings: Res<lunco_render::RenderingQualitySettings>,
     mut images: ResMut<Assets<Image>>,
     mut feeds: ResMut<CameraFeeds>,
@@ -271,7 +276,7 @@ fn set_camera_feed(
         let entity = registry
             .resolve(&source)
             .ok_or_else(|| Reject::InvalidOp("camera source is no longer live".into()))?;
-        let (projection, exposure, layers) = sources
+        let (projection, exposure, layers, view_layers) = sources
             .get(entity)
             .map_err(|_| Reject::InvalidOp("source has no camera projection".into()))?;
         if request.label.trim().is_empty() {
@@ -286,7 +291,9 @@ fn set_camera_feed(
             entity,
             projection.clone(),
             exposure.copied().unwrap_or(default_exposure),
-            layers.cloned(),
+            view_layers
+                .map(|view| view.base.clone())
+                .or_else(|| layers.cloned()),
             look,
         ))
     } else {
@@ -330,6 +337,10 @@ fn set_camera_feed(
         let image = images.add(target);
         let mut render_camera = commands.spawn((
             lunco_render::camera::CameraFeedCamera(look),
+            lunco_render::camera::SceneViewDemand {
+                source: entity,
+                output: lunco_render::camera::SceneViewOutput::Observation { id },
+            },
             projection,
             exposure,
             RenderTarget::Image(image.clone().into()),

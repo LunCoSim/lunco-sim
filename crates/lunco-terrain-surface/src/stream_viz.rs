@@ -34,7 +34,8 @@
 //!
 //! The companion canonical-res collider ring is [`crate::collider_ring`].
 
-use bevy::math::{DQuat, DVec3};
+use bevy::camera::visibility::RenderLayers;
+use bevy::math::{DMat4, DQuat, DVec3};
 use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
@@ -46,16 +47,18 @@ use lunco_materials::{
     ShaderLookReady, TextureLayer,
 };
 use lunco_obstacle_field::grid_mesh;
+use lunco_render::camera::{SceneViewDemand, SceneViewLayers};
 use lunco_terrain_core::{HeightSource, NodeGeometry, measure_node_geometry};
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{
     collections::VecDeque,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
 };
 
+use crate::band::SurfaceBand;
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::{DemHeightField, SurfaceOracle};
 use crate::surface_change::TerrainSurfaceChange;
@@ -67,9 +70,10 @@ use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
 /// makes the Graphics menu the sole owner of render-quality policy; this module
 /// only consumes the selected profile.
 ///
-/// Marks a perspective camera as a visual terrain-detail authority.
+/// Configures the near-field detail policy for a consumed camera output.
 ///
-/// Every active marked camera contributes one stable, camera-centred detail cover.
+/// Every consumed camera output owns one camera-centred detail cover; this
+/// component optionally overrides that output's near-field policy.
 #[derive(Component, Reflect, Debug, Clone, Copy, Default)]
 #[reflect(Component)]
 pub struct TerrainVisualFocus {
@@ -77,9 +81,8 @@ pub struct TerrainVisualFocus {
     /// to use the finest visual geometry. `None` uses
     /// [`lunco_settings::TerrainSettings::visual_detail_radius_m`].
     ///
-    /// This covers nearby subjects (for example a third-person rover) without
-    /// extending the camera cover to unrelated physical bodies. The separate
-    /// contact cover consumes the physics-owned support nodes.
+    /// Nearby subjects share the camera cover; unused physical bodies do not
+    /// contribute visual refinement demand.
     pub near_detail_radius_m: Option<f64>,
     /// Optional per-camera override for the extra distance a previously refined
     /// near-field tile remains selected after the camera moves away. `None` uses
@@ -123,44 +126,462 @@ lunco_hooks::declare_hook! {
     installable: true,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TerrainProjection {
+    Perspective {
+        fov_y_rad: f64,
+        clip_from_local: DMat4,
+    },
+    Orthographic {
+        pixels_per_metre: f64,
+        area: [f64; 4],
+        output_pixels: [u32; 2],
+        clip_from_local: DMat4,
+    },
+}
+
+impl TerrainProjection {
+    fn fov_y_rad(self) -> Option<f64> {
+        match self {
+            Self::Perspective { fov_y_rad, .. } => Some(fov_y_rad),
+            Self::Orthographic { .. } => None,
+        }
+    }
+    fn write_signature(self, signature: &mut lunco_precompute::Fnv1a) {
+        match self {
+            Self::Perspective {
+                fov_y_rad,
+                clip_from_local,
+            } => {
+                signature.write_u64(0);
+                signature.write_u64(fov_y_rad.to_bits());
+                for value in clip_from_local.to_cols_array() {
+                    signature.write_u64(value.to_bits());
+                }
+            }
+            Self::Orthographic {
+                pixels_per_metre,
+                area,
+                output_pixels,
+                clip_from_local,
+            } => {
+                signature.write_u64(1);
+                signature.write_u64(pixels_per_metre.to_bits());
+                for value in area {
+                    signature.write_u64(value.to_bits());
+                }
+                for value in output_pixels {
+                    signature.write_u64(u64::from(value));
+                }
+                for value in clip_from_local.to_cols_array() {
+                    signature.write_u64(value.to_bits());
+                }
+            }
+        }
+    }
+    fn clip_from_local(self) -> DMat4 {
+        match self {
+            Self::Perspective {
+                clip_from_local, ..
+            }
+            | Self::Orthographic {
+                clip_from_local, ..
+            } => clip_from_local,
+        }
+    }
+}
+
+/// A retained, quantized clip-plane envelope. The full-quantum retention
+/// interval exceeds the half-quantum snap interval, so a pose near a rounding
+/// boundary cannot alternate selection requests under subpixel physics jitter.
+#[derive(Clone, Copy, Debug)]
+struct SelectionClip {
+    center: DVec3,
+    planes: [bevy::math::DVec4; 6],
+    normal_quantum: f64,
+    offset_quantum: f64,
+}
+
+impl SelectionClip {
+    fn normalized_planes(projection: TerrainProjection, center: DVec3) -> [bevy::math::DVec4; 6] {
+        let rows = projection.clip_from_local().transpose();
+        [
+            rows.w_axis + rows.x_axis,
+            rows.w_axis - rows.x_axis,
+            rows.w_axis + rows.y_axis,
+            rows.w_axis - rows.y_axis,
+            rows.z_axis,
+            rows.w_axis - rows.z_axis,
+        ]
+        .map(|plane| {
+            let length = plane.truncate().length();
+            // Infinite reverse perspective has an exact constant far
+            // inequality. Preserve it instead of inventing a unit normal.
+            if length == 0.0 {
+                plane
+            } else {
+                let normalized = plane / length;
+                normalized
+                    .truncate()
+                    .extend(normalized.w + normalized.truncate().dot(center))
+            }
+        })
+    }
+    fn new(
+        projection: TerrainProjection,
+        screen_height_px: f64,
+        pixel_error: f64,
+        eye: DVec3,
+    ) -> Option<Self> {
+        let (normal_quantum, offset_quantum) = match projection {
+            TerrainProjection::Perspective { fov_y_rad, .. } => {
+                let tangent = (0.5 * fov_y_rad).tan();
+                // A configured pixel-error interval expressed as a normal
+                // direction increment at the perspective projection boundary.
+                (
+                    2.0 * tangent * pixel_error / (screen_height_px * (1.0 + tangent * tangent)),
+                    TERRAIN_FOCUS_QUANT_M,
+                )
+            }
+            TerrainProjection::Orthographic {
+                output_pixels,
+                pixels_per_metre,
+                ..
+            } => (
+                pixel_error / f64::from(output_pixels[0].max(output_pixels[1])),
+                TERRAIN_FOCUS_QUANT_M.min(pixel_error / pixels_per_metre),
+            ),
+        };
+        // A unit normal has a component of magnitude at least 1/sqrt(3);
+        // limiting its lattice step to one preserves a nonzero plane normal.
+        if !normal_quantum.is_finite()
+            || normal_quantum <= 0.0
+            || !offset_quantum.is_finite()
+            || offset_quantum <= 0.0
+        {
+            return None;
+        }
+        let normal_quantum = normal_quantum.min(1.0);
+        // The spatial owner supplies the actual terrain-local camera eye;
+        // projection depth mapping does not choose the envelope reference.
+        if !eye.is_finite() || !projection.clip_from_local().inverse().is_finite() {
+            return None;
+        }
+        // Orthographic scale is independent of axial distance. Anchor its
+        // angular envelope on the view axis nearest the terrain chart origin,
+        // so translating along that axis cannot inflate the selected footprint.
+        let reference = match projection {
+            TerrainProjection::Perspective { .. } => eye,
+            TerrainProjection::Orthographic { .. } => {
+                let axis = projection
+                    .clip_from_local()
+                    .transpose()
+                    .z_axis
+                    .truncate()
+                    .try_normalize()?;
+                eye - axis * eye.dot(axis)
+            }
+        };
+        let center = (reference / offset_quantum).round() * offset_quantum;
+        if !center.is_finite() {
+            return None;
+        }
+        let planes = Self::normalized_planes(projection, center).map(|plane| {
+            if plane.truncate() == DVec3::ZERO {
+                return plane;
+            }
+            let normal = (plane.truncate() / normal_quantum).round() * normal_quantum;
+            normal.extend((plane.w / offset_quantum).round() * offset_quantum)
+        });
+        if planes.iter().any(|plane| !plane.is_finite()) {
+            return None;
+        }
+        Some(Self {
+            center,
+            planes,
+            normal_quantum,
+            offset_quantum,
+        })
+    }
+    fn retains(&self, projection: TerrainProjection, candidate: Self) -> bool {
+        self.normal_quantum == candidate.normal_quantum
+            && self.offset_quantum == candidate.offset_quantum
+            && self
+                .planes
+                .iter()
+                .zip(Self::normalized_planes(projection, self.center))
+                .all(|(anchor, current)| {
+                    if anchor.truncate() == DVec3::ZERO || current.truncate() == DVec3::ZERO {
+                        return *anchor == current;
+                    }
+                    let difference = (*anchor - current).abs();
+                    difference.truncate().max_element() <= self.normal_quantum
+                        && difference.w <= self.offset_quantum
+                })
+    }
+    fn write_signature(self, signature: &mut lunco_precompute::Fnv1a) {
+        for value in self.center.to_array() {
+            signature.write_u64(value.to_bits());
+        }
+        signature.write_u64(self.normal_quantum.to_bits());
+        signature.write_u64(self.offset_quantum.to_bits());
+        for plane in self.planes {
+            for value in plane.to_array() {
+                signature.write_u64(value.to_bits());
+            }
+        }
+    }
+    fn intersects(self, region: Square, heights: [f64; 2]) -> bool {
+        if !heights[0].is_finite() || !heights[1].is_finite() || heights[0] > heights[1] {
+            return true;
+        }
+        let region = Square {
+            center: [
+                region.center[0] - self.center.x,
+                region.center[1] - self.center.z,
+            ],
+            half: region.half,
+        };
+        let heights = [heights[0] - self.center.y, heights[1] - self.center.y];
+        let magnitude = DVec3::new(
+            region.center[0].abs() + region.half,
+            heights[0].abs().max(heights[1].abs()),
+            region.center[1].abs() + region.half,
+        );
+        self.planes.iter().all(|plane| {
+            if !plane.is_finite() {
+                return true;
+            }
+            let normal = plane.truncate();
+            if normal == DVec3::ZERO {
+                return plane.w >= 0.0;
+            }
+            let maximum = normal.x * region.center[0]
+                + normal.z * region.center[1]
+                + region.half * (normal.x.abs() + normal.z.abs())
+                + normal.y
+                    * if normal.y >= 0.0 {
+                        heights[1]
+                    } else {
+                        heights[0]
+                    }
+                + plane.w;
+            // Every admitted pose may differ by the FULL retained quantum in
+            // every coefficient, including Y and the plane offset.
+            let guard = self.normal_quantum * magnitude.element_sum() + self.offset_quantum;
+            // Plane recentering and point subtraction also round at the
+            // original source-frame magnitudes, before common translation cancels.
+            let arithmetic = normal.abs().dot(magnitude)
+                + plane.w.abs()
+                + guard
+                + 2.0 * (normal.abs() + DVec3::splat(self.normal_quantum)).dot(self.center.abs());
+            let pad = 64.0 * f64::EPSILON * arithmetic.max(1.0);
+            !maximum.is_finite() || !guard.is_finite() || maximum + guard >= -pad
+        })
+    }
+}
+
+#[derive(Clone)]
 struct VisualDemand {
     entity: Entity,
+    render_layer: usize,
+    source: Entity,
+    terrain_poses: HashMap<Entity, (DVec3, DVec3)>,
+    terrain_clips: HashMap<Entity, DMat4>,
+    preparation_corridors: HashMap<Entity, TerrainPreparationCorridor>,
     position: DVec3,
     forward: DVec3,
     /// Physical height of the camera's rendered viewport, in pixels.
     screen_height_px: f64,
-    /// Vertical perspective field of view used by that camera, in radians.
-    fov_y_rad: f64,
+    projection: TerrainProjection,
     near_detail_radius_m: f64,
     near_detail_hysteresis_m: f64,
 }
 
+/// Spatial resolution of camera-driven cover reselection in terrain metres.
+const TERRAIN_FOCUS_QUANT_M: f64 = 0.5;
+
 #[derive(Clone, Copy)]
 struct TerrainVisualDemand {
+    camera: Entity,
     focus: [f64; 2],
     camera_y: f64,
     heading: Option<bevy::math::DVec2>,
+    view_direction: DVec3,
     screen_height_px: f64,
-    fov_y_rad: f64,
+    projection: TerrainProjection,
+    selection_clip: SelectionClip,
     /// This demand comes from an active rendering camera.
     required: bool,
     near_detail_radius_m: f64,
     near_detail_hysteresis_m: f64,
 }
 
-/// Frame-local detail demands collected once from explicit ECS focus markers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TerrainPreparationCorridor {
+    start: DVec3,
+    end: DVec3,
+    radius_m: f64,
+    source_pose: crate::surface_query::TerrainPoseInPhysicsFrame,
+    source_key: u64,
+}
+
+/// Navigation intent stays admitted until its owner clears it or an exact
+/// source/output lease retires; presentation cadence does not consume it.
+#[derive(Clone)]
+struct TerrainCameraTarget {
+    source: crate::surface_query::TerrainSurfaceSnapshot,
+    start: lunco_spatial::coords::GridPos,
+    end: lunco_spatial::coords::GridPos,
+    radius_m: f64,
+    outputs: Vec<(Entity, SceneViewDemand, usize)>,
+    camera_position: Option<DVec3>,
+}
+
+/// Persistent predictive intent owned and explicitly withdrawn by navigation.
+#[derive(Resource, Default)]
+pub struct TerrainCameraTargets {
+    targets: HashMap<Entity, TerrainCameraTarget>,
+}
+impl lunco_core::SceneResource for TerrainCameraTargets {}
+impl TerrainCameraTargets {
+    pub fn request(
+        &mut self,
+        camera: Entity,
+        source: crate::surface_query::TerrainSurfaceSnapshot,
+        start: lunco_spatial::coords::GridPos,
+        end: lunco_spatial::coords::GridPos,
+        radius_m: f64,
+    ) -> Result<(), &'static str> {
+        if !start.0.is_finite() || !end.0.is_finite() || !radius_m.is_finite() || radius_m <= 0.0 {
+            self.targets.remove(&camera);
+            return Err(
+                "terrain camera preparation requires finite endpoints and a positive finite radius",
+            );
+        }
+        if let Some(target) = self.targets.get_mut(&camera)
+            && target.source.same_source(&source)
+            && target.start == start
+            && target.radius_m == radius_m
+        {
+            target.end = end;
+            return Ok(());
+        }
+        self.targets.insert(
+            camera,
+            TerrainCameraTarget {
+                source,
+                start,
+                end,
+                radius_m,
+                outputs: Vec::new(),
+                camera_position: None,
+            },
+        );
+        Ok(())
+    }
+    pub fn clear(&mut self, camera: Entity) {
+        self.targets.remove(&camera);
+    }
+}
+
+/// Frame-local detail demands collected from finalized consumed camera outputs.
 #[derive(Resource, Default)]
 pub struct TerrainDetailDemands {
     visual: Vec<VisualDemand>,
 }
+/// Finalized camera demands and their latest-cover readiness are published
+/// before render/capture consumers read this presentation boundary.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerrainPresentationSet {
+    PublishDemands,
+}
+impl lunco_core::SceneResource for TerrainDetailDemands {}
 
 impl TerrainDetailDemands {
+    pub(crate) fn camera_projection(&self, camera: Entity) -> Option<TerrainProjection> {
+        self.visual
+            .iter()
+            .find(|demand| demand.entity == camera)
+            .map(|demand| demand.projection)
+    }
+    pub(crate) fn has_preparation(&self, camera: Entity, terrain: Entity) -> bool {
+        self.visual
+            .iter()
+            .find(|demand| demand.entity == camera)
+            .is_some_and(|demand| demand.preparation_corridors.contains_key(&terrain))
+    }
+    fn preparation_signature(&self, camera: Entity, terrain: Entity) -> Option<u64> {
+        let lease = self.preparation_lease_signature(camera, terrain)?;
+        let demand = self.visual.iter().find(|demand| demand.entity == camera)?;
+        let corridor = demand.preparation_corridors.get(&terrain)?;
+        let mut signature = lunco_precompute::Fnv1a::new();
+        signature.write_u64(lease);
+        for value in corridor.end.to_array() {
+            signature.write_u64(value.to_bits());
+        }
+        Some(signature.finish())
+    }
+    fn preparation_lease_signature(&self, camera: Entity, terrain: Entity) -> Option<u64> {
+        let demand = self.visual.iter().find(|demand| demand.entity == camera)?;
+        let corridor = demand.preparation_corridors.get(&terrain)?;
+        let (position, _) = demand.terrain_poses.get(&terrain)?;
+        let mut signature = lunco_precompute::Fnv1a::new();
+        signature.write_u64(camera.to_bits());
+        signature.write_u64(demand.source.to_bits());
+        signature.write_u64(terrain.to_bits());
+        signature.write_u64(demand.render_layer as u64);
+        signature.write_u64(demand.screen_height_px.to_bits());
+        signature.write_u64(demand.near_detail_radius_m.to_bits());
+        signature.write_u64(demand.near_detail_hysteresis_m.to_bits());
+        demand.projection.write_signature(&mut signature);
+        // The corridor and distance morph depend on eye position, source and
+        // intrinsic projection. Coalescing desired follow endpoints must not
+        // retire preparation while the admitted rig pose remains held.
+        for value in position.to_array() {
+            signature.write_u64(value.to_bits());
+        }
+        for value in corridor.start.to_array() {
+            signature.write_u64(value.to_bits());
+        }
+        signature.write_u64(corridor.radius_m.to_bits());
+        signature.write_u64(corridor.source_pose.frame.to_bits());
+        signature.write_u64(corridor.source_key);
+        for value in corridor
+            .source_pose
+            .position
+            .to_array()
+            .into_iter()
+            .chain(corridor.source_pose.rotation.to_array())
+        {
+            signature.write_u64(value.to_bits());
+        }
+        Some(signature.finish())
+    }
+    pub(crate) fn cameras_for_source(&self, source: Entity) -> impl Iterator<Item = Entity> + '_ {
+        self.visual
+            .iter()
+            .filter(move |demand| demand.entity == source || demand.source == source)
+            .map(|demand| demand.entity)
+    }
+
+    pub(crate) fn terrain_pose_snapshot(
+        &self,
+        camera: Entity,
+        terrain: Entity,
+    ) -> Option<(DVec3, DVec3)> {
+        self.visual
+            .iter()
+            .find(|demand| demand.entity == camera)?
+            .terrain_poses
+            .get(&terrain)
+            .copied()
+    }
     /// Snapshot active camera poses in their composed BigSpace root coordinates
     /// for API diagnostics. Selection does not consume these root values: it
     /// projects each camera entity into each terrain through
-    /// [`camera_pose_in_terrain`], preserving the nearest shared precision frame.
-    pub(crate) fn visual_focus_snapshot(&self) -> Vec<(u64, [f64; 3], [f64; 3], f64, f64)> {
+    /// [`camera_frame_in_terrain`], preserving the nearest shared precision frame.
+    pub(crate) fn visual_focus_snapshot(&self) -> Vec<(u64, [f64; 3], [f64; 3], f64, Option<f64>)> {
         self.visual
             .iter()
             .map(|demand| {
@@ -169,124 +590,316 @@ impl TerrainDetailDemands {
                     [demand.position.x, demand.position.y, demand.position.z],
                     [demand.forward.x, demand.forward.y, demand.forward.z],
                     demand.screen_height_px,
-                    demand.fov_y_rad,
+                    demand.projection.fov_y_rad(),
                 )
             })
             .collect()
     }
 }
 
-/// Give every perspective scene camera the standard visual-detail policy.
-///
-/// Filtered on PRESENCE, not `Added<Camera>`. A camera's `Projection` does not
-/// always arrive with its `Camera`: `lunco_avatar::spawn_avatar_camera` spawns a
-/// bare `Camera` + `SceneCamera`, and the render half (`Camera3d`, which carries
-/// `Projection` as a required component) is attached afterwards by
-/// `lunco-render-bevy`'s `SceneCamera` binder through `Commands` — a later flush,
-/// measured a second later on a real scene load. Under `Added<Camera>` the one
-/// tick the filter was true had no `Projection` to match, and `Added` never fires
-/// again, so the camera the player looks through was never marked at all (and with
-/// no marked camera there is no visual demand, no near-field error floor, and the
-/// cover freezes coarse — see [`collect_terrain_detail_demands`]).
-///
-/// `Without<TerrainVisualFocus>` keeps this archetype-limited: an entity leaves
-/// the query the moment it is marked, so dropping the change filter costs nothing
-/// in steady state.
-pub(crate) fn mark_terrain_visual_foci(
-    mut commands: Commands,
-    cameras: Query<(Entity, &Projection), (With<Camera>, Without<TerrainVisualFocus>)>,
-) {
-    for (entity, projection) in &cameras {
-        if matches!(projection, Projection::Perspective(_)) {
-            commands
-                .entity(entity)
-                .try_insert(TerrainVisualFocus::default());
-        }
-    }
-}
-
-/// Collect active visual cameras for the visual streamer.
+/// Snapshot only rendering cameras admitted by their output owner.
+/// Runs after camera pose, viewport and physical output publication. Terrain
+/// preparation consumes these immutable terrain-local poses on the next Update.
 pub(crate) fn collect_terrain_detail_demands(
     mut demands: ResMut<TerrainDetailDemands>,
+    mut targets: ResMut<TerrainCameraTargets>,
     terrain_settings: Option<Res<lunco_settings::TerrainSettings>>,
-    viewport: Res<lunco_viewport_core::SceneViewport>,
-    cameras: Query<(
-        Entity,
-        &Camera,
-        &Projection,
-        &TerrainVisualFocus,
-        Has<Camera3d>,
-    )>,
+    cameras: Query<
+        (
+            Entity,
+            &Camera,
+            &Projection,
+            &SceneViewDemand,
+            &SceneViewLayers,
+        ),
+        With<Camera3d>,
+    >,
+    policies: Query<&TerrainVisualFocus>,
+    terrains: Query<
+        (
+            Entity,
+            Option<&RenderLayers>,
+            Option<&crate::surface_query::TerrainPoseInPhysicsFrame>,
+        ),
+        With<DemTerrainSurface>,
+    >,
     parents: Query<&ChildOf>,
     grids: Query<&Grid>,
     spatial: Query<(Option<&CellCoord>, &Transform)>,
+    sources: Query<(Entity, &DemHeightField)>,
+    active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    quality: Option<Res<lunco_render::RenderingQualitySettings>>,
+    mut terrain_views: Query<(Entity, &DemHeightField, &mut LodTiles, Has<LodFrozen>)>,
+    mut stream_status: Option<ResMut<TerrainStreamStatus>>,
 ) {
     let defaults = terrain_settings.as_deref().cloned().unwrap_or_default();
     demands.visual.clear();
-    demands.visual.extend(
-        cameras
+    let frame = active_frame.as_deref().map(|frame| frame.0);
+    let live_sources = frame.map(|frame| {
+        sources
             .iter()
-            .filter(|(entity, camera, projection, _, has_pipeline)| {
-                // The viewport binding is the presentation authority. A raw
-                // `Camera::is_active` flag is not enough: a stale camera can
-                // retain a render component during a handoff, and an
-                // offscreen camera can be active without contributing to the
-                // window image. Terrain refinement must follow exactly the
-                // camera that the viewport reconciler has selected.
-                viewport.active_camera == Some(*entity)
-                    && *has_pipeline
-                    && camera.is_active
-                    && matches!(projection, Projection::Perspective(_))
-            })
-            .filter_map(|(entity, camera, projection, focus, _)| {
-                let (screen_height_px, fov_y_rad) = match projection {
-                    Projection::Perspective(perspective) => {
-                        let viewport = camera.physical_viewport_size()?;
-                        let screen_height_px = viewport.y as f64;
-                        let fov_y_rad = perspective.fov as f64;
-                        if !(screen_height_px > 0.0
-                            && screen_height_px.is_finite()
-                            && 0.0 < fov_y_rad
-                            && fov_y_rad < std::f64::consts::PI
-                            && fov_y_rad.is_finite())
-                        {
-                            return None;
-                        }
-                        (screen_height_px, fov_y_rad)
-                    }
-                    Projection::Orthographic(_) | Projection::Custom(_) => return None,
-                };
-                // A scene camera is often below a rover/avatar/mount hierarchy.
-                // Its local Transform is then only a rig offset. Keep a composed
-                // root pose for diagnostics; the selector retains `entity` and
-                // later resolves the precision-safe camera-to-terrain transform
-                // through their nearest shared Grid.
-                let (position, rotation) =
-                    lunco_spatial::coords::world_pose(entity, &parents, &grids, &spatial).ok()?;
-                Some(VisualDemand {
+            .map(|(entity, field)| {
+                (
                     entity,
-                    position: position.0,
-                    forward: rotation.0 * DVec3::NEG_Z,
-                    screen_height_px,
-                    fov_y_rad,
-                    near_detail_radius_m: focus
-                        .near_detail_radius_m
-                        .unwrap_or(defaults.visual_detail_radius_m)
-                        .max(0.0),
-                    near_detail_hysteresis_m: focus
-                        .near_detail_hysteresis_m
-                        .unwrap_or(defaults.visual_detail_hysteresis_m)
-                        .max(0.0),
-                })
-            }),
-    );
-    demands.visual.sort_by(|a, b| {
-        a.position
-            .x
-            .total_cmp(&b.position.x)
-            .then(a.position.y.total_cmp(&b.position.y))
-            .then(a.position.z.total_cmp(&b.position.z))
+                    field.0.surface_key(),
+                    lunco_spatial::coords::pose_in_grid(entity, frame, &parents, &grids, &spatial),
+                )
+            })
+            .collect::<Vec<_>>()
     });
+    targets.targets.retain(|owner, target| {
+        let (Some(frame), Some(live_sources)) = (frame, live_sources.as_ref()) else {
+            return false;
+        };
+        if !target
+            .source
+            .matches_live_sources(frame, live_sources.iter().copied())
+        {
+            return false;
+        }
+        let Some(pose) =
+            lunco_spatial::coords::pose_in_grid(*owner, frame, &parents, &grids, &spatial)
+        else {
+            return false;
+        };
+        if target
+            .camera_position
+            .is_some_and(|admitted| admitted != pose.0)
+        {
+            return false;
+        }
+        let mut outputs = cameras
+            .iter()
+            .filter(|(entity, camera, _, output, _)| {
+                camera.is_active && (*entity == *owner || output.source == *owner)
+            })
+            .map(|(entity, _, _, output, layers)| (entity, *output, layers.layer))
+            .collect::<Vec<_>>();
+        outputs.sort_by_key(|output| output.0);
+        if outputs.is_empty()
+            || (!target.outputs.is_empty()
+                && !target.outputs.iter().any(|lease| outputs.contains(lease)))
+        {
+            return false;
+        }
+        target.outputs = outputs;
+        target.camera_position = Some(pose.0);
+        true
+    });
+    let requests = &targets.targets;
+    let profile = quality
+        .as_deref()
+        .and_then(|quality| quality.validated_profile().ok());
+    let mut findings = Vec::new();
+    for (entity, camera, projection, output, layers) in &cameras {
+        if !camera.is_active {
+            continue;
+        }
+        let Some(size) = camera.physical_viewport_size() else {
+            continue;
+        };
+        let screen_height_px = f64::from(size.y);
+        let metric = match projection {
+            Projection::Perspective(perspective) => {
+                let fov_y_rad = f64::from(perspective.fov);
+                let clip_from_local = projection.get_clip_from_view().as_dmat4();
+                (size.x > 0
+                    && size.y > 0
+                    && fov_y_rad.is_finite()
+                    && fov_y_rad > 0.0
+                    && fov_y_rad < std::f64::consts::PI
+                    && clip_from_local.is_finite())
+                .then_some(TerrainProjection::Perspective {
+                    fov_y_rad,
+                    clip_from_local,
+                })
+            }
+            Projection::Orthographic(orthographic) => {
+                let area = orthographic.area;
+                let pixels_per_metre = (f64::from(size.x) / f64::from(area.width()))
+                    .max(f64::from(size.y) / f64::from(area.height()));
+                let clip_from_local = projection.get_clip_from_view().as_dmat4();
+                (size.x > 0
+                    && size.y > 0
+                    && area.width() > 0.0
+                    && area.height() > 0.0
+                    && pixels_per_metre.is_finite()
+                    && pixels_per_metre > 0.0
+                    && clip_from_local.is_finite())
+                .then_some(TerrainProjection::Orthographic {
+                    pixels_per_metre,
+                    area: [
+                        f64::from(area.min.x),
+                        f64::from(area.min.y),
+                        f64::from(area.max.x),
+                        f64::from(area.max.y),
+                    ],
+                    output_pixels: [size.x, size.y],
+                    clip_from_local,
+                })
+            }
+            Projection::Custom(_) => None,
+        };
+        let Some(metric) = metric else {
+            findings.push(lunco_core::RuntimeDiagnostic {
+                producer: "terrain-view-projection".into(), code: "projection-unavailable".into(),
+                severity: lunco_core::DiagnosticSeverity::Error, subject: format!("camera {entity:?}"),
+                message: "consumed terrain camera requires a finite perspective or orthographic projection and nonzero output pixels; custom projections require an explicit terrain screen metric".into(),
+            });
+            continue;
+        };
+        if profile.as_ref().is_some_and(|profile| {
+            SelectionClip::new(
+                metric,
+                screen_height_px,
+                profile.terrain_lod_pixel_error,
+                DVec3::ZERO,
+            )
+            .is_none()
+        }) {
+            findings.push(lunco_core::RuntimeDiagnostic {
+                producer: "terrain-view-projection".into(), code: "projection-unavailable".into(),
+                severity: lunco_core::DiagnosticSeverity::Error, subject: format!("camera {entity:?}"),
+                message: "consumed terrain camera has no finite selection clip envelope for its native projection and configured pixel error".into(),
+            });
+            continue;
+        }
+        let Ok((position, rotation)) =
+            lunco_spatial::coords::world_pose(entity, &parents, &grids, &spatial)
+        else {
+            continue;
+        };
+        let policy = policies
+            .get(entity)
+            .or_else(|_| policies.get(output.source))
+            .copied()
+            .unwrap_or_default();
+        let mut terrain_clips = HashMap::new();
+        let terrain_poses = terrains
+            .iter()
+            .filter_map(|(terrain, terrain_layers, _)| {
+                if !layers
+                    .base
+                    .intersects(&terrain_layers.cloned().unwrap_or_default())
+                {
+                    return None;
+                }
+                let (position, rotation) =
+                    camera_frame_in_terrain(entity, terrain, &parents, &grids, &spatial)?;
+                terrain_clips.insert(
+                    terrain,
+                    metric.clip_from_local()
+                        * DMat4::from_rotation_translation(rotation, position).inverse(),
+                );
+                Some((terrain, (position, rotation * DVec3::NEG_Z)))
+            })
+            .collect();
+        let mut preparation_corridors = HashMap::new();
+        if let Some(target) = requests
+            .get(&entity)
+            .or_else(|| requests.get(&output.source))
+        {
+            for (terrain, terrain_layers, pose) in &terrains {
+                if !layers
+                    .base
+                    .intersects(&terrain_layers.cloned().unwrap_or_default())
+                {
+                    continue;
+                }
+                if !pose.is_some_and(|pose| pose.frame == target.source.frame()) {
+                    continue;
+                }
+                // The exact source lease was checked against freshly resolved
+                // poses above; use that same pose for the local corridor.
+                let Some((position, rotation)) = lunco_spatial::coords::pose_in_grid(
+                    terrain,
+                    target.source.frame(),
+                    &parents,
+                    &grids,
+                    &spatial,
+                ) else {
+                    continue;
+                };
+                let Ok((_, field)) = sources.get(terrain) else {
+                    continue;
+                };
+                preparation_corridors.insert(
+                    terrain,
+                    TerrainPreparationCorridor {
+                        start: rotation.inverse() * (target.start.0 - position),
+                        end: rotation.inverse() * (target.end.0 - position),
+                        radius_m: target.radius_m,
+                        source_pose: crate::surface_query::TerrainPoseInPhysicsFrame {
+                            frame: target.source.frame(),
+                            position,
+                            rotation,
+                        },
+                        source_key: field.0.surface_key(),
+                    },
+                );
+            }
+        }
+        demands.visual.push(VisualDemand {
+            entity,
+            source: output.source,
+            render_layer: layers.layer,
+            terrain_poses,
+            terrain_clips,
+            preparation_corridors,
+            position: position.0,
+            forward: rotation.0 * DVec3::NEG_Z,
+            screen_height_px,
+            projection: metric,
+            near_detail_radius_m: policy
+                .near_detail_radius_m
+                .unwrap_or(defaults.visual_detail_radius_m)
+                .max(0.0),
+            near_detail_hysteresis_m: policy
+                .near_detail_hysteresis_m
+                .unwrap_or(defaults.visual_detail_hysteresis_m)
+                .max(0.0),
+        });
+    }
+    demands.visual.sort_by_key(|demand| demand.entity);
+    let mut selection_pending = 0;
+    let mut presentation_pending = 0;
+    for (terrain, field, mut tiles, frozen) in &mut terrain_views {
+        for demand in demands
+            .visual
+            .iter()
+            .filter(|demand| demand.terrain_poses.contains_key(&terrain))
+        {
+            let Some(view) = tiles.views.get_mut(&demand.entity) else {
+                selection_pending += 1;
+                continue;
+            };
+            view.publish_latest_demand(
+                &demands,
+                terrain,
+                demand,
+                field.0.surface_key(),
+                profile.as_ref(),
+                frozen,
+            );
+            selection_pending += usize::from(!view.latest_ready());
+            presentation_pending += usize::from(view.presentation_pending);
+        }
+    }
+    if let Some(status) = stream_status.as_deref_mut() {
+        status.publish_selection_pending(selection_pending);
+        status.presentation_pending = presentation_pending;
+    }
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        if diagnostics
+            .findings
+            .iter()
+            .filter(|finding| finding.producer == "terrain-view-projection")
+            .ne(findings.iter())
+        {
+            diagnostics.replace_producer("terrain-view-projection", findings);
+        }
+    }
 }
 
 /// Resolve one camera into one terrain's local DEM frame through their nearest
@@ -296,6 +909,7 @@ pub(crate) fn collect_terrain_detail_demands(
 /// and terrain may live in different nested grids, but they must be connected by
 /// real grid ancestry. A disconnected hierarchy produces no demand; substituting
 /// root-space or local coordinates would silently refine the wrong location.
+#[cfg(test)]
 fn camera_pose_in_terrain(
     camera: Entity,
     terrain: Entity,
@@ -303,12 +917,23 @@ fn camera_pose_in_terrain(
     grids: &Query<&Grid>,
     spatial: &Query<(Option<&CellCoord>, &Transform)>,
 ) -> Option<(DVec3, DVec3)> {
+    camera_frame_in_terrain(camera, terrain, parents, grids, spatial)
+        .map(|(position, rotation)| (position, rotation * DVec3::NEG_Z))
+}
+
+fn camera_frame_in_terrain(
+    camera: Entity,
+    terrain: Entity,
+    parents: &Query<&ChildOf>,
+    grids: &Query<&Grid>,
+    spatial: &Query<(Option<&CellCoord>, &Transform)>,
+) -> Option<(DVec3, DQuat)> {
     let (_, camera_position, camera_rotation, terrain_position, terrain_rotation) =
         lunco_spatial::coords::common_grid_poses(camera, terrain, parents, grids, spatial)?;
     let grid_to_terrain = terrain_rotation.inverse();
     Some((
         grid_to_terrain * (camera_position - terrain_position),
-        grid_to_terrain * (camera_rotation * DVec3::NEG_Z),
+        grid_to_terrain * camera_rotation,
     ))
 }
 
@@ -321,19 +946,46 @@ fn terrain_visual_demand(
     demand: &VisualDemand,
     terrain_local: DVec3,
     local_forward: DVec3,
+    terrain_clip: DMat4,
+    pixel_error: f64,
 ) -> Option<TerrainVisualDemand> {
-    if !terrain_local.is_finite() || !local_forward.is_finite() {
+    if !terrain_local.is_finite() || !local_forward.is_finite() || !terrain_clip.is_finite() {
         return None;
     }
     let heading = bevy::math::DVec2::new(local_forward.x, local_forward.z);
     let heading = (heading.length() > 1e-3).then(|| heading.normalize());
     let focus = [terrain_local.x, terrain_local.z];
+    let projection = match demand.projection {
+        TerrainProjection::Orthographic {
+            pixels_per_metre,
+            area,
+            output_pixels,
+            ..
+        } => TerrainProjection::Orthographic {
+            pixels_per_metre,
+            area,
+            output_pixels,
+            clip_from_local: terrain_clip,
+        },
+        TerrainProjection::Perspective { fov_y_rad, .. } => TerrainProjection::Perspective {
+            fov_y_rad,
+            clip_from_local: terrain_clip,
+        },
+    };
     Some(TerrainVisualDemand {
+        camera: demand.entity,
         focus,
         camera_y: terrain_local.y,
         heading,
+        view_direction: local_forward,
         screen_height_px: demand.screen_height_px,
-        fov_y_rad: demand.fov_y_rad,
+        projection,
+        selection_clip: SelectionClip::new(
+            projection,
+            demand.screen_height_px,
+            pixel_error,
+            terrain_local,
+        )?,
         required: true,
         near_detail_radius_m: demand.near_detail_radius_m,
         near_detail_hysteresis_m: demand.near_detail_hysteresis_m,
@@ -352,10 +1004,12 @@ pub struct TerrainLodViz;
 /// re-bake (Inspector edit) changes the heights, the terrain's generation bumps; a
 /// tile whose `gen` is older is *stale* — it keeps rendering (so the surface never
 /// opens a hole) while a fresh replacement bakes near-camera-first, and is despawned
-/// the instant that fresh tile spawns. This is what makes regeneration *progressive*
+/// only after the complete replacement draw passes camera admission. This makes regeneration *progressive*
 /// instead of a synchronous despawn-everything flash.
 #[derive(Clone, Copy)]
 struct TileSlot {
+    resolution: usize,
+    half_extent: f64,
     entity: Entity,
     r#gen: u32,
     /// The tile's selected morph-band end (parent refine range) — kept so a live
@@ -377,6 +1031,53 @@ struct TileSlot {
     /// here so a stable draw cover does not dirty every tile's `ShaderLook` on
     /// every update.
     stitch_edges: [f32; 4],
+}
+
+#[derive(Clone, Copy)]
+struct DrawPublicationEntry {
+    resolution: usize,
+    half_extent: f64,
+    coord: QuadCoord,
+    entity: Entity,
+    morph_end: f32,
+    stitch_edges: [f32; 4],
+}
+
+fn publication_look_matches(
+    current: &ShaderLook,
+    entry: &DrawPublicationEntry,
+    ratio: f32,
+) -> bool {
+    let (start, end, _) = snap_band(entry.morph_end, ratio);
+    current.values().get("morph_start") == Some(&ParamValue::F32(start))
+        && current.values().get("morph_end") == Some(&ParamValue::F32(end))
+        && current.values().get("stitch_edges") == Some(&ParamValue::Vec4(entry.stitch_edges))
+}
+
+fn publication_look(
+    current: &ShaderLook,
+    entry: &DrawPublicationEntry,
+    ratio: f32,
+) -> Option<ShaderLook> {
+    if publication_look_matches(current, entry, ratio) {
+        return None;
+    }
+    let (start, end, _) = snap_band(entry.morph_end, ratio);
+    let mut look = current.clone();
+    set_param(&mut look, "morph_start", ParamValue::F32(start));
+    set_param(&mut look, "morph_end", ParamValue::F32(end));
+    set_param(
+        &mut look,
+        "stitch_edges",
+        ParamValue::Vec4(entry.stitch_edges),
+    );
+    Some(look)
+}
+
+#[derive(Default)]
+struct DrawPublicationChanges {
+    retired: Vec<Entity>,
+    visibility: Vec<(Entity, bool)>,
 }
 
 /// Render extraction can still reference an entity for the frame in which main
@@ -474,30 +1175,6 @@ fn wanted_parent_fallbacks(wanted: &HashSet<QuadCoord>, parents: &mut HashSet<Qu
     parents.extend(wanted.iter().filter_map(|coord| coord.parent()));
 }
 
-/// Choose what to draw for each selected node: itself if ready, else its deepest
-/// ready ancestor.
-///
-/// `is_drawable` is **residency, not freshness** — and that distinction is the
-/// whole fix for the terrain blanking.
-///
-/// `invalidate()` bumps the generation and KEEPS every tile (see its docs): the
-/// tiles are marked stale, not removed, and each is still geometrically valid —
-/// same coord, same region, mesh baked with its own `origin_y`. Only the heights
-/// are a generation old. Keying this walk on freshness therefore hid every tile in
-/// the same frame on any invalidation, caught live as
-/// `uncovered=265 drawn=0 resident=510`: five hundred good tiles in memory, none
-/// drawn, terrain to clear colour until the re-bakes landed.
-///
-/// A stale tile keeps drawing ITSELF until its own replacement is ready, and
-/// `tiles.insert` then swaps that replacement in at the same coord and despawns the
-/// old entity — an atomic per-coord hand-off. Freshness still drives BAKING (a
-/// stale tile is re-baked); it just no longer decides visibility.
-///
-/// NOT to be confused with the earlier rejected attempt, which fell back to a stale
-/// *ancestor* when the exact node was stale: that made tiles alternate between a
-/// stale deep tile and a fresh coarse one as re-bakes landed, and looked worse.
-/// Substituting a DIFFERENT node is the thing that fails; keeping the SAME node on
-/// screen until it is replaced is what works.
 #[cfg(test)]
 const TEST_MAX_COVER_EDITS: usize = 64;
 #[cfg(test)]
@@ -595,24 +1272,10 @@ fn evolve_cover(
     node_error: &impl Fn(QuadCoord, Square) -> f64,
     budget: usize,
 ) -> usize {
-    evolve_cover_for_foci(qt, cover, &[(focus, camera_y)], node_error, budget)
-}
-
-/// Multi-viewport form of [`evolve_cover`]. A node uses its nearest visual focus,
-/// so all active marked cameras contribute to one exact cover without one camera
-/// evicting another's terrain.
-#[cfg(test)]
-fn evolve_cover_for_foci(
-    qt: &Quadtree,
-    cover: &mut HashSet<QuadCoord>,
-    foci: &[([f64; 2], f64)],
-    node_error: &impl Fn(QuadCoord, Square) -> f64,
-    budget: usize,
-) -> usize {
     evolve_cover_for_foci_with_retention(
         qt,
         cover,
-        foci,
+        &[(focus, camera_y)],
         node_error,
         &|_, _| [0.0, 0.0],
         budget,
@@ -641,7 +1304,7 @@ struct CoverScratch {
 ///
 /// Returns `(edits applied, splits refused by the budget)`. Zero edits means
 /// the cover is at its fixed point FOR THESE INPUTS — the caller can skip the
-/// pass until an input changes (see [`LodTiles::settled_sig`]).
+/// pass until an input changes (see [`LodView::settled_sig`]).
 fn evolve_cover_for_foci_with_retention(
     qt: &Quadtree,
     cover: &mut HashSet<QuadCoord>,
@@ -898,6 +1561,9 @@ fn evolve_cover_for_foci_with_retention(
     (edits + forced, budget_refused)
 }
 
+/// Construct a disjoint candidate partition from ready leaves and ancestors.
+/// Freshness controls bake admission; stale published tiles remain valid visual
+/// candidates until the complete successor surface passes camera admission.
 fn build_draw_partition(
     selected: impl Iterator<Item = QuadCoord>,
     is_drawable: impl Fn(QuadCoord) -> bool,
@@ -1015,13 +1681,237 @@ fn stitch_edges(coord: QuadCoord, draw: &HashSet<QuadCoord>) -> [f32; 4] {
     result
 }
 
-/// The LOD tile entities currently spawned for a terrain, keyed by quadtree node.
-/// `gen` bumps on every live height re-bake so tiles refresh
-/// progressively (see [`TileSlot`]) rather than all being despawned at once.
+/// Visual products of one terrain, scoped to each consumed rendering camera.
 #[derive(Component, Default)]
 pub struct LodTiles {
-    contact_lattice: Option<(u8, usize)>,
+    frame_cursor: usize,
+    resolution: usize,
+    r#gen: u32,
+    views: BTreeMap<Entity, LodView>,
+}
+
+pub(crate) struct TerrainViewStatus {
+    pub wanted: usize,
+    pub resident: usize,
+    pub drawn: usize,
+    pub budget_refused: usize,
+    pub resolution: usize,
+    pub effective_max_depth: u8,
+    pub selection_current: bool,
+    pub ready: bool,
+    pub presented_ready: bool,
+    pub presentation_pending: bool,
+    pub presentation_reason: Option<String>,
+}
+
+impl LodTiles {
+    pub(crate) fn tile_entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.views.values().flat_map(LodView::tile_entities)
+    }
+    pub(crate) fn tile_material_specs(
+        &self,
+    ) -> impl Iterator<Item = (Entity, u32, f32, f32, [f32; 4])> + '_ {
+        self.views.values().flat_map(LodView::tile_material_specs)
+    }
+    fn invalidate_material_readiness(&mut self, entity: Entity) -> bool {
+        self.views.values_mut().fold(false, |changed, view| {
+            view.invalidate_material_readiness(entity) || changed
+        })
+    }
+    pub(crate) fn focus_tile(&self, camera: Entity, point: [f64; 2]) -> Option<(u8, bool, bool)> {
+        self.views.get(&camera)?.focus_tile(point)
+    }
+    pub(crate) fn draw_tiles(
+        &self,
+        camera: Entity,
+    ) -> Option<impl Iterator<Item = (QuadCoord, Entity, f32, [f32; 4])> + '_> {
+        Some(
+            self.views
+                .get(&camera)?
+                .tiles
+                .iter()
+                .filter(|(_, slot)| slot.ready && slot.drawn)
+                .map(|(coord, slot)| (*coord, slot.entity, slot.morph_end, slot.stitch_edges)),
+        )
+    }
+    pub(crate) fn draw_lattice(
+        &self,
+        camera: Entity,
+        coord: QuadCoord,
+    ) -> Option<(usize, f64, bool)> {
+        let view = self.views.get(&camera)?;
+        let slot = view.tiles.get(&coord)?;
+        let current = slot.r#gen == view.r#gen
+            && slot.resolution == view.resolution
+            && slot.half_extent.to_bits() == view.half_extent.to_bits();
+        (slot.ready && slot.drawn).then_some((slot.resolution, slot.half_extent, current))
+    }
+    pub(crate) fn draw_revision(&self, camera: Entity) -> Option<u64> {
+        let view = self.views.get(&camera)?;
+        (!view.draw_revision_exhausted).then_some(view.draw_revision)
+    }
+    pub(crate) fn preparation_refused(
+        &self,
+        camera: Entity,
+        demands: &TerrainDetailDemands,
+        terrain: Entity,
+    ) -> bool {
+        let Some(view) = self.views.get(&camera) else {
+            return false;
+        };
+        let Some(held) = &view.held_preparation else {
+            return false;
+        };
+        view.preparation_refusal_count(
+            demands.preparation_signature(camera, terrain),
+            held.lease_signature,
+        ) > 0
+    }
+    pub(crate) fn view_status(&self, camera: Entity) -> Option<TerrainViewStatus> {
+        let view = self.views.get(&camera)?;
+        Some(TerrainViewStatus {
+            wanted: view.cover_selected.len(),
+            resident: view
+                .cover_selected
+                .iter()
+                .filter(|selected| {
+                    view.tiles
+                        .get(&selected.coord)
+                        .is_some_and(|slot| slot.ready)
+                })
+                .count(),
+            drawn: view.tiles.values().filter(|slot| slot.drawn).count(),
+            budget_refused: view.budget_refused,
+            resolution: view.resolution,
+            effective_max_depth: view.effective_max_depth,
+            selection_current: view.selection_current(),
+            ready: view.latest_ready(),
+            presentation_pending: view.presentation_pending,
+            presentation_reason: view
+                .presentation_wait
+                .as_ref()
+                .map(|(_, reason)| reason.clone()),
+            // The authoritative draw partition is disjoint. Its dyadic node
+            // areas sum exactly to the root area at supported depths <=20.
+            presented_ready: view
+                .tiles
+                .iter()
+                .filter(|(_, slot)| slot.ready && slot.drawn)
+                .map(|(coord, _)| 0.25_f64.powi(i32::from(coord.depth)))
+                .sum::<f64>()
+                == 1.0,
+        })
+    }
+    pub fn invalidate(&mut self) {
+        self.invalidate_region(None, 1.0);
+    }
+    pub fn invalidate_region(&mut self, bounds: Option<[f64; 4]>, half: f64) {
+        self.r#gen = self.r#gen.wrapping_add(1);
+        for view in self.views.values_mut() {
+            view.invalidate_region(bounds, half);
+        }
+    }
+    pub fn reap_stale(&mut self) -> Vec<Entity> {
+        self.views
+            .values_mut()
+            .flat_map(LodView::reap_stale)
+            .collect()
+    }
+}
+
+/// Bounded fine-node intent retained under one source/output/profile/eye lease.
+/// Current requests precede historical retention in balanced-cover admission.
+#[derive(Default)]
+struct HeldTerrainPreparation {
+    lease_signature: u64,
+    input_signature: Option<u64>,
+    nodes: HashSet<QuadCoord>,
+    latest_nodes: HashSet<QuadCoord>,
+    capacity_refused: bool,
+    requirements_signature: u64,
+}
+
+impl HeldTerrainPreparation {
+    fn admit(
+        &mut self,
+        lease: u64,
+        input: u64,
+        corridor: TerrainPreparationCorridor,
+        quadtree: &Quadtree,
+        capacity: usize,
+    ) {
+        if self.lease_signature != lease {
+            *self = Self {
+                lease_signature: lease,
+                ..default()
+            };
+        }
+        if self.input_signature == Some(input) {
+            return;
+        }
+        self.input_signature = Some(input);
+        let Ok(nodes) = preparation_corridor_nodes(quadtree, corridor, capacity) else {
+            self.capacity_refused = true;
+            self.latest_nodes.clear();
+            return;
+        };
+        self.capacity_refused = false;
+        self.latest_nodes = nodes.into_iter().collect();
+        let union_count = self.nodes.len()
+            + self
+                .latest_nodes
+                .iter()
+                .filter(|node| !self.nodes.contains(*node))
+                .count();
+        if union_count > capacity {
+            // Superseded intent cannot make the feasible latest corridor fail.
+            self.nodes.clone_from(&self.latest_nodes);
+        } else {
+            self.nodes.extend(self.latest_nodes.iter().copied());
+        }
+        let mut nodes = self.nodes.iter().copied().collect::<Vec<_>>();
+        nodes.sort_unstable_by_key(|node| (node.depth, node.x, node.z));
+        let mut signature = lunco_precompute::Fnv1a::new();
+        signature.write_u64(lease);
+        for node in nodes {
+            signature.write_u64(u64::from(node.depth));
+            signature.write_u64(u64::from(node.x));
+            signature.write_u64(u64::from(node.z));
+        }
+        let mut latest = self.latest_nodes.iter().copied().collect::<Vec<_>>();
+        latest.sort_unstable_by_key(|node| (node.depth, node.x, node.z));
+        signature.write_u64(latest.len() as u64);
+        for node in latest {
+            signature.write_u64(u64::from(node.depth));
+            signature.write_u64(u64::from(node.x));
+            signature.write_u64(u64::from(node.z));
+        }
+        self.requirements_signature = signature.finish();
+    }
+    fn requirements(&self) -> TerrainPreparationRequirements {
+        TerrainPreparationRequirements {
+            nodes: self.nodes.clone(),
+            latest_nodes: self.latest_nodes.clone(),
+        }
+    }
+}
+
+/// Per-view selected cover and resident tile entities for one terrain.
+#[derive(Default)]
+struct LodView {
+    selection_clip: Option<SelectionClip>,
+    draw_revision: u64,
+    draw_revision_exhausted: bool,
+    render_layer: usize,
+    resolution: usize,
+    effective_max_depth: u8,
+    half_extent: f64,
     tiles: HashMap<QuadCoord, TileSlot>,
+    /// Hidden same-coordinate replacements cannot retire the published surface
+    /// until its complete successor partition passes stationary admission.
+    pending_replacements: HashMap<QuadCoord, TileSlot>,
+    presentation_pending: bool,
+    presentation_wait: Option<(u64, String)>,
     morph_ratio: f32,
     r#gen: u32,
     /// Signature of the inputs the tile SELECTION is a pure function of (camera
@@ -1031,6 +1921,10 @@ pub struct LodTiles {
     /// resident tile set is already correct and the whole reselection is skipped —
     /// the idle-camera fast path (see [`update_lod_tiles`]). `None` = never selected.
     last_sig: Option<u64>,
+    requested_signature: Option<u64>,
+    /// Hard source/view inputs that retire queued preparation and wake cover
+    /// reconciliation independently of the presentation cadence.
+    last_admission_sig: Option<u64>,
     /// The PERSISTENT cover: the leaves currently selected. Evolved incrementally by
     /// `evolve_cover` instead of re-derived each frame, which is what removes the
     /// mass re-selection the old global budget fit caused.
@@ -1038,8 +1932,11 @@ pub struct LodTiles {
     /// The immutable selection derived for `cover`, committed with it from one
     /// completed cover-preparation operation.
     cover_selected: Vec<Selected>,
+    /// Camera patches already requested inside the detail radius, retained
+    /// only through the configured hysteresis band and their exact source.
+    camera_patches: CameraPatchRetention,
     /// At most one asynchronous cover preparation may own this terrain at a time.
-    pending_cover: Option<(u32, u64, u64, u64)>,
+    pending_cover: Option<(u32, u64, u64, u64, u64)>,
     cover_operation: u64,
     /// A failed preparation stays terminal for its exact input signature.
     failed_cover_signature: Option<u64>,
@@ -1057,6 +1954,9 @@ pub struct LodTiles {
     /// on the component because the idle fast path skips selection — a
     /// starved-but-idle terrain must keep reporting, not read as healthy.
     budget_refused: usize,
+    preparation_refused_nodes: HashSet<QuadCoord>,
+    preparation_signature: Option<u64>,
+    held_preparation: Option<HeldTerrainPreparation>,
     /// Whether every resident tile has crossed the render-material readiness
     /// boundary. New slots clear this once; settled terrains must not scan the
     /// entire resident map on every frame just to rediscover that fact.
@@ -1076,10 +1976,236 @@ pub struct LodTiles {
     settled_sig: Option<u64>,
 }
 
-impl LodTiles {
+impl LodView {
+    fn preparation_refusal_count(&self, input: Option<u64>, admission: u64) -> usize {
+        let Some(held) = self.held_preparation.as_ref() else {
+            return 0;
+        };
+        if held.input_signature != input
+            || held.lease_signature != admission
+            || self.requested_signature.is_none()
+        {
+            return 0;
+        }
+        if held.capacity_refused {
+            return 1;
+        }
+        if !self.selection_current() || self.last_admission_sig != Some(admission) {
+            return 0;
+        }
+        held.latest_nodes
+            .intersection(&self.preparation_refused_nodes)
+            .count()
+    }
+    fn cover_selection_settled(&self, signature: u64) -> bool {
+        self.last_sig == Some(signature) && self.settled_sig == Some(signature)
+    }
+    fn cover_preparation_needed(&self, signature: u64) -> bool {
+        self.cover.is_empty() || (self.bootstrap_ready && !self.cover_selection_settled(signature))
+    }
+    fn commit_frozen_cover(&mut self, selected: &[Selected], signature: u64, admission: u64) {
+        if self.cover_selected != selected {
+            self.cover_selected = selected.to_vec();
+            self.bump_draw_revision();
+        }
+        self.last_sig = Some(signature);
+        self.settled_sig = Some(signature);
+        self.last_admission_sig = Some(admission);
+        self.preparation_signature = self
+            .held_preparation
+            .as_ref()
+            .map(|held| held.requirements_signature);
+        self.preparation_refused_nodes = self
+            .held_preparation
+            .as_ref()
+            .map(|held| held.latest_nodes.clone())
+            .unwrap_or_default();
+    }
+    fn selection_current(&self) -> bool {
+        self.requested_signature
+            .is_some_and(|signature| self.cover_selection_settled(signature))
+            && self.pending_cover.is_none()
+            && self
+                .held_preparation
+                .as_ref()
+                .is_none_or(|held| self.preparation_signature == Some(held.requirements_signature))
+    }
+    fn latest_ready(&self) -> bool {
+        !self.presentation_pending
+            && self.selection_current()
+            && selected_cover_status(self, self.r#gen).complete
+            && self.held_preparation.as_ref().is_none_or(|held| {
+                !held.capacity_refused
+                    && !held
+                        .latest_nodes
+                        .iter()
+                        .any(|node| self.preparation_refused_nodes.contains(node))
+            })
+    }
+    fn retain_selection_clip(&mut self, visual: &mut TerrainVisualDemand) {
+        let candidate = visual.selection_clip;
+        let retained = self
+            .selection_clip
+            .filter(|anchor| anchor.retains(visual.projection, candidate))
+            .unwrap_or(candidate);
+        self.selection_clip = Some(retained);
+        visual.selection_clip = retained;
+    }
+    fn publish_latest_demand(
+        &mut self,
+        demands: &TerrainDetailDemands,
+        terrain: Entity,
+        demand: &VisualDemand,
+        surface_key: u64,
+        profile: Option<&lunco_render::RenderQualityProfile>,
+        frozen: bool,
+    ) {
+        self.requested_signature = None;
+        let Some(profile) = profile else {
+            return;
+        };
+        let Some(&(position, forward)) = demand.terrain_poses.get(&terrain) else {
+            return;
+        };
+        let Some(clip) = demand.terrain_clips.get(&terrain).copied() else {
+            return;
+        };
+        let Some(mut visual) = terrain_visual_demand(
+            demand,
+            position,
+            forward,
+            clip,
+            profile.terrain_lod_pixel_error,
+        ) else {
+            return;
+        };
+        self.retain_selection_clip(&mut visual);
+        let (signature, admission) = terrain_view_signatures(
+            demands,
+            terrain,
+            demand,
+            std::slice::from_ref(&visual),
+            self.r#gen,
+            surface_key,
+            profile,
+            frozen,
+        );
+        let preparation = match (
+            demands.preparation_signature(demand.entity, terrain),
+            &self.held_preparation,
+        ) {
+            (None, None) => None,
+            (Some(input), Some(held))
+                if held.input_signature == Some(input) && held.lease_signature == admission =>
+            {
+                Some(held.requirements_signature)
+            }
+            _ => return,
+        };
+        self.requested_signature = Some(finish_terrain_view_signature(
+            signature,
+            admission,
+            preparation,
+        ));
+    }
+    fn bump_draw_revision(&mut self) {
+        if let Some(next) = self.draw_revision.checked_add(1) {
+            self.draw_revision = next;
+        } else {
+            self.draw_revision_exhausted = true;
+        }
+    }
     fn insert_slot(&mut self, coord: QuadCoord, slot: TileSlot) -> Option<TileSlot> {
+        self.bump_draw_revision();
         self.materials_ready = false;
-        self.tiles.insert(coord, slot)
+        if self.tiles.contains_key(&coord) {
+            self.pending_replacements.insert(coord, slot)
+        } else {
+            self.tiles.insert(coord, slot)
+        }
+    }
+
+    /// The commit boundary owns mesh replacement, topology and the CPU copy of
+    /// material geometry state together. Refusal leaves every published slot intact.
+    fn publish_draw_partition(
+        &mut self,
+        candidate: &[DrawPublicationEntry],
+        morph_ratio: f32,
+        admitted: bool,
+    ) -> DrawPublicationChanges {
+        if !admitted {
+            self.presentation_pending = true;
+            return DrawPublicationChanges::default();
+        }
+        let mut changes = DrawPublicationChanges::default();
+        let draw: HashMap<_, _> = candidate.iter().map(|entry| (entry.coord, entry)).collect();
+        let mut changed = self.morph_ratio.to_bits() != morph_ratio.to_bits();
+        for entry in candidate {
+            if self
+                .pending_replacements
+                .get(&entry.coord)
+                .is_some_and(|slot| slot.entity == entry.entity)
+            {
+                if let Some(replacement) = self.pending_replacements.remove(&entry.coord) {
+                    if let Some(old) = self.tiles.insert(entry.coord, replacement) {
+                        changes.retired.push(old.entity);
+                    }
+                    changed = true;
+                }
+            }
+        }
+        // Ready replacements outside the admitted draw are hidden residents.
+        // Committing them too retires stale fallback payloads and lets the view
+        // return to its idle gate once all staged materials have arrived.
+        let hidden: Vec<_> = self
+            .pending_replacements
+            .iter()
+            .filter_map(|(coord, slot)| (slot.ready && !draw.contains_key(coord)).then_some(*coord))
+            .collect();
+        for coord in hidden {
+            if let Some(replacement) = self.pending_replacements.remove(&coord) {
+                if let Some(old) = self.tiles.insert(coord, replacement) {
+                    changes.retired.push(old.entity);
+                }
+                changed = true;
+            }
+        }
+        for (coord, slot) in &mut self.tiles {
+            let entry = draw.get(coord);
+            let visible = entry.is_some_and(|entry| entry.entity == slot.entity);
+            if visible != slot.drawn {
+                changes.visibility.push((slot.entity, visible));
+                slot.drawn = visible;
+                changed = true;
+            }
+            if let Some(entry) = entry.filter(|entry| entry.entity == slot.entity) {
+                changed |= slot.morph_end.to_bits() != entry.morph_end.to_bits()
+                    || slot.stitch_edges != entry.stitch_edges;
+                slot.morph_end = entry.morph_end;
+                slot.stitch_edges = entry.stitch_edges;
+            }
+        }
+        self.morph_ratio = morph_ratio;
+        self.presentation_pending = false;
+        self.presentation_wait = None;
+        if changed {
+            self.bump_draw_revision();
+        }
+        changes
+    }
+
+    fn candidate_slot(&self, coord: &QuadCoord) -> Option<&TileSlot> {
+        self.pending_replacements
+            .get(coord)
+            .filter(|slot| slot.ready)
+            .or_else(|| self.tiles.get(coord).filter(|slot| slot.ready))
+    }
+
+    fn fresh_slot(&self, coord: &QuadCoord, generation: u32) -> bool {
+        self.pending_replacements
+            .get(coord)
+            .or_else(|| self.tiles.get(coord))
+            .is_some_and(|slot| slot.r#gen == generation)
     }
 
     /// Invalidate the streamer's cached render-readiness when the render binder
@@ -1089,55 +2215,57 @@ impl LodTiles {
     /// keep an invalid material visible until another tile happened to spawn.
     fn invalidate_material_readiness(&mut self, entity: Entity) -> bool {
         let mut was_drawn = false;
-        if self.tiles.values().any(|slot| slot.entity == entity) {
+        let mut changed = false;
+        if self
+            .tiles
+            .values()
+            .chain(self.pending_replacements.values())
+            .any(|slot| slot.entity == entity)
+        {
             self.materials_ready = false;
-            for slot in self.tiles.values_mut().filter(|slot| slot.entity == entity) {
+            for slot in self
+                .tiles
+                .values_mut()
+                .chain(self.pending_replacements.values_mut())
+                .filter(|slot| slot.entity == entity)
+            {
+                changed |= slot.ready || slot.drawn;
                 slot.ready = false;
                 was_drawn |= slot.drawn;
                 slot.drawn = false;
             }
+        }
+        if changed {
+            self.bump_draw_revision();
         }
         was_drawn
     }
 
     /// Every resident tile entity (the late-bind / live-tune targets).
     pub(crate) fn tile_entities(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.tiles.values().map(|s| s.entity)
+        self.tiles
+            .values()
+            .chain(self.pending_replacements.values())
+            .map(|s| s.entity)
     }
 
     /// Material geometry inputs for the live diagnostic tool. The morph band is
     /// snapped at the same boundary as normal tile creation so changing the
     /// diagnostic mode cannot silently create a different material topology.
-    pub(crate) fn tile_material_specs(&self) -> impl Iterator<Item = (Entity, u32, f32, f32)> + '_ {
-        self.tiles.iter().map(move |(coord, slot)| {
-            let (morph_start, morph_end, _) = snap_band(slot.morph_end, self.morph_ratio);
-            (slot.entity, coord.depth as u32, morph_start, morph_end)
-        })
-    }
-
-    /// Selected render leaves fulfilling one canonical support node.
-    pub(crate) fn contact_tiles(
+    pub(crate) fn tile_material_specs(
         &self,
-        coord: QuadCoord,
-    ) -> impl Iterator<Item = (QuadCoord, Option<(Entity, bool, bool, bool)>)> + '_ {
-        self.cover_selected
+    ) -> impl Iterator<Item = (Entity, u32, f32, f32, [f32; 4])> + '_ {
+        self.tiles
             .iter()
-            .filter(move |selected| {
-                selected.coord.depth >= coord.depth
-                    && (selected.coord.x >> (selected.coord.depth - coord.depth)) == coord.x
-                    && (selected.coord.z >> (selected.coord.depth - coord.depth)) == coord.z
-            })
-            .map(|selected| {
+            .chain(self.pending_replacements.iter())
+            .map(move |(coord, slot)| {
+                let (morph_start, morph_end, _) = snap_band(slot.morph_end, self.morph_ratio);
                 (
-                    selected.coord,
-                    self.tiles.get(&selected.coord).map(|slot| {
-                        (
-                            slot.entity,
-                            slot.ready,
-                            slot.drawn,
-                            slot.morph_end >= 1.0e20,
-                        )
-                    }),
+                    slot.entity,
+                    coord.depth as u32,
+                    morph_start,
+                    morph_end,
+                    slot.stitch_edges,
                 )
             })
     }
@@ -1152,20 +2280,12 @@ impl LodTiles {
                     selected.coord.depth,
                     self.tiles
                         .get(&selected.coord)
-                        .is_some_and(|slot| slot.ready && slot.drawn),
+                        .is_some_and(|slot| slot.r#gen == self.r#gen && slot.ready && slot.drawn),
                     self.tiles
                         .get(&selected.coord)
                         .is_some_and(|slot| slot.morph_end >= 1.0e20),
                 )
             })
-    }
-
-    /// Bump the generation: every live tile becomes stale and re-bakes from the new
-    /// heights, near-camera-first, while still covering the surface until replaced.
-    /// Called by the live re-bake instead of despawning the whole tile set.
-    pub fn invalidate(&mut self) {
-        self.r#gen = self.r#gen.wrapping_add(1);
-        self.coarse_ready = false;
     }
 
     /// Invalidate only the tiles whose world footprint overlaps the committed
@@ -1176,10 +2296,15 @@ impl LodTiles {
     /// overlapping tiles fall through to a re-bake. `None` bounds = whole terrain →
     /// same as [`invalidate`]. `root_half_extent` is the DEM half-extent (the
     /// quadtree root region), so each tile's square derives from its `QuadCoord`.
-    pub fn invalidate_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+    fn invalidate_region(&mut self, bounds: Option<[f64; 4]>, root_half_extent: f64) {
+        self.bump_draw_revision();
         let new_gen = self.r#gen.wrapping_add(1);
         if let Some(aabb) = bounds {
-            for (coord, slot) in self.tiles.iter_mut() {
+            for (coord, slot) in self
+                .tiles
+                .iter_mut()
+                .chain(self.pending_replacements.iter_mut())
+            {
                 // Non-overlapping tiles keep the NEW gen → stay fresh (skipped).
                 // Overlapping tiles keep their OLD gen → stale → re-baked.
                 if !node_overlaps_aabb(*coord, root_half_extent, aabb) {
@@ -1191,22 +2316,29 @@ impl LodTiles {
         self.coarse_ready = false;
     }
 
-    /// Remove (and return for despawn) every tile already stale from a PRIOR
-    /// invalidation — i.e. older than the current generation. Called right before a
-    /// new `invalidate()` so that rapid successive re-bakes keep at most ONE
-    /// generation of hole-cover instead of piling up generations of dead tiles (which
-    /// made the per-frame tile bookkeeping go O(n²) and tanked the frame rate).
-    pub fn reap_stale(&mut self) -> Vec<Entity> {
+    /// Keep the one published partition across repeated invalidations. Hidden
+    /// stale candidates retire immediately; a visible old mesh is released only
+    /// by a successfully admitted successor transaction.
+    fn reap_stale(&mut self) -> Vec<Entity> {
         let cur = self.r#gen;
         let mut dead = Vec::new();
         self.tiles.retain(|_, slot| {
-            if slot.r#gen == cur {
-                true
-            } else {
+            let keep = slot.r#gen == cur || slot.drawn;
+            if !keep {
                 dead.push(slot.entity);
-                false
             }
+            keep
         });
+        self.pending_replacements.retain(|_, slot| {
+            let keep = slot.r#gen == cur;
+            if !keep {
+                dead.push(slot.entity);
+            }
+            keep
+        });
+        if !dead.is_empty() {
+            self.bump_draw_revision();
+        }
         dead
     }
 }
@@ -1224,7 +2356,7 @@ struct SelectedCoverStatus {
 /// re-bakes, so it contributes to `resident`. It cannot make the cover complete:
 /// the idle gate may stop only after every selected leaf is current-generation,
 /// material-bound, and selected by the exact draw partition.
-fn selected_cover_status(tiles: &LodTiles, current_generation: u32) -> SelectedCoverStatus {
+fn selected_cover_status(tiles: &LodView, current_generation: u32) -> SelectedCoverStatus {
     let wanted = tiles.cover_selected.len();
     let resident = tiles
         .cover_selected
@@ -1319,7 +2451,7 @@ pub struct SetTerrainRenderingQuality {
 fn on_set_terrain_rendering_quality(
     trigger: On<SetTerrainRenderingQuality>,
     mut settings: ResMut<lunco_render::RenderingQualitySettings>,
-) {
+) -> Result<lunco_command_contracts::Ack, lunco_command_contracts::Reject> {
     let event = trigger.event();
     let mut candidate = *settings;
     if let Some(value) = event.tile_resolution {
@@ -1356,10 +2488,13 @@ fn on_set_terrain_rendering_quality(
         candidate.terrain_lod_morph_start_ratio = value;
     }
     if let Err(reason) = candidate.validate() {
-        bevy::log::error!(target: "terrain", "rejected terrain rendering quality: {reason}");
-        return;
+        bevy::log::warn!(target: "terrain", "rejected terrain rendering quality: {reason}");
+        return Err(lunco_command_contracts::Reject::InvalidOp(reason.into()));
     }
     *settings = candidate;
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
 }
 
 register_commands!(on_set_terrain_rendering_quality);
@@ -1384,26 +2519,27 @@ pub struct TerrainNodeGeometry {
 /// function of its `QuadCoord` (deterministic DEM sampling), so a despawned tile
 /// re-selected later (LOD-boundary oscillation, revisiting an area) reuses its mesh
 /// handle instead of re-baking + re-uploading — the "tile caching" that was missing.
-/// Bounded: LRU-trimmed against a resident-derived entry cap and the
-/// authoritative graphics-settings byte ceiling (see
-/// [`mesh_cache_entry_cap`] / `lunco_render::RenderingQualitySettings`);
-/// entries the current frame's cover needs are never evicted.
+/// Upload admission enforces the graphics settings' logical GPU upload byte
+/// ceiling across all sources and views. Invalidated meshes remain accounted
+/// while live or retiring tile entities own them. LRU eviction releases only
+/// unused handles; ready CPU bakes wait when residents leave insufficient room.
 /// Value: the cached mesh handle AND the `origin_y` its vertices were rebased by at
 /// bake time. `origin_y` MUST travel with the mesh — the tile is placed at it, so a
 /// recompute at spawn (against a since-changed oracle, e.g. a crater layer composed
 /// mid-load) would seat the mesh at a different height than it was baked for and the
 /// tile would jump/jitter. Stored together, mesh and placement can never disagree.
-type MeshCacheKey = (Entity, QuadCoord, usize, Option<u8>);
+type MeshCacheKey = (Entity, QuadCoord, usize);
 
 /// One cached tile mesh plus its LRU/byte bookkeeping.
 struct MeshCacheEntry {
     mesh: Handle<Mesh>,
     /// Surface height the mesh Y was rebased by at bake time (see the type doc).
     origin_y: f64,
+    draw_bounds: Option<TerrainDrawBounds>,
     /// The cache's monotone clock at last hit/insert — the LRU stamp. Unique
     /// per touch, so eviction order is a total (deterministic) order.
     last_used: u64,
-    /// Estimated upload footprint of this mesh ([`tile_mesh_bytes`]).
+    /// Measured packed mesh bytes for retained CPU and uploaded GPU copies.
     bytes: usize,
 }
 
@@ -1412,9 +2548,10 @@ pub struct LodMeshCache {
     map: HashMap<MeshCacheKey, MeshCacheEntry>,
     /// Monotone LRU clock, bumped on every touch.
     clock: u64,
-    /// Running byte estimate over all entries — kept incrementally because the
-    /// trim check runs every frame and re-summing would be O(n).
-    bytes: usize,
+    /// Invalidated cache identities still held by live or retiring geometry.
+    retired: HashMap<AssetId<Mesh>, usize>,
+    /// All live tile handles plus handles admitted or reused this publication frame.
+    protected: HashSet<AssetId<Mesh>>,
 }
 
 impl LodMeshCache {
@@ -1424,39 +2561,48 @@ impl LodMeshCache {
     }
 
     /// Cache hit: return the mesh + its baked `origin_y`, refreshing the LRU stamp.
-    fn get(&mut self, key: &MeshCacheKey) -> Option<(Handle<Mesh>, f64)> {
+    fn get(
+        &mut self,
+        key: &MeshCacheKey,
+    ) -> Option<(Handle<Mesh>, f64, Option<TerrainDrawBounds>)> {
         let now = self.tick();
         let entry = self.map.get_mut(key)?;
         entry.last_used = now;
-        Some((entry.mesh.clone(), entry.origin_y))
+        self.protected.insert(entry.mesh.id());
+        Some((entry.mesh.clone(), entry.origin_y, entry.draw_bounds))
     }
 
-    fn insert(&mut self, key: MeshCacheKey, mesh: Handle<Mesh>, origin_y: f64) {
+    fn insert(
+        &mut self,
+        key: MeshCacheKey,
+        mesh: Handle<Mesh>,
+        origin_y: f64,
+        draw_bounds: Option<TerrainDrawBounds>,
+        bytes: usize,
+    ) {
         let now = self.tick();
-        let last = (1u32 << key.1.depth) - 1;
-        let boundary = key.1.x == 0 || key.1.z == 0 || key.1.x == last || key.1.z == last;
-        let bytes = tile_mesh_bytes(key.2) * if boundary || key.3.is_some() { 2 } else { 1 };
-        self.bytes += bytes;
+        self.protected.insert(mesh.id());
         if let Some(old) = self.map.insert(
             key,
             MeshCacheEntry {
                 mesh,
                 origin_y,
+                draw_bounds,
                 last_used: now,
                 bytes,
             },
         ) {
-            self.bytes -= old.bytes;
+            self.retired.insert(old.mesh.id(), old.bytes);
         }
     }
 
-    /// `retain` with the running byte estimate kept in step.
+    /// Invalidated cache identities remain accounted while geometry owns them.
     fn retain_entries(&mut self, mut keep: impl FnMut(&MeshCacheKey) -> bool) {
-        let bytes = &mut self.bytes;
+        let retired = &mut self.retired;
         self.map.retain(|key, entry| {
             let kept = keep(key);
             if !kept {
-                *bytes -= entry.bytes;
+                retired.insert(entry.mesh.id(), entry.bytes);
             }
             kept
         });
@@ -1464,7 +2610,7 @@ impl LodMeshCache {
 
     /// Drop every entry whose terrain is dead (the orphan sweep's eviction).
     pub(crate) fn retain_terrains(&mut self, keep: impl Fn(Entity) -> bool) {
-        self.retain_entries(|(t, _, _, _)| keep(*t));
+        self.retain_entries(|(t, _, _)| keep(*t));
     }
 
     /// Drop cached meshes a live height edit invalidated, scoped to one `terrain`.
@@ -1483,46 +2629,104 @@ impl LodMeshCache {
         root_half_extent: f64,
     ) {
         match bounds {
-            None => self.retain_entries(|(e, _, _, _)| *e != terrain),
-            Some(aabb) => self.retain_entries(|(e, coord, _, _)| {
+            None => self.retain_entries(|(e, _, _)| *e != terrain),
+            Some(aabb) => self.retain_entries(|(e, coord, _)| {
                 *e != terrain || !node_overlaps_aabb(*coord, root_half_extent, aabb)
             }),
         }
     }
 
-    /// LRU trim to `entry_cap` entries / `byte_cap` bytes.
-    /// `protected` entries — the current frame's cover and its fallback coords —
-    /// are NEVER evicted: dropping what the cover still cycles through is exactly
-    /// the old failure (cap below the resident bound ⇒ every trailing-edge tile
-    /// re-baked on revisit). Victims go oldest-stamp-first, a total order.
-    fn trim(&mut self, entry_cap: usize, byte_cap: u64, protected: impl Fn(&MeshCacheKey) -> bool) {
-        if self.map.len() <= entry_cap && (self.bytes as u64) <= byte_cap {
-            return;
+    /// Capture every live view's mesh identities, including retiring tiles.
+    fn begin_frame(&mut self, live: HashSet<AssetId<Mesh>>) {
+        self.protected = live;
+        self.retired.retain(|id, _| self.protected.contains(id));
+    }
+
+    fn unique_meshes(&self) -> HashMap<AssetId<Mesh>, usize> {
+        let mut unique = self.retired.clone();
+        for entry in self.map.values() {
+            unique.insert(entry.mesh.id(), entry.bytes);
         }
+        unique
+    }
+
+    fn accounted_bytes(&self) -> u64 {
+        self.unique_meshes()
+            .values()
+            .map(|bytes| *bytes as u64)
+            .sum()
+    }
+
+    /// Retire only unused cache handles. Actual global residents and handles
+    /// published through deferred commands this frame always retain coverage.
+    fn trim(&mut self, entry_cap: usize, byte_cap: u64) {
         let mut victims: Vec<(u64, MeshCacheKey)> = self
             .map
             .iter()
-            .filter(|(key, _)| !protected(key))
+            .filter(|(_, entry)| !self.protected.contains(&entry.mesh.id()))
             .map(|(key, entry)| (entry.last_used, *key))
             .collect();
         victims.sort_unstable_by_key(|&(stamp, _)| stamp);
         for (_, key) in victims {
-            if self.map.len() <= entry_cap && (self.bytes as u64) <= byte_cap {
+            if self.map.len() <= entry_cap && self.accounted_bytes() <= byte_cap {
                 break;
             }
             if let Some(entry) = self.map.remove(&key) {
-                self.bytes -= entry.bytes;
+                debug_assert!(!self.protected.contains(&entry.mesh.id()));
             }
         }
+    }
+
+    /// Admission precedes upload. Lowering a limit can leave old residents
+    /// above it; their replacement waits while ancestor geometry stays visible.
+    fn admit_upload(&mut self, bytes: u64, byte_cap: u64) -> bool {
+        if bytes > byte_cap {
+            return false;
+        }
+        self.trim(usize::MAX, byte_cap.saturating_sub(bytes));
+        self.accounted_bytes()
+            .checked_add(bytes)
+            .is_some_and(|total| total <= byte_cap)
+    }
+
+    fn publish_accounting(&self, status: &mut TerrainStreamStatus, byte_cap: u64) {
+        let unique = self.unique_meshes();
+        let cached = self
+            .map
+            .values()
+            .map(|entry| entry.mesh.id())
+            .collect::<HashSet<_>>();
+        status.mesh_accounted_bytes = unique.values().map(|bytes| *bytes as u64).sum();
+        status.mesh_cpu_bytes = status.mesh_accounted_bytes;
+        status.mesh_resident_bytes = unique
+            .iter()
+            .filter(|(id, _)| self.protected.contains(id))
+            .map(|(_, bytes)| *bytes as u64)
+            .sum();
+        status.mesh_cached_bytes = unique
+            .iter()
+            .filter(|(id, _)| cached.contains(id))
+            .map(|(_, bytes)| *bytes as u64)
+            .sum();
+        status.mesh_retired_bytes = unique
+            .iter()
+            .filter(|(id, _)| !cached.contains(id))
+            .map(|(_, bytes)| *bytes as u64)
+            .sum();
+        status.mesh_byte_limit = byte_cap;
     }
 }
 
 /// Byte estimate of one cached tile mesh as uploaded: per `res²` vertex, four
-/// 12-B vec3 attributes (position, normal, morph target, morph normal) + an
-/// 8-B uv, plus `(res−1)²·6` u32 indices. 49² ⇒ ~190 KB; a 2049² cinematic
-/// tile ⇒ ~330 MB — which is why the ceiling is byte-based, not entry-count.
+/// 12-B vec3 attributes (position, normal, morph target, morph normal), an
+/// 8-B uv and a 16-B edge mask, plus `(res−1)²·6` u32 indices. A 49² tile
+/// uses about 223 KiB per copy; a 2049² cinematic tile uses about 384 MiB.
+/// Admission preserves the graphics setting's GPU upload semantics. The retained
+/// CPU geometry is reported separately. Backend-derived resources, such as
+/// path-tracing geometry, have their own owner.
+#[cfg(test)]
 fn tile_mesh_bytes(res: usize) -> usize {
-    res * res * (4 * 12 + 8) + (res - 1) * (res - 1) * 6 * 4
+    res * res * (4 * 12 + 8 + 16) + (res - 1) * (res - 1) * 6 * 4
 }
 
 /// Cache-entry cap derived from what streaming terrains can actually keep
@@ -1549,11 +2753,48 @@ struct BakedTile {
     depth: u32,
     /// Verts per side the mesh was baked at — part of the mesh-cache key.
     res: usize,
-    /// Canonical physical depth represented by this render mesh.
-    contact: Option<u8>,
-    morph_end: f32,
     /// Surface height at the tile centre the mesh Y was rebased by (see `LodMeshCache`).
     origin_y: f64,
+    draw_bounds: Option<TerrainDrawBounds>,
+    bytes: usize,
+}
+
+/// Finite local hull of both exact fine and parent-morph postings. Every
+/// distance morph and stitched edge lies inside this convex axis-aligned hull.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TerrainDrawBounds {
+    pub min: DVec3,
+    pub max: DVec3,
+    /// Componentwise displacement envelope of every fine-to-parent posting.
+    pub parent_displacement: DVec3,
+}
+
+fn terrain_draw_bounds(fine: &[[f32; 3]], parent: &[[f32; 3]]) -> Option<TerrainDrawBounds> {
+    if fine.is_empty() || parent.len() != fine.len() {
+        return None;
+    }
+    let mut min = DVec3::splat(f64::INFINITY);
+    let mut max = DVec3::splat(f64::NEG_INFINITY);
+    let mut parent_displacement = DVec3::ZERO;
+    for (fine, parent) in fine.iter().zip(parent) {
+        let fine = Vec3::from_array(*fine).as_dvec3();
+        let parent = Vec3::from_array(*parent).as_dvec3();
+        if !fine.is_finite() || !parent.is_finite() {
+            return None;
+        }
+        min = min.min(fine).min(parent);
+        max = max.max(fine).max(parent);
+        parent_displacement = parent_displacement.max((parent - fine).abs());
+    }
+    Some(TerrainDrawBounds {
+        min,
+        max,
+        parent_displacement,
+    })
+}
+
+fn measured_mesh_bytes(mesh: &Mesh) -> usize {
+    mesh.get_vertex_buffer_size() + mesh.get_index_buffer_bytes().map_or(0, |bytes| bytes.len())
 }
 
 fn assemble_baked_tile(
@@ -1562,22 +2803,9 @@ fn assemble_baked_tile(
     center: [f64; 2],
     depth: u32,
     resolution: usize,
-    morph_end: f32,
-    contact: Option<u8>,
 ) -> BakedTile {
-    // Retain crop boundaries and physical-surface meshes for bounded inspection.
-    // Discretionary coarse interiors remain GPU-only.
-    let half = f64::from(oracle.grid().half_extent);
-    let boundary_mesh = tile_mesh.positions.iter().any(|p| {
-        let x = center[0] + f64::from(p[0]);
-        let z = center[1] + f64::from(p[2]);
-        (x.abs() - half).abs() < 1e-4 || (z.abs() - half).abs() < 1e-4
-    });
-    let usage = if boundary_mesh || contact.is_some() {
-        bevy::asset::RenderAssetUsages::default()
-    } else {
-        bevy::asset::RenderAssetUsages::RENDER_WORLD
-    };
+    let draw_bounds = terrain_draw_bounds(&tile_mesh.positions, &tile_mesh.morph_targets);
+    let usage = bevy::asset::RenderAssetUsages::default();
     let mut mesh = grid_mesh(
         tile_mesh.positions,
         tile_mesh.normals,
@@ -1588,14 +2816,15 @@ fn assemble_baked_tile(
     mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, tile_mesh.morph_targets);
     mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, tile_mesh.morph_normals);
     mesh.insert_attribute(ATTRIBUTE_MORPH_EDGE, tile_mesh.edge_masks);
+    let bytes = measured_mesh_bytes(&mesh);
     BakedTile {
         mesh,
         center,
         depth,
         res: resolution,
-        contact,
-        morph_end,
         origin_y: oracle.height_at(center[0], center[1]),
+        draw_bounds,
+        bytes,
     }
 }
 
@@ -1900,6 +3129,18 @@ pub(crate) fn apply_terrain_maps_to_look(
     maps: Option<&TerrainDerivedMaps>,
     authored: Option<&TerrainAuthoredMaps>,
 ) {
+    let regional_albedo = authored.and_then(|maps| maps.regional_albedo.as_ref());
+    set_texture(look, TextureLayer::RegionalAlbedo, regional_albedo);
+    let registered = matches!(look.values().get("regional_uv_scale"), Some(ParamValue::F32(scale)) if *scale > 0.0);
+    set_param(
+        look,
+        "regional_albedo_on",
+        ParamValue::F32(if registered && regional_albedo.is_some() {
+            1.0
+        } else {
+            0.0
+        }),
+    );
     let authored_surface = authored.is_some_and(TerrainAuthoredMaps::has_active_surface);
     let authored_normal = authored.is_some_and(TerrainAuthoredMaps::has_active_normal);
 
@@ -2098,6 +3339,10 @@ fn lunar_surface_continuation_look(
     };
     look.set_value("site_weight_rough", ParamValue::F32(weight_rough));
     look.set_value("site_weight_ao", ParamValue::F32(weight_ao));
+    look.set_value(
+        "site_authored_surface_on",
+        ParamValue::F32(if authored_surface.is_some() { 1.0 } else { 0.0 }),
+    );
     Ok(look)
 }
 
@@ -2239,6 +3484,7 @@ pub(crate) fn sync_terrain_visual_continuations(
     mut removed_looks: RemovedComponents<ShaderLook>,
     mut removed_interfaces: RemovedComponents<lunco_materials::ShaderLookSourceInterface>,
     mut removed_shader_ready: RemovedComponents<ShaderLookReady>,
+    mut removed_terrain: RemovedComponents<DemTerrainSurface>,
     terrain_sources: Query<
         (
             &ShaderLook,
@@ -2283,7 +3529,9 @@ pub(crate) fn sync_terrain_visual_continuations(
     scene_transition: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
+    let retired_terrain: HashSet<Entity> = removed_terrain.read().collect();
     let mut changed_terrain_entities: HashSet<Entity> = changed_terrain_sources.iter().collect();
+    changed_terrain_entities.extend(retired_terrain.iter().copied());
     changed_terrain_entities.extend(removed_derived.read());
     changed_terrain_entities.extend(removed_authored.read());
     changed_terrain_entities.extend(removed_looks.read());
@@ -2328,6 +3576,16 @@ pub(crate) fn sync_terrain_visual_continuations(
     for (target, continuation, current, reflected_interface, mut visibility, shader_ready) in
         changed
     {
+        // The DEM owner may retire while the globe reconciler is still
+        // removing its handoff. Retire this derived binding immediately;
+        // it no longer has a scene source and must not publish a fault.
+        if retired_terrain.contains(&continuation.source) {
+            *visibility = Visibility::Hidden;
+            commands
+                .entity(target)
+                .remove::<TerrainVisualContinuation>();
+            continue;
+        }
         let surface_look = &continuation.surface_look;
         let reflected_interface = reflected_interface.as_ref();
         let policy_action =
@@ -2518,6 +3776,8 @@ pub(crate) fn tile_look(
     morph_end: f32,
     maps: Option<&TerrainDerivedMaps>,
     terrain_half_extent: f32,
+    regional_map_blend_m: f32,
+    regional_uv_scale: f32,
     authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
     diagnostic: &ShaderLook,
@@ -2578,6 +3838,18 @@ pub(crate) fn tile_look(
         "terrain_half_extent",
         ParamValue::F32(terrain_half_extent),
     );
+    if regional_map_blend_m > 0.0 {
+        set_param(
+            &mut look,
+            "site_blend_widths_m",
+            ParamValue::Vec4([regional_map_blend_m; 4]),
+        );
+    }
+    set_param(
+        &mut look,
+        "regional_uv_scale",
+        ParamValue::F32(regional_uv_scale),
+    );
     // Every streamed tile is sampled from the terrain's composed DEM oracle.
     // Keep the relief-source fact on the look itself so the canonical fragment
     // does not guess from whichever derived map happens to be available.
@@ -2597,14 +3869,19 @@ fn spawn_tile(
     grid: &Grid,
     grid_entity: Entity,
     terrain: Entity,
+    view_camera: Entity,
+    render_layer: usize,
     coord: QuadCoord,
     mesh: Handle<Mesh>,
+    draw_bounds: Option<TerrainDrawBounds>,
     center: [f64; 2],
     depth: u32,
     morph_end: f32,
     morph_ratio: f32,
     maps: Option<&TerrainDerivedMaps>,
     terrain_half_extent: f32,
+    regional_map_blend_m: f32,
+    regional_uv_scale: f32,
     authored: Option<&TerrainAuthoredMaps>,
     shadow: Option<&TileShadowCache>,
     template: &ShaderLook,
@@ -2638,6 +3915,8 @@ fn spawn_tile(
             me,
             maps,
             terrain_half_extent,
+            regional_map_blend_m,
+            regional_uv_scale,
             authored,
             shadow,
             diagnostic,
@@ -2655,7 +3934,12 @@ fn spawn_tile(
         // BigSpace's existing stationary path to prune this high-precision
         // leaf from propagation and spatial-hash work on stable frames.
         Stationary,
+        lunco_core::SceneOwned,
         LodTileOf(terrain),
+        lunco_render::camera::SceneViewGeometry {
+            camera: view_camera,
+        },
+        bevy::camera::visibility::RenderLayers::none().with(render_layer),
         Name::new(format!("LodTile d{} {},{}", coord.depth, coord.x, coord.z)),
         // Streamed runtime detail, not scene content — hidden from the Entity
         // list unless the user opts in.
@@ -2664,6 +3948,9 @@ fn spawn_tile(
     ));
     if overlay.mode > 0.5 {
         tile.try_insert(TerrainDiagnosticTile);
+    }
+    if let Some(bounds) = draw_bounds {
+        tile.try_insert(bounds);
     }
     tile.try_remove::<bevy::light::NotShadowReceiver>();
     tile.id()
@@ -2682,6 +3969,23 @@ pub(crate) struct TerrainDiagnosticTile;
 /// a pure derived read.
 #[derive(Resource, Default, Clone, Copy)]
 pub struct TerrainStreamStatus {
+    /// Unique GPU upload estimate across every source and view.
+    pub mesh_accounted_bytes: u64,
+    /// Retained CPU vertex/index payload, reported outside the GPU byte ceiling.
+    pub mesh_cpu_bytes: u64,
+    /// Accounted meshes referenced by live, retiring, or newly published tiles.
+    pub mesh_resident_bytes: u64,
+    /// Unique mesh estimate addressable by current cache keys; overlaps residents.
+    pub mesh_cached_bytes: u64,
+    /// Live old-generation meshes whose cache identity was invalidated.
+    pub mesh_retired_bytes: u64,
+    pub mesh_byte_limit: u64,
+    /// CPU-ready meshes waiting for logical residency byte admission.
+    pub mesh_upload_refused: usize,
+    /// Largest individual waiting upload estimate, for an unsatisfied profile.
+    pub mesh_upload_required_bytes: u64,
+    /// Exhausted revisions withdraw exact drawn-surface query availability.
+    pub draw_revision_exhausted: usize,
     /// Tiles the current selection wants on screen (all streaming terrains).
     pub wanted: usize,
     /// Wanted tiles with a resident mesh entity (stale-but-covering counts —
@@ -2690,6 +3994,11 @@ pub struct TerrainStreamStatus {
     /// Stream work not yet render-ready: cover preparation, off-thread bakes,
     /// and selected tiles waiting for the render binder to install a material.
     pub pending: usize,
+    /// Views whose finalized latest demand has not reached a settled,
+    /// current-generation drawn cover, including work not yet queued.
+    pub selection_pending: usize,
+    /// Views retaining their published partition while a candidate awaits stationary camera clearance.
+    pub presentation_pending: usize,
     /// Obsolete in-flight requests dropped this frame after selection moved on.
     pub stale_cancelled: usize,
     /// Splits the selection wanted but `tile_budget` refused (summed over
@@ -2697,11 +4006,78 @@ pub struct TerrainStreamStatus {
     /// camera means areas hold on coarser parents until `tile_budget` is raised
     /// or `pixel_error` coarsened.
     pub budget_refused: usize,
+    /// Navigation corridors whose finest-node or restricted-cover admission
+    /// exceeded the configured tile/work capacity.
+    pub preparation_refused: usize,
     /// Active camera demands resolved in a streaming terrain frame.
     pub focus_wanted: usize,
     /// Camera positions whose exact selected tile is ready; positions outside
     /// the finite footprint have no selected tile.
     pub focus_resident: usize,
+}
+impl lunco_core::SceneResource for TerrainStreamStatus {}
+impl TerrainStreamStatus {
+    fn publish_selection_pending(&mut self, pending: usize) {
+        self.pending = self.pending.saturating_sub(self.selection_pending) + pending;
+        self.selection_pending = pending;
+    }
+}
+
+fn publish_mesh_pressure(
+    status: &TerrainStreamStatus,
+    diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+) {
+    let Some(diagnostics) = diagnostics.as_deref_mut() else {
+        return;
+    };
+    let mut findings = if status.mesh_upload_refused > 0
+        || status.mesh_accounted_bytes > status.mesh_byte_limit
+    {
+        vec![lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(),
+            code: "mesh-upload-waiting".into(),
+            severity: lunco_core::DiagnosticSeverity::Info,
+            subject: "terrain mesh residency".into(),
+            message: format!(
+                "terrain mesh residency admission pending: {} ready upload(s) waiting, {} estimated bytes retained, {} byte limit, largest pending mesh {} bytes",
+                status.mesh_upload_refused,
+                status.mesh_accounted_bytes,
+                status.mesh_byte_limit,
+                status.mesh_upload_required_bytes
+            ),
+        }]
+    } else {
+        Vec::new()
+    };
+    if status.draw_revision_exhausted > 0 {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(), code: "draw-revision-exhausted".into(),
+            severity: lunco_core::DiagnosticSeverity::Error, subject: "terrain drawn surface".into(),
+            message: "terrain drawn-surface revision is exhausted; exact camera collision queries are unavailable".into(),
+        });
+    }
+    if status.preparation_refused > 0 {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(), code: "preparation-capacity-refused".into(),
+            severity: lunco_core::DiagnosticSeverity::Info, subject: "terrain camera preparation".into(),
+            message: format!("{} finest corridor requirement(s) exceed the configured terrain cover/work capacity", status.preparation_refused),
+        });
+    }
+    if status.presentation_pending > 0 {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(), code: "presentation-waiting".into(),
+            severity: lunco_core::DiagnosticSeverity::Info, subject: "terrain drawn surface".into(),
+            message: format!("{} terrain view(s) retain their published surface while replacement geometry awaits camera clearance", status.presentation_pending),
+        });
+    }
+    if diagnostics
+        .findings
+        .iter()
+        .filter(|finding| finding.producer == "terrain-mesh-residency")
+        .ne(findings.iter())
+    {
+        diagnostics.replace_producer("terrain-mesh-residency", findings);
+    }
 }
 
 /// Count the stream work that still has to cross the render-readiness boundary.
@@ -2715,11 +4091,17 @@ pub struct TerrainStreamStatus {
 fn render_pending_count(
     pending_bakes: usize,
     wanted: &HashSet<QuadCoord>,
-    tiles: &LodTiles,
+    tiles: &LodView,
 ) -> usize {
     let wanted_unready = wanted
         .iter()
-        .filter(|coord| tiles.tiles.get(coord).is_some_and(|slot| !slot.ready))
+        .filter(|coord| {
+            tiles
+                .pending_replacements
+                .get(coord)
+                .or_else(|| tiles.tiles.get(coord))
+                .is_some_and(|slot| !slot.ready)
+        })
         .count();
     let root_unready = (!wanted.contains(&QuadCoord::ROOT)
         && !tiles.coarse_ready
@@ -2748,22 +4130,11 @@ fn required_focus_depth(
         .min()
 }
 
-fn near_field_error_floor(
-    region: Square,
-    heights: [f64; 2],
-    tile_res: usize,
-    demands: &[TerrainVisualDemand],
-) -> f64 {
-    if demands.iter().any(|focus| {
-        focus.required
-            && region
-                .distance_to_height_range([focus.focus[0], focus.camera_y, focus.focus[1]], heights)
-                <= focus.near_detail_radius_m
-    }) {
-        region.side() / (tile_res - 1) as f64
-    } else {
-        0.0
-    }
+fn projected_posting_error_floor(region: Square, tile_res: usize) -> f64 {
+    // Coarse probes intentionally omit unresolved source bands. Projected
+    // posting density must therefore keep driving discovery at every camera
+    // range, independently of measured intrinsic relief and the near-field pins.
+    region.side() / (tile_res - 1) as f64
 }
 
 fn near_field_retains_refinement(
@@ -2773,6 +4144,7 @@ fn near_field_retains_refinement(
 ) -> bool {
     demands.iter().any(|focus| {
         focus.required
+            && matches!(focus.projection, TerrainProjection::Perspective { .. })
             && region
                 .distance_to_height_range([focus.focus[0], focus.camera_y, focus.focus[1]], heights)
                 <= focus.near_detail_radius_m + focus.near_detail_hysteresis_m
@@ -2890,6 +4262,14 @@ impl TerrainStreamCadence {
     }
 }
 
+fn terrain_cover_selection_due(
+    cadence_due: bool,
+    last_admission: Option<u64>,
+    current: u64,
+) -> bool {
+    cadence_due || last_admission != Some(current)
+}
+
 #[derive(Resource, Default, Clone)]
 pub(crate) struct TerrainCoverResults {
     queue: Arc<Mutex<VecDeque<TerrainCoverCompletion>>>,
@@ -2927,23 +4307,352 @@ pub struct TerrainStreamEnvironment<'w, 's> {
     grids: Query<'w, 's, &'static Grid>,
     spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
     material_bound: Query<'w, 's, (), With<ShaderLookReady>>,
-    contacts: Query<
+    draw_geometry: Query<
         'w,
         's,
         (
-            &'static crate::collider_ring::TerrainColliderRing,
-            &'static crate::collider_ring::ColliderTiles,
+            Ref<'static, Mesh3d>,
+            Ref<'static, ShaderLook>,
+            Ref<'static, GlobalTransform>,
+            Option<&'static TerrainDrawBounds>,
         ),
     >,
+    envelopes: Query<'w, 's, &'static lunco_camera_core::CameraCollisionEnvelope>,
+    precision: lunco_spatial::coords::RenderPrecisionQuery<'w, 's>,
+    occlusion_budget: Option<Res<'w, crate::occlusion::SurfaceOcclusionBudget>>,
+    origin_controllers: Query<
+        'w,
+        's,
+        Ref<'static, lunco_spatial::world::RenderOriginController>,
+        With<lunco_spatial::world::OriginAnchor>,
+    >,
+    live_meshes: Query<
+        'w,
+        's,
+        &'static Mesh3d,
+        (
+            With<LodTileOf>,
+            bevy::ecs::query::Allow<bevy::ecs::entity_disabling::Disabled>,
+        ),
+    >,
+    diagnostics: Option<ResMut<'w, lunco_core::RuntimeDiagnostics>>,
+}
+
+impl TerrainStreamEnvironment<'_, '_> {
+    /// Read the navigating owner's current native pose, including a camera move
+    /// already committed this Update before low-precision propagation runs.
+    fn publication_eye(&self, source: Entity) -> Result<DVec3, String> {
+        let parent = self
+            .parents
+            .get(source)
+            .map_err(|_| "navigating camera has no grid parent")?
+            .parent();
+        let grid = self
+            .grids
+            .get(parent)
+            .map_err(|_| "navigating camera parent is not a native grid")?;
+        let (cell, transform) = self
+            .spatial
+            .get(source)
+            .map_err(|_| "navigating camera pose is unavailable")?;
+        let cell = cell.ok_or("navigating camera has no native cell")?;
+        let eye = grid
+            .global_transform(cell, transform)
+            .translation()
+            .as_dvec3();
+        if !eye.is_finite() {
+            return Err("navigating camera render pose is non-finite".into());
+        }
+        Ok(eye)
+    }
+
+    fn admit_publication(
+        &self,
+        source: Entity,
+        grid_entity: Entity,
+        candidates: &[DrawPublicationEntry],
+        ratio: f32,
+        resolution: usize,
+        half: f64,
+        meshes: &Assets<Mesh>,
+        previous: Option<&(u64, String)>,
+    ) -> Result<(), (u64, String)> {
+        use std::hash::{Hash, Hasher};
+        let Ok(envelope) = self.envelopes.get(source) else {
+            return Ok(());
+        };
+        let mut signature = std::hash::DefaultHasher::new();
+        source.hash(&mut signature);
+        grid_entity.hash(&mut signature);
+        resolution.hash(&mut signature);
+        half.to_bits().hash(&mut signature);
+        ratio.to_bits().hash(&mut signature);
+        for scalar in [
+            envelope.radius_m,
+            envelope.skin_m,
+            envelope.sweep_tolerance_m,
+        ] {
+            scalar.to_bits().hash(&mut signature);
+        }
+        for controller in &self.origin_controllers {
+            controller.camera.hash(&mut signature);
+            controller.world_grid.hash(&mut signature);
+        }
+        let eye = self.publication_eye(source);
+        if let Ok(eye) = eye.as_ref() {
+            for scalar in eye.to_array() {
+                scalar.to_bits().hash(&mut signature);
+            }
+        }
+        self.occlusion_budget
+            .as_ref()
+            .map(|budget| budget.max_intervals)
+            .hash(&mut signature);
+        // Native origin/grid state can alter the coordinate certificate even
+        // while the authored camera and tile coordinates are unchanged.
+        let source_grid = self.parents.get(source).ok().map(|parent| parent.parent());
+        let mut visited = HashSet::new();
+        for seed in [Some(grid_entity), source_grid].into_iter().flatten() {
+            let mut entity = seed;
+            for _ in 0..lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH {
+                if !visited.insert(entity) {
+                    break;
+                }
+                entity.hash(&mut signature);
+                let Ok(grid) = self.grids.get(entity) else {
+                    break;
+                };
+                grid.cell_edge_length().to_bits().hash(&mut signature);
+                grid.maximum_distance_from_origin()
+                    .to_bits()
+                    .hash(&mut signature);
+                let origin = grid.local_floating_origin();
+                let cell = origin.cell();
+                [cell.x, cell.y, cell.z].hash(&mut signature);
+                for scalar in origin.grid_transform().to_cols_array() {
+                    scalar.to_bits().hash(&mut signature);
+                }
+                let Ok(parent) = self.parents.get(entity) else {
+                    break;
+                };
+                entity = parent.parent();
+            }
+        }
+        for entry in candidates {
+            entry.resolution.hash(&mut signature);
+            entry.half_extent.to_bits().hash(&mut signature);
+            entry.coord.hash(&mut signature);
+            entry.entity.hash(&mut signature);
+            self.parents
+                .get(entry.entity)
+                .ok()
+                .map(|parent| parent.parent())
+                .hash(&mut signature);
+            entry.morph_end.to_bits().hash(&mut signature);
+            entry.stitch_edges.map(f32::to_bits).hash(&mut signature);
+            match self.draw_geometry.get(entry.entity) {
+                Ok((mesh, look, transform, bounds)) => {
+                    mesh.0.id().hash(&mut signature);
+                    meshes.get(&mesh.0).is_some().hash(&mut signature);
+                    look.last_changed().get().hash(&mut signature);
+                    for scalar in transform.to_matrix().to_cols_array() {
+                        scalar.to_bits().hash(&mut signature);
+                    }
+                    if let Some(bounds) = bounds {
+                        for scalar in bounds
+                            .min
+                            .to_array()
+                            .into_iter()
+                            .chain(bounds.max.to_array())
+                            .chain(bounds.parent_displacement.to_array())
+                        {
+                            scalar.to_bits().hash(&mut signature);
+                        }
+                    }
+                    bounds.is_some().hash(&mut signature);
+                }
+                Err(_) => false.hash(&mut signature),
+            }
+        }
+        let signature = signature.finish();
+        if let Some((last, reason)) = previous.filter(|(last, _)| *last == signature) {
+            return Err((*last, reason.clone()));
+        }
+        let result = (|| {
+            let eye = eye?;
+            let mut remaining = self
+                .occlusion_budget
+                .as_ref()
+                .ok_or("terrain publication requires the source collision work budget")?
+                .max_intervals;
+            for entry in candidates {
+                if self
+                    .parents
+                    .get(entry.entity)
+                    .map(|parent| parent.parent())
+                    .ok()
+                    != Some(grid_entity)
+                {
+                    return Err("candidate terrain tile has no matching native grid lease".into());
+                }
+                let (handle, _, global, bounds) = self
+                    .draw_geometry
+                    .get(entry.entity)
+                    .map_err(|_| "candidate terrain draw pose or material has not propagated")?;
+                let mesh = meshes
+                    .get(&handle.0)
+                    .ok_or("candidate terrain CPU geometry is unavailable")?;
+                let bounds =
+                    bounds.ok_or("candidate terrain has no finite geometry certificate")?;
+                let matrix = global.to_matrix().as_dmat4();
+                let certificate = self.precision.certify(
+                    source,
+                    grid_entity,
+                    grid_entity,
+                    eye,
+                    eye,
+                    matrix,
+                    bounds.min.abs().max(bounds.max.abs()),
+                )?;
+                let (start, end, _) = snap_band(entry.morph_end, ratio);
+                if !crate::draw_collision::admits_stationary_mesh(
+                    mesh,
+                    entry.coord,
+                    entry.resolution,
+                    entry.half_extent,
+                    matrix,
+                    eye,
+                    envelope,
+                    start,
+                    end,
+                    entry.stitch_edges,
+                    certificate,
+                    bounds,
+                    &mut remaining,
+                )? {
+                    return Err(format!(
+                        "candidate terrain tile {:?} would intersect the navigating camera or has unresolved render precision",
+                        entry.coord
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        result.map_err(|reason| (signature, reason))
+    }
+}
+
+fn view_owner(terrain: Entity, camera: Entity) -> u128 {
+    (u128::from(terrain.to_bits()) << 64) | u128::from(camera.to_bits())
+}
+
+pub(crate) fn visual_max_depth(
+    oracle: &SurfaceOracle,
+    local_depth: u8,
+) -> Result<u8, &'static str> {
+    let local = f64::from(oracle.half_extent());
+    let domain = f64::from(oracle.domain_half_extent());
+    let ratio = domain / local;
+    let levels = ratio.log2();
+    if !ratio.is_finite() || ratio < 1.0 || levels.fract() != 0.0 {
+        return Err("visual terrain domain must be a power-of-two local expansion");
+    }
+    let depth = u32::from(local_depth) + levels as u32;
+    if depth > 20 {
+        return Err("visual terrain finest spacing exceeds supported depth");
+    }
+    Ok(depth as u8)
+}
+
+/// One owner for camera selection inputs used by preparation and finalized
+/// presentation readiness. It performs only bounded scalar/hash work.
+fn terrain_view_signatures(
+    demands: &TerrainDetailDemands,
+    terrain: Entity,
+    demand: &VisualDemand,
+    visual_foci: &[TerrainVisualDemand],
+    generation: u32,
+    surface_key: u64,
+    profile: &lunco_render::RenderQualityProfile,
+    frozen: bool,
+) -> (lunco_precompute::Fnv1a, u64) {
+    let mut sig = lunco_precompute::Fnv1a::new();
+    let mut admission = lunco_precompute::Fnv1a::new();
+    for visual in visual_foci.iter() {
+        admission.write_u64(visual.camera.to_bits());
+        admission.write_u64(demand.source.to_bits());
+        admission.write_u64(demand.render_layer as u64);
+        admission.write_u64(visual.screen_height_px.to_bits());
+        // Pose is a soft selection input; embedding the terrain-local clip pose
+        // into hard admission would invalidate useful in-flight work on every
+        // small eye/heading change. Native projection parameters remain exact.
+        demand.projection.write_signature(&mut admission);
+        admission.write_u64(visual.near_detail_radius_m.to_bits());
+        admission.write_u64(visual.near_detail_hysteresis_m.to_bits());
+        if !frozen {
+            visual.selection_clip.write_signature(&mut sig);
+        }
+    }
+    let preparation = demands.preparation_lease_signature(demand.entity, terrain);
+    admission.write_u64(u64::from(preparation.is_some()));
+    if let Some(preparation) = preparation {
+        admission.write_u64(preparation);
+    }
+    admission.write_u64(generation as u64);
+    // Oracle identity — a live re-compose changes the surface without
+    // always bumping gen, and would otherwise be missed by the gate.
+    // Content key, not the Arc pointer: a reused allocation address
+    // would pass the gate with a stale surface.
+    admission.write_u64(surface_key);
+    // LOD knobs (Inspector) — a live tweak must re-select.
+    admission.write_u64(profile.terrain_lod_pixel_error.to_bits());
+    admission.write_u64(profile.terrain_lod_tile_budget as u64);
+    admission.write_u64(profile.terrain_lod_max_depth as u64);
+    admission.write_u64(profile.terrain_lod_tile_resolution as u64);
+    admission.write_u64(profile.terrain_lod_cinematic_resolution as u64);
+    admission.write_u64(profile.terrain_lod_probe_resolution as u64);
+    admission.write_u64(profile.terrain_lod_cover_edits_per_frame as u64);
+    admission.write_u64(profile.terrain_lod_hysteresis_ratio.to_bits());
+    admission.write_u64(profile.terrain_lod_morph_start_ratio.to_bits());
+    admission.write_u64(u64::from(frozen));
+    let admission_sig = admission.finish();
+    (sig, admission_sig)
+}
+
+fn finish_terrain_view_signature(
+    mut signature: lunco_precompute::Fnv1a,
+    admission: u64,
+    preparation: Option<u64>,
+) -> u64 {
+    if let Some(preparation) = preparation {
+        signature.write_u64(preparation);
+    }
+    signature.write_u64(admission);
+    signature.finish()
 }
 
 #[derive(Clone, Copy)]
 struct TerrainCoverToken {
     terrain: Entity,
+    camera: Entity,
     generation: u32,
     signature: u64,
+    admission_signature: u64,
     oracle_key: u64,
     operation: u64,
+}
+
+impl TerrainCoverToken {
+    fn matches_current_inputs(
+        &self,
+        generation: u32,
+        oracle_key: u64,
+        admission_signature: u64,
+    ) -> bool {
+        self.generation == generation
+            && self.oracle_key == oracle_key
+            && self.admission_signature == admission_signature
+    }
 }
 
 struct TerrainCoverCompletion {
@@ -2951,13 +4660,29 @@ struct TerrainCoverCompletion {
     result: Result<PreparedTerrainCover, ()>,
 }
 
+#[derive(Default, Clone)]
+struct CameraPatchRetention {
+    oracle_key: u64,
+    root_half_bits: u64,
+    max_depth: u8,
+    patches: HashMap<Entity, Vec<QuadCoord>>,
+}
+
 struct PreparedTerrainCover {
     cover: HashSet<QuadCoord>,
     selected: Vec<Selected>,
+    camera_patches: CameraPatchRetention,
     node_geometry: HashMap<QuadCoord, NodeGeometry>,
     budget_refused: usize,
+    preparation_refused_nodes: HashSet<QuadCoord>,
+    preparation_signature: Option<u64>,
     settled_sig: Option<u64>,
     more_work: bool,
+}
+
+struct TerrainPreparationRequirements {
+    nodes: HashSet<QuadCoord>,
+    latest_nodes: HashSet<QuadCoord>,
 }
 
 struct TerrainCoverRequest {
@@ -2965,19 +4690,199 @@ struct TerrainCoverRequest {
     oracle: Arc<SurfaceOracle>,
     oracle_key: u64,
     demands: Vec<TerrainVisualDemand>,
-    contact_nodes: Vec<QuadCoord>,
+    camera_patches: CameraPatchRetention,
     cover: HashSet<QuadCoord>,
     node_geometry: HashMap<QuadCoord, NodeGeometry>,
     bootstrap_ready: bool,
     settled_sig: Option<u64>,
     budget_refused: usize,
     signature: u64,
+    preparation_signature: Option<u64>,
+    preparation: Option<TerrainPreparationRequirements>,
     tile_resolution: usize,
     probe_resolution: usize,
     tile_budget: usize,
     max_depth: u8,
     cover_edits_per_cycle: usize,
     hysteresis_ratio: f64,
+}
+
+/// Same-depth diagonal neighbours, clipped to the terrain root.
+fn camera_diagonal_neighbours(centre: QuadCoord) -> impl Iterator<Item = QuadCoord> {
+    centre
+        .edge_neighbours()
+        .flat_map(QuadCoord::edge_neighbours)
+        .filter(move |neighbour| neighbour.x != centre.x && neighbour.z != centre.z)
+}
+
+/// Cover a continuous swept footprint with finest nodes. Samples are at most
+/// half a finest-cell side apart; each disk includes half the sample spacing,
+/// enclosing the entire segment between samples. Capacity failure admits no
+/// truncated corridor and is reported as a refused preparation request.
+fn preparation_corridor_nodes(
+    quadtree: &Quadtree,
+    corridor: TerrainPreparationCorridor,
+    capacity: usize,
+) -> Result<Vec<QuadCoord>, ()> {
+    if !corridor.start.is_finite()
+        || !corridor.end.is_finite()
+        || !corridor.radius_m.is_finite()
+        || corridor.radius_m <= 0.0
+        || capacity == 0
+    {
+        return Err(());
+    }
+    let side = quadtree
+        .region(QuadCoord {
+            depth: quadtree.max_depth,
+            x: 0,
+            z: 0,
+        })
+        .side();
+    if !side.is_finite() || side <= 0.0 {
+        return Err(());
+    }
+    let a = bevy::math::DVec2::new(corridor.start.x, corridor.start.z);
+    let b = bevy::math::DVec2::new(corridor.end.x, corridor.end.z);
+    let length = a.distance(b);
+    let intervals = (length / (side * 0.5)).ceil();
+    if !intervals.is_finite() || intervals > capacity.saturating_mul(4) as f64 {
+        return Err(());
+    }
+    let intervals = intervals as usize;
+    let reach = corridor.radius_m
+        + if intervals > 0 {
+            length / intervals as f64 * 0.5
+        } else {
+            0.0
+        };
+    let root = quadtree.region(QuadCoord::ROOT);
+    let mut nodes = HashSet::new();
+    let mut remaining_work = capacity.saturating_mul(32);
+    for index in 0..=intervals {
+        let point = if intervals == 0 {
+            a
+        } else {
+            a.lerp(b, index as f64 / intervals as f64)
+        };
+        if root.distance_to(point.to_array()) > reach {
+            continue;
+        }
+        let lo = quadtree.node_containing(
+            quadtree.max_depth,
+            (point - bevy::math::DVec2::splat(reach)).to_array(),
+        );
+        let hi = quadtree.node_containing(
+            quadtree.max_depth,
+            (point + bevy::math::DVec2::splat(reach)).to_array(),
+        );
+        let count = u64::from(hi.x - lo.x + 1) * u64::from(hi.z - lo.z + 1);
+        if count > capacity.saturating_mul(4) as u64 || count > remaining_work as u64 {
+            return Err(());
+        }
+        remaining_work -= count as usize;
+        for z in lo.z..=hi.z {
+            for x in lo.x..=hi.x {
+                let coord = QuadCoord {
+                    depth: quadtree.max_depth,
+                    x,
+                    z,
+                };
+                if quadtree.region(coord).distance_to(point.to_array()) <= reach {
+                    nodes.insert(coord);
+                    if nodes.len() > capacity {
+                        return Err(());
+                    }
+                }
+            }
+        }
+    }
+    let mut nodes = nodes.into_iter().collect::<Vec<_>>();
+    nodes.sort_unstable_by_key(|node| (node.depth, node.x, node.z));
+    Ok(nodes)
+}
+
+/// Bias one continuous detail region toward the visible ground while fading
+/// the bias to zero as the hit approaches the finite near-field reach.
+fn terrain_view_focus(oracle: &SurfaceOracle, demand: TerrainVisualDemand) -> [f64; 2] {
+    if matches!(demand.projection, TerrainProjection::Orthographic { .. }) {
+        return demand.focus;
+    }
+    let direction = demand.view_direction;
+    let radius = demand.near_detail_radius_m;
+    if radius <= 0.0 {
+        return demand.focus;
+    }
+    let origin = DVec3::new(demand.focus[0], demand.camera_y, demand.focus[1]);
+    // Detail finer than the selection quantum cannot affect a stable cover
+    // decision. Filter only the selection ray; geometry and physics still
+    // sample their own surface bands.
+    let selection_surface = SurfaceBand::visual(TERRAIN_FOCUS_QUANT_M).limited(oracle);
+    let hit =
+        match crate::oracle::raycast_surface(&selection_surface, origin, direction, 2.0 * radius) {
+            Ok(hit) => hit,
+            Err(error) => {
+                warn_once!("terrain view-focus ray could not be certified: {error}");
+                return demand.focus;
+            }
+        };
+    let Some(hit) = hit else { return demand.focus };
+    let t = ((2.0 * radius - origin.distance(hit)) / radius).clamp(0.0, 1.0);
+    let blend = 0.5 * t * t * (3.0 - 2.0 * t);
+    let mut offset = bevy::math::DVec2::new(hit.x - origin.x, hit.z - origin.z) * blend;
+    let half = oracle.domain_half_extent() as f64;
+    if origin.x.abs() <= half && origin.z.abs() <= half {
+        let clearance = (origin.y - oracle.height_at(origin.x, origin.z)).abs();
+        let horizontal_reach = (radius * radius - clearance * clearance).max(0.0).sqrt();
+        if offset.length_squared() > horizontal_reach * horizontal_reach {
+            offset = offset.normalize() * horizontal_reach;
+        }
+    }
+    [demand.focus[0] + offset.x, demand.focus[1] + offset.y]
+}
+
+/// Bound clipping work independently of raster size. Missing certification keeps
+/// the node eligible; it can never discard geometry from an uncertain envelope.
+fn projected_node_height_bounds(oracle: &SurfaceOracle, region: Square) -> Option<[f64; 2]> {
+    const MAX_NODE_ENCLOSURE_CELLS: usize = 64;
+    let resolution = oracle.domain_resolution();
+    if resolution < 2 {
+        return None;
+    }
+    let half = f64::from(oracle.domain_half_extent());
+    let spacing = oracle.occlusion_spacing();
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return None;
+    }
+    let rect = [
+        region.center[0] - region.half,
+        region.center[1] - region.half,
+        region.center[0] + region.half,
+        region.center[1] + region.half,
+    ];
+    let index = |value: f64| (((value + half) / spacing).floor() as usize).min(resolution - 2);
+    let [x0, z0, x1, z1] = rect.map(index);
+    if (x1 - x0 + 1).checked_mul(z1 - z0 + 1)? > MAX_NODE_ENCLOSURE_CELLS {
+        return None;
+    }
+    let mut bounds = [f64::INFINITY, f64::NEG_INFINITY];
+    let mut remaining = MAX_NODE_ENCLOSURE_CELLS;
+    for z in z0..=z1 {
+        for x in x0..=x1 {
+            let cell_rect = [
+                rect[0].max(-half + x as f64 * spacing),
+                rect[1].max(-half + z as f64 * spacing),
+                rect[2].min(-half + (x + 1) as f64 * spacing),
+                rect[3].min(-half + (z + 1) as f64 * spacing),
+            ];
+            let enclosure = oracle
+                .height_bounds_in_cell([x, z], cell_rect, &mut remaining)
+                .ok()?;
+            bounds[0] = bounds[0].min(enclosure[0]);
+            bounds[1] = bounds[1].max(enclosure[1]);
+        }
+    }
+    Some(bounds)
 }
 
 fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCover {
@@ -2989,14 +4894,16 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
         quadtree,
         oracle,
         oracle_key: _,
-        demands,
-        contact_nodes,
+        mut demands,
+        camera_patches,
         mut cover,
         mut node_geometry,
         bootstrap_ready,
         mut settled_sig,
         mut budget_refused,
         signature,
+        preparation_signature,
+        preparation,
         tile_resolution,
         probe_resolution,
         tile_budget,
@@ -3004,8 +4911,38 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
         cover_edits_per_cycle,
         hysteresis_ratio,
     } = request;
+    // The immutable source owns this cached full-surface fact. Preparation
+    // runs on its existing worker; no sampled height can certify exclusion.
+    #[cfg(not(target_arch = "wasm32"))]
+    let global_height_bounds = oracle.global_height_bounds().ok();
+    // The web fallback prepares synchronously. A missing optimization fact
+    // keeps nodes eligible rather than scanning a complete source on the UI.
+    #[cfg(target_arch = "wasm32")]
+    let global_height_bounds = oracle.cached_global_height_bounds().and_then(Result::ok);
+    let source_key = oracle.surface_key();
+    let root_half_bits = quadtree.root_half_extent.to_bits();
+    let retention_matches = camera_patches.oracle_key == source_key
+        && camera_patches.root_half_bits == root_half_bits
+        && camera_patches.max_depth == max_depth;
+    let mut retained_patches = CameraPatchRetention {
+        oracle_key: source_key,
+        root_half_bits,
+        max_depth,
+        patches: HashMap::new(),
+    };
+    let camera_foci: Vec<_> = demands
+        .iter()
+        .copied()
+        .filter(|demand| demand.required)
+        .collect();
+    // Resolve the view centre during cover preparation. Keep the camera's
+    // own mandatory nodes separately.
+    for demand in &mut demands {
+        demand.focus = terrain_view_focus(&oracle, *demand);
+    }
     let mut selected = Vec::new();
     let mut more_work = false;
+    let preparation_refused_nodes;
     {
         let geometry_cache = std::cell::RefCell::new(&mut node_geometry);
         let geometry = |coord: QuadCoord, region: Square| {
@@ -3015,39 +4952,142 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
                 measure_node_geometry(&limited, region, probe_resolution)
             })
         };
-        let mut required = contact_nodes.clone();
-        for demand in demands.iter().filter(|demand| demand.required) {
-            if demand.focus[0].abs() > quadtree.root_half_extent
-                || demand.focus[1].abs() > quadtree.root_half_extent
-            {
+        let mut required = Vec::new();
+        let mut preparation_required = HashSet::new();
+        for (demand, camera_focus) in demands
+            .iter()
+            .map(|demand| (demand, false))
+            .chain(camera_foci.iter().map(|demand| (demand, true)))
+            .filter(|(demand, _)| demand.required)
+        {
+            if matches!(demand.projection, TerrainProjection::Orthographic { .. }) {
                 continue;
             }
-            let height = oracle.height_at(demand.focus[0], demand.focus[1]);
-            if (demand.camera_y - height).abs() > demand.near_detail_radius_m {
+            let inside = demand.focus[0].abs() <= quadtree.root_half_extent
+                && demand.focus[1].abs() <= quadtree.root_half_extent;
+            let within_radius = inside
+                && (demand.camera_y - oracle.height_at(demand.focus[0], demand.focus[1])).abs()
+                    <= demand.near_detail_radius_m;
+            if !within_radius {
+                if camera_focus && retention_matches {
+                    if let Some(patch) = camera_patches.patches.get(&demand.camera) {
+                        let retained: Vec<_> = patch
+                            .iter()
+                            .copied()
+                            .filter(|coord| {
+                                let region = quadtree.region(*coord);
+                                let heights = geometry(*coord, region).height_range;
+                                near_field_retains_refinement(
+                                    region,
+                                    heights,
+                                    std::slice::from_ref(demand),
+                                )
+                            })
+                            .collect();
+                        if !retained.is_empty() {
+                            required.extend(retained.iter().copied());
+                            retained_patches.patches.insert(demand.camera, retained);
+                        }
+                    }
+                }
                 continue;
             }
             let centre = quadtree.node_containing(max_depth, demand.focus);
             required.push(centre);
             required.extend(centre.edge_neighbours());
+            if camera_focus {
+                // Keep the exact already-requested patch through the retention
+                // band; never request a new patch outside the detail radius.
+                let mut patch = vec![centre];
+                patch.extend(centre.edge_neighbours());
+                patch.extend(camera_diagonal_neighbours(centre));
+                patch.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
+                patch.dedup();
+                required.extend(patch.iter().copied());
+                retained_patches.patches.insert(demand.camera, patch);
+            }
         }
-        required.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
+        let mut historical = HashSet::new();
+        if let Some(preparation) = preparation {
+            preparation_required = preparation.latest_nodes;
+            historical.extend(
+                preparation
+                    .nodes
+                    .difference(&preparation_required)
+                    .copied()
+                    .filter(|node| !required.contains(node)),
+            );
+            required.extend(preparation.nodes);
+        }
+        // Current camera and current navigation requirements precede retained
+        // superseded intent, so history cannot consume their mandatory budget.
+        required.sort_unstable_by_key(|coord| {
+            (historical.contains(coord), coord.depth, coord.x, coord.z)
+        });
         required.dedup();
         let node_heights = |coord, region| geometry(coord, region).height_range;
+        let clip_bounds = std::cell::RefCell::new(HashMap::new());
         let node_error = |coord, region| {
             let measured = geometry(coord, region);
-            measured.error.max(near_field_error_floor(
-                region,
-                measured.height_range,
-                tile_resolution,
-                &demands,
-            ))
+            let bounds = *clip_bounds.borrow_mut().entry(coord).or_insert_with(|| {
+                match (
+                    projected_node_height_bounds(&oracle, region),
+                    global_height_bounds,
+                ) {
+                    (Some(local), Some(global)) => {
+                        let bounds = [local[0].max(global[0]), local[1].min(global[1])];
+                        (bounds[0] <= bounds[1]).then_some(bounds)
+                    }
+                    (local, global) => local.or(global),
+                }
+            });
+            if let Some(bounds) = bounds {
+                if !demands
+                    .iter()
+                    .any(|demand| demand.selection_clip.intersects(region, bounds))
+                {
+                    return 0.0;
+                }
+            }
+            measured
+                .error
+                .max(projected_posting_error_floor(region, tile_resolution))
         };
         let focus_metric = demands
             .iter()
             .map(|demand| (demand.focus, demand.camera_y))
             .collect::<Vec<_>>();
+        let mut admitted = Vec::new();
         let mut reserved = vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)];
-        quadtree.constrain_selection(&mut reserved, &required, &node_error);
+        let mut refused_mandatory = 0;
+        let mut refused_preparation_nodes = HashSet::new();
+        for requested in required {
+            let mut candidate = requested;
+            loop {
+                let mut trial = admitted.clone();
+                trial.push(candidate);
+                let mut restricted = vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)];
+                quadtree.constrain_selection(&mut restricted, &trial, &node_error);
+                if restricted.len() <= tile_budget {
+                    admitted = trial;
+                    reserved = restricted;
+                    refused_mandatory += usize::from(candidate != requested);
+                    if candidate != requested && preparation_required.contains(&requested) {
+                        refused_preparation_nodes.insert(requested);
+                    }
+                    break;
+                }
+                let Some(parent) = candidate.parent() else {
+                    refused_mandatory += 1;
+                    if preparation_required.contains(&requested) {
+                        refused_preparation_nodes.insert(requested);
+                    }
+                    break;
+                };
+                candidate = parent;
+            }
+        }
+        let required = admitted;
         // Union of two refinement trees has at most A+B-1 leaves. Reserve the
         // mandatory tree first; the camera's discretionary splits use the rest.
         let discretionary_budget = tile_budget.saturating_sub(reserved.len() - 1).max(1);
@@ -3095,6 +5135,8 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
             more_work = edits > 0;
             settled_sig = (edits == 0).then_some(signature);
         }
+        preparation_refused_nodes = refused_preparation_nodes;
+        budget_refused += refused_mandatory;
         selected.extend(cover.iter().map(|&coord| {
             let parent_range = coord
                 .parent()
@@ -3109,28 +5151,38 @@ fn prepare_terrain_cover(mut request: TerrainCoverRequest) -> PreparedTerrainCov
     PreparedTerrainCover {
         cover,
         selected,
+        camera_patches: retained_patches,
         node_geometry,
         budget_refused,
+        preparation_refused_nodes,
+        preparation_signature,
         settled_sig,
         more_work,
     }
 }
 
 fn commit_prepared_terrain_cover(
-    tiles: &mut LodTiles,
+    tiles: &mut LodView,
     node_geometry: &mut TerrainNodeGeometry,
     prepared: PreparedTerrainCover,
     oracle_key: u64,
     signature: u64,
+    admission_signature: u64,
 ) {
+    tiles.bump_draw_revision();
     tiles.cover = prepared.cover;
     tiles.cover_selected = prepared.selected;
+    tiles.camera_patches = prepared.camera_patches;
     tiles.budget_refused = prepared.budget_refused;
+    tiles.preparation_refused_nodes = prepared.preparation_refused_nodes;
+    tiles.preparation_signature = prepared.preparation_signature;
     tiles.settled_sig = prepared.settled_sig;
-    tiles.last_sig = (!prepared.more_work).then_some(signature);
+    tiles.last_sig =
+        (!prepared.more_work && prepared.settled_sig == Some(signature)).then_some(signature);
+    tiles.last_admission_sig = Some(admission_signature);
     tiles.failed_cover_signature = None;
     node_geometry.oracle_key = oracle_key;
-    node_geometry.map = prepared.node_geometry;
+    node_geometry.map.extend(prepared.node_geometry);
 }
 
 type TerrainBakeSortKey = (u8, f64, Selected);
@@ -3155,6 +5207,22 @@ pub(crate) fn advance_terrain_stream_cadence(
     wall_time: Res<Time<Real>>,
 ) {
     cadence.advance(wall_time.delta());
+}
+
+pub(crate) fn cancel_terrain_view_preparation(
+    removed: On<Remove<LodTiles>>,
+    terrains: Query<&LodTiles>,
+    mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
+) {
+    if let Ok(tiles) = terrains.get(removed.entity) {
+        for camera in tiles.views.keys() {
+            admission.cancel_owner(
+                lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                0,
+                view_owner(removed.entity, *camera),
+            );
+        }
+    }
 }
 
 /// Withdraw presentation preparation when its terrain owner leaves the ECS
@@ -3202,7 +5270,6 @@ pub(crate) fn cancel_removed_terrain_preparation(
 /// idle-signature gate already skips the whole pass when nothing moved.
 #[derive(Default)]
 pub struct StreamScratch {
-    swaps: Vec<(Entity, u32, f32)>,
     done: Vec<(QuadCoord, u32, BakedTile)>,
     keyed: Vec<TerrainBakeSortKey>,
     wanted: HashSet<QuadCoord>,
@@ -3223,18 +5290,10 @@ pub struct StreamScratch {
     /// terrain per frame.
     sel: Vec<Selected>,
     /// Results returned by bounded background cover preparation.
-    cover_completions: HashMap<Entity, Vec<TerrainCoverCompletion>>,
+    cover_completions: HashMap<(Entity, Entity), Vec<TerrainCoverCompletion>>,
     #[cfg(not(target_arch = "wasm32"))]
     /// Results returned by shared-priority streamed tile bakes.
     tile_completions: HashMap<Entity, Vec<TerrainTileBakeCompletion>>,
-    /// Tile material updates collected while the terrain query is borrowed.
-    /// Applying them after the terrain pass keeps the two mutable ECS views in
-    /// one explicit `ParamSet` without weakening either ownership filter.
-    stitch_updates: Vec<(Entity, [f32; 4])>,
-    /// Stitch state successfully published to a tile look this pass. Slot
-    /// state is committed only after the material write succeeds, so a tile
-    /// whose render binding arrives later is retried on the next frame.
-    stitch_applied: HashMap<Entity, [f32; 4]>,
 }
 
 /// Freeze this terrain's LOD selection once its tiles are up: authored
@@ -3262,27 +5321,24 @@ pub struct LodFrozen;
 pub fn update_lod_tiles(
     mut commands: Commands,
     demands: Res<TerrainDetailDemands>,
-    mut terrain_queries: ParamSet<(
-        Query<
-            (
-                Entity,
-                &DemHeightField,
-                &TerrainLodViz,
-                &mut LodTiles,
-                &mut PendingTileBakes,
-                &mut TerrainNodeGeometry,
-                Option<&TerrainDerivedMaps>,
-                Option<&TerrainAuthoredMaps>,
-                Option<&TileShadowCache>,
-                Option<&HorizonShadowTerrain>,
-                Option<&HorizonMap>,
-                Option<&ShaderLook>,
-                Has<LodFrozen>,
-            ),
-            With<DemTerrainSurface>,
-        >,
-        Query<&mut ShaderLook, With<LodTileOf>>,
-    )>,
+    mut terrains: Query<
+        (
+            Entity,
+            &DemHeightField,
+            &TerrainLodViz,
+            &mut LodTiles,
+            &mut PendingTileBakes,
+            &mut TerrainNodeGeometry,
+            Option<&TerrainDerivedMaps>,
+            Option<&TerrainAuthoredMaps>,
+            Option<&TileShadowCache>,
+            Option<&HorizonShadowTerrain>,
+            Option<&HorizonMap>,
+            Option<&ShaderLook>,
+            Has<LodFrozen>,
+        ),
+        With<DemTerrainSurface>,
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_cache: ResMut<LodMeshCache>,
     quality: Res<lunco_render::RenderingQualitySettings>,
@@ -3292,7 +5348,7 @@ pub fn update_lod_tiles(
     frame_driven: Res<TerrainStreamFrameDriven>,
     cadence: Res<TerrainStreamCadence>,
     mut cover_work: TerrainCoverWork,
-    environment: TerrainStreamEnvironment,
+    mut environment: TerrainStreamEnvironment,
     mut scratch: Local<StreamScratch>,
 ) {
     let profile = match quality.validated_profile() {
@@ -3306,9 +5362,17 @@ pub fn update_lod_tiles(
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = environment.overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
+    mesh_cache.begin_frame(
+        environment
+            .live_meshes
+            .iter()
+            .map(|mesh| mesh.0.id())
+            .collect(),
+    );
+    mesh_cache.trim(usize::MAX, profile.terrain_mesh_cache_bytes);
+    let mut refused_uploads = HashSet::new();
     // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
     let StreamScratch {
-        swaps,
         done,
         keyed,
         wanted,
@@ -3321,11 +5385,7 @@ pub fn update_lod_tiles(
         cover_completions,
         #[cfg(not(target_arch = "wasm32"))]
         tile_completions,
-        stitch_updates,
-        stitch_applied,
     } = &mut *scratch;
-    stitch_updates.clear();
-    stitch_applied.clear();
     cover_completions.clear();
     #[cfg(not(target_arch = "wasm32"))]
     tile_completions.clear();
@@ -3337,41 +5397,34 @@ pub fn update_lod_tiles(
             .unwrap_or_else(PoisonError::into_inner);
         for completion in queue.drain(..) {
             cover_completions
-                .entry(completion.token.terrain)
+                .entry((completion.token.terrain, completion.token.camera))
                 .or_default()
                 .push(completion);
         }
     }
     if demands.visual.is_empty() {
-        let mut terrain_rows = terrain_queries.p0();
-        for (terrain, _, _, mut tiles, mut pending, _, _, _, _, _, _, _, _) in &mut terrain_rows {
-            let completion = cover_completions.remove(&terrain).and_then(|mut results| {
-                let index = results.iter().position(|completion| {
-                    tiles.pending_cover
-                        == Some((
-                            completion.token.generation,
-                            completion.token.signature,
-                            completion.token.oracle_key,
-                            completion.token.operation,
-                        ))
-                })?;
-                Some(results.remove(index))
-            });
-            if completion.is_some() {
-                tiles.pending_cover = None;
+        for (terrain, _, _, mut tiles, mut pending, _, _, _, _, _, _, _, _) in &mut terrains {
+            for (camera, view) in std::mem::take(&mut tiles.views) {
+                for entity in view.tile_entities() {
+                    retire_tile(&mut commands, entity);
+                }
+                cover_work.admission.cancel_owner(
+                    lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                    0,
+                    view_owner(terrain, camera),
+                );
             }
             pending.cancel_for_missing_demand(&mut cover_work.admission);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            tile_completions.clear();
-            cover_work
-                .tile_results
-                .queue
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clear();
-        }
+        cover_work
+            .tile_results
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        mesh_cache.publish_accounting(&mut stream_status, profile.terrain_mesh_cache_bytes);
+        publish_mesh_pressure(&stream_status, &mut environment.diagnostics);
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -3392,19 +5445,19 @@ pub fn update_lod_tiles(
     //
     let frame_driven = frame_driven.0;
     let mut bake_budget = profile.terrain_lod_bakes_per_frame;
+    let mut upload_budget = profile.terrain_lod_bakes_per_frame;
     let max_inflight = profile.terrain_lod_max_inflight_bakes;
     // Live streaming terrains — the mesh cache is GLOBAL (keyed by `(terrain,
     // coord)`), so its cap must scale with them or two terrains would fight over
     // one terrain's worth of entries and thrash each other every frame.
-    let terrain_count = terrain_queries.p0().iter().count().max(1);
+    let terrain_count = terrains.iter().count().max(1);
 
-    let mut terrains = terrain_queries.p0();
     {
         for (
             terrain,
             hf,
             _viz,
-            mut tiles,
+            mut terrain_tiles,
             mut pending,
             mut errs,
             maps,
@@ -3422,470 +5475,526 @@ pub fn update_lod_tiles(
                 tile_completions.remove(&terrain).unwrap_or_default(),
             );
 
-            // A first cover and a cover invalidated by a live depth-bound change
-            // are admitted immediately. Other camera/profile changes wait for the
-            // next wall-clock selection cycle, while the prior cover remains live.
-            let contact = environment.contacts.get(terrain).ok();
-            let contact_nodes = contact.map_or(&[][..], |(_, tiles)| tiles.contact_nodes());
-            let contact_ring = contact.map(|(ring, _)| ring.clone());
-            let max_depth = contact_ring
-                .as_ref()
-                .map_or(profile.terrain_lod_max_depth, |ring| {
-                    profile.terrain_lod_max_depth.max(ring.depth)
-                });
-            let frozen = frozen && contact_nodes.is_empty();
-            let lattice = contact_ring.as_ref().map(|ring| (ring.depth, ring.res));
-            if tiles.contact_lattice != lattice {
-                tiles.contact_lattice = lattice;
-                tiles.invalidate();
-                mesh_cache.drop_region(terrain, None, hf.0.half_extent() as f64);
-            }
-            let selection_cycle_due = frame_driven
-                || cadence.is_due()
-                || tiles.cover.is_empty()
-                || tiles.cover.iter().any(|coord| coord.depth > max_depth);
-            // Horizon-shadow terrain has one complete lighting contract: its
-            // heightfield must be present before the first streamed tile is
-            // admitted. The horizon bake is an off-thread visual product, but
-            // exposing tiles before it lands changes the material inputs after
-            // the terrain is already visible. Non-opted-in DEMs keep the normal
-            // path.
-            if horizon_shadow.is_some() && horizon_map.is_none() {
-                continue;
-            }
-            let Some(template) = template else {
-                bevy::log::error!(
-                    target: "terrain",
-                    entity = ?terrain,
-                    "streamed DEM terrain has no authored production material"
-                );
-                continue;
-            };
-            if template.vertex_shader.is_none() {
-                bevy::log::error!(
-                    target: "terrain",
-                    entity = ?terrain,
-                    "streamed DEM terrain material has no authored CDLOD vertex source"
-                );
-                continue;
-            }
-            // A terrain may be mounted under the canonical WorldGrid or under a
-            // body's surface sub-grid. Resolve the actual frame from its ancestry;
-            // streamed tiles must share that frame, while their mesh coordinates
-            // remain in the terrain owner's local DEM axes.
-            let Some((grid_entity, grid)) = lunco_spatial::coords::ancestor_grid(
-                terrain,
-                &environment.parents,
-                &environment.grids,
-            ) else {
-                continue;
-            };
-            let Some((terrain_grid_position, terrain_grid_rotation)) =
-                lunco_spatial::coords::grid_relative_pose(
-                    terrain,
-                    grid_entity,
-                    &environment.parents,
-                    &environment.grids,
-                    &environment.spatial,
-                )
-            else {
-                continue;
-            };
-
-            // A tile is drawable only after the render binder has installed its
-            // concrete material. Checking the marker avoids exposing a spawned mesh
-            // merely because one ECS turn happened to elapse; deferred command order
-            // is not a material-readiness contract.
-            let mut promoted_tiles = false;
-            if !tiles.materials_ready {
-                let mut all_ready = true;
-                for slot in tiles.tiles.values_mut() {
-                    if !slot.ready {
-                        if environment.material_bound.get(slot.entity).is_ok() {
-                            slot.ready = true;
-                            promoted_tiles = true;
-                        } else {
-                            all_ready = false;
-                        }
-                    }
-                }
-                tiles.materials_ready = all_ready;
-            }
-
-            // Frozen and already covered ⇒ the drawn set is final. Report it as fully
-            // resident (it is — that is the point) so the status bar clears and anything
-            // gating on residency, like a camera path waiting to start, is satisfied.
-            if frozen && !tiles.tiles.is_empty() && pending.is_empty() {
-                stream_status.wanted += tiles.tiles.len();
-                stream_status.resident += tiles.tiles.len();
-                continue;
-            }
-            // Do not expose a tile before the USD material projection and any
-            // required engine-derived product have selected every source. Creating
-            // a procedural/derived cover first and rewriting it when either
-            // producer publishes would mint a second set of material keys, upload
-            // the whole terrain again, and visibly change its appearance. The UI
-            // remains active while these off-thread inputs are pending.
-            if tiles.tiles.is_empty() && !initial_lit_material_ready(maps, authored) {
-                continue;
-            }
-            // The frozen cover is ONE tile for the whole terrain, so it carries the
-            // detail the whole quadtree used to spread over thousands — mesh it far
-            // finer than a streamed tile. The configured streamed resolution over the full window
-            // would be ~20 m between vertices: one tile, and no terrain.
-            let tile_res = if frozen {
+            let resolution = if frozen {
                 profile.terrain_lod_cinematic_resolution
             } else {
-                contact_ring
-                    .as_ref()
-                    .map_or(profile.terrain_lod_tile_resolution, |ring| ring.res)
+                profile.terrain_lod_tile_resolution
             };
-            // A live max-depth reduction invalidates the persistent cover: it may
-            // still contain leaves deeper than the new tree and those leaves would
-            // otherwise remain drawable forever. The cover is authoritative state,
-            // so reset it to the root and let the normal selector rebuild it under
-            // the new bound. Increasing the bound keeps the existing cover and
-            // refines from that valid fixed point.
-            if selection_cycle_due && tiles.cover.iter().any(|coord| coord.depth > max_depth) {
-                tiles.cover.clear();
-                tiles.cover_selected.clear();
-                tiles.bootstrap_ready = false;
-                tiles.settled_sig = None;
-                tiles.last_sig = None;
-                tiles.budget_refused = 0;
+            if terrain_tiles.resolution != resolution {
+                terrain_tiles.resolution = resolution;
+                terrain_tiles.invalidate();
+                pending.cancel_for_missing_demand(&mut cover_work.admission);
+                mesh_cache.drop_region(terrain, None, f64::from(hf.0.domain_half_extent()));
             }
-            // The terrain's current height generation: a tile/bake tagged with an older
-            // gen is stale (a live re-bake changed the heights) and is replaced near-first.
-            let cur_gen = tiles.r#gen;
-            // A quality-profile morph change only changes the material's shared morph
-            // bands. Restate resident looks in place; geometry and the production
-            // material remain the same.
-            let morph_ratio = profile.terrain_lod_morph_start_ratio as f32;
-            if tiles.morph_ratio.to_bits() != morph_ratio.to_bits() {
-                swaps.clear();
-                swaps.extend(
-                    tiles
-                        .tiles
-                        .iter()
-                        .map(|(c, s)| (s.entity, c.depth as u32, s.morph_end)),
-                );
-                for &(ent, depth, morph_end) in swaps.iter() {
-                    // Each tile carries its own morph band; restate it under the new profile.
-                    let (ms, me, _) = snap_band(morph_end, morph_ratio);
-                    let look = tile_look(
-                        template,
-                        depth,
-                        ms,
-                        me,
-                        maps,
-                        hf.0.half_extent(),
-                        authored,
-                        shadow,
-                        &environment.diagnostic.0,
-                        overlay,
-                    );
-                    commands.entity(ent).try_insert(look);
+            stream_status.pending += pending.len();
+            let generation = terrain_tiles.r#gen;
+            let live: HashSet<_> = demands
+                .visual
+                .iter()
+                .filter(|demand| demand.terrain_poses.contains_key(&terrain))
+                .map(|demand| demand.entity)
+                .collect();
+            terrain_tiles.views.retain(|camera, view| {
+                if live.contains(camera) {
+                    return true;
                 }
-                tiles.morph_ratio = morph_ratio;
+                for entity in view.tile_entities() {
+                    retire_tile(&mut commands, entity);
+                }
+                cover_work.admission.cancel_owner(
+                    lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                    0,
+                    view_owner(terrain, *camera),
+                );
+                false
+            });
+            for demand in demands
+                .visual
+                .iter()
+                .filter(|demand| live.contains(&demand.entity))
+            {
+                if terrain_tiles
+                    .views
+                    .get(&demand.entity)
+                    .is_some_and(|view| view.render_layer != demand.render_layer)
+                {
+                    if let Some(view) = terrain_tiles.views.remove(&demand.entity) {
+                        for entity in view.tile_entities() {
+                            retire_tile(&mut commands, entity);
+                        }
+                        cover_work.admission.cancel_owner(
+                            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                            0,
+                            view_owner(terrain, demand.entity),
+                        );
+                    }
+                }
+                terrain_tiles
+                    .views
+                    .entry(demand.entity)
+                    .or_insert_with(|| LodView {
+                        render_layer: demand.render_layer,
+                        r#gen: generation,
+                        ..default()
+                    });
             }
-
-            // Project every active visual camera into this terrain's local DEM frame.
-            // Direction remains a bake-priority bias, but it is deliberately not a
-            // second selection focus: startup camera settling otherwise creates a
-            // transient high-detail island that visibly appears and disappears.
-            let oracle = &hf.0;
-            let h = oracle.half_extent() as f64;
-            visual_foci.clear();
-            for demand in demands.visual.iter() {
-                let Some((terrain_local, local_forward)) = camera_pose_in_terrain(
-                    demand.entity,
-                    terrain,
-                    &environment.parents,
-                    &environment.grids,
-                    &environment.spatial,
-                ) else {
-                    debug!(
-                        target: "terrain_stream",
-                        camera = ?demand.entity,
-                        terrain = ?terrain,
-                        "visual camera and terrain have no common BigSpace frame"
+            let mut view_cameras: Vec<_> = terrain_tiles.views.keys().copied().collect();
+            if !view_cameras.is_empty() {
+                let offset = terrain_tiles.frame_cursor % view_cameras.len();
+                view_cameras.rotate_left(offset);
+                terrain_tiles.frame_cursor = terrain_tiles.frame_cursor.wrapping_add(1);
+            }
+            for view_camera in view_cameras {
+                let mut tiles = terrain_tiles
+                    .views
+                    .get_mut(&view_camera)
+                    .expect("live view state exists");
+                let demand = demands
+                    .visual
+                    .iter()
+                    .find(|demand| demand.entity == view_camera)
+                    .expect("live view has a demand");
+                let max_depth = match visual_max_depth(&hf.0, profile.terrain_lod_max_depth) {
+                    Ok(depth) => depth,
+                    Err(error) => {
+                        bevy::log::error!(target: "terrain", "{error}");
+                        continue;
+                    }
+                };
+                let selection_cycle_due = frame_driven
+                    || cadence.is_due()
+                    || tiles.cover.is_empty()
+                    || tiles.cover.iter().any(|coord| coord.depth > max_depth);
+                // Horizon-shadow terrain has one complete lighting contract: its
+                // heightfield must be present before the first streamed tile is
+                // admitted. The horizon bake is an off-thread visual product, but
+                // exposing tiles before it lands changes the material inputs after
+                // the terrain is already visible. Non-opted-in DEMs keep the normal
+                // path.
+                if horizon_shadow.is_some() && horizon_map.is_none() {
+                    continue;
+                }
+                let Some(template) = template else {
+                    bevy::log::error!(
+                        target: "terrain",
+                        entity = ?terrain,
+                        "streamed DEM terrain has no authored production material"
                     );
                     continue;
                 };
-                if let Some(visual_demand) =
-                    terrain_visual_demand(demand, terrain_local, local_forward)
-                {
-                    visual_foci.push(visual_demand);
-                }
-            }
-            // The cover is shared by all active visual cameras. Use the actual
-            // camera with the greatest angular pixel density, i.e. the one that can
-            // see the most terrain detail. This is conservative for split views and
-            // remains derived solely from the cameras that really render this frame.
-            let Some((screen_height_px, fov_y_rad)) = visual_foci
-                .iter()
-                .filter(|demand| {
-                    demand.screen_height_px.is_finite()
-                        && demand.screen_height_px > 0.0
-                        && demand.fov_y_rad.is_finite()
-                        && demand.fov_y_rad > 0.0
-                })
-                .max_by(|a, b| {
-                    let density = |demand: &TerrainVisualDemand| {
-                        demand.screen_height_px / (2.0 * (demand.fov_y_rad * 0.5).tan())
-                    };
-                    density(a).total_cmp(&density(b))
-                })
-                .map(|demand| (demand.screen_height_px, demand.fov_y_rad))
-            else {
-                continue;
-            };
-            let quadtree_for = |px: f64| {
-                Quadtree::from_screen_metric(
-                    h,
-                    max_depth,
-                    h,
-                    screen_height_px,
-                    fov_y_rad,
-                    px,
-                    profile.terrain_lod_morph_start_ratio,
-                )
-            };
-            let pixel_error = profile.terrain_lod_pixel_error;
-            let qt = quadtree_for(pixel_error);
-            // ── Idle-camera fast path ────────────────────────────────────────────
-            // The selection below (quadtree walks + budget-coarsen loop + sort + queue
-            // + retain) is a pure function of (focus, eye height, generation, oracle
-            // identity, LOD knobs). Re-deriving it EVERY
-            // frame with a still camera was the dominant idle terrain CPU cost
-            // (obs 23593). Fold those inputs into a signature; when it matches last
-            // frame's AND no bake is mid-flight (nothing to finalize/spawn), last
-            // frame's resident tiles are already correct — skip the whole body.
-            // Quantise focus/eye so sub-tile jitter doesn't defeat the gate; a slow
-            // creep re-runs the frame it crosses a quantum (a 1-frame-late reselection
-            // is invisible — tiles morph).
-            let sig = {
-                const IDLE_QUANT_M: f64 = 0.5;
-                let q = |v: f64| (v / IDLE_QUANT_M).round() as i64 as u64;
-                let mut sig = lunco_precompute::Fnv1a::new();
-                for visual in visual_foci.iter() {
-                    sig.write_u64(q(visual.focus[0]));
-                    sig.write_u64(q(visual.focus[1]));
-                    sig.write_u64(q(visual.camera_y));
-                    sig.write_u64(visual.screen_height_px.to_bits());
-                    sig.write_u64(visual.fov_y_rad.to_bits());
-                    sig.write_u64(visual.near_detail_radius_m.to_bits());
-                    sig.write_u64(visual.near_detail_hysteresis_m.to_bits());
-                    // Heading feeds `benefit()` (bake priority): panning in place
-                    // re-ranks which pending tile should bake first, so it must
-                    // re-run the body — omitting it left the priority stale.
-                    // Quantised coarsely (~7°): priority only needs the general
-                    // look direction, and rig jitter must not defeat the gate.
-                    let (hx, hz) = visual.heading.map_or((i64::MIN, i64::MIN), |heading| {
-                        (
-                            (heading.x * 8.0).round() as i64,
-                            (heading.y * 8.0).round() as i64,
-                        )
-                    });
-                    sig.write_u64(hx as u64);
-                    sig.write_u64(hz as u64);
-                }
-                if let Some(ring) = &contact_ring {
-                    sig.write_u64(ring.depth as u64);
-                    sig.write_u64(ring.res as u64);
-                    for node in contact_nodes {
-                        sig.write_u64(node.x as u64);
-                        sig.write_u64(node.z as u64);
-                    }
-                }
-                sig.write_u64(cur_gen as u64);
-                // Oracle identity — a live re-compose changes the surface without
-                // always bumping gen, and would otherwise be missed by the gate.
-                // Content key, not the Arc pointer: a reused allocation address
-                // would pass the gate with a stale surface.
-                sig.write_u64(hf.0.surface_key());
-                // LOD knobs (Inspector) — a live tweak must re-select.
-                sig.write_u64(profile.terrain_lod_pixel_error.to_bits());
-                sig.write_u64(profile.terrain_lod_tile_budget as u64);
-                sig.write_u64(profile.terrain_lod_max_depth as u64);
-                sig.write_u64(profile.terrain_lod_tile_resolution as u64);
-                sig.write_u64(profile.terrain_lod_cinematic_resolution as u64);
-                sig.write_u64(profile.terrain_lod_probe_resolution as u64);
-                sig.write_u64(profile.terrain_lod_cover_edits_per_frame as u64);
-                sig.write_u64(profile.terrain_lod_hysteresis_ratio.to_bits());
-                sig.write_u64(profile.terrain_lod_morph_start_ratio.to_bits());
-                sig.write_u64(u64::from(frozen));
-                sig.finish()
-            };
-            let oracle_key = hf.0.surface_key();
-            if errs.oracle_key != oracle_key {
-                errs.map.clear();
-                errs.oracle_key = oracle_key;
-            }
-            let mut selection_due = selection_cycle_due || tiles.last_sig != Some(sig);
-            let completion = cover_completions.remove(&terrain).and_then(|mut results| {
-                let index = results.iter().position(|completion| {
-                    tiles.pending_cover
-                        == Some((
-                            completion.token.generation,
-                            completion.token.signature,
-                            completion.token.oracle_key,
-                            completion.token.operation,
-                        ))
-                })?;
-                Some(results.remove(index))
-            });
-            let mut cover_committed = false;
-            if let Some(completion) = completion {
-                tiles.pending_cover = None;
-                match completion.result {
-                    Ok(prepared)
-                        if completion.token.generation == cur_gen
-                            && completion.token.signature == sig
-                            && completion.token.oracle_key == oracle_key =>
-                    {
-                        commit_prepared_terrain_cover(
-                            &mut tiles, &mut errs, prepared, oracle_key, sig,
-                        );
-                        cover_committed = true;
-                    }
-                    Ok(_) => selection_due = true,
-                    Err(()) => {
-                        bevy::log::error!(
-                            target: "terrain_stream",
-                            terrain = ?terrain,
-                            signature = completion.token.signature,
-                            "terrain cover preparation worker failed"
-                        );
-                        tiles.failed_cover_signature = Some(completion.token.signature);
-                        if completion.token.signature != sig {
-                            selection_due = true;
-                        }
-                    }
-                }
-            }
-            if tiles
-                .pending_cover
-                .is_some_and(|(generation, pending_sig, pending_oracle, _)| {
-                    generation != cur_gen || pending_sig != sig || pending_oracle != oracle_key
-                })
-            {
-                selection_due = true;
-            }
-            {
-                let cover_status = selected_cover_status(&tiles, cur_gen);
-                // A complete resident cover can still have new morph pins to
-                // publish when physics moves onto geometry already in memory.
-                if !cover_committed
-                    && !promoted_tiles
-                    && pending.is_empty()
-                    && tiles.pending_cover.is_none()
-                    && tiles.last_sig == Some(sig)
-                    && tiles.coarse_ready
-                    && cover_status.complete
-                {
-                    // Idle: resident tiles already match. Contribute this terrain's
-                    // resident count so the status bar still reads "done", not "0/0".
-                    stream_status.wanted += cover_status.wanted;
-                    stream_status.resident += cover_status.resident;
-                    stream_status.budget_refused += tiles.budget_refused;
-                    add_focus_readiness(
-                        &mut stream_status,
-                        visual_foci,
-                        tiles.cover_selected.iter().map(|selected| selected.coord),
-                        &qt,
-                        |coord| {
-                            tiles
-                                .tiles
-                                .get(&coord)
-                                .is_some_and(|slot| slot.ready && slot.drawn)
-                        },
+                if template.vertex_shader.is_none() {
+                    bevy::log::error!(
+                        target: "terrain",
+                        entity = ?terrain,
+                        "streamed DEM terrain material has no authored CDLOD vertex source"
                     );
                     continue;
                 }
-            }
-            let budget = profile.terrain_lod_tile_budget;
-            sel.clear();
-            if frozen {
-                sel.push(Selected {
-                    coord: QuadCoord::ROOT,
-                    region: qt.region(QuadCoord::ROOT),
-                    morph_start: f64::INFINITY,
-                    morph_end: f64::INFINITY,
-                });
-            } else {
-                sel.extend(tiles.cover_selected.iter().copied());
-                let needs_cover_work = tiles.cover.is_empty()
-                    || (tiles.bootstrap_ready && tiles.settled_sig != Some(sig));
-                if selection_due
-                    && needs_cover_work
-                    && tiles.last_sig != Some(sig)
-                    && tiles.pending_cover.is_none()
-                    && tiles.failed_cover_signature != Some(sig)
-                {
-                    let Some(operation) = tiles.cover_operation.checked_add(1) else {
-                        bevy::log::error!(
-                            target: "terrain_stream",
-                            entity = ?terrain,
-                            "terrain cover operation identity is exhausted"
-                        );
-                        tiles.failed_cover_signature = Some(sig);
+                // A terrain may be mounted under the canonical WorldGrid or under a
+                // body's surface sub-grid. Resolve the actual frame from its ancestry;
+                // streamed tiles must share that frame, while their mesh coordinates
+                // remain in the terrain owner's local DEM axes.
+                let Some((grid_entity, grid)) = lunco_spatial::coords::ancestor_grid(
+                    terrain,
+                    &environment.parents,
+                    &environment.grids,
+                ) else {
+                    continue;
+                };
+                let Some((terrain_grid_position, terrain_grid_rotation)) =
+                    lunco_spatial::coords::grid_relative_pose(
+                        terrain,
+                        grid_entity,
+                        &environment.parents,
+                        &environment.grids,
+                        &environment.spatial,
+                    )
+                else {
+                    continue;
+                };
+
+                // A tile is drawable only after the render binder has installed its
+                // concrete material. Checking the marker avoids exposing a spawned mesh
+                // merely because one ECS turn happened to elapse; deferred command order
+                // is not a material-readiness contract.
+                let mut promoted_tiles = false;
+                if !tiles.materials_ready {
+                    let mut all_ready = true;
+                    for slot in tiles
+                        .tiles
+                        .values_mut()
+                        .chain(tiles.pending_replacements.values_mut())
+                    {
+                        if !slot.ready {
+                            if environment.material_bound.get(slot.entity).is_ok() {
+                                slot.ready = true;
+                                promoted_tiles = true;
+                            } else {
+                                all_ready = false;
+                            }
+                        }
+                    }
+                    tiles.materials_ready = all_ready;
+                }
+                if promoted_tiles {
+                    tiles.bump_draw_revision();
+                }
+
+                // Do not expose a tile before the USD material projection and any
+                // required engine-derived product have selected every source. Creating
+                // a procedural/derived cover first and rewriting it when either
+                // producer publishes would mint a second set of material keys, upload
+                // the whole terrain again, and visibly change its appearance. The UI
+                // remains active while these off-thread inputs are pending.
+                if tiles.tiles.is_empty() && !initial_lit_material_ready(maps, authored) {
+                    continue;
+                }
+                // The frozen cover is ONE tile for the whole terrain, so it carries the
+                // detail the whole quadtree used to spread over thousands — mesh it far
+                // finer than a streamed tile. The configured streamed resolution over the full window
+                // would be ~20 m between vertices: one tile, and no terrain.
+                let tile_res = if frozen {
+                    profile.terrain_lod_cinematic_resolution
+                } else {
+                    profile.terrain_lod_tile_resolution
+                };
+                tiles.resolution = tile_res;
+                tiles.effective_max_depth = max_depth;
+                // A live max-depth reduction invalidates the persistent cover: it may
+                // still contain leaves deeper than the new tree and those leaves would
+                // otherwise remain drawable forever. The cover is authoritative state,
+                // so reset it to the root and let the normal selector rebuild it under
+                // the new bound. Increasing the bound keeps the existing cover and
+                // refines from that valid fixed point.
+                if selection_cycle_due && tiles.cover.iter().any(|coord| coord.depth > max_depth) {
+                    tiles.cover.clear();
+                    tiles.cover_selected.clear();
+                    tiles.bootstrap_ready = false;
+                    tiles.settled_sig = None;
+                    tiles.last_sig = None;
+                    tiles.budget_refused = 0;
+                }
+                // The terrain's current height generation: a tile/bake tagged with an older
+                // gen is stale (a live re-bake changed the heights) and is replaced near-first.
+                let cur_gen = tiles.r#gen;
+                // Geometry-affecting material inputs join the draw transaction below.
+                let morph_ratio = profile.terrain_lod_morph_start_ratio as f32;
+
+                // Project every active visual camera into this terrain's local DEM frame.
+                // Cover preparation biases the continuous detail region toward
+                // visible ground, while preserving the camera's finest nodes.
+                let oracle = &hf.0;
+                let h = oracle.domain_half_extent() as f64;
+                tiles.half_extent = h;
+                visual_foci.clear();
+                for demand in std::iter::once(demand) {
+                    let Some(&(terrain_local, local_forward)) = demand.terrain_poses.get(&terrain)
+                    else {
                         continue;
                     };
-                    tiles.cover_operation = operation;
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let token = TerrainCoverToken {
-                        terrain,
-                        generation: cur_gen,
-                        signature: sig,
-                        oracle_key,
+                    let Some(clip) = demand.terrain_clips.get(&terrain).copied() else {
+                        continue;
+                    };
+                    if let Some(mut visual_demand) = terrain_visual_demand(
+                        demand,
+                        terrain_local,
+                        local_forward,
+                        clip,
+                        profile.terrain_lod_pixel_error,
+                    ) {
+                        tiles.retain_selection_clip(&mut visual_demand);
+                        visual_foci.push(visual_demand);
+                    }
+                }
+                // The actual camera owns the projection. A pending navigation
+                // corridor adds exact required nodes during worker preparation.
+                let Some(actual) = visual_foci.first() else {
+                    continue;
+                };
+                let quadtree_for = |px: f64| match actual.projection {
+                    TerrainProjection::Perspective { fov_y_rad, .. } => {
+                        Quadtree::from_screen_metric(
+                            h,
+                            max_depth,
+                            h,
+                            actual.screen_height_px,
+                            fov_y_rad,
+                            px,
+                            profile.terrain_lod_morph_start_ratio,
+                        )
+                    }
+                    TerrainProjection::Orthographic {
+                        pixels_per_metre, ..
+                    } => Quadtree::from_orthographic_metric(h, max_depth, h, pixels_per_metre, px),
+                };
+                let pixel_error = profile.terrain_lod_pixel_error;
+                let qt = quadtree_for(pixel_error);
+                // ── Idle-camera fast path ────────────────────────────────────────────
+                // The selection below (quadtree walks + budget-coarsen loop + sort + queue
+                // + retain) is a pure function of (focus, eye height, generation, oracle
+                // identity, LOD knobs). Re-deriving it EVERY
+                // frame with a still camera was the dominant idle terrain CPU cost
+                // (obs 23593). Fold those inputs into a signature; when it matches last
+                // frame's AND no bake is mid-flight (nothing to finalize/spawn), last
+                // frame's resident tiles are already correct — skip the whole body.
+                // The retained clip envelope supplies one bounded pose identity for
+                // both this requester and finalized readiness. Geometry remains
+                // eligible throughout its full hysteresis interval.
+                let (signature, admission_sig) = terrain_view_signatures(
+                    &demands,
+                    terrain,
+                    demand,
+                    visual_foci,
+                    cur_gen,
+                    hf.0.surface_key(),
+                    &profile,
+                    frozen,
+                );
+                let sig = {
+                    if let (Some(input), Some(corridor)) = (
+                        demands.preparation_signature(view_camera, terrain),
+                        demand.preparation_corridors.get(&terrain),
+                    ) {
+                        tiles
+                            .held_preparation
+                            .get_or_insert_with(HeldTerrainPreparation::default)
+                            .admit(
+                                admission_sig,
+                                input,
+                                *corridor,
+                                &qt,
+                                profile.terrain_lod_tile_budget,
+                            );
+                    } else {
+                        tiles.held_preparation = None;
+                    }
+                    finish_terrain_view_signature(
+                        signature,
+                        admission_sig,
+                        tiles
+                            .held_preparation
+                            .as_ref()
+                            .map(|held| held.requirements_signature),
+                    )
+                };
+                tiles.requested_signature = Some(sig);
+                let oracle_key = hf.0.surface_key();
+                if errs.oracle_key != oracle_key {
+                    errs.map.clear();
+                    errs.oracle_key = oracle_key;
+                }
+                // Camera motion follows the wall-clock cadence. Changes to physics
+                // support or other admission inputs wake selection immediately.
+                let mut selection_due = terrain_cover_selection_due(
+                    selection_cycle_due,
+                    tiles.last_admission_sig,
+                    admission_sig,
+                );
+                let completion =
+                    cover_completions
+                        .remove(&(terrain, view_camera))
+                        .and_then(|mut results| {
+                            let index = results.iter().position(|completion| {
+                                tiles.pending_cover
+                                    == Some((
+                                        completion.token.generation,
+                                        completion.token.signature,
+                                        completion.token.oracle_key,
+                                        completion.token.operation,
+                                        completion.token.admission_signature,
+                                    ))
+                            })?;
+                            Some(results.remove(index))
+                        });
+                let mut cover_committed = false;
+                if let Some(completion) = completion {
+                    tiles.pending_cover = None;
+                    match completion.result {
+                        Ok(prepared)
+                            if completion.token.matches_current_inputs(
+                                cur_gen,
+                                oracle_key,
+                                admission_sig,
+                            ) =>
+                        {
+                            commit_prepared_terrain_cover(
+                                &mut tiles,
+                                &mut errs,
+                                prepared,
+                                oracle_key,
+                                completion.token.signature,
+                                completion.token.admission_signature,
+                            );
+                            cover_committed = true;
+                        }
+                        Ok(_) => selection_due = true,
+                        Err(()) => {
+                            bevy::log::error!(
+                                target: "terrain_stream",
+                                terrain = ?terrain,
+                                signature = completion.token.signature,
+                                "terrain cover preparation worker failed"
+                            );
+                            tiles.failed_cover_signature = Some(completion.token.signature);
+                            if completion.token.signature != sig {
+                                selection_due = true;
+                            }
+                        }
+                    }
+                }
+                if let Some((generation, pending_sig, pending_oracle, operation, pending_admission)) =
+                    tiles.pending_cover
+                    && (generation != cur_gen
+                        || pending_admission != admission_sig
+                        || pending_oracle != oracle_key)
+                {
+                    // Hard source/view leases retire immutable work. Endpoint and
+                    // heading updates retain valid queued work; its earlier subset
+                    // can publish before the latest accumulated requirements.
+                    let key = lunco_core_runtime::AsyncWorkKey::new(
+                        lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                        0,
+                        view_owner(terrain, view_camera),
+                        pending_sig,
                         operation,
-                    };
-                    let request = TerrainCoverRequest {
-                        quadtree: qt,
-                        oracle: Arc::clone(&hf.0),
-                        oracle_key,
-                        demands: visual_foci.clone(),
-                        contact_nodes: contact_nodes.to_vec(),
-                        cover: tiles.cover.clone(),
-                        node_geometry: errs.map.clone(),
-                        bootstrap_ready: tiles.bootstrap_ready,
-                        settled_sig: tiles.settled_sig,
-                        budget_refused: tiles.budget_refused,
-                        signature: sig,
-                        tile_resolution: tile_res,
-                        probe_resolution: profile.terrain_lod_probe_resolution,
-                        tile_budget: budget,
-                        max_depth,
-                        cover_edits_per_cycle: profile.terrain_lod_cover_edits_per_frame,
-                        hysteresis_ratio: profile.terrain_lod_hysteresis_ratio,
-                    };
-                    #[cfg(not(target_arch = "wasm32"))]
+                    );
+                    if cover_work.admission.cancel_queued(key) {
+                        tiles.pending_cover = None;
+                    }
+                    selection_due = true;
+                }
+                {
+                    let cover_status = selected_cover_status(&tiles, cur_gen);
+                    // A newly committed cover can change morph windows on resident meshes.
+                    if !cover_committed
+                        && !promoted_tiles
+                        && !tiles.presentation_pending
+                        && tiles.pending_replacements.is_empty()
+                        && tiles.morph_ratio.to_bits() == morph_ratio.to_bits()
+                        && pending.is_empty()
+                        && tiles.pending_cover.is_none()
+                        && tiles.selection_current()
+                        && tiles.coarse_ready
+                        && cover_status.complete
                     {
-                        let queue = Arc::clone(&cover_work.results.queue);
-                        let job = move || {
-                            let result =
-                                catch_unwind(AssertUnwindSafe(|| prepare_terrain_cover(request)))
-                                    .map_err(|_| ());
-                            queue
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .push_back(TerrainCoverCompletion { token, result });
-                        };
-                        let key = lunco_core_runtime::AsyncWorkKey::new(
-                            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
-                            0,
-                            terrain.to_bits() as u128,
-                            sig,
-                            operation,
+                        // Idle: resident tiles already match. Contribute this terrain's
+                        // resident count so the status bar still reads "done", not "0/0".
+                        stream_status.wanted += cover_status.wanted;
+                        stream_status.resident += cover_status.resident;
+                        stream_status.budget_refused += tiles.budget_refused;
+                        stream_status.preparation_refused += tiles.preparation_refusal_count(
+                            demands.preparation_signature(view_camera, terrain),
+                            admission_sig,
                         );
-                        match cover_work.admission.submit(
-                            lunco_core_runtime::AsyncWorkPriority::Background,
+                        stream_status.selection_pending += usize::from(!tiles.latest_ready());
+                        stream_status.pending += usize::from(!tiles.latest_ready());
+                        add_focus_readiness(
+                            &mut stream_status,
+                            visual_foci,
+                            tiles.cover_selected.iter().map(|selected| selected.coord),
+                            &qt,
+                            |coord| {
+                                tiles
+                                    .tiles
+                                    .get(&coord)
+                                    .is_some_and(|slot| slot.ready && slot.drawn)
+                            },
+                        );
+                        continue;
+                    }
+                }
+                let budget = profile.terrain_lod_tile_budget;
+                sel.clear();
+                if frozen {
+                    sel.push(Selected {
+                        coord: QuadCoord::ROOT,
+                        region: qt.region(QuadCoord::ROOT),
+                        morph_start: f64::INFINITY,
+                        morph_end: f64::INFINITY,
+                    });
+                    tiles.commit_frozen_cover(sel, sig, admission_sig);
+                } else {
+                    sel.extend(tiles.cover_selected.iter().copied());
+                    let needs_cover_work = tiles.cover_preparation_needed(sig);
+                    if selection_due
+                        && needs_cover_work
+                        && tiles.pending_cover.is_none()
+                        && tiles.failed_cover_signature != Some(sig)
+                    {
+                        let Some(operation) = tiles.cover_operation.checked_add(1) else {
+                            bevy::log::error!(
+                                target: "terrain_stream",
+                                entity = ?terrain,
+                                "terrain cover operation identity is exhausted"
+                            );
+                            tiles.failed_cover_signature = Some(sig);
+                            continue;
+                        };
+                        tiles.cover_operation = operation;
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let token = TerrainCoverToken {
+                            terrain,
+                            camera: view_camera,
+                            generation: cur_gen,
+                            signature: sig,
+                            admission_signature: admission_sig,
+                            oracle_key,
+                            operation,
+                        };
+                        let request = TerrainCoverRequest {
+                            quadtree: qt,
+                            oracle: Arc::clone(&hf.0),
+                            oracle_key,
+                            demands: visual_foci.clone(),
+                            camera_patches: tiles.camera_patches.clone(),
+                            cover: tiles.cover.clone(),
+                            node_geometry: errs.map.clone(),
+                            bootstrap_ready: tiles.bootstrap_ready,
+                            settled_sig: tiles.settled_sig,
+                            budget_refused: tiles.budget_refused,
+                            signature: sig,
+                            preparation_signature: tiles
+                                .held_preparation
+                                .as_ref()
+                                .map(|held| held.requirements_signature),
+                            preparation: tiles
+                                .held_preparation
+                                .as_ref()
+                                .map(HeldTerrainPreparation::requirements),
+                            tile_resolution: tile_res,
+                            probe_resolution: profile.terrain_lod_probe_resolution,
+                            tile_budget: budget,
+                            max_depth,
+                            cover_edits_per_cycle: profile.terrain_lod_cover_edits_per_frame,
+                            hysteresis_ratio: profile.terrain_lod_hysteresis_ratio,
+                        };
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            let queue = Arc::clone(&cover_work.results.queue);
+                            let job = move || {
+                                let result = catch_unwind(AssertUnwindSafe(|| {
+                                    prepare_terrain_cover(request)
+                                }))
+                                .map_err(|_| ());
+                                queue
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .push_back(TerrainCoverCompletion { token, result });
+                            };
+                            let key = lunco_core_runtime::AsyncWorkKey::new(
+                                lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                                0,
+                                view_owner(terrain, view_camera),
+                                sig,
+                                operation,
+                            );
+                            match cover_work.admission.submit(
+                            lunco_core_runtime::AsyncWorkPriority::Interactive,
                             key,
                             job,
                         ) {
                             Ok(()) | Err(lunco_core_runtime::AsyncWorkRejection::DuplicateKey) => {
-                                tiles.pending_cover = Some((cur_gen, sig, oracle_key, operation));
+                                tiles.pending_cover = Some((cur_gen, sig, oracle_key, operation, admission_sig));
                             }
                             Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
                                 bevy::log::warn_once!(
@@ -3903,343 +6012,207 @@ pub fn update_lod_tiles(
                                 tiles.failed_cover_signature = Some(sig);
                             }
                         }
-                    }
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let prepared = prepare_terrain_cover(request);
-                        commit_prepared_terrain_cover(
-                            &mut tiles, &mut errs, prepared, oracle_key, sig,
-                        );
-                        sel.clear();
-                        sel.extend(tiles.cover_selected.iter().copied());
-                    }
-                }
-            }
-            // A node can enter or leave the support footprint without rebaking.
-            // Publish its current morph window, including the pin, to its reader.
-            for selected in sel.iter() {
-                let end = if selected.morph_end.is_finite() {
-                    selected.morph_end as f32
-                } else {
-                    1.0e21
-                };
-                if let Some(slot) = tiles.tiles.get_mut(&selected.coord) {
-                    if slot.morph_end.to_bits() != end.to_bits() {
-                        slot.morph_end = end;
-                        let (start, end, _) = snap_band(end, morph_ratio);
-                        let mut look = tile_look(
-                            template,
-                            selected.coord.depth as u32,
-                            start,
-                            end,
-                            maps,
-                            h as f32,
-                            authored,
-                            shadow,
-                            &environment.diagnostic.0,
-                            overlay,
-                        );
-                        set_param(
-                            &mut look,
-                            "stitch_edges",
-                            ParamValue::Vec4(slot.stitch_edges),
-                        );
-                        commands.entity(slot.entity).try_insert(look);
-                    }
-                }
-            }
-            wanted.clear();
-            wanted.extend(sel.iter().map(|s| s.coord));
-            wanted_parent_fallbacks(wanted, parent_fallbacks);
-
-            // Bound the node-error memo. It only ever wiped on an oracle swap, so a
-            // long traverse accumulated every node the camera ever visited. Past the
-            // cap, keep exactly the cover-relevant set — the wanted leaves, their
-            // parent fallbacks and every ancestor chain (the coords the next
-            // selection pass re-reads) — so the trim costs the live cover no
-            // re-probes (a full clear would re-measure ~1.6 k nodes in one frame).
-            if errs.map.len() > NODE_GEOMETRY_CACHE_CAP {
-                let mut keep: HashSet<QuadCoord> = HashSet::with_capacity(
-                    wanted.len() * (profile.terrain_lod_max_depth as usize + 1),
-                );
-                for &c in wanted.iter().chain(parent_fallbacks.iter()) {
-                    let mut n = c;
-                    while keep.insert(n) {
-                        let Some(p) = n.parent() else { break };
-                        n = p;
-                    }
-                }
-                errs.map.retain(|c, _| keep.contains(c));
-            }
-
-            // Selection is authoritative. Drop superseded generations and camera
-            // requests no longer selected before they can occupy every worker slot.
-            // The retained coarse base is always kept pending until its generation is
-            // complete; fine requests are admitted only after that cover is ready.
-            let pending_before = pending.len();
-            #[cfg(not(target_arch = "wasm32"))]
-            pending.jobs.retain(|coord, job| {
-                let keep = job.generation == cur_gen
-                    && (wanted.contains(coord)
-                        || parent_fallbacks.contains(coord)
-                        || is_coarse_fallback(*coord));
-                if !keep {
-                    cover_work.admission.cancel_queued(job.key);
-                }
-                keep
-            });
-            #[cfg(target_arch = "wasm32")]
-            pending.tasks.retain(|coord, (r#gen, _)| {
-                *r#gen == cur_gen
-                    && (wanted.contains(coord)
-                        || parent_fallbacks.contains(coord)
-                        || is_coarse_fallback(*coord))
-            });
-            pending.ready.retain(|(coord, r#gen, _)| {
-                *r#gen == cur_gen
-                    && (wanted.contains(coord)
-                        || parent_fallbacks.contains(coord)
-                        || is_coarse_fallback(*coord))
-            });
-            pending.failed.retain(|(coord, r#gen)| {
-                *r#gen == cur_gen
-                    && (wanted.contains(coord)
-                        || parent_fallbacks.contains(coord)
-                        || is_coarse_fallback(*coord))
-            });
-            stream_status.stale_cancelled += pending_before - pending.len();
-            // Intelligent baking, two phases:
-            //
-            // 1. CARPET — the selection's coarsest tiles first (a depth-N tile costs
-            //    the same 49² samples as a leaf but covers 4^(maxdepth−N)× the
-            //    area), so the whole view is covered by a low-res carpet within the
-            //    first few frames instead of staying BLACK.
-            // 2. BENEFIT — everything finer ordered by distance measured in units
-            //    of the tile's own size (≈ inverse screen-space error): the leaf at
-            //    the camera's feet outranks a mid-depth ring 800 m out. Strict
-            //    depth-major order here was wrong on open: every mid-depth tile
-            //    across the whole 1.5 km view baked before the leaves under the
-            //    camera — the user watched FAR detail land while the near ground
-            //    lagged coarse.
-            //
-            // The DISTANCE morph settles children onto the parent lattice, so the
-            // out-of-depth-order coarse->fine handoff never pops. It is a pure function
-            // of world position, which is what keeps neighbouring tiles agreeing at
-            // their shared edge — see the note where the per-tile reveal was removed.
-            // NOTE: the old `CARPET_DEPTH` two-tier key is gone. It bucketed depth <= 2 ahead of
-            // everything else to bake a "carpet" first — but the selection is a REPLACE cover and
-            // a site DEM never selects depths 0-2, so the branch never fired and no carpet ever
-            // existed (that absence is what made the terrain go black). The coarse base now does
-            // that job properly: it is enumerated, not selected, and queued ahead of `sel`. So
-            // this sort only has to order the SELECTION, by screen-space benefit.
-            // Minimum screen-space benefit across actual active camera positions.
-            // Prefetch samples shape the selected cover, but are not substitute
-            // viewpoints: letting an 80 m look-ahead endpoint compete as an equal
-            // focus delayed the tile directly beneath the camera.
-            let benefit = |s: &Selected| -> f64 {
-                let size = s.region.half * 2.0;
-                visual_foci
-                    .iter()
-                    .filter(|visual| visual.required)
-                    .map(|visual| {
-                        let to = bevy::math::DVec2::new(
-                            s.region.center[0] - visual.focus[0],
-                            s.region.center[1] - visual.focus[1],
-                        );
-                        let base = to.length_squared() / (size * size).max(1e-9);
-                        let Some(heading) = visual.heading else {
-                            return base;
-                        };
-                        let distance = to.length();
-                        if distance < 1e-6 {
-                            return base;
                         }
-                        // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
-                        base * (2.5 - 1.5 * (to / distance).dot(heading))
-                    })
-                    .reduce(f64::min)
-                    .unwrap_or(f64::INFINITY)
-            };
-            let camera_underfoot = |s: &Selected| {
-                visual_foci.iter().any(|visual| {
-                    visual.required && s.region.distance_to(visual.focus) <= f64::EPSILON
-                })
-            };
-            // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
-            // the comparator re-ran them on BOTH sides of every comparison
-            // (O(n log n) evaluations) — compute each tile's key once, sort on the
-            // cached key.
-            keyed.clear();
-            keyed.extend(sel.drain(..).map(|s| {
-                let priority = if contact_nodes.contains(&s.coord) {
-                    0
-                } else if camera_underfoot(&s) {
-                    1
-                } else {
-                    2
-                };
-                (priority, benefit(&s), s)
-            }));
-            keyed.sort_by(compare_terrain_bake_keys);
-            sel.extend(keyed.drain(..).map(|(_, _, s)| s));
-
-            // A coord is *fresh* (no work needed) when it has a resident tile OR an
-            // in-flight bake tagged with the current generation. A stale entry (older
-            // gen, from before a live re-bake) still renders but no longer counts as
-            // satisfied, so a current-gen replacement is queued for it.
-            let fresh_tile = |tiles: &LodTiles, c: &QuadCoord| {
-                tiles.tiles.get(c).is_some_and(|s| s.r#gen == cur_gen)
-            };
-
-            // Worker arrivals are only data. Accept results for the current owner key,
-            // then publish meshes in stable tile order under the per-frame budget.
-            // Offline capture waits at its presentation boundary for readiness rather
-            // than blocking this system.
-            done.clear();
-            #[cfg(target_arch = "wasm32")]
-            pending.tasks.retain(|coord, (r#gen, task)| {
-                match block_on(future::poll_once(&mut *task)) {
-                    Some(baked) => {
-                        done.push((*coord, *r#gen, baked));
-                        false
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let prepared = prepare_terrain_cover(request);
+                            commit_prepared_terrain_cover(
+                                &mut tiles,
+                                &mut errs,
+                                prepared,
+                                oracle_key,
+                                sig,
+                                admission_sig,
+                            );
+                            sel.clear();
+                            sel.extend(tiles.cover_selected.iter().copied());
+                        }
                     }
-                    None => true,
                 }
-            });
-            pending.ready.append(done);
-            let ready = pending.take_ready(cur_gen, profile.terrain_lod_bakes_per_frame);
-            for (coord, baked) in ready {
-                let handle = meshes.add(baked.mesh);
-                let oy = baked.origin_y;
-                mesh_cache.insert(
-                    (terrain, coord, baked.res, baked.contact),
-                    handle.clone(),
-                    oy,
-                );
-                // Coarse-base tiles are live residents even though they are not selected
-                // leaves. Direct parent fallbacks are also live residents. Other completed
-                // work that is no longer wanted stays in the content cache.
-                if !wanted.contains(&coord)
-                    && !parent_fallbacks.contains(&coord)
-                    && !is_coarse_fallback(coord)
-                {
-                    continue;
-                }
-                let depth = baked.depth;
-                // `oy` (baked with the mesh) anchors the tile's cell to its geometry — see
-                // `spawn_tile`/`bake_tile_mesh` `origin_y`. Using the baked value (not a
-                // spawn-time recompute) keeps mesh and placement in lock-step across gens.
-                let ent = spawn_tile(
-                    &mut commands,
-                    grid,
-                    grid_entity,
-                    terrain,
-                    coord,
-                    handle,
-                    baked.center,
-                    depth,
-                    baked.morph_end,
-                    morph_ratio,
-                    maps,
-                    h as f32,
-                    authored,
-                    shadow,
-                    template,
-                    &environment.diagnostic.0,
-                    overlay,
-                    oy,
-                    terrain_grid_position,
-                    terrain_grid_rotation,
-                );
-                // Replace any stale slot at this coord, despawning the tile it held.
-                if let Some(old) = tiles.insert_slot(
-                    coord,
-                    TileSlot {
-                        entity: ent,
-                        r#gen: cur_gen,
-                        morph_end: baked.morph_end,
-                        drawn: false,
-                        ready: false,
-                        stitch_edges: [0.0; 4],
-                    },
-                ) {
-                    retire_tile(&mut commands, old.entity);
-                }
-            }
+                wanted.clear();
+                wanted.extend(sel.iter().map(|s| s.coord));
+                wanted_parent_fallbacks(wanted, parent_fallbacks);
 
-            // ── Queue new work, nearest-first ────────────────────────────
-            // Cache hits spawn instantly; native misses use shared admission and the
-            // browser keeps its explicit cache task path. Tiles anchor to their OWN
-            // big_space `CellCoord` so far-from-origin tiles keep f32 precision.
-            #[cfg(target_arch = "wasm32")]
-            let pool = AsyncComputeTaskPool::get();
-            // The retained coarse cover is queued before the selection. It is a
-            // complete DEM-derived floor; finer work never creates an uncovered area.
-            coarse.clear();
-            if !frozen && !tiles.coarse_ready {
-                for c in fallback_coords() {
-                    coarse.push(Selected {
-                        coord: c,
-                        region: qt.region(c),
-                        // A coarse-base tile is a stand-in, not a member of the selected
-                        // cover: it must not morph toward a parent of its own. The
-                        // non-finite sentinel maps to the shader's no-morph bucket.
-                        morph_start: f64::INFINITY,
-                        morph_end: f64::INFINITY,
-                    });
+                // Bound the node-error memo. It only ever wiped on an oracle swap, so a
+                // long traverse accumulated every node the camera ever visited. Past the
+                // cap, keep exactly the cover-relevant set — the wanted leaves, their
+                // parent fallbacks and every ancestor chain (the coords the next
+                // selection pass re-reads) — so the trim costs the live cover no
+                // re-probes (a full clear would re-measure ~1.6 k nodes in one frame).
+                if errs.map.len() > NODE_GEOMETRY_CACHE_CAP {
+                    let mut keep: HashSet<QuadCoord> = HashSet::with_capacity(
+                        wanted.len() * (profile.terrain_lod_max_depth as usize + 1),
+                    );
+                    for &c in wanted.iter().chain(parent_fallbacks.iter()) {
+                        let mut n = c;
+                        while keep.insert(n) {
+                            let Some(p) = n.parent() else { break };
+                            n = p;
+                        }
+                    }
+                    errs.map.retain(|c, _| keep.contains(c));
                 }
-            }
-            // The complete coarse cover is a correctness prerequisite, not just a
-            // priority hint. Starting fine bakes beside it can saturate the worker
-            // pool on a cold cache and leave an area without a ready ancestor. Admit
-            // only coarse work until the complete cover exists; then refine nearest-first.
-            for (_priority_order, s) in coarse.iter().chain(sel.iter()).enumerate() {
-                if !tiles.coarse_ready && !is_coarse_fallback(s.coord) {
-                    continue;
-                }
-                // Skip coords already satisfied at the current generation (resident tile
-                // or in-flight current-gen bake). Stale tiles fall through → re-baked.
-                let have_pending = pending.has_current(s.coord, cur_gen);
-                if fresh_tile(&tiles, &s.coord) || have_pending {
-                    continue;
-                }
-                if pending.failed.contains(&(s.coord, cur_gen)) {
-                    continue;
-                }
-                let contact = contact_ring
-                    .as_ref()
-                    .filter(|ring| s.coord.depth >= ring.depth)
-                    .map(|ring| ring.depth);
-                let resolution = if contact.is_some() {
-                    contact_ring.as_ref().unwrap().res
-                } else {
-                    tile_res
+
+                // Selection is authoritative. Drop superseded generations and camera
+                // requests no longer selected before they can occupy every worker slot.
+                // Intelligent baking, two phases:
+                //
+                // 1. CARPET — the selection's coarsest tiles first (a depth-N tile costs
+                //    the same 49² samples as a leaf but covers 4^(maxdepth−N)× the
+                //    area), so the whole view is covered by a low-res carpet within the
+                //    first few frames instead of staying BLACK.
+                // 2. BENEFIT — everything finer ordered by distance measured in units
+                //    of the tile's own size (≈ inverse screen-space error): the leaf at
+                //    the camera's feet outranks a mid-depth ring 800 m out. Strict
+                //    depth-major order here was wrong on open: every mid-depth tile
+                //    across the whole 1.5 km view baked before the leaves under the
+                //    camera — the user watched FAR detail land while the near ground
+                //    lagged coarse.
+                //
+                // The DISTANCE morph settles children onto the parent lattice, so the
+                // out-of-depth-order coarse->fine handoff never pops. It is a pure function
+                // of world position, which is what keeps neighbouring tiles agreeing at
+                // their shared edge — see the note where the per-tile reveal was removed.
+                // NOTE: the old `CARPET_DEPTH` two-tier key is gone. It bucketed depth <= 2 ahead of
+                // everything else to bake a "carpet" first — but the selection is a REPLACE cover and
+                // a site DEM never selects depths 0-2, so the branch never fired and no carpet ever
+                // existed (that absence is what made the terrain go black). The coarse base now does
+                // that job properly: it is enumerated, not selected, and queued ahead of `sel`. So
+                // this sort only has to order the SELECTION, by screen-space benefit.
+                // Minimum screen-space benefit across actual active camera positions.
+                // Prefetch samples shape the selected cover, but are not substitute
+                // viewpoints: letting an 80 m look-ahead endpoint compete as an equal
+                // focus delayed the tile directly beneath the camera.
+                let benefit = |s: &Selected| -> f64 {
+                    let size = s.region.half * 2.0;
+                    visual_foci
+                        .iter()
+                        .filter(|visual| visual.required)
+                        .map(|visual| {
+                            let to = bevy::math::DVec2::new(
+                                s.region.center[0] - visual.focus[0],
+                                s.region.center[1] - visual.focus[1],
+                            );
+                            let base = to.length_squared() / (size * size).max(1e-9);
+                            let Some(heading) = visual.heading else {
+                                return base;
+                            };
+                            let distance = to.length();
+                            if distance < 1e-6 {
+                                return base;
+                            }
+                            // cos 1 (dead ahead) → ×1 … cos −1 (behind) → ×4.
+                            base * (2.5 - 1.5 * (to / distance).dot(heading))
+                        })
+                        .reduce(f64::min)
+                        .unwrap_or(f64::INFINITY)
                 };
-                let depth = s.coord.depth as u32;
-                // Per-node morph band: finite for sub-root nodes, "never" for the root
-                // (the sentinel `snap_band` maps to the no-morph bucket).
-                let morph_end = if s.morph_end.is_finite() {
-                    s.morph_end as f32
-                } else {
-                    1.0e21
+                let camera_underfoot = |s: &Selected| {
+                    visual_foci.iter().any(|visual| {
+                        visual.required && s.region.distance_to(visual.focus) <= f64::EPSILON
+                    })
                 };
-                if let Some((cached, oy)) = mesh_cache.get(&(terrain, s.coord, resolution, contact))
-                {
-                    // Placed at the mesh's OWN baked `origin_y` (stored beside it), never a
-                    // recompute — otherwise a cache hit against a since-composed oracle jumps.
+                // Decorate-sort-undecorate: `dist2`/`benefit` pay a sqrt/dot per call and
+                // the comparator re-ran them on BOTH sides of every comparison
+                // (O(n log n) evaluations) — compute each tile's key once, sort on the
+                // cached key.
+                keyed.clear();
+                keyed.extend(sel.drain(..).map(|s| {
+                    let priority = if camera_underfoot(&s) { 0 } else { 1 };
+                    (priority, benefit(&s), s)
+                }));
+                keyed.sort_by(compare_terrain_bake_keys);
+                sel.extend(keyed.drain(..).map(|(_, _, s)| s));
+
+                // A coord is *fresh* (no work needed) when it has a resident tile OR an
+                // in-flight bake tagged with the current generation. A stale entry (older
+                // gen, from before a live re-bake) still renders but no longer counts as
+                // satisfied, so a current-gen replacement is queued for it.
+                let fresh_tile = |tiles: &LodView, c: &QuadCoord| tiles.fresh_slot(c, cur_gen);
+
+                // Worker arrivals are only data. Accept results for the current owner key,
+                // then publish meshes in stable tile order under the per-frame budget.
+                // Offline capture waits at its presentation boundary for readiness rather
+                // than blocking this system.
+                done.clear();
+                #[cfg(target_arch = "wasm32")]
+                pending.tasks.retain(|coord, (r#gen, task)| {
+                    match block_on(future::poll_once(&mut *task)) {
+                        Some(baked) => {
+                            done.push((*coord, *r#gen, baked));
+                            false
+                        }
+                        None => true,
+                    }
+                });
+                pending.ready.append(done);
+                let ready = pending.take_ready(cur_gen, upload_budget);
+                for (coord, baked) in ready {
+                    if refused_uploads.contains(&(terrain, coord, cur_gen)) {
+                        pending.ready.push((coord, cur_gen, baked));
+                        continue;
+                    }
+                    let upload_bytes = baked.bytes as u64;
+                    if !mesh_cache.admit_upload(upload_bytes, profile.terrain_mesh_cache_bytes) {
+                        refused_uploads.insert((terrain, coord, cur_gen));
+                        stream_status.mesh_upload_refused += 1;
+                        stream_status.mesh_upload_required_bytes =
+                            stream_status.mesh_upload_required_bytes.max(upload_bytes);
+                        pending.ready.push((coord, cur_gen, baked));
+                        continue;
+                    }
+                    upload_budget = upload_budget.saturating_sub(1);
+                    let view_morph_end = sel
+                        .iter()
+                        .find(|selected| selected.coord == coord)
+                        .map(|selected| {
+                            if selected.morph_end.is_finite() {
+                                selected.morph_end as f32
+                            } else {
+                                1.0e21
+                            }
+                        })
+                        .unwrap_or(1.0e21);
+                    let handle = meshes.add(baked.mesh);
+                    let oy = baked.origin_y;
+                    mesh_cache.insert(
+                        (terrain, coord, baked.res),
+                        handle.clone(),
+                        oy,
+                        baked.draw_bounds,
+                        baked.bytes,
+                    );
+                    // Coarse-base tiles are live residents even though they are not selected
+                    // leaves. Direct parent fallbacks are also live residents. Other completed
+                    // work that is no longer wanted stays in the content cache.
+                    if !wanted.contains(&coord)
+                        && !parent_fallbacks.contains(&coord)
+                        && !is_coarse_fallback(coord)
+                    {
+                        continue;
+                    }
+                    let depth = baked.depth;
+                    // `oy` (baked with the mesh) anchors the tile's cell to its geometry — see
+                    // `spawn_tile`/`bake_tile_mesh` `origin_y`. Using the baked value (not a
+                    // spawn-time recompute) keeps mesh and placement in lock-step across gens.
                     let ent = spawn_tile(
                         &mut commands,
                         grid,
                         grid_entity,
                         terrain,
-                        s.coord,
-                        cached,
-                        s.region.center,
+                        view_camera,
+                        demand.render_layer,
+                        coord,
+                        handle,
+                        baked.draw_bounds,
+                        baked.center,
                         depth,
-                        morph_end,
+                        view_morph_end,
                         morph_ratio,
                         maps,
-                        h as f32,
+                        oracle.half_extent(),
+                        oracle.regional_map_blend_m(),
+                        oracle.regional_uv_scale(),
                         authored,
                         shadow,
                         template,
@@ -4249,12 +6222,15 @@ pub fn update_lod_tiles(
                         terrain_grid_position,
                         terrain_grid_rotation,
                     );
+                    // Stage same-coordinate geometry without retiring the published slot.
                     if let Some(old) = tiles.insert_slot(
-                        s.coord,
+                        coord,
                         TileSlot {
+                            resolution: tile_res,
+                            half_extent: h,
                             entity: ent,
                             r#gen: cur_gen,
-                            morph_end,
+                            morph_end: view_morph_end,
                             drawn: false,
                             ready: false,
                             stitch_edges: [0.0; 4],
@@ -4262,341 +6238,539 @@ pub fn update_lod_tiles(
                     ) {
                         retire_tile(&mut commands, old.entity);
                     }
-                    continue;
                 }
-                // Cache miss → needs a bake. Respect the per-frame and per-terrain
-                // budgets while the shared native admission enforces the global worker
-                // bound. Keep scanning for cheap cache hits regardless of bake budget.
-                if bake_budget == 0 || pending.len() >= max_inflight {
-                    continue;
-                }
-                let oracle_arc = hf.0.clone();
-                let coord = s.coord;
-                let region = s.region;
-                let half = h;
-                let center = s.region.center;
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let capacity_revision = cover_work.admission.capacity_revision();
-                    if pending.capacity_wait_revision == Some(capacity_revision) {
-                        break;
+
+                // ── Queue new work, nearest-first ────────────────────────────
+                // Cache hits spawn instantly; native misses use shared admission and the
+                // browser keeps its explicit cache task path. Tiles anchor to their OWN
+                // big_space `CellCoord` so far-from-origin tiles keep f32 precision.
+                #[cfg(target_arch = "wasm32")]
+                let pool = AsyncComputeTaskPool::get();
+                // The retained coarse cover is queued before the selection. It is a
+                // complete DEM-derived floor; finer work never creates an uncovered area.
+                coarse.clear();
+                if !frozen && !tiles.coarse_ready {
+                    for c in fallback_coords() {
+                        coarse.push(Selected {
+                            coord: c,
+                            region: qt.region(c),
+                            // A coarse-base tile is a stand-in, not a member of the selected
+                            // cover: it must not morph toward a parent of its own. The
+                            // non-finite sentinel maps to the shader's no-morph bucket.
+                            morph_start: f64::INFINITY,
+                            morph_end: f64::INFINITY,
+                        });
                     }
-                    pending.capacity_wait_revision = None;
-
-                    let Some(operation) = pending.next_operation.checked_add(1) else {
-                        bevy::log::error!(
-                            target: "terrain_stream",
-                            entity = ?terrain,
-                            coord = ?coord,
-                            "terrain tile bake operation identity is exhausted"
-                        );
-                        pending.failed.insert((coord, cur_gen));
+                }
+                // The complete coarse cover is a correctness prerequisite, not just a
+                // priority hint. Starting fine bakes beside it can saturate the worker
+                // pool on a cold cache and leave an area without a ready ancestor. Admit
+                // only coarse work until the complete cover exists; then refine nearest-first.
+                for (_priority_order, s) in coarse.iter().chain(sel.iter()).enumerate() {
+                    if !tiles.coarse_ready && !is_coarse_fallback(s.coord) {
                         continue;
+                    }
+                    // Skip coords already satisfied at the current generation (resident tile
+                    // or in-flight current-gen bake). Stale tiles fall through → re-baked.
+                    let have_pending = pending.has_current(s.coord, cur_gen);
+                    if fresh_tile(&tiles, &s.coord) || have_pending {
+                        continue;
+                    }
+                    if pending.failed.contains(&(s.coord, cur_gen)) {
+                        continue;
+                    }
+                    let resolution = tile_res;
+                    let depth = s.coord.depth as u32;
+                    // Per-node morph band: finite for sub-root nodes, "never" for the root
+                    // (the sentinel `snap_band` maps to the no-morph bucket).
+                    let morph_end = if s.morph_end.is_finite() {
+                        s.morph_end as f32
+                    } else {
+                        1.0e21
                     };
-                    pending.next_operation = operation;
-                    let key = lunco_core_runtime::AsyncWorkKey::new(
-                        lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
-                        0,
-                        terrain.to_bits() as u128,
-                        cur_gen as u64,
-                        operation,
-                    );
-                    let queue = Arc::clone(&cover_work.tile_results.queue);
-                    let bake_oracle = Arc::clone(&oracle_arc);
-                    let depth = coord.depth as u32;
+                    if let Some((cached, oy, draw_bounds)) =
+                        mesh_cache.get(&(terrain, s.coord, resolution))
+                    {
+                        // Placed at the mesh's OWN baked `origin_y` (stored beside it), never a
+                        // recompute — otherwise a cache hit against a since-composed oracle jumps.
+                        let ent = spawn_tile(
+                            &mut commands,
+                            grid,
+                            grid_entity,
+                            terrain,
+                            view_camera,
+                            demand.render_layer,
+                            s.coord,
+                            cached,
+                            draw_bounds,
+                            s.region.center,
+                            depth,
+                            morph_end,
+                            morph_ratio,
+                            maps,
+                            oracle.half_extent(),
+                            oracle.regional_map_blend_m(),
+                            oracle.regional_uv_scale(),
+                            authored,
+                            shadow,
+                            template,
+                            &environment.diagnostic.0,
+                            overlay,
+                            oy,
+                            terrain_grid_position,
+                            terrain_grid_rotation,
+                        );
+                        if let Some(old) = tiles.insert_slot(
+                            s.coord,
+                            TileSlot {
+                                resolution: tile_res,
+                                half_extent: h,
+                                entity: ent,
+                                r#gen: cur_gen,
+                                morph_end,
+                                drawn: false,
+                                ready: false,
+                                stitch_edges: [0.0; 4],
+                            },
+                        ) {
+                            retire_tile(&mut commands, old.entity);
+                        }
+                        continue;
+                    }
+                    // Cache miss → needs a bake. Respect the per-frame and per-terrain
+                    // budgets while the shared native admission enforces the global worker
+                    // bound. Keep scanning for cheap cache hits regardless of bake budget.
+                    if bake_budget == 0 || pending.len() >= max_inflight {
+                        continue;
+                    }
+                    let oracle_arc = hf.0.clone();
+                    let coord = s.coord;
+                    let region = s.region;
+                    let half = h;
+                    let center = s.region.center;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let capacity_revision = cover_work.admission.capacity_revision();
+                        if pending.capacity_wait_revision == Some(capacity_revision) {
+                            break;
+                        }
+                        pending.capacity_wait_revision = None;
 
-                    let result_key = key;
-                    let job = move || {
-                        let result = catch_unwind(AssertUnwindSafe(|| {
+                        let Some(operation) = pending.next_operation.checked_add(1) else {
+                            bevy::log::error!(
+                                target: "terrain_stream",
+                                entity = ?terrain,
+                                coord = ?coord,
+                                "terrain tile bake operation identity is exhausted"
+                            );
+                            pending.failed.insert((coord, cur_gen));
+                            continue;
+                        };
+                        pending.next_operation = operation;
+                        let key = lunco_core_runtime::AsyncWorkKey::new(
+                            lunco_core_runtime::AsyncWorkKind::VisualizationPreparation,
+                            0,
+                            terrain.to_bits() as u128,
+                            cur_gen as u64,
+                            operation,
+                        );
+                        let queue = Arc::clone(&cover_work.tile_results.queue);
+                        let bake_oracle = Arc::clone(&oracle_arc);
+                        let depth = coord.depth as u32;
+
+                        let result_key = key;
+                        let job = move || {
+                            let result = catch_unwind(AssertUnwindSafe(|| {
+                                let _span = bevy::log::info_span!("terrain_tile_bake").entered();
+                                let tile_mesh = crate::tile_cache::bake_tile_mesh_cached(
+                                    bake_oracle.as_ref(),
+                                    coord,
+                                    region,
+                                    resolution,
+                                    half,
+                                    center,
+                                );
+                                assemble_baked_tile(
+                                    tile_mesh,
+                                    bake_oracle.as_ref(),
+                                    center,
+                                    depth,
+                                    resolution,
+                                )
+                            }))
+                            .map_err(|_| ());
+                            queue
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .push_back(TerrainTileBakeCompletion {
+                                    terrain,
+                                    coord,
+                                    key: result_key,
+                                    result,
+                                });
+                        };
+                        match cover_work.admission.submit_ordered(
+                            lunco_core_runtime::AsyncWorkPriority::Interactive,
+                            key,
+                            _priority_order as u64,
+                            job,
+                        ) {
+                            Ok(()) => {
+                                pending.jobs.insert(
+                                    coord,
+                                    PendingTileBake {
+                                        generation: cur_gen,
+                                        key,
+                                    },
+                                );
+                                pending.capacity_wait_revision = None;
+                                bake_budget -= 1;
+                            }
+                            Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
+                                pending.capacity_wait_revision =
+                                    Some(cover_work.admission.capacity_revision());
+                                break;
+                            }
+                            Err(rejection) => {
+                                bevy::log::error!(
+                                    target: "terrain_stream",
+                                    entity = ?terrain,
+                                    coord = ?coord,
+                                    ?rejection,
+                                    "terrain tile bake was rejected by shared preparation admission"
+                                );
+                                pending.failed.insert((coord, cur_gen));
+                            }
+                        }
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        bake_budget -= 1;
+                        let tile_generation = cur_gen;
+                        let task = pool.spawn(async move {
                             let _span = bevy::log::info_span!("terrain_tile_bake").entered();
-                            let tile_mesh = crate::tile_cache::bake_tile_mesh_cached(
-                                bake_oracle.as_ref(),
+                            let tile_mesh = crate::tile_cache::bake_tile_mesh_cached_async(
+                                Arc::clone(&oracle_arc),
                                 coord,
                                 region,
                                 resolution,
                                 half,
                                 center,
-                                contact,
-                            );
+                            )
+                            .await;
                             assemble_baked_tile(
                                 tile_mesh,
-                                bake_oracle.as_ref(),
+                                oracle_arc.as_ref(),
                                 center,
-                                depth,
+                                coord.depth as u32,
                                 resolution,
-                                morph_end,
-                                contact,
                             )
-                        }))
-                        .map_err(|_| ());
-                        queue
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .push_back(TerrainTileBakeCompletion {
-                                terrain,
-                                coord,
-                                key: result_key,
-                                result,
-                            });
-                    };
-                    match cover_work.admission.submit_ordered(
-                        lunco_core_runtime::AsyncWorkPriority::Interactive,
-                        key,
-                        _priority_order as u64,
-                        job,
-                    ) {
-                        Ok(()) => {
-                            pending.jobs.insert(
-                                coord,
-                                PendingTileBake {
-                                    generation: cur_gen,
-                                    key,
-                                },
-                            );
-                            pending.capacity_wait_revision = None;
-                            bake_budget -= 1;
-                        }
-                        Err(lunco_core_runtime::AsyncWorkRejection::QueueFull) => {
-                            pending.capacity_wait_revision =
-                                Some(cover_work.admission.capacity_revision());
-                            break;
-                        }
-                        Err(rejection) => {
-                            bevy::log::error!(
-                                target: "terrain_stream",
-                                entity = ?terrain,
-                                coord = ?coord,
-                                ?rejection,
-                                "terrain tile bake was rejected by shared preparation admission"
-                            );
-                            pending.failed.insert((coord, cur_gen));
+                        });
+                        pending.tasks.insert(coord, (tile_generation, task));
+                    }
+                }
+
+                // The base is complete once every enumerated coarse node is resident at this
+                // generation. Latching it stops the per-frame enumeration AND re-arms the idle
+                // fast path (which is held off until then — see `LodView::coarse_ready`).
+                if !tiles.coarse_ready && !coarse.is_empty() {
+                    tiles.coarse_ready = coarse.iter().all(|s| {
+                        tiles
+                            .candidate_slot(&s.coord)
+                            .is_some_and(|slot| slot.r#gen == cur_gen)
+                    });
+                }
+
+                // ── Unrefinement: draw the best READY data, never a hole ─────────────
+                // Cesium's `ForbidHoles`: "unrefine back to a parent tile when a child isn't done
+                // loading… never rendered with holes, though the tile rendered instead may have low
+                // resolution". MSFS states the same rule as "draw tiles using the best currently
+                // available data ● tiles can use data from a parent". Both draw the parent INSTEAD
+                // of its children — never underneath them, which would punch a coarse shell through
+                // the fine surface wherever the terrain is concave.
+                //
+                // So: each selected node draws itself if ready, else its deepest ready ancestor.
+                // The coarse base guarantees that walk terminates, which is what the old design
+                // lacked — it could only hold a trailing tile that happened to overlap, so panning
+                // somewhere new had nothing to fall back to and showed clear colour.
+                build_draw_partition(
+                    sel.iter().map(|s| s.coord),
+                    // RESIDENCY. A stale tile keeps drawing itself until its own re-bake
+                    // replaces it in place — see this function's docs.
+                    |c| tiles.candidate_slot(&c).is_some(),
+                    draw,
+                    drop_covered,
+                );
+
+                // Mesh replacement, snapped morph bands and stitches describe one
+                // candidate surface. None may replace the published partition until
+                // that entire candidate is safe for the stationary navigating owner.
+                let selected_ends: HashMap<_, _> = sel
+                    .iter()
+                    .map(|selected| {
+                        (
+                            selected.coord,
+                            if selected.morph_end.is_finite() {
+                                selected.morph_end as f32
+                            } else {
+                                1.0e21
+                            },
+                        )
+                    })
+                    .collect();
+                let mut candidate: Vec<_> = draw
+                    .iter()
+                    .filter_map(|coord| {
+                        let slot = tiles.candidate_slot(coord)?;
+                        Some(DrawPublicationEntry {
+                            resolution: slot.resolution,
+                            half_extent: slot.half_extent,
+                            coord: *coord,
+                            entity: slot.entity,
+                            morph_end: selected_ends.get(coord).copied().unwrap_or(slot.morph_end),
+                            stitch_edges: stitch_edges(*coord, draw),
+                        })
+                    })
+                    .collect();
+                candidate.sort_unstable_by_key(|entry| {
+                    (entry.coord.depth, entry.coord.x, entry.coord.z)
+                });
+                let changed = tiles.presentation_pending
+                    || tiles.morph_ratio.to_bits() != morph_ratio.to_bits()
+                    || tiles.tiles.values().filter(|slot| slot.drawn).count() != candidate.len()
+                    || candidate.iter().any(|entry| {
+                        tiles.tiles.get(&entry.coord).is_none_or(|slot| {
+                            slot.entity != entry.entity
+                                || !slot.drawn
+                                || slot.morph_end.to_bits() != entry.morph_end.to_bits()
+                                || slot.stitch_edges != entry.stitch_edges
+                        })
+                    });
+                let admission = if changed {
+                    environment.admit_publication(
+                        demand.source,
+                        grid_entity,
+                        &candidate,
+                        morph_ratio,
+                        tile_res,
+                        h,
+                        &meshes,
+                        tiles.presentation_wait.as_ref(),
+                    )
+                } else {
+                    Ok(())
+                };
+                let admitted = admission.is_ok();
+                if let Err(wait) = admission {
+                    tiles.presentation_wait = Some(wait);
+                }
+                if admitted {
+                    // One clone merges every geometry-affecting parameter. Applying
+                    // independent morph and stitch writes could overwrite one another.
+                    for entry in &candidate {
+                        if let Ok((_, look, _, _)) = environment.draw_geometry.get(entry.entity) {
+                            if !publication_look_matches(&look, entry, morph_ratio) {
+                                let entry = *entry;
+                                commands.entity(entry.entity).queue(
+                                    move |mut entity: EntityWorldMut| {
+                                        if let Some(mut look) = entity.get_mut::<ShaderLook>() {
+                                            if let Some(replacement) =
+                                                publication_look(&look, &entry, morph_ratio)
+                                            {
+                                                *look = replacement;
+                                            }
+                                        }
+                                    },
+                                );
+                            }
                         }
                     }
                 }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    bake_budget -= 1;
-                    let tile_generation = cur_gen;
-                    let task = pool.spawn(async move {
-                        let _span = bevy::log::info_span!("terrain_tile_bake").entered();
-                        let tile_mesh = crate::tile_cache::bake_tile_mesh_cached_async(
-                            Arc::clone(&oracle_arc),
-                            coord,
-                            region,
-                            resolution,
-                            half,
-                            center,
-                            contact,
-                        )
-                        .await;
-                        assemble_baked_tile(
-                            tile_mesh,
-                            oracle_arc.as_ref(),
-                            center,
-                            coord.depth as u32,
-                            resolution,
-                            morph_end,
-                            contact,
-                        )
-                    });
-                    pending.tasks.insert(coord, (tile_generation, task));
+                let changes = tiles.publish_draw_partition(&candidate, morph_ratio, admitted);
+                for entity in changes.retired {
+                    retire_tile(&mut commands, entity);
                 }
-            }
-
-            // The base is complete once every enumerated coarse node is resident at this
-            // generation. Latching it stops the per-frame enumeration AND re-arms the idle
-            // fast path (which is held off until then — see `LodTiles::coarse_ready`).
-            if !tiles.coarse_ready && !coarse.is_empty() {
-                tiles.coarse_ready = coarse.iter().all(|s| {
-                    tiles
-                        .tiles
-                        .get(&s.coord)
-                        .is_some_and(|slot| slot.r#gen == cur_gen && slot.ready)
-                });
-            }
-
-            // ── Unrefinement: draw the best READY data, never a hole ─────────────
-            // Cesium's `ForbidHoles`: "unrefine back to a parent tile when a child isn't done
-            // loading… never rendered with holes, though the tile rendered instead may have low
-            // resolution". MSFS states the same rule as "draw tiles using the best currently
-            // available data ● tiles can use data from a parent". Both draw the parent INSTEAD
-            // of its children — never underneath them, which would punch a coarse shell through
-            // the fine surface wherever the terrain is concave.
-            //
-            // So: each selected node draws itself if ready, else its deepest ready ancestor.
-            // The coarse base guarantees that walk terminates, which is what the old design
-            // lacked — it could only hold a trailing tile that happened to overlap, so panning
-            // somewhere new had nothing to fall back to and showed clear colour.
-            build_draw_partition(
-                sel.iter().map(|s| s.coord),
-                // RESIDENCY. A stale tile keeps drawing itself until its own re-bake
-                // replaces it in place — see this function's docs.
-                |c| tiles.tiles.get(&c).is_some_and(|slot| slot.ready),
-                draw,
-                drop_covered,
-            );
-
-            // The draw cover is the authoritative topology for this frame. The
-            // edge mask is per-tile material identity (not a shared live uniform),
-            // so change it only when the cover actually changes at that tile. This
-            // keeps the existing content-keyed material cache stable while still
-            // making every fine/coarse boundary conform to the parent lattice.
-            for (coord, slot) in &mut tiles.tiles {
-                let edges = stitch_edges(*coord, draw);
-                if edges == slot.stitch_edges {
-                    continue;
-                }
-                stitch_updates.push((slot.entity, edges));
-            }
-
-            // Retain + visibility. The coarse cover is never despawned; everything
-            // else lives while wanted, is a direct hidden fallback for a wanted child,
-            // or actively draws as a stand-in.
-            tiles.tiles.retain(|coord, slot| {
-                let keep = is_coarse_fallback(*coord)
-                    || wanted.contains(coord)
-                    || parent_fallbacks.contains(coord)
-                    || draw.contains(coord);
-                if !keep {
-                    retire_tile(&mut commands, slot.entity);
-                    return false;
-                }
-                let vis = draw.contains(coord);
-                if slot.drawn != vis {
-                    slot.drawn = vis;
-                    commands.entity(slot.entity).try_insert(if vis {
+                for (entity, visible) in changes.visibility {
+                    commands.entity(entity).try_insert(if visible {
                         Visibility::Inherited
                     } else {
                         Visibility::Hidden
                     });
                 }
-                true
-            });
-
-            // The first cover may now begin adapting normally. Until its complete
-            // camera-near patch is prepared it is intentionally immutable: changing
-            // that cover while the rig settles only creates startup churn.
-            if !tiles.bootstrap_ready
-                && bootstrap_cover_is_ready(sel, visual_foci, |coord| {
-                    tiles.tiles.get(&coord).is_some_and(|slot| slot.ready)
-                })
-            {
-                tiles.bootstrap_ready = true;
-                // The cover was intentionally held while the camera rig settled;
-                // force one clean signature pass now that normal adaptation resumes.
-                tiles.last_sig = None;
-            }
-
-            // How many selected areas have NO cover at all — the metric that must stay 0.
-            // Non-zero means something rendered as clear colour, and it can only happen
-            // before the coarse base has finished baking.
-            let uncovered = sel
-                .iter()
-                .filter(|s| {
-                    let mut c = s.coord;
-                    loop {
-                        if draw.contains(&c) {
-                            return false;
-                        }
-                        match c.parent() {
-                            Some(p) => c = p,
-                            None => return true,
-                        }
+                // A rejected candidate may release hidden work, but never a single
+                // member of the old visible partition. Staging stays bounded to one
+                // unpublished replacement per retained coordinate.
+                let retain = |coord: &QuadCoord| {
+                    is_coarse_fallback(*coord)
+                        || wanted.contains(coord)
+                        || parent_fallbacks.contains(coord)
+                };
+                tiles.tiles.retain(|coord, slot| {
+                    let keep = slot.drawn || retain(coord);
+                    if !keep {
+                        retire_tile(&mut commands, slot.entity);
                     }
-                })
-                .count();
-            if uncovered > 0 {
-                let ready = tiles.tiles.values().filter(|slot| slot.ready).count();
-                let selected_ready = sel
-                    .iter()
-                    .filter(|selected| {
-                        tiles
-                            .tiles
-                            .get(&selected.coord)
-                            .is_some_and(|slot| slot.ready)
-                    })
-                    .count();
-                debug!(
-                    target: "terrain_stream",
-                    uncovered,
-                    wanted = wanted.len(),
-                    drawn = draw.len(),
-                    resident = tiles.tiles.len(),
-                    ready,
-                    selected_ready,
-                    coarse_ready = tiles.coarse_ready,
-                    materials_ready = tiles.materials_ready,
-                    backlog = pending.len(),
-                    "terrain has uncovered area (coarse base still baking?)"
-                );
-            }
-
-            // Streaming progress for the UI indicator (accumulated across terrains).
-            stream_status.wanted += wanted.len();
-            stream_status.resident += wanted
-                .iter()
-                .filter(|c| tiles.tiles.get(c).is_some_and(|slot| slot.ready))
-                .count();
-            stream_status.pending += render_pending_count(pending.len(), wanted, &tiles)
-                + usize::from(tiles.pending_cover.is_some());
-            stream_status.budget_refused += tiles.budget_refused;
-            add_focus_readiness(
-                &mut stream_status,
-                visual_foci,
-                sel.iter().map(|selected| selected.coord),
-                &qt,
-                |coord| {
+                    keep
+                });
+                tiles.pending_replacements.retain(|coord, slot| {
+                    let keep = retain(coord);
+                    if !keep {
+                        retire_tile(&mut commands, slot.entity);
+                    }
+                    keep
+                });
+                // Diagnostics below describe the actually published topology.
+                draw.clear();
+                draw.extend(
                     tiles
                         .tiles
-                        .get(&coord)
-                        .is_some_and(|slot| slot.ready && slot.drawn)
-                },
-            );
+                        .iter()
+                        .filter_map(|(coord, slot)| slot.drawn.then_some(*coord)),
+                );
 
-            // Bound the mesh cache. The cap derives from the ACTUAL resident bound
-            // per terrain (`mesh_cache_entry_cap` — cover + parent fallbacks +
-            // stand-ins, with retention head-room) instead of the old flat 1024,
-            // which sat below one default terrain's residents and so trimmed the
-            // trailing edge every frame (every revisited tile re-baked + re-uploaded).
-            // Eviction is LRU (oldest touch first) under both the entry cap and a
-            // byte ceiling; the entries THIS frame's cover needs — the wanted set,
-            // its hidden parent fallbacks and the coarse cover — are never evicted.
-            // (An idle terrain's residents keep their `Handle<Mesh>` alive on the
-            // tile entities themselves, so LRU-evicting its cache entries can only
-            // cost a re-bake on a much later re-selection, never a visible hole.)
-            mesh_cache.trim(
-                mesh_cache_entry_cap(profile.terrain_lod_tile_budget, terrain_count),
-                profile.terrain_mesh_cache_bytes,
-                |(e, c, _, _)| {
-                    *e == terrain
-                        && (wanted.contains(c)
-                            || parent_fallbacks.contains(c)
-                            || is_coarse_fallback(*c))
-                },
-            );
-        }
-    }
+                // The first cover may now begin adapting normally. Until its complete
+                // camera-near patch is prepared it is intentionally immutable: changing
+                // that cover while the rig settles only creates startup churn.
+                if !tiles.presentation_pending
+                    && !tiles.bootstrap_ready
+                    && bootstrap_cover_is_ready(sel, visual_foci, |coord| {
+                        tiles.tiles.get(&coord).is_some_and(|slot| slot.ready)
+                    })
+                {
+                    tiles.bootstrap_ready = true;
+                    // The cover was intentionally held while the camera rig settled;
+                    // force one clean signature pass now that normal adaptation resumes.
+                    if !frozen {
+                        tiles.last_sig = None;
+                    }
+                }
 
-    let mut looks = terrain_queries.p1();
-    {
-        for &(entity, edges) in stitch_updates.iter() {
-            if let Ok(mut look) = looks.get_mut(entity) {
-                set_param(&mut look, "stitch_edges", ParamValue::Vec4(edges));
-                stitch_applied.insert(entity, edges);
+                // How many selected areas have NO cover at all — the metric that must stay 0.
+                // Non-zero means something rendered as clear colour, and it can only happen
+                // before the coarse base has finished baking.
+                let uncovered = sel
+                    .iter()
+                    .filter(|s| {
+                        let mut c = s.coord;
+                        loop {
+                            if draw.contains(&c) {
+                                return false;
+                            }
+                            match c.parent() {
+                                Some(p) => c = p,
+                                None => return true,
+                            }
+                        }
+                    })
+                    .count();
+                if uncovered > 0 {
+                    let ready = tiles.tiles.values().filter(|slot| slot.ready).count();
+                    let selected_ready = sel
+                        .iter()
+                        .filter(|selected| {
+                            tiles
+                                .tiles
+                                .get(&selected.coord)
+                                .is_some_and(|slot| slot.ready)
+                        })
+                        .count();
+                    debug!(
+                        target: "terrain_stream",
+                        uncovered,
+                        wanted = wanted.len(),
+                        drawn = draw.len(),
+                        resident = tiles.tiles.len(),
+                        ready,
+                        selected_ready,
+                        coarse_ready = tiles.coarse_ready,
+                        materials_ready = tiles.materials_ready,
+                        backlog = pending.len(),
+                        "terrain has uncovered area (coarse base still baking?)"
+                    );
+                }
+
+                // Streaming progress for the UI indicator (accumulated across terrains).
+                stream_status.wanted += wanted.len();
+                stream_status.resident += wanted
+                    .iter()
+                    .filter(|c| tiles.tiles.get(c).is_some_and(|slot| slot.ready))
+                    .count();
+                let selection_pending = usize::from(!tiles.latest_ready());
+                stream_status.selection_pending += selection_pending;
+                stream_status.presentation_pending += usize::from(tiles.presentation_pending);
+                stream_status.pending +=
+                    render_pending_count(0, wanted, &tiles) + selection_pending;
+                stream_status.budget_refused += tiles.budget_refused;
+                stream_status.preparation_refused += tiles.preparation_refusal_count(
+                    demands.preparation_signature(view_camera, terrain),
+                    admission_sig,
+                );
+                add_focus_readiness(
+                    &mut stream_status,
+                    visual_foci,
+                    sel.iter().map(|selected| selected.coord),
+                    &qt,
+                    |coord| {
+                        tiles
+                            .tiles
+                            .get(&coord)
+                            .is_some_and(|slot| slot.ready && slot.drawn)
+                    },
+                );
             }
-        }
-    }
-
-    if !stitch_applied.is_empty() {
-        let mut terrains = terrain_queries.p0();
-        for (_, _, _, mut tiles, _, _, _, _, _, _, _, _, _) in &mut terrains {
-            for slot in tiles.tiles.values_mut() {
-                if let Some(edges) = stitch_applied.get(&slot.entity) {
-                    slot.stitch_edges = *edges;
+            // Shared bakes survive while any live view needs their geometry.
+            let mut union = HashSet::new();
+            for view in terrain_tiles.views.values() {
+                for selected in &view.cover_selected {
+                    union.insert(selected.coord);
+                    if let Some(parent) = selected.coord.parent() {
+                        union.insert(parent);
+                    }
                 }
             }
+            let keep = |coord: &QuadCoord| union.contains(coord) || is_coarse_fallback(*coord);
+            let before = pending.len();
+            #[cfg(not(target_arch = "wasm32"))]
+            pending.jobs.retain(|coord, job| {
+                let retained = job.generation == generation && keep(coord);
+                if !retained {
+                    cover_work.admission.cancel_queued(job.key);
+                }
+                retained
+            });
+            #[cfg(target_arch = "wasm32")]
+            pending
+                .tasks
+                .retain(|coord, (r#gen, _)| *r#gen == generation && keep(coord));
+            pending
+                .ready
+                .retain(|(coord, r#gen, _)| *r#gen == generation && keep(coord));
+            pending
+                .failed
+                .retain(|(coord, r#gen)| *r#gen == generation && keep(coord));
+            stream_status.stale_cancelled += before.saturating_sub(pending.len());
+            mesh_cache.trim(
+                mesh_cache_entry_cap(
+                    profile.terrain_lod_tile_budget,
+                    terrain_count * live.len().max(1),
+                ),
+                profile.terrain_mesh_cache_bytes,
+            );
         }
     }
+
+    stream_status.draw_revision_exhausted = terrains
+        .iter()
+        .map(|(_, _, _, tiles, ..)| {
+            tiles
+                .views
+                .values()
+                .filter(|view| view.draw_revision_exhausted)
+                .count()
+        })
+        .sum();
+    mesh_cache.publish_accounting(&mut stream_status, profile.terrain_mesh_cache_bytes);
+    publish_mesh_pressure(&stream_status, &mut environment.diagnostics);
 }
 
 /// Reap LOD tiles whose owning terrain no longer exists (or no longer streams) —
@@ -4649,6 +6823,7 @@ pub(crate) fn bind_terrain_maps_to_materials(
             Option<&LodTiles>,
             Option<&TerrainDerivedMaps>,
             Option<&TerrainAuthoredMaps>,
+            Option<&DemHeightField>,
             &ShaderLook,
         ),
         (
@@ -4656,20 +6831,33 @@ pub(crate) fn bind_terrain_maps_to_materials(
             Or<(
                 Changed<TerrainDerivedMaps>,
                 Changed<TerrainAuthoredMaps>,
+                Changed<DemHeightField>,
                 Changed<ShaderLook>,
             )>,
         ),
     >,
     tile_looks: Query<(&ShaderLook, Option<&TerrainDiagnosticTile>), Without<DemTerrainSurface>>,
     mut commands: Commands,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
-    for (terrain, tiles, maps, authored, look) in changed {
+    for (terrain, tiles, maps, authored, heightfield, look) in changed {
         // The generic USD shader projection already put the material network into
         // this look. Publish the terrain-specific view from those same handles so
         // no second USD reader is needed. The temporary is also used immediately,
         // so the owner does not render one frame with the derived source before the
         // deferred component insertion becomes visible.
         let inferred = TerrainAuthoredMaps::from_shader_look(&look, maps);
+        if inferred.regional_albedo.is_some()
+            && heightfield.is_some_and(|field| field.0.regional_uv_scale() <= 0.0)
+        {
+            faults.raise(
+                "terrain-regional-material",
+                Some(terrain),
+                look.shader.clone(),
+                "regional albedo requires a registered regional DEM",
+            );
+            continue;
+        }
         let source_changed = authored != Some(&inferred);
         if source_changed {
             commands.entity(terrain).try_insert(inferred.clone());
@@ -4687,7 +6875,26 @@ pub(crate) fn bind_terrain_maps_to_materials(
                         let mut tile_look = look.clone();
                         apply_terrain_maps_to_look(&mut tile_look, maps, authored);
                         if tile_look != *look {
-                            commands.entity(entity).insert(tile_look);
+                            let maps = maps.cloned();
+                            let authored = authored.cloned();
+                            commands
+                                .entity(entity)
+                                .queue(move |mut tile: EntityWorldMut| {
+                                    if tile.contains::<TerrainDiagnosticTile>() {
+                                        return;
+                                    }
+                                    if let Some(mut current) = tile.get_mut::<ShaderLook>() {
+                                        let mut replacement = current.clone();
+                                        apply_terrain_maps_to_look(
+                                            &mut replacement,
+                                            maps.as_ref(),
+                                            authored.as_ref(),
+                                        );
+                                        if replacement != *current {
+                                            *current = replacement;
+                                        }
+                                    }
+                                });
                         }
                     }
                 }
@@ -4766,9 +6973,1732 @@ pub(crate) fn bind_shadow_cache_to_tiles(
 }
 
 #[cfg(test)]
+#[expect(
+    deprecated,
+    reason = "Bevy reexports DMat4 but does not expose glam's dcamera replacement"
+)]
+fn test_view(eye: DVec3, forward: DVec3, up: DVec3) -> DMat4 {
+    DMat4::look_to_rh(eye, forward, up)
+}
+
+#[cfg(test)]
+fn test_perspective(fov_y_rad: f64, eye: DVec3, forward: DVec3) -> TerrainProjection {
+    let up = if forward.y.abs() > 0.99 {
+        DVec3::NEG_Z
+    } else {
+        DVec3::Y
+    };
+    TerrainProjection::Perspective {
+        fov_y_rad,
+        clip_from_local: bevy::math::dproj::perspective_infinite_reverse(fov_y_rad, 1.0, 0.1)
+            * test_view(eye, forward, up),
+    }
+}
+
+#[cfg(test)]
 mod draw_partition_tests {
     use super::*;
-    use bevy::camera::Viewport;
+
+    #[test]
+    fn initial_preparation_bootstraps_then_reaches_a_real_fixed_point() {
+        let quadtree = Quadtree::new(100.0, 6, 20.0, 100.0);
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 100.0),
+        )));
+        let focus = TerrainVisualDemand {
+            camera: Entity::PLACEHOLDER,
+            focus: [11.3, 13.7],
+            camera_y: 10.0,
+            heading: None,
+            view_direction: DVec3::NEG_Y,
+            screen_height_px: 720.0,
+            selection_clip: SelectionClip::new(
+                test_perspective(2.8, DVec3::new(11.3, 10.0, 13.7), DVec3::NEG_Y),
+                720.0,
+                2.0,
+                DVec3::new(11.3, 10.0, 13.7),
+            )
+            .unwrap(),
+            projection: test_perspective(2.8, DVec3::new(11.3, 10.0, 13.7), DVec3::NEG_Y),
+            required: true,
+            near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
+        };
+        let signature = 77;
+        let mut view = LodView {
+            requested_signature: Some(signature),
+            ..default()
+        };
+        let mut geometry = TerrainNodeGeometry::default();
+        let request = |view: &LodView, geometry: &TerrainNodeGeometry| TerrainCoverRequest {
+            quadtree,
+            oracle: oracle.clone(),
+            oracle_key: oracle.surface_key(),
+            demands: vec![focus],
+            camera_patches: view.camera_patches.clone(),
+            cover: view.cover.clone(),
+            node_geometry: geometry.map.clone(),
+            bootstrap_ready: view.bootstrap_ready,
+            settled_sig: view.settled_sig,
+            budget_refused: view.budget_refused,
+            signature,
+            preparation_signature: None,
+            preparation: None,
+            tile_resolution: 5,
+            probe_resolution: 3,
+            tile_budget: 512,
+            max_depth: 6,
+            cover_edits_per_cycle: 8,
+            hysteresis_ratio: 0.8,
+        };
+        let acknowledge_selected = |view: &mut LodView| {
+            for slot in view.tiles.values_mut() {
+                slot.drawn = false;
+            }
+            for selected in &view.cover_selected {
+                view.tiles.insert(
+                    selected.coord,
+                    TileSlot {
+                        resolution: 3,
+                        half_extent: 1.0,
+                        entity: Entity::PLACEHOLDER,
+                        r#gen: view.r#gen,
+                        morph_end: if selected.morph_end.is_finite() {
+                            selected.morph_end as f32
+                        } else {
+                            1.0e21
+                        },
+                        ready: true,
+                        drawn: true,
+                        stitch_edges: [0.0; 4],
+                    },
+                );
+            }
+        };
+        let initial = prepare_terrain_cover(request(&view, &geometry));
+        assert_eq!(initial.settled_sig, None);
+        commit_prepared_terrain_cover(
+            &mut view,
+            &mut geometry,
+            initial,
+            oracle.surface_key(),
+            signature,
+            9,
+        );
+        assert_eq!(
+            view.last_sig, None,
+            "bootstrap selection is not evidence of a settled zero-edit pass"
+        );
+        acknowledge_selected(&mut view);
+        view.bootstrap_ready = bootstrap_cover_is_ready(&view.cover_selected, &[focus], |coord| {
+            view.tiles[&coord].ready
+        });
+        assert!(view.bootstrap_ready);
+        assert!(view.cover_preparation_needed(signature));
+        assert!(!view.latest_ready());
+        let mut saw_more_work = false;
+        for _ in 0..128 {
+            if !view.cover_preparation_needed(signature) {
+                break;
+            }
+            let prepared = prepare_terrain_cover(request(&view, &geometry));
+            let more_work = prepared.more_work;
+            saw_more_work |= more_work;
+            commit_prepared_terrain_cover(
+                &mut view,
+                &mut geometry,
+                prepared,
+                oracle.surface_key(),
+                signature,
+                9,
+            );
+            acknowledge_selected(&mut view);
+            if more_work {
+                assert_eq!(
+                    view.last_sig, None,
+                    "a useful same-signature subset keeps its required follow-up runnable"
+                );
+                assert!(view.cover_preparation_needed(signature));
+            }
+        }
+        assert!(saw_more_work);
+        assert_eq!(view.settled_sig, Some(signature));
+        assert!(!view.cover_preparation_needed(signature));
+        assert!(
+            view.latest_ready(),
+            "a completed real zero-edit fixed point releases latest-cover readiness"
+        );
+    }
+
+    fn ready_view_fixture() -> (
+        TerrainDetailDemands,
+        Entity,
+        Entity,
+        lunco_render::RenderQualityProfile,
+        LodView,
+    ) {
+        let camera = Entity::from_bits(1);
+        let terrain = Entity::from_bits(2);
+        let profile = terrain_quality();
+        let demands = TerrainDetailDemands {
+            visual: vec![VisualDemand {
+                entity: camera,
+                source: camera,
+                render_layer: 64,
+                terrain_poses: HashMap::from([(terrain, (DVec3::Y, DVec3::NEG_Z))]),
+                terrain_clips: HashMap::new(),
+                preparation_corridors: HashMap::new(),
+                position: DVec3::Y,
+                forward: DVec3::NEG_Z,
+                screen_height_px: 720.0,
+                projection: test_perspective(1.0, DVec3::ZERO, DVec3::NEG_Z),
+                near_detail_radius_m: 30.0,
+                near_detail_hysteresis_m: 12.0,
+            }],
+        };
+        let mut demands = demands;
+        let visual = &mut demands.visual[0];
+        visual.terrain_clips.insert(
+            terrain,
+            visual.projection.clip_from_local() * test_view(DVec3::Y, DVec3::NEG_Z, DVec3::Y),
+        );
+        let quadtree = Quadtree::new(100.0, 5, 1.0, 100.0);
+        let mut view = LodView {
+            r#gen: 4,
+            cover: HashSet::from([QuadCoord::ROOT]),
+            cover_selected: vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)],
+            ..default()
+        };
+        view.tiles.insert(
+            QuadCoord::ROOT,
+            TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
+                entity: camera,
+                r#gen: 4,
+                morph_end: 1.0e21,
+                ready: true,
+                drawn: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        view.publish_latest_demand(
+            &demands,
+            terrain,
+            &demands.visual[0],
+            3,
+            Some(&profile),
+            false,
+        );
+        view.last_sig = view.requested_signature;
+        view.settled_sig = view.requested_signature;
+        (demands, camera, terrain, profile, view)
+    }
+
+    #[test]
+    fn draw_publication_refusal_retains_partition_and_staged_replacement_recovers_atomically() {
+        let (_, camera, _, _, mut view) = ready_view_fixture();
+        let coord = QuadCoord::ROOT;
+        view.morph_ratio = 0.65;
+        view.resolution = 65;
+        view.half_extent = 500.0;
+        let old = view.tiles[&coord];
+        view.r#gen += 1;
+        let replacement = Entity::from_bits(3);
+        assert!(
+            view.insert_slot(
+                coord,
+                TileSlot {
+                    entity: replacement,
+                    r#gen: view.r#gen,
+                    resolution: 65,
+                    half_extent: 500.0,
+                    morph_end: 4.0,
+                    stitch_edges: [0.0; 4],
+                    ready: true,
+                    drawn: false
+                }
+            )
+            .is_none()
+        );
+        let candidate = [DrawPublicationEntry {
+            coord,
+            entity: replacement,
+            resolution: 65,
+            half_extent: 500.0,
+            morph_end: 12.0,
+            stitch_edges: [1.0, 0.0, 1.0, 0.0],
+        }];
+        let before = view.draw_revision;
+        let refused = view.publish_draw_partition(&candidate, 0.8, false);
+        assert!(refused.retired.is_empty() && refused.visibility.is_empty());
+        assert_eq!(view.tiles[&coord].entity, old.entity);
+        assert!(view.tiles[&coord].drawn);
+        assert_eq!(view.tiles[&coord].morph_end, old.morph_end);
+        assert_eq!(view.tiles[&coord].stitch_edges, old.stitch_edges);
+        assert_eq!(view.morph_ratio, 0.65);
+        assert_eq!(
+            view.draw_revision, before,
+            "unpublished geometry must not rewrite the drawn lease"
+        );
+        assert_eq!(
+            view.tile_entities().count(),
+            2,
+            "both published and staged meshes remain lifecycle-owned"
+        );
+        assert!(view.presentation_pending && !view.latest_ready());
+        let mut terrain = LodTiles::default();
+        terrain.views.insert(camera, view);
+        assert_eq!(
+            terrain.draw_lattice(camera, coord),
+            Some((old.resolution, old.half_extent, false))
+        );
+        assert!(terrain.view_status(camera).unwrap().presented_ready);
+        let view = terrain.views.get_mut(&camera).unwrap();
+        let committed = view.publish_draw_partition(&candidate, 0.8, true);
+        assert_eq!(committed.retired, vec![old.entity]);
+        assert_eq!(committed.visibility, vec![(replacement, true)]);
+        assert!(view.pending_replacements.is_empty());
+        assert_eq!(view.tiles[&coord].entity, replacement);
+        assert_eq!(view.tiles[&coord].stitch_edges, candidate[0].stitch_edges);
+        assert_eq!(view.tiles[&coord].morph_end, 12.0);
+        assert!(!view.presentation_pending);
+        assert!(view.draw_revision > before);
+        assert_eq!(terrain.draw_lattice(camera, coord), Some((65, 500.0, true)));
+    }
+
+    #[test]
+    fn admitted_partition_commits_ready_hidden_fallback_replacements() {
+        let (_, _, _, _, mut view) = ready_view_fixture();
+        let root = view.tiles[&QuadCoord::ROOT];
+        let child = QuadCoord::ROOT.children()[0];
+        let old_hidden = Entity::from_bits(3);
+        let new_hidden = Entity::from_bits(4);
+        view.tiles.insert(
+            child,
+            TileSlot {
+                entity: old_hidden,
+                drawn: false,
+                ..root
+            },
+        );
+        view.insert_slot(
+            child,
+            TileSlot {
+                entity: new_hidden,
+                drawn: false,
+                ..root
+            },
+        );
+        let candidate = [DrawPublicationEntry {
+            coord: QuadCoord::ROOT,
+            entity: root.entity,
+            resolution: root.resolution,
+            half_extent: root.half_extent,
+            morph_end: root.morph_end,
+            stitch_edges: root.stitch_edges,
+        }];
+        let committed = view.publish_draw_partition(&candidate, view.morph_ratio, true);
+        assert_eq!(committed.retired, vec![old_hidden]);
+        assert!(committed.visibility.is_empty());
+        assert!(
+            view.pending_replacements.is_empty(),
+            "unused ready fallback replacements cannot keep the view perpetually active"
+        );
+        assert_eq!(view.tiles[&child].entity, new_hidden);
+        assert!(!view.tiles[&child].drawn);
+        assert!(view.tiles[&QuadCoord::ROOT].drawn);
+    }
+
+    #[test]
+    fn repeated_source_invalidation_reaps_hidden_work_but_preserves_published_cover() {
+        let (_, _, _, _, mut view) = ready_view_fixture();
+        let old = view.tiles[&QuadCoord::ROOT];
+        let staged = Entity::from_bits(3);
+        view.insert_slot(
+            QuadCoord::ROOT,
+            TileSlot {
+                entity: staged,
+                drawn: false,
+                ..old
+            },
+        );
+        let hidden_coord = QuadCoord::ROOT.children()[0];
+        let hidden = Entity::from_bits(4);
+        view.tiles.insert(
+            hidden_coord,
+            TileSlot {
+                entity: hidden,
+                drawn: false,
+                ..old
+            },
+        );
+        view.invalidate_region(None, 1.0);
+        let dead = view.reap_stale();
+        assert!(dead.contains(&staged) && dead.contains(&hidden));
+        assert_eq!(dead.len(), 2);
+        assert_eq!(view.tile_entities().collect::<Vec<_>>(), vec![old.entity]);
+        view.invalidate_region(None, 1.0);
+        assert!(view.reap_stale().is_empty());
+        assert!(
+            view.tiles[&QuadCoord::ROOT].drawn,
+            "successive source revisions cannot withdraw the last safe partition"
+        );
+    }
+
+    #[test]
+    fn staged_material_readiness_and_merged_publication_look_preserve_published_state() {
+        let (_, _, _, _, mut view) = ready_view_fixture();
+        let coord = QuadCoord::ROOT;
+        let old = view.tiles[&coord];
+        let staged = Entity::from_bits(3);
+        view.insert_slot(
+            coord,
+            TileSlot {
+                entity: staged,
+                drawn: false,
+                ..old
+            },
+        );
+        assert!(!view.invalidate_material_readiness(staged));
+        assert!(view.tiles[&coord].drawn && view.tiles[&coord].ready);
+        assert!(!view.pending_replacements[&coord].ready);
+        assert_eq!(view.tile_material_specs().count(), 2);
+        let entry = DrawPublicationEntry {
+            coord,
+            entity: staged,
+            resolution: 3,
+            half_extent: 1.0,
+            morph_end: 12.0,
+            stitch_edges: [1.0, 0.0, 0.0, 1.0],
+        };
+        let look = ShaderLook::new("inline-test.wesl").with("unchanged", ParamValue::F32(7.0));
+        let merged = publication_look(&look, &entry, 0.8).unwrap();
+        let (start, end, _) = snap_band(12.0, 0.8);
+        assert_eq!(
+            merged.values().get("morph_start"),
+            Some(&ParamValue::F32(start))
+        );
+        assert_eq!(
+            merged.values().get("morph_end"),
+            Some(&ParamValue::F32(end))
+        );
+        assert_eq!(
+            merged.values().get("stitch_edges"),
+            Some(&ParamValue::Vec4(entry.stitch_edges))
+        );
+        assert_eq!(
+            merged.values().get("unchanged"),
+            Some(&ParamValue::F32(7.0))
+        );
+        assert!(publication_look(&merged, &entry, 0.8).is_none());
+    }
+
+    #[test]
+    fn latest_readiness_counts_unqueued_followup_and_current_generation() {
+        let (_, camera, _, _, mut view) = ready_view_fixture();
+        assert!(view.latest_ready());
+        let old = view.requested_signature.unwrap();
+        view.requested_signature = Some(old.wrapping_add(1));
+        let old_cover = PreparedTerrainCover {
+            cover: view.cover.clone(),
+            selected: view.cover_selected.clone(),
+            camera_patches: CameraPatchRetention::default(),
+            node_geometry: HashMap::new(),
+            budget_refused: 0,
+            preparation_refused_nodes: HashSet::new(),
+            preparation_signature: None,
+            settled_sig: Some(old),
+            more_work: false,
+        };
+        commit_prepared_terrain_cover(
+            &mut view,
+            &mut TerrainNodeGeometry::default(),
+            old_cover,
+            3,
+            old,
+            9,
+        );
+        let mut status = TerrainStreamStatus::default();
+        status.publish_selection_pending(usize::from(!view.latest_ready()));
+        assert_eq!(
+            status.pending, 1,
+            "a fully resident older subset cannot hide a required follow-up before queue admission"
+        );
+        assert!(view.pending_cover.is_none());
+        let mut tiles = LodTiles::default();
+        tiles.views.insert(camera, view);
+        let report = tiles.view_status(camera).unwrap();
+        assert!(report.presented_ready && !report.ready && !report.selection_current);
+        let view = tiles.views.get_mut(&camera).unwrap();
+        view.last_sig = view.requested_signature;
+        view.settled_sig = view.requested_signature;
+        assert!(view.latest_ready());
+        status.publish_selection_pending(usize::from(!view.latest_ready()));
+        assert_eq!(
+            status.pending, 0,
+            "a stable completed fixed point releases readiness"
+        );
+        view.tiles.get_mut(&QuadCoord::ROOT).unwrap().r#gen -= 1;
+        assert!(
+            !view.latest_ready(),
+            "retained stale-generation geometry remains presented, not current"
+        );
+        assert!(!view.focus_tile([0.0, 0.0]).unwrap().1);
+        status.publish_selection_pending(1);
+        status.publish_selection_pending(0);
+        assert_eq!(
+            status.pending, 0,
+            "removed output demand withdraws its selection contribution"
+        );
+    }
+
+    #[test]
+    fn finalized_demand_publication_invalidates_readiness_without_a_worker() {
+        let (mut demands, _, terrain, profile, mut view) = ready_view_fixture();
+        assert!(view.latest_ready());
+        let old = view.requested_signature;
+        demands.visual[0]
+            .terrain_poses
+            .get_mut(&terrain)
+            .unwrap()
+            .0
+            .x = 2.0;
+        let demand = &mut demands.visual[0];
+        let (eye, forward) = demand.terrain_poses[&terrain];
+        demand.terrain_clips.insert(
+            terrain,
+            demand.projection.clip_from_local() * test_view(eye, forward, DVec3::Y),
+        );
+        view.publish_latest_demand(
+            &demands,
+            terrain,
+            &demands.visual[0],
+            3,
+            Some(&profile),
+            false,
+        );
+        assert_ne!(view.requested_signature, old);
+        assert!(
+            !view.latest_ready(),
+            "PostUpdate's finalized pose must invalidate the already completed Update cover"
+        );
+        assert!(view.pending_cover.is_none());
+        view.last_sig = view.requested_signature;
+        view.settled_sig = view.requested_signature;
+        assert!(view.latest_ready());
+        let stable = view.requested_signature;
+        view.publish_latest_demand(
+            &demands,
+            terrain,
+            &demands.visual[0],
+            3,
+            Some(&profile),
+            false,
+        );
+        assert_eq!(view.requested_signature, stable);
+        assert!(
+            view.latest_ready(),
+            "unchanged finalized demands cannot create permanent pending work"
+        );
+        view.publish_latest_demand(
+            &demands,
+            terrain,
+            &demands.visual[0],
+            4,
+            Some(&profile),
+            false,
+        );
+        assert!(
+            !view.latest_ready(),
+            "a new source key cannot inherit old-cover readiness"
+        );
+    }
+
+    #[test]
+    fn mounted_pose_jitter_keeps_readiness_but_telephoto_pan_and_zoom_invalidate() {
+        let (mut demands, _, terrain, profile, mut view) = ready_view_fixture();
+        demands.visual[0].projection = test_perspective(0.01, DVec3::ZERO, DVec3::NEG_Z);
+        let publish = |view: &mut LodView,
+                       demands: &mut TerrainDetailDemands,
+                       eye: DVec3,
+                       rotation: DQuat| {
+            let forward = rotation * DVec3::NEG_Z;
+            let demand = &mut demands.visual[0];
+            demand.terrain_poses.insert(terrain, (eye, forward));
+            demand.terrain_clips.insert(
+                terrain,
+                demand.projection.clip_from_local()
+                    * DMat4::from_rotation_translation(rotation, eye).inverse(),
+            );
+            view.publish_latest_demand(
+                demands,
+                terrain,
+                &demands.visual[0],
+                3,
+                Some(&profile),
+                false,
+            );
+        };
+        // Exactly half a metre-lattice step in the production site's negative
+        // Y frame exercises the snap boundary rather than a convenient bin centre.
+        let eye = DVec3::new(-380.25, -1918.25, -380.25);
+        publish(&mut view, &mut demands, eye, DQuat::IDENTITY);
+        let stable = view.requested_signature;
+        view.last_sig = stable;
+        view.settled_sig = stable;
+        assert!(view.latest_ready());
+        let ulp = f64::from(f32::from_bits(1918.25f32.to_bits() + 4) - 1918.25f32);
+        for index in 0..64 {
+            let sign = if index % 2 == 0 { -1.0 } else { 1.0 };
+            publish(
+                &mut view,
+                &mut demands,
+                eye + DVec3::splat(sign * ulp),
+                DQuat::from_rotation_y(sign * 1e-8),
+            );
+            assert_eq!(
+                view.requested_signature, stable,
+                "native ULP jitter must stay within the retained envelope"
+            );
+            assert!(
+                view.latest_ready(),
+                "a resident complete mounted view cannot remain pending from subpixel jitter"
+            );
+            // Update and finalized publication consult the same retained anchor.
+            let demand = &demands.visual[0];
+            let (position, forward) = demand.terrain_poses[&terrain];
+            let mut visual = terrain_visual_demand(
+                demand,
+                position,
+                forward,
+                demand.terrain_clips[&terrain],
+                profile.terrain_lod_pixel_error,
+            )
+            .unwrap();
+            view.retain_selection_clip(&mut visual);
+            let (signature, admission) = terrain_view_signatures(
+                &demands,
+                terrain,
+                demand,
+                &[visual],
+                4,
+                3,
+                &profile,
+                false,
+            );
+            assert_eq!(
+                Some(finish_terrain_view_signature(signature, admission, None)),
+                stable
+            );
+        }
+        publish(&mut view, &mut demands, eye, DQuat::from_rotation_y(0.001));
+        assert_ne!(
+            view.requested_signature, stable,
+            "meaningful telephoto panning must refresh the footprint"
+        );
+        assert!(!view.latest_ready());
+        let previous = view.requested_signature;
+        demands.visual[0].projection = test_perspective(0.02, DVec3::ZERO, DVec3::NEG_Z);
+        publish(&mut view, &mut demands, eye, DQuat::from_rotation_y(0.001));
+        assert_ne!(
+            view.requested_signature, previous,
+            "optical zoom changes the native hard projection lease"
+        );
+    }
+
+    #[test]
+    fn retained_clip_encloses_full_quantum_boundary_and_exact_infinite_far_plane() {
+        let eye = DVec3::new(-380.25, -1918.25, -380.25);
+        let projection = test_perspective(0.01, eye, DVec3::NEG_Z);
+        let anchor = SelectionClip::new(projection, 1080.0, 2.0, eye).unwrap();
+        let native = SelectionClip::normalized_planes(projection, anchor.center);
+        assert_eq!(native[4].truncate(), DVec3::ZERO);
+        assert_eq!(
+            anchor.planes[4], native[4],
+            "the native constant inequality must remain exact"
+        );
+        let rotation = DQuat::from_rotation_y(anchor.normal_quantum * 0.9);
+        let current = TerrainProjection::Perspective {
+            fov_y_rad: 0.01,
+            clip_from_local: bevy::math::dproj::perspective_infinite_reverse(0.01, 1.0, 0.1)
+                * DMat4::from_rotation_translation(rotation, eye + DVec3::splat(0.1)).inverse(),
+        };
+        assert!(anchor.retains(
+            current,
+            SelectionClip::new(current, 1080.0, 2.0, eye + DVec3::splat(0.1)).unwrap()
+        ));
+        for x in [-1.0, 0.0, 1.0] {
+            for y in [-1.0, 0.0, 1.0] {
+                let homogeneous =
+                    current.clip_from_local().inverse() * bevy::math::DVec4::new(x, y, 0.001, 1.0);
+                let point = homogeneous.truncate() / homogeneous.w;
+                assert!(
+                    anchor.intersects(
+                        Square {
+                            center: [point.x, point.z],
+                            half: 1e-8
+                        },
+                        [point.y - 1e-8, point.y + 1e-8]
+                    ),
+                    "the retained full-quantum guard must include every current clip boundary, including negative source Y"
+                );
+            }
+        }
+        let tiny = test_perspective(1.0, DVec3::ZERO, DVec3::NEG_Z);
+        let low_output = SelectionClip::new(tiny, 1.0, 32.0, DVec3::ZERO).unwrap();
+        assert!(
+            SelectionClip::new(tiny, 1.0, 32.0, DVec3::NAN).is_none(),
+            "the authoritative camera-eye input must be finite"
+        );
+        for (native, quantized) in SelectionClip::normalized_planes(tiny, low_output.center)
+            .into_iter()
+            .zip(low_output.planes)
+        {
+            assert_eq!(
+                native.truncate() == DVec3::ZERO,
+                quantized.truncate() == DVec3::ZERO,
+                "normal quantization cannot fabricate a constant inequality for a one-pixel output"
+            );
+        }
+        assert!(low_output.intersects(
+            Square {
+                center: [0.0, -1.0],
+                half: 0.1
+            },
+            [-0.1, 0.1]
+        ));
+    }
+
+    #[test]
+    fn orthographic_clip_retains_subpixel_jitter_and_detects_roll() {
+        let native = bevy::math::dproj::orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 10_000.0);
+        let eye = DVec3::new(-380.25, -1918.25, -380.25);
+        let pose = test_view(eye, DVec3::NEG_Y, DVec3::NEG_Z).inverse();
+        let projection = |roll, offset| TerrainProjection::Orthographic {
+            pixels_per_metre: 50.0,
+            area: [-10.0, -10.0, 10.0, 10.0],
+            output_pixels: [1000, 1000],
+            clip_from_local: native
+                * (DMat4::from_translation(DVec3::splat(offset))
+                    * pose
+                    * DMat4::from_quat(DQuat::from_rotation_z(roll)))
+                .inverse(),
+        };
+        let initial = projection(0.0, 0.0);
+        let anchor = SelectionClip::new(initial, 1000.0, 2.0, eye).unwrap();
+        let distant_far = TerrainProjection::Orthographic {
+            pixels_per_metre: 50.0,
+            area: [-10.0, -10.0, 10.0, 10.0],
+            output_pixels: [1000, 1000],
+            clip_from_local: bevy::math::dproj::orthographic(
+                -10.0,
+                10.0,
+                -10.0,
+                10.0,
+                0.1,
+                1_000_000.0,
+            ) * pose.inverse(),
+        };
+        assert_eq!(
+            SelectionClip::new(distant_far, 1000.0, 2.0, eye)
+                .unwrap()
+                .center,
+            anchor.center,
+            "projection far range cannot translate the camera-centred angular guard"
+        );
+        let distant_eye = eye + DVec3::Y * 1_000_000.0;
+        let distant = TerrainProjection::Orthographic {
+            pixels_per_metre: 50.0,
+            area: [-10.0, -10.0, 10.0, 10.0],
+            output_pixels: [1000, 1000],
+            clip_from_local: bevy::math::dproj::orthographic(
+                -10.0,
+                10.0,
+                -10.0,
+                10.0,
+                0.1,
+                2_000_000.0,
+            ) * test_view(distant_eye, DVec3::NEG_Y, DVec3::NEG_Z),
+        };
+        let distant_anchor = SelectionClip::new(distant, 1000.0, 2.0, distant_eye).unwrap();
+        assert_eq!(
+            distant_anchor.center, anchor.center,
+            "axial distance cannot inflate an orthographic selection envelope"
+        );
+        for offset in [0.0, 30.0] {
+            let region = Square {
+                center: [eye.x + offset, eye.z],
+                half: 0.01,
+            };
+            assert_eq!(
+                anchor.intersects(region, [-1920.0, -1919.0]),
+                distant_anchor.intersects(region, [-1920.0, -1919.0])
+            );
+        }
+        let jitter = projection(1e-8, 0.0005);
+        assert!(anchor.retains(
+            jitter,
+            SelectionClip::new(jitter, 1000.0, 2.0, eye + DVec3::splat(0.0005)).unwrap()
+        ));
+        let rolled = projection(0.01, 0.0);
+        assert!(
+            !anchor.retains(
+                rolled,
+                SelectionClip::new(rolled, 1000.0, 2.0, eye).unwrap()
+            ),
+            "orthographic roll changes the visible footprint even when its forward direction is unchanged"
+        );
+        let mut first = lunco_precompute::Fnv1a::new();
+        anchor.write_signature(&mut first);
+        let mut second = lunco_precompute::Fnv1a::new();
+        SelectionClip::new(rolled, 1000.0, 2.0, eye)
+            .unwrap()
+            .write_signature(&mut second);
+        assert_ne!(first.finish(), second.finish());
+    }
+
+    #[test]
+    fn frozen_root_is_explicitly_settled_and_pose_independent() {
+        let (mut demands, _, terrain, profile, mut view) = ready_view_fixture();
+        view.publish_latest_demand(
+            &demands,
+            terrain,
+            &demands.visual[0],
+            3,
+            Some(&profile),
+            true,
+        );
+        let signature = view.requested_signature.unwrap();
+        let selected = view.cover_selected.clone();
+        view.commit_frozen_cover(&selected, signature, 9);
+        assert!(view.latest_ready());
+        demands.visual[0]
+            .terrain_poses
+            .insert(terrain, (DVec3::new(12.0, 10.0, -4.0), DVec3::X));
+        view.publish_latest_demand(
+            &demands,
+            terrain,
+            &demands.visual[0],
+            3,
+            Some(&profile),
+            true,
+        );
+        assert_eq!(view.requested_signature, Some(signature));
+        assert!(
+            view.latest_ready(),
+            "a root-wide fixed cinematic mesh does not require reselection when the capture camera moves"
+        );
+        view.tiles.get_mut(&QuadCoord::ROOT).unwrap().r#gen -= 1;
+        assert!(!view.latest_ready());
+    }
+
+    #[test]
+    fn held_preparation_coalesces_jitter_and_retires_superseded_capacity() {
+        let quadtree = Quadtree::new(64.0, 6, 1.0, 64.0);
+        let corridor = TerrainPreparationCorridor {
+            start: DVec3::new(0.3, 2.0, 0.3),
+            end: DVec3::new(8.3, 2.0, 0.3),
+            radius_m: 0.1,
+            source_pose: crate::surface_query::TerrainPoseInPhysicsFrame {
+                frame: Entity::PLACEHOLDER,
+                position: DVec3::ZERO,
+                rotation: DQuat::IDENTITY,
+            },
+            source_key: 1,
+        };
+        let mut held = HeldTerrainPreparation::default();
+        held.admit(9, 1, corridor, &quadtree, 128);
+        let first = held.requirements_signature;
+        let first_nodes = held.nodes.clone();
+        held.admit(
+            9,
+            2,
+            TerrainPreparationCorridor {
+                end: corridor.end + DVec3::new(0.01, 0.001, 0.0),
+                ..corridor
+            },
+            &quadtree,
+            128,
+        );
+        assert_eq!(
+            held.requirements_signature, first,
+            "dt changes that need the same fine nodes do not replace queued work"
+        );
+        let farther = TerrainPreparationCorridor {
+            end: DVec3::new(18.3, 2.0, 0.3),
+            ..corridor
+        };
+        held.admit(9, 3, farther, &quadtree, 128);
+        assert_ne!(held.requirements_signature, first);
+        assert!(
+            first_nodes.is_subset(&held.nodes),
+            "an in-flight subset remains useful as new nodes are requested"
+        );
+        let token = TerrainCoverToken {
+            terrain: Entity::PLACEHOLDER,
+            camera: Entity::PLACEHOLDER,
+            generation: 2,
+            signature: first,
+            admission_signature: 9,
+            oracle_key: 4,
+            operation: 1,
+        };
+        assert!(
+            token.matches_current_inputs(2, 4, 9),
+            "soft endpoint and heading changes retain source-valid queued work"
+        );
+        assert!(!token.matches_current_inputs(2, 4, 10));
+        let current_signature = held.requirements_signature;
+        let mut selected = vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)];
+        quadtree.constrain_selection(
+            &mut selected,
+            &first_nodes.iter().copied().collect::<Vec<_>>(),
+            &|_, _| 0.0,
+        );
+        let mut view = LodView {
+            held_preparation: Some(held),
+            ..default()
+        };
+        commit_prepared_terrain_cover(
+            &mut view,
+            &mut TerrainNodeGeometry::default(),
+            PreparedTerrainCover {
+                cover: HashSet::from([QuadCoord::ROOT]),
+                selected,
+                camera_patches: CameraPatchRetention::default(),
+                node_geometry: HashMap::new(),
+                budget_refused: 0,
+                preparation_refused_nodes: HashSet::new(),
+                preparation_signature: Some(first),
+                settled_sig: Some(first),
+                more_work: false,
+            },
+            4,
+            first,
+            9,
+        );
+        assert_eq!(
+            view.held_preparation
+                .as_ref()
+                .unwrap()
+                .requirements_signature,
+            current_signature,
+            "publishing a useful earlier subset cannot erase the latest accumulated requirement"
+        );
+        assert_ne!(
+            view.preparation_signature,
+            Some(current_signature),
+            "latest requirements still need their own follow-up publication"
+        );
+        let changed = TerrainPreparationCorridor {
+            end: DVec3::new(0.3, 2.0, 8.3),
+            ..corridor
+        };
+        let a = preparation_corridor_nodes(&quadtree, corridor, 128).unwrap();
+        let b = preparation_corridor_nodes(&quadtree, changed, 128).unwrap();
+        let capacity = a.len().max(b.len());
+        held = HeldTerrainPreparation::default();
+        held.admit(9, 4, corridor, &quadtree, capacity);
+        held.admit(9, 5, changed, &quadtree, capacity);
+        assert!(
+            !held.capacity_refused,
+            "historical requirements cannot poison a feasible current corridor"
+        );
+        assert_eq!(held.nodes, held.latest_nodes);
+        held.admit(10, 6, corridor, &quadtree, 128);
+        assert_eq!(
+            held.nodes,
+            a.into_iter().collect(),
+            "hard lease changes retire accumulated intent"
+        );
+        held.admit(10, 7, farther, &quadtree, 1);
+        assert!(
+            held.capacity_refused,
+            "an actually oversized current request stays explicitly refused"
+        );
+        held.admit(10, 8, corridor, &quadtree, 128);
+        assert!(
+            !held.capacity_refused,
+            "a later feasible request can progress after genuine capacity refusal"
+        );
+    }
+
+    #[test]
+    fn current_corridor_precedes_historical_balanced_cover_pressure() {
+        let quadtree = Quadtree::new(64.0, 6, 1.0, 64.0);
+        let latest = QuadCoord {
+            depth: 6,
+            x: 62,
+            z: 62,
+        };
+        let history = QuadCoord {
+            depth: 6,
+            x: 1,
+            z: 1,
+        };
+        let mut current_only = vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)];
+        quadtree.constrain_selection(&mut current_only, &[latest], &|_, _| 0.0);
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 64.0),
+        )));
+        let prepared = prepare_terrain_cover(TerrainCoverRequest {
+            quadtree,
+            oracle: oracle.clone(),
+            oracle_key: oracle.surface_key(),
+            demands: vec![TerrainVisualDemand {
+                camera: Entity::PLACEHOLDER,
+                focus: [0.0, 0.0],
+                camera_y: 1000.0,
+                heading: None,
+                view_direction: DVec3::Y,
+                screen_height_px: 720.0,
+                selection_clip: SelectionClip::new(
+                    test_perspective(1.0, DVec3::Y * 1000.0, DVec3::Y),
+                    720.0,
+                    2.0,
+                    DVec3::Y * 1000.0,
+                )
+                .unwrap(),
+                projection: test_perspective(1.0, DVec3::Y * 1000.0, DVec3::Y),
+                required: true,
+                near_detail_radius_m: 0.0,
+                near_detail_hysteresis_m: 0.0,
+            }],
+            camera_patches: CameraPatchRetention::default(),
+            cover: HashSet::new(),
+            node_geometry: HashMap::new(),
+            bootstrap_ready: true,
+            settled_sig: None,
+            budget_refused: 0,
+            signature: 7,
+            preparation_signature: Some(8),
+            preparation: Some(TerrainPreparationRequirements {
+                nodes: HashSet::from([history, latest]),
+                latest_nodes: HashSet::from([latest]),
+            }),
+            tile_resolution: 49,
+            probe_resolution: 5,
+            tile_budget: current_only.len(),
+            max_depth: 6,
+            cover_edits_per_cycle: 8,
+            hysteresis_ratio: 0.8,
+        });
+        assert!(
+            prepared.preparation_refused_nodes.is_empty(),
+            "historical intent cannot steal the balanced-cover budget from a feasible current path"
+        );
+        assert!(
+            prepared
+                .selected
+                .iter()
+                .any(|selected| selected.coord == latest && selected.morph_end.is_infinite())
+        );
+    }
+
+    #[test]
+    fn continuous_preparation_corridor_covers_fine_cells_and_refuses_capacity() {
+        let quadtree = Quadtree::new(500.0, 9, 1.0, 500.0);
+        let corridor = TerrainPreparationCorridor {
+            start: DVec3::new(-25.0, 20.0, -1.0),
+            end: DVec3::new(25.0, 20.0, 1.0),
+            radius_m: 0.7,
+            source_pose: crate::surface_query::TerrainPoseInPhysicsFrame {
+                frame: Entity::PLACEHOLDER,
+                position: DVec3::ZERO,
+                rotation: DQuat::IDENTITY,
+            },
+            source_key: 1,
+        };
+        let nodes = preparation_corridor_nodes(&quadtree, corridor, 512).unwrap();
+        let selected: HashSet<_> = nodes.iter().copied().collect();
+        for index in 0..=1000 {
+            let center = corridor.start.lerp(corridor.end, index as f64 / 1000.0);
+            for angle in 0..16 {
+                let angle = angle as f64 * std::f64::consts::TAU / 16.0;
+                let point = [
+                    center.x + corridor.radius_m * angle.cos(),
+                    center.z + corridor.radius_m * angle.sin(),
+                ];
+                assert!(
+                    selected.contains(&quadtree.node_containing(quadtree.max_depth, point)),
+                    "no unsampled corridor gap may retain a coarser morphing tile"
+                );
+            }
+        }
+        assert_eq!(
+            nodes,
+            preparation_corridor_nodes(
+                &quadtree,
+                TerrainPreparationCorridor {
+                    start: corridor.end,
+                    end: corridor.start,
+                    ..corridor
+                },
+                512
+            )
+            .unwrap(),
+            "ordered required nodes are independent of travel direction"
+        );
+        assert!(
+            preparation_corridor_nodes(&quadtree, corridor, 4).is_err(),
+            "capacity cannot truncate a long requested path"
+        );
+        assert!(
+            preparation_corridor_nodes(
+                &quadtree,
+                TerrainPreparationCorridor {
+                    radius_m: f64::NAN,
+                    ..corridor
+                },
+                512
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn preparation_intent_survives_render_frames_and_retires_exact_leases() {
+        let mut app = App::new();
+        app.init_resource::<TerrainDetailDemands>()
+            .init_resource::<TerrainCameraTargets>()
+            .add_systems(Update, collect_terrain_detail_demands);
+        let frame = app.world_mut().spawn(Grid::new(1000.0, 100.0)).id();
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        let terrain = app
+            .world_mut()
+            .spawn((
+                DemTerrainSurface,
+                DemHeightField(Arc::new(SurfaceOracle::bare(Arc::new(
+                    lunco_obstacle_field::field::HeightGrid::new_flat(3, 100.0),
+                )))),
+                crate::surface_query::TerrainPoseInPhysicsFrame {
+                    frame,
+                    position: DVec3::ZERO,
+                    rotation: DQuat::IDENTITY,
+                },
+                CellCoord::ZERO,
+                Transform::default(),
+                ChildOf(frame),
+            ))
+            .id();
+        let camera = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                Camera {
+                    viewport: Some(bevy::camera::Viewport {
+                        physical_size: UVec2::splat(720),
+                        ..default()
+                    }),
+                    ..default()
+                },
+                Projection::default(),
+                SceneViewDemand {
+                    source: frame,
+                    output: lunco_render::camera::SceneViewOutput::MainViewport,
+                },
+                SceneViewLayers {
+                    layer: 64,
+                    base: RenderLayers::default(),
+                },
+                CellCoord::ZERO,
+                Transform::from_xyz(0.0, 2.0, 0.0),
+                ChildOf(frame),
+            ))
+            .id();
+        app.world_mut().entity_mut(camera).insert(SceneViewDemand {
+            source: camera,
+            output: lunco_render::camera::SceneViewOutput::MainViewport,
+        });
+        let snapshot = {
+            let mut state =
+                bevy::ecs::system::SystemState::<crate::surface_query::GridSurfaceQuery>::new(
+                    app.world_mut(),
+                );
+            state.get(app.world()).unwrap().snapshot().unwrap()
+        };
+        let request = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<TerrainCameraTargets>()
+                .request(
+                    camera,
+                    snapshot.clone(),
+                    lunco_spatial::coords::GridPos(DVec3::new(0.0, 2.0, 0.0)),
+                    lunco_spatial::coords::GridPos(DVec3::new(30.0, 2.0, 0.0)),
+                    0.4,
+                )
+                .unwrap()
+        };
+        request(&mut app);
+        let mut preparation_signature = None;
+        for index in 0..4 {
+            app.world_mut()
+                .get_mut::<Transform>(camera)
+                .unwrap()
+                .rotation = Quat::from_rotation_y(index as f32 * 0.3);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<TerrainDetailDemands>()
+                    .has_preparation(camera, terrain)
+            );
+            assert!(
+                app.world()
+                    .resource::<TerrainCameraTargets>()
+                    .targets
+                    .contains_key(&camera)
+            );
+            let signature = app
+                .world()
+                .resource::<TerrainDetailDemands>()
+                .preparation_signature(camera, terrain);
+            if index > 0 {
+                assert_eq!(
+                    signature, preparation_signature,
+                    "stationary orientation damping cannot retire identical corridor preparation"
+                );
+            }
+            preparation_signature = signature;
+        }
+        app.world_mut()
+            .get_mut::<Transform>(camera)
+            .unwrap()
+            .translation
+            .x = 1.0;
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<TerrainCameraTargets>()
+                .targets
+                .contains_key(&camera),
+            "moving the eye retires its held corridor lease"
+        );
+        app.world_mut()
+            .get_mut::<Transform>(camera)
+            .unwrap()
+            .translation
+            .x = 0.0;
+        request(&mut app);
+        app.update();
+        app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = false;
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<TerrainCameraTargets>()
+                .targets
+                .contains_key(&camera)
+        );
+        app.world_mut().get_mut::<Camera>(camera).unwrap().is_active = true;
+        request(&mut app);
+        app.update();
+        app.world_mut()
+            .get_mut::<SceneViewDemand>(camera)
+            .unwrap()
+            .output = lunco_render::camera::SceneViewOutput::Observation { id: 8 };
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<TerrainCameraTargets>()
+                .targets
+                .contains_key(&camera),
+            "a reused camera entity cannot retain a retired output lease"
+        );
+        request(&mut app);
+        app.update();
+        app.world_mut()
+            .get_mut::<Transform>(terrain)
+            .unwrap()
+            .translation
+            .x = 1.0;
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<TerrainCameraTargets>()
+                .targets
+                .contains_key(&camera),
+            "fresh source pose changes retire the old snapshot before cached PreUpdate poses change"
+        );
+        app.world_mut()
+            .get_mut::<Transform>(terrain)
+            .unwrap()
+            .translation
+            .x = 0.0;
+        request(&mut app);
+        app.update();
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(DemHeightField(Arc::new(SurfaceOracle::bare(Arc::new(
+                lunco_obstacle_field::field::HeightGrid::new_flat(3, 200.0),
+            )))));
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<TerrainCameraTargets>()
+                .targets
+                .contains_key(&camera),
+            "the same entity cannot retain an old oracle content lease"
+        );
+        let result = app
+            .world_mut()
+            .resource_mut::<TerrainCameraTargets>()
+            .request(
+                camera,
+                snapshot,
+                lunco_spatial::coords::GridPos(DVec3::ZERO),
+                lunco_spatial::coords::GridPos(DVec3::NAN),
+                0.4,
+            );
+        assert!(result.is_err());
+        assert!(
+            !app.world()
+                .resource::<TerrainCameraTargets>()
+                .targets
+                .contains_key(&camera)
+        );
+    }
+
+    #[test]
+    fn orthographic_footprint_clips_nodes_and_keeps_uncertainty_eligible() {
+        let clip = bevy::math::dproj::orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 10_000.0)
+            * Transform::from_translation(Vec3::new(0.0, 1000.0, 0.0))
+                .looking_at(Vec3::ZERO, Vec3::NEG_Z)
+                .to_matrix()
+                .as_dmat4()
+                .inverse();
+        let projection = TerrainProjection::Orthographic {
+            pixels_per_metre: 50.0,
+            area: [-10.0, -10.0, 10.0, 10.0],
+            output_pixels: [1000, 1000],
+            clip_from_local: clip,
+        };
+        assert!(
+            SelectionClip::new(projection, 1000.0, 2.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(
+                    Square {
+                        center: [0.0, 0.0],
+                        half: 2.0
+                    },
+                    [-4.0, 4.0]
+                )
+        );
+        assert!(
+            !SelectionClip::new(projection, 1000.0, 2.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(
+                    Square {
+                        center: [30.0, 0.0],
+                        half: 2.0
+                    },
+                    [-4.0, 4.0]
+                )
+        );
+        assert!(
+            SelectionClip::new(projection, 1000.0, 2.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(
+                    Square {
+                        center: [11.0, 0.0],
+                        half: 2.0
+                    },
+                    [-4.0, 4.0]
+                )
+        );
+        assert!(
+            SelectionClip::new(projection, 1000.0, 2.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(
+                    Square {
+                        center: [30.0, 0.0],
+                        half: 2.0
+                    },
+                    [f64::NAN; 2]
+                ),
+            "without a certified height envelope an off-axis node remains eligible"
+        );
+        let demand = TerrainVisualDemand {
+            camera: Entity::PLACEHOLDER,
+            focus: [0.0, 0.0],
+            camera_y: 1000.0,
+            heading: None,
+            view_direction: DVec3::NEG_Y,
+            screen_height_px: 1000.0,
+            projection,
+            selection_clip: SelectionClip::new(projection, 1000.0, 2.0, DVec3::Y * 1000.0).unwrap(),
+            required: true,
+            near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
+        };
+        assert!(demand.camera_y > demand.near_detail_radius_m);
+        let floor = projected_posting_error_floor(
+            Square {
+                center: [0.0, 0.0],
+                half: 20.0,
+            },
+            5,
+        );
+        assert_eq!(
+            floor, 10.0,
+            "visible posting density survives coarse height-probe aliasing at any altitude"
+        );
+        let quadtree = Quadtree::from_orthographic_metric(20.0, 5, 20.0, 50.0, 2.0);
+        assert!(
+            quadtree.error_refine_range(floor)
+                > quadtree.focus_distance(QuadCoord::ROOT, [0.0, 1000.0, 0.0], [0.0, 0.0])
+        );
+        let oracle = SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 20.0),
+        ));
+        let bounds = projected_node_height_bounds(
+            &oracle,
+            Square {
+                center: [0.0, 0.0],
+                half: 20.0,
+            },
+        )
+        .expect("flat enclosure");
+        assert!(bounds[0] <= 0.0 && bounds[1] >= 0.0 && bounds[1] - bounds[0] < 1e-12);
+        let large = SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(33, 20.0),
+        ));
+        assert_eq!(
+            projected_node_height_bounds(
+                &large,
+                Square {
+                    center: [0.0, 0.0],
+                    half: 20.0
+                }
+            ),
+            None,
+            "bounded enclosure work cannot silently certify exclusion of a large node"
+        );
+        let mut previous = lunco_precompute::Fnv1a::new();
+        projection.write_signature(&mut previous);
+        let mut zoomed = lunco_precompute::Fnv1a::new();
+        TerrainProjection::Orthographic {
+            pixels_per_metre: 100.0,
+            area: [-5.0, -5.0, 5.0, 5.0],
+            output_pixels: [1000, 1000],
+            clip_from_local: clip,
+        }
+        .write_signature(&mut zoomed);
+        assert_ne!(previous.finish(), zoomed.finish());
+    }
+
+    #[test]
+    fn distant_perspective_zoom_discovers_probe_filtered_crater_with_bounded_cover() {
+        let half = 128.0;
+        let oracle = Arc::new(SurfaceOracle::new(
+            Arc::new(lunco_obstacle_field::field::HeightGrid::new_flat(3, half)),
+            vec![crate::oracle::HeightContribution {
+                content_key: 1,
+                modifier: Arc::new(lunco_terrain_core::Craters::new(vec![
+                    lunco_terrain_core::Crater {
+                        center: [0.0, 0.0],
+                        radius: 4.0,
+                        depth: 1.0,
+                        rim_height: 0.2,
+                        softness: 0.0,
+                        bowl_power: 4.0,
+                    },
+                ])),
+            }],
+        ));
+        let root = Square {
+            center: [0.0, 0.0],
+            half: f64::from(half),
+        };
+        let probe_step = root.side() / 4.0;
+        let gated = measure_node_geometry(&oracle.detail_limited(probe_step), root, 5);
+        assert_eq!(
+            gated.error, 0.0,
+            "the 8m crater is completely absent from 64m-gated coarse probes"
+        );
+        assert!(oracle.height_at(0.0, 0.0) < -0.5);
+        let tile_budget = 512;
+        let select = |fov_y_rad| {
+            let quadtree = Quadtree::from_screen_metric(
+                f64::from(half),
+                8,
+                f64::from(half),
+                1080.0,
+                fov_y_rad,
+                3.0,
+                0.55,
+            );
+            let demand = TerrainVisualDemand {
+                camera: Entity::PLACEHOLDER,
+                focus: [0.0, 0.0],
+                camera_y: 1000.0,
+                heading: None,
+                view_direction: DVec3::NEG_Y,
+                screen_height_px: 1080.0,
+                selection_clip: SelectionClip::new(
+                    test_perspective(fov_y_rad, DVec3::Y * 1000.0, DVec3::NEG_Y),
+                    1080.0,
+                    2.0,
+                    DVec3::Y * 1000.0,
+                )
+                .unwrap(),
+                projection: test_perspective(fov_y_rad, DVec3::Y * 1000.0, DVec3::NEG_Y),
+                required: true,
+                near_detail_radius_m: 30.0,
+                near_detail_hysteresis_m: 12.0,
+            };
+            assert!(demand.camera_y > demand.near_detail_radius_m);
+            let mut request = TerrainCoverRequest {
+                quadtree,
+                oracle: oracle.clone(),
+                oracle_key: oracle.surface_key(),
+                demands: vec![demand],
+                camera_patches: CameraPatchRetention::default(),
+                cover: HashSet::new(),
+                node_geometry: HashMap::new(),
+                bootstrap_ready: true,
+                settled_sig: None,
+                budget_refused: 0,
+                signature: fov_y_rad.to_bits(),
+                preparation_signature: None,
+                preparation: None,
+                tile_resolution: 49,
+                probe_resolution: 5,
+                tile_budget,
+                max_depth: 8,
+                cover_edits_per_cycle: 64,
+                hysteresis_ratio: 1.3,
+            };
+            for _ in 0..64 {
+                let result = prepare_terrain_cover(request);
+                assert!(result.cover.len() <= tile_budget);
+                if result.settled_sig == Some(fov_y_rad.to_bits()) {
+                    return result;
+                }
+                request = TerrainCoverRequest {
+                    quadtree,
+                    oracle: oracle.clone(),
+                    oracle_key: oracle.surface_key(),
+                    demands: vec![demand],
+                    camera_patches: result.camera_patches,
+                    cover: result.cover,
+                    node_geometry: result.node_geometry,
+                    bootstrap_ready: true,
+                    settled_sig: result.settled_sig,
+                    budget_refused: result.budget_refused,
+                    signature: fov_y_rad.to_bits(),
+                    preparation_signature: None,
+                    preparation: None,
+                    tile_resolution: 49,
+                    probe_resolution: 5,
+                    tile_budget,
+                    max_depth: 8,
+                    cover_edits_per_cycle: 64,
+                    hysteresis_ratio: 1.3,
+                };
+            }
+            panic!("bounded cover preparation must reach a real fixed point");
+        };
+        let wide = select(std::f64::consts::FRAC_PI_3);
+        let zoomed = select(0.01);
+        let visible_depth = |cover: &HashSet<QuadCoord>| {
+            cover
+                .iter()
+                .filter(|coord| {
+                    let cells = f64::from(1u32 << coord.depth);
+                    let side = root.side() / cells;
+                    let square = Square {
+                        center: [
+                            -f64::from(half) + (f64::from(coord.x) + 0.5) * side,
+                            -f64::from(half) + (f64::from(coord.z) + 0.5) * side,
+                        ],
+                        half: side * 0.5,
+                    };
+                    square.distance_to([0.0, 0.0]) == 0.0
+                })
+                .map(|coord| coord.depth)
+                .min()
+                .unwrap()
+        };
+        assert!(
+            visible_depth(&zoomed.cover) > visible_depth(&wide.cover),
+            "changing only native FOV must refine distant visible small relief"
+        );
+        assert_eq!(
+            zoomed.budget_refused, 0,
+            "the clipped telephoto footprint must fit the configured cover"
+        );
+        assert!(
+            zoomed.camera_patches.patches.is_empty(),
+            "telephoto discovery must not depend on near-field pins"
+        );
+        let off_axis = Square {
+            center: [30.0, 0.0],
+            half: 2.0,
+        };
+        let zoom = test_perspective(0.01, DVec3::Y * 1000.0, DVec3::NEG_Y);
+        assert!(
+            !SelectionClip::new(zoom, 1080.0, 3.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(off_axis, oracle.global_height_bounds().unwrap())
+        );
+        assert!(
+            SelectionClip::new(zoom, 1080.0, 3.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(off_axis, [f64::NAN; 2]),
+            "uncertain heights cannot certify exclusion"
+        );
+        let overlook = test_perspective(0.01, DVec3::Y * 1000.0, DVec3::NEG_Z);
+        let mountain = Square {
+            center: [0.0, -1000.0],
+            half: 2.0,
+        };
+        assert!(
+            !SelectionClip::new(overlook, 1080.0, 3.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(mountain, [0.0, 0.0])
+        );
+        assert!(
+            SelectionClip::new(overlook, 1080.0, 3.0, DVec3::Y * 1000.0)
+                .unwrap()
+                .intersects(mountain, [0.0, 1000.0]),
+            "a possible tall feature excluded by flat probes must remain eligible under full-source bounds"
+        );
+    }
+
+    #[test]
+    fn preparation_refusal_requires_settled_exact_current_request() {
+        let mut world = World::new();
+        let camera = world.spawn_empty().id();
+        let terrain = world.spawn_empty().id();
+        let mut demands = TerrainDetailDemands {
+            visual: vec![VisualDemand {
+                entity: camera,
+                source: camera,
+                render_layer: 64,
+                terrain_poses: HashMap::from([(terrain, (DVec3::Y, DVec3::NEG_Z))]),
+                terrain_clips: HashMap::new(),
+                preparation_corridors: HashMap::from([(
+                    terrain,
+                    TerrainPreparationCorridor {
+                        start: DVec3::Y,
+                        end: DVec3::new(4.0, 2.0, 3.0),
+                        radius_m: 0.5,
+                        source_pose: crate::surface_query::TerrainPoseInPhysicsFrame {
+                            frame: Entity::PLACEHOLDER,
+                            position: DVec3::ZERO,
+                            rotation: DQuat::IDENTITY,
+                        },
+                        source_key: 1,
+                    },
+                )]),
+                position: DVec3::Y,
+                forward: DVec3::NEG_Z,
+                screen_height_px: 720.0,
+                projection: test_perspective(1.0, DVec3::ZERO, DVec3::NEG_Z),
+                near_detail_radius_m: 30.0,
+                near_detail_hysteresis_m: 12.0,
+            }],
+        };
+        let clip = demands.visual[0].projection.clip_from_local()
+            * test_view(DVec3::Y, DVec3::NEG_Z, DVec3::Y);
+        demands.visual[0].terrain_clips.insert(terrain, clip);
+        let mut tiles = LodTiles::default();
+        let mut held = HeldTerrainPreparation::default();
+        held.admit(
+            9,
+            demands.preparation_signature(camera, terrain).unwrap(),
+            demands.visual[0].preparation_corridors[&terrain],
+            &Quadtree::new(100.0, 5, 1.0, 100.0),
+            64,
+        );
+        tiles.views.insert(
+            camera,
+            LodView {
+                preparation_signature: Some(held.requirements_signature),
+                preparation_refused_nodes: held.latest_nodes.clone(),
+                held_preparation: Some(held),
+                last_sig: Some(7),
+                settled_sig: Some(7),
+                requested_signature: Some(7),
+                last_admission_sig: Some(9),
+                ..default()
+            },
+        );
+        assert!(demands.has_preparation(camera, terrain));
+        assert!(tiles.preparation_refused(camera, &demands, terrain));
+        let view = &tiles.views[&camera];
+        let current_input = demands.preparation_signature(camera, terrain);
+        assert!(view.preparation_refusal_count(current_input, 9) > 0);
+        assert_eq!(
+            view.preparation_refusal_count(current_input, 10),
+            0,
+            "a new profile/admission cannot inherit a refused requirement count"
+        );
+        let view = tiles.views.get_mut(&camera).unwrap();
+        let signature = view.preparation_signature;
+        view.preparation_signature = None;
+        assert_eq!(
+            view.preparation_refusal_count(current_input, 9),
+            0,
+            "uncommitted requirements must not publish old refused nodes"
+        );
+        view.preparation_signature = signature;
+        demands.visual[0]
+            .preparation_corridors
+            .get_mut(&terrain)
+            .unwrap()
+            .end
+            .x += 1.0;
+        assert!(
+            !tiles.preparation_refused(camera, &demands, terrain),
+            "a retired request cannot reject a new navigation target"
+        );
+        demands.visual[0]
+            .preparation_corridors
+            .get_mut(&terrain)
+            .unwrap()
+            .end
+            .x -= 1.0;
+        tiles.views.get_mut(&camera).unwrap().pending_cover = Some((0, 7, 0, 0, 9));
+        assert!(!tiles.preparation_refused(camera, &demands, terrain));
+        let view = tiles.views.get_mut(&camera).unwrap();
+        view.pending_cover = None;
+        view.settled_sig = None;
+        assert!(!tiles.preparation_refused(camera, &demands, terrain));
+        let view = tiles.views.get_mut(&camera).unwrap();
+        view.settled_sig = Some(7);
+        view.preparation_refused_nodes.clear();
+        view.budget_refused = 20;
+        assert!(
+            !tiles.preparation_refused(camera, &demands, terrain),
+            "discretionary budget pressure is not a failed navigation patch"
+        );
+    }
+
+    #[test]
+    fn cover_completion_allows_camera_motion_but_fences_authoritative_inputs() {
+        let token = TerrainCoverToken {
+            camera: Entity::PLACEHOLDER,
+            terrain: Entity::from_bits(1),
+            generation: 3,
+            signature: 4,
+            admission_signature: 5,
+            oracle_key: 6,
+            operation: 7,
+        };
+        assert!(token.matches_current_inputs(3, 6, 5));
+        assert!(!token.matches_current_inputs(2, 6, 5));
+        assert!(!token.matches_current_inputs(3, 8, 5));
+        assert!(!token.matches_current_inputs(3, 6, 9));
+    }
+
+    #[test]
+    fn camera_cover_cadence_does_not_delay_admission_changes() {
+        assert!(!terrain_cover_selection_due(false, Some(7), 7));
+        assert!(terrain_cover_selection_due(true, Some(7), 7));
+        assert!(terrain_cover_selection_due(false, Some(7), 8));
+        assert!(terrain_cover_selection_due(false, None, 7));
+    }
 
     fn terrain_quality() -> lunco_render::RenderQualityProfile {
         lunco_render::RenderQualityProfile {
@@ -4794,9 +8724,9 @@ mod draw_partition_tests {
             center: [marker, 0.0],
             depth: 1,
             res: 1,
-            contact: None,
-            morph_end: 0.0,
             origin_y: 0.0,
+            draw_bounds: None,
+            bytes: 0,
         }
     }
 
@@ -4849,22 +8779,41 @@ mod draw_partition_tests {
                 oracle: Arc::clone(&oracle),
                 oracle_key: oracle.surface_key(),
                 demands: vec![TerrainVisualDemand {
+                    camera: Entity::PLACEHOLDER,
                     focus: [12.0, -8.0],
                     camera_y: 35.0,
                     heading: None,
+                    view_direction: DVec3::Y,
                     screen_height_px: 720.0,
-                    fov_y_rad: std::f64::consts::FRAC_PI_3,
+                    selection_clip: SelectionClip::new(
+                        test_perspective(
+                            std::f64::consts::FRAC_PI_3,
+                            DVec3::new(12.0, 35.0, -8.0),
+                            DVec3::Y,
+                        ),
+                        720.0,
+                        2.0,
+                        DVec3::new(12.0, 35.0, -8.0),
+                    )
+                    .unwrap(),
+                    projection: test_perspective(
+                        std::f64::consts::FRAC_PI_3,
+                        DVec3::new(12.0, 35.0, -8.0),
+                        DVec3::Y,
+                    ),
                     required: true,
                     near_detail_radius_m: 30.0,
                     near_detail_hysteresis_m: 12.0,
                 }],
-                contact_nodes: Vec::new(),
+                camera_patches: CameraPatchRetention::default(),
                 cover,
                 node_geometry: HashMap::new(),
                 bootstrap_ready: true,
                 settled_sig: None,
                 budget_refused: 0,
                 signature: 7,
+                preparation_signature: None,
+                preparation: None,
                 tile_resolution: 49,
                 probe_resolution: 5,
                 tile_budget: 64,
@@ -5031,6 +8980,8 @@ mod draw_partition_tests {
             200.0,
             Some(&maps),
             512.0,
+            0.0,
+            0.0,
             None,
             None,
             &diagnostic_template(),
@@ -5043,6 +8994,8 @@ mod draw_partition_tests {
             200.0,
             Some(&maps),
             512.0,
+            0.0,
+            0.0,
             None,
             None,
             &diagnostic_template(),
@@ -5081,6 +9034,8 @@ mod draw_partition_tests {
             200.0,
             None,
             512.0,
+            0.0,
+            0.0,
             None,
             None,
             &diagnostic_template(),
@@ -5106,6 +9061,8 @@ mod draw_partition_tests {
             200.0,
             None,
             512.0,
+            0.0,
+            0.0,
             None,
             None,
             &diagnostic_template(),
@@ -5138,6 +9095,7 @@ mod draw_partition_tests {
             texel_size_m: 7.0,
         };
         let authored = TerrainAuthoredMaps {
+            regional_albedo: Some(Handle::<Image>::default().into()),
             surface: Some(Handle::<Image>::default().into()),
             weight_rough: 0.25,
             weight_ao: 0.75,
@@ -5152,12 +9110,23 @@ mod draw_partition_tests {
             200.0,
             Some(&derived),
             512.0,
+            1024.0,
+            0.125,
             Some(&authored),
             None,
             &diagnostic_template(),
             crate::overlay::OverlayUniforms::OFF,
         );
 
+        assert!(look.textures.contains_key(&TextureLayer::RegionalAlbedo));
+        assert_eq!(
+            look.values().get("regional_albedo_on"),
+            Some(&ParamValue::F32(1.0))
+        );
+        assert_eq!(
+            look.values().get("regional_uv_scale"),
+            Some(&ParamValue::F32(0.125))
+        );
         assert_eq!(
             look.values().get("authored_surface_on"),
             Some(&ParamValue::F32(1.0))
@@ -5189,10 +9158,48 @@ mod draw_partition_tests {
     }
 
     #[test]
+    fn regional_albedo_without_registered_surface_faults_after_dem_admission() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Image>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .add_systems(Update, bind_terrain_maps_to_materials);
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        let terrain = app
+            .world_mut()
+            .spawn((
+                DemTerrainSurface,
+                ShaderLook::new("shaders/terrain_layered.wesl")
+                    .with_texture(TextureLayer::RegionalAlbedo, image),
+            ))
+            .id();
+        app.update();
+        assert!(!app.world().resource::<lunco_core::RuntimeFaults>().active());
+        let grid = Arc::new(lunco_obstacle_field::field::HeightGrid::new_flat(3, 10.0));
+        let oracle = crate::oracle::SurfaceOracle::bare(grid);
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(DemHeightField(Arc::new(oracle)));
+        app.update();
+        let fault = app
+            .world()
+            .resource::<lunco_core::RuntimeFaults>()
+            .first
+            .as_ref()
+            .unwrap();
+        assert_eq!(fault.kind, "terrain-regional-material");
+        assert_eq!(fault.entity, Some(terrain));
+    }
+
+    #[test]
     fn reauthored_shader_look_refreshes_the_shared_terrain_source_view() {
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<Image>()
+            .init_resource::<lunco_core::RuntimeFaults>()
             .add_systems(Update, bind_terrain_maps_to_materials);
         let first = app
             .world_mut()
@@ -5290,10 +9297,12 @@ mod draw_partition_tests {
         set_param(&mut shader_look, "map_texel_size_m", ParamValue::F32(7.0));
         set_param(&mut shader_look, "derived_surface_on", ParamValue::F32(1.0));
         set_param(&mut shader_look, "derived_normal_on", ParamValue::F32(1.0));
-        let mut tiles = LodTiles::default();
+        let mut tiles = LodView::default();
         tiles.tiles.insert(
             QuadCoord::ROOT,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: tile,
                 r#gen: 0,
                 morph_end: f32::INFINITY,
@@ -5305,7 +9314,10 @@ mod draw_partition_tests {
         let terrain = app
             .world_mut()
             .spawn((
-                tiles,
+                LodTiles {
+                    views: BTreeMap::from([(Entity::PLACEHOLDER, tiles)]),
+                    ..Default::default()
+                },
                 DemTerrainSurface,
                 TerrainDerivedMaps {
                     surface: Handle::default(),
@@ -5438,17 +9450,29 @@ mod draw_partition_tests {
     #[test]
     fn finite_terrain_keeps_a_demand_when_camera_is_beyond_its_edge() {
         let camera = VisualDemand {
+            render_layer: 64,
+            source: Entity::PLACEHOLDER,
+            terrain_poses: HashMap::new(),
+            terrain_clips: HashMap::new(),
+            preparation_corridors: HashMap::new(),
             entity: Entity::PLACEHOLDER,
             position: DVec3::new(-550.0, 100.0, -550.0),
             forward: DVec3::NEG_Z,
             screen_height_px: 1080.0,
-            fov_y_rad: std::f64::consts::FRAC_PI_4,
+            projection: test_perspective(std::f64::consts::FRAC_PI_4, DVec3::ZERO, DVec3::NEG_Z),
             near_detail_radius_m: 30.0,
             near_detail_hysteresis_m: 12.0,
         };
 
-        let visual = terrain_visual_demand(&camera, camera.position, camera.forward)
-            .expect("finite camera pose remains a valid visual demand");
+        let visual = terrain_visual_demand(
+            &camera,
+            camera.position,
+            camera.forward,
+            camera.projection.clip_from_local()
+                * test_view(camera.position, camera.forward, DVec3::Y),
+            2.0,
+        )
+        .expect("finite camera pose remains a valid visual demand");
 
         assert_eq!(visual.focus, [-550.0, -550.0]);
         assert_eq!(visual.camera_y, 100.0);
@@ -5475,10 +9499,12 @@ mod draw_partition_tests {
                 bevy::light::NotShadowReceiver,
             ))
             .id();
-        let mut tiles = LodTiles::default();
+        let mut tiles = LodView::default();
         tiles.tiles.insert(
             QuadCoord::ROOT,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: tile,
                 r#gen: 0,
                 morph_end: f32::INFINITY,
@@ -5490,7 +9516,10 @@ mod draw_partition_tests {
         let shadow_image = Handle::<Image>::default();
         app.world_mut().spawn((
             TerrainLodViz,
-            tiles,
+            LodTiles {
+                views: BTreeMap::from([(Entity::PLACEHOLDER, tiles)]),
+                ..Default::default()
+            },
             TileShadowCache {
                 image: shadow_image.clone(),
                 on: 1.0,
@@ -5527,10 +9556,12 @@ mod draw_partition_tests {
                 bevy::light::NotShadowReceiver,
             ))
             .id();
-        let mut tiles = LodTiles::default();
+        let mut tiles = LodView::default();
         tiles.tiles.insert(
             QuadCoord::ROOT,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: tile,
                 r#gen: 0,
                 morph_end: f32::INFINITY,
@@ -5541,7 +9572,10 @@ mod draw_partition_tests {
         );
         app.world_mut().spawn((
             TerrainLodViz,
-            tiles,
+            LodTiles {
+                views: BTreeMap::from([(Entity::PLACEHOLDER, tiles)]),
+                ..Default::default()
+            },
             TileShadowCache {
                 image: Handle::<Image>::default(),
                 on: 0.0,
@@ -5570,10 +9604,12 @@ mod draw_partition_tests {
             .into_iter()
             .collect::<HashSet<_>>();
         let unready = wanted.iter().next().copied().expect("four children");
-        let mut tiles = LodTiles::default();
+        let mut tiles = LodView::default();
         tiles.tiles.insert(
             QuadCoord::ROOT,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: Entity::PLACEHOLDER,
                 r#gen: 0,
                 morph_end: f32::INFINITY,
@@ -5585,6 +9621,8 @@ mod draw_partition_tests {
         tiles.tiles.insert(
             unready,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: Entity::PLACEHOLDER,
                 r#gen: 0,
                 morph_end: 0.0,
@@ -5604,13 +9642,15 @@ mod draw_partition_tests {
     #[test]
     fn material_readiness_invalidation_reopens_cached_gate() {
         let tile = Entity::PLACEHOLDER;
-        let mut tiles = LodTiles {
+        let mut tiles = LodView {
             materials_ready: true,
             ..Default::default()
         };
         tiles.tiles.insert(
             QuadCoord::ROOT,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: tile,
                 r#gen: 0,
                 morph_end: f32::INFINITY,
@@ -5634,13 +9674,15 @@ mod draw_partition_tests {
         app.add_observer(invalidate_removed_shader_look_ready);
 
         let tile = app.world_mut().spawn(ShaderLookReady).id();
-        let mut terrain_tiles = LodTiles {
+        let mut terrain_tiles = LodView {
             materials_ready: true,
             ..Default::default()
         };
         terrain_tiles.tiles.insert(
             QuadCoord::ROOT,
             TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
                 entity: tile,
                 r#gen: 0,
                 morph_end: f32::INFINITY,
@@ -5652,11 +9694,20 @@ mod draw_partition_tests {
         app.world_mut()
             .entity_mut(tile)
             .insert(Visibility::Inherited);
-        let terrain = app.world_mut().spawn(terrain_tiles).id();
+        let terrain = app
+            .world_mut()
+            .spawn(LodTiles {
+                frame_cursor: 0,
+                resolution: 49,
+                r#gen: 0,
+                views: BTreeMap::from([(Entity::PLACEHOLDER, terrain_tiles)]),
+            })
+            .id();
 
         app.world_mut().entity_mut(tile).remove::<ShaderLookReady>();
 
-        let terrain_tiles = app.world().get::<LodTiles>(terrain).unwrap();
+        let terrain_tiles =
+            &app.world().get::<LodTiles>(terrain).unwrap().views[&Entity::PLACEHOLDER];
         assert!(!terrain_tiles.materials_ready);
         let slot = terrain_tiles.tiles.get(&QuadCoord::ROOT).unwrap();
         assert!(!slot.ready);
@@ -5834,7 +9885,351 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn camera_near_field_reaches_finest_cover_without_a_transient_forward_focus() {
+    fn camera_patch_retention_preserves_only_requested_nodes_and_source() {
+        let mut world = World::new();
+        let camera = world.spawn_empty().id();
+        let other_camera = world.spawn_empty().id();
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 80.0),
+        )));
+        let make_request = |camera, focus, camera_y, camera_patches| TerrainCoverRequest {
+            quadtree: Quadtree::from_screen_metric(
+                80.0,
+                5,
+                80.0,
+                720.0,
+                std::f64::consts::FRAC_PI_3,
+                2.0,
+                0.55,
+            ),
+            oracle: Arc::clone(&oracle),
+            oracle_key: oracle.surface_key(),
+            demands: vec![TerrainVisualDemand {
+                camera,
+                focus,
+                camera_y,
+                heading: None,
+                view_direction: DVec3::Y,
+                screen_height_px: 720.0,
+                selection_clip: SelectionClip::new(
+                    test_perspective(
+                        std::f64::consts::FRAC_PI_3,
+                        DVec3::new(focus[0], camera_y, focus[1]),
+                        DVec3::Y,
+                    ),
+                    720.0,
+                    2.0,
+                    DVec3::new(focus[0], camera_y, focus[1]),
+                )
+                .unwrap(),
+                projection: test_perspective(
+                    std::f64::consts::FRAC_PI_3,
+                    DVec3::new(focus[0], camera_y, focus[1]),
+                    DVec3::Y,
+                ),
+                required: true,
+                near_detail_radius_m: 30.0,
+                near_detail_hysteresis_m: 12.0,
+            }],
+            camera_patches,
+            cover: HashSet::new(),
+            node_geometry: HashMap::new(),
+            bootstrap_ready: true,
+            settled_sig: None,
+            budget_refused: 0,
+            signature: 7,
+            preparation_signature: None,
+            preparation: None,
+            tile_resolution: 49,
+            probe_resolution: 5,
+            tile_budget: 128,
+            max_depth: 5,
+            cover_edits_per_cycle: 8,
+            hysteresis_ratio: 1.3,
+        };
+        let initial = prepare_terrain_cover(make_request(
+            camera,
+            [0.0, 0.0],
+            20.0,
+            CameraPatchRetention::default(),
+        ));
+        let patch = initial
+            .camera_patches
+            .patches
+            .get(&camera)
+            .expect("near camera patch")
+            .clone();
+        assert_eq!(patch.len(), 9);
+        assert!(
+            patch.iter().all(|coord| initial
+                .selected
+                .iter()
+                .any(|tile| tile.coord == *coord && tile.morph_end.is_infinite())),
+            "the requested patch must be pinned in the selected cover"
+        );
+        let retained = prepare_terrain_cover(make_request(
+            camera,
+            [4.0, 0.0],
+            35.0,
+            initial.camera_patches.clone(),
+        ));
+        assert_eq!(
+            retained.camera_patches.patches.get(&camera),
+            Some(&patch),
+            "the retention band must not request a new patch at the moved camera"
+        );
+        assert!(
+            patch.iter().all(|coord| retained
+                .selected
+                .iter()
+                .any(|tile| tile.coord == *coord && tile.morph_end.is_infinite())),
+            "the retained patch must remain pinned in the selected cover"
+        );
+        let moved_away = prepare_terrain_cover(make_request(
+            camera,
+            [60.0, 0.0],
+            35.0,
+            retained.camera_patches.clone(),
+        ));
+        assert!(
+            moved_away.camera_patches.patches.is_empty(),
+            "a patch outside the three-dimensional retention range must be released"
+        );
+        let released = prepare_terrain_cover(make_request(
+            camera,
+            [4.0, 0.0],
+            43.0,
+            retained.camera_patches.clone(),
+        ));
+        assert!(
+            released.camera_patches.patches.is_empty(),
+            "patch must expire beyond hysteresis"
+        );
+        let replacement = prepare_terrain_cover(make_request(
+            other_camera,
+            [4.0, 0.0],
+            35.0,
+            initial.camera_patches.clone(),
+        ));
+        assert!(
+            replacement.camera_patches.patches.is_empty(),
+            "another camera must not inherit the patch"
+        );
+        let edge = prepare_terrain_cover(make_request(
+            camera,
+            [79.0, 0.0],
+            20.0,
+            CameraPatchRetention::default(),
+        ));
+        let edge_patch = edge
+            .camera_patches
+            .patches
+            .get(&camera)
+            .expect("edge patch")
+            .clone();
+        let outside =
+            prepare_terrain_cover(make_request(camera, [82.0, 0.0], 35.0, edge.camera_patches));
+        assert_eq!(
+            outside.camera_patches.patches.get(&camera),
+            Some(&edge_patch),
+            "a camera just outside the terrain keeps nearby requested nodes"
+        );
+        let outside_far = prepare_terrain_cover(make_request(
+            camera,
+            [130.0, 0.0],
+            35.0,
+            outside.camera_patches,
+        ));
+        assert!(
+            outside_far.camera_patches.patches.is_empty(),
+            "a camera beyond the terrain must release distant nodes"
+        );
+        let mut wrong_source = initial.camera_patches.clone();
+        wrong_source.oracle_key ^= 1;
+        let stale = prepare_terrain_cover(make_request(camera, [0.0, 0.0], 35.0, wrong_source));
+        assert!(
+            stale.camera_patches.patches.is_empty(),
+            "another surface must not inherit the patch"
+        );
+        let mut wrong_extent = initial.camera_patches.clone();
+        wrong_extent.root_half_bits ^= 1;
+        let stale = prepare_terrain_cover(make_request(camera, [0.0, 0.0], 35.0, wrong_extent));
+        assert!(
+            stale.camera_patches.patches.is_empty(),
+            "another extent must not inherit the patch"
+        );
+        let mut wrong_depth = initial.camera_patches;
+        wrong_depth.max_depth -= 1;
+        let stale = prepare_terrain_cover(make_request(camera, [0.0, 0.0], 35.0, wrong_depth));
+        assert!(
+            stale.camera_patches.patches.is_empty(),
+            "another depth must not inherit the patch"
+        );
+    }
+
+    #[test]
+    fn camera_diagonal_neighbours_cover_corners_and_clip_at_root() {
+        let centre = QuadCoord {
+            depth: 3,
+            x: 4,
+            z: 4,
+        };
+        let neighbours: HashSet<_> = camera_diagonal_neighbours(centre).collect();
+        let expected: HashSet<_> = [(3, 3), (3, 5), (5, 3), (5, 5)]
+            .into_iter()
+            .map(|(x, z)| QuadCoord { depth: 3, x, z })
+            .collect();
+        assert_eq!(neighbours, expected);
+        let corner = QuadCoord {
+            depth: 3,
+            x: 0,
+            z: 0,
+        };
+        let clipped: HashSet<_> = camera_diagonal_neighbours(corner).collect();
+        assert_eq!(
+            clipped,
+            HashSet::from([QuadCoord {
+                depth: 3,
+                x: 1,
+                z: 1
+            }])
+        );
+    }
+
+    #[test]
+    fn terrain_view_focus_ignores_subquantum_craters() {
+        let grid = Arc::new(lunco_obstacle_field::field::HeightGrid::new_flat(3, 100.0));
+        let flat = SurfaceOracle::bare(Arc::clone(&grid));
+        let crater = lunco_terrain_core::Crater {
+            center: [15.0, 0.0],
+            radius: 0.4,
+            depth: 0.5,
+            rim_height: 0.1,
+            softness: 0.0,
+            bowl_power: 4.0,
+        };
+        let detailed = SurfaceOracle::new(
+            grid,
+            vec![crate::oracle::HeightContribution {
+                modifier: Arc::new(lunco_terrain_core::Craters::new(vec![crater])),
+                content_key: 1,
+            }],
+        );
+        let direction = DVec3::new(15.0, -10.0, 0.0).normalize();
+        let demand = TerrainVisualDemand {
+            camera: Entity::PLACEHOLDER,
+            focus: [0.0, 0.0],
+            camera_y: 10.0,
+            heading: None,
+            view_direction: direction,
+            screen_height_px: 720.0,
+            selection_clip: SelectionClip::new(
+                test_perspective(std::f64::consts::FRAC_PI_3, DVec3::Y * 10.0, direction),
+                720.0,
+                2.0,
+                DVec3::Y * 10.0,
+            )
+            .unwrap(),
+            projection: test_perspective(std::f64::consts::FRAC_PI_3, DVec3::Y * 10.0, direction),
+            required: true,
+            near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
+        };
+        let origin = DVec3::new(0.0, 10.0, 0.0);
+        let physical = crate::oracle::raycast_surface(&detailed, origin, direction, 60.0)
+            .unwrap()
+            .unwrap();
+        assert!(
+            (physical.x - 15.0).abs() > 0.1,
+            "fixture must change the physical hit"
+        );
+        let a = terrain_view_focus(&flat, demand);
+        let b = terrain_view_focus(&detailed, demand);
+        assert!(
+            (a[0] - b[0]).abs() < 1e-8 && (a[1] - b[1]).abs() < 1e-8,
+            "sub-quantum crater must not move the LOD focus: {a:?} != {b:?}"
+        );
+    }
+
+    #[test]
+    fn terrain_view_focus_fades_at_the_finite_reach() {
+        let oracle = SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 500.0),
+        ));
+        let demand = TerrainVisualDemand {
+            camera: Entity::PLACEHOLDER,
+            focus: [0.0, 0.0],
+            camera_y: 10.0,
+            heading: None,
+            view_direction: DVec3::new(15.0, -10.0, 0.0).normalize(),
+            screen_height_px: 720.0,
+            selection_clip: SelectionClip::new(
+                test_perspective(
+                    std::f64::consts::FRAC_PI_3,
+                    DVec3::Y * 10.0,
+                    DVec3::new(15.0, -10.0, 0.0).normalize(),
+                ),
+                720.0,
+                2.0,
+                DVec3::Y * 10.0,
+            )
+            .unwrap(),
+            projection: test_perspective(
+                std::f64::consts::FRAC_PI_3,
+                DVec3::Y * 10.0,
+                DVec3::new(15.0, -10.0, 0.0).normalize(),
+            ),
+            required: true,
+            near_detail_radius_m: 30.0,
+            near_detail_hysteresis_m: 12.0,
+        };
+        let near = terrain_view_focus(&oracle, demand);
+        assert!((near[0] - 7.5).abs() < 0.01, "near hit: {near:?}");
+        let edge = terrain_view_focus(
+            &oracle,
+            TerrainVisualDemand {
+                view_direction: DVec3::new(58.9, -10.0, 0.0).normalize(),
+                ..demand
+            },
+        );
+        assert!(edge[0].abs() < 0.01, "reach boundary must fade: {edge:?}");
+        let high = terrain_view_focus(
+            &oracle,
+            TerrainVisualDemand {
+                camera_y: 29.0,
+                view_direction: DVec3::new(30.0, -29.0, 0.0).normalize(),
+                ..demand
+            },
+        );
+        let horizontal_reach = (30.0_f64.powi(2) - 29.0_f64.powi(2)).sqrt();
+        assert!(
+            high[0] > 0.0 && high[0] <= horizontal_reach + 1e-9,
+            "near field must include the camera ground point: {high:?}"
+        );
+        let above = terrain_view_focus(
+            &oracle,
+            TerrainVisualDemand {
+                camera_y: 30.001,
+                view_direction: DVec3::new(30.0, -30.001, 0.0).normalize(),
+                ..demand
+            },
+        );
+        assert_eq!(
+            above, demand.focus,
+            "bias must vanish at the clearance limit"
+        );
+        let sky = terrain_view_focus(
+            &oracle,
+            TerrainVisualDemand {
+                view_direction: DVec3::Y,
+                ..demand
+            },
+        );
+        assert_eq!(sky, demand.focus);
+    }
+
+    #[test]
+    fn camera_near_field_with_sky_view_reaches_finest_cover() {
         let qt = Quadtree::from_screen_metric(
             1000.0,
             6,
@@ -5845,11 +10240,20 @@ mod draw_partition_tests {
             terrain_quality().terrain_lod_morph_start_ratio,
         );
         let actual = TerrainVisualDemand {
+            camera: Entity::PLACEHOLDER,
             focus: [0.0, 0.0],
             camera_y: 3.0,
             heading: None,
+            view_direction: DVec3::Y,
             screen_height_px: 1080.0,
-            fov_y_rad: std::f64::consts::FRAC_PI_4,
+            selection_clip: SelectionClip::new(
+                test_perspective(std::f64::consts::FRAC_PI_4, DVec3::Y * 3.0, DVec3::Y),
+                1080.0,
+                2.0,
+                DVec3::Y * 3.0,
+            )
+            .unwrap(),
+            projection: test_perspective(std::f64::consts::FRAC_PI_4, DVec3::Y * 3.0, DVec3::Y),
             required: true,
             near_detail_radius_m: 30.0,
             near_detail_hysteresis_m: 12.0,
@@ -5860,26 +10264,39 @@ mod draw_partition_tests {
             ..actual
         }];
         let root = qt.region(QuadCoord::ROOT);
-        assert_eq!(near_field_error_floor(root, [0.0, 0.0], 49, &elevated), 0.0);
+        assert!(
+            projected_posting_error_floor(root, 49) > 0.0,
+            "projected posting discovery applies beyond the near-detail radius"
+        );
         assert!(!near_field_retains_refinement(root, [0.0, 0.0], &elevated));
-        assert!(near_field_error_floor(root, [190.0, 200.0], 49, &elevated) > 0.0);
-        let foci = demands
-            .iter()
-            .map(|demand| (demand.focus, demand.camera_y))
-            .collect::<Vec<_>>();
-        let error = |_coord: QuadCoord, region: Square| {
-            near_field_error_floor(
-                region,
-                [0.0, 0.0],
-                terrain_quality().terrain_lod_tile_resolution,
-                &demands,
-            )
-        };
-        let mut cover = HashSet::new();
-
-        for _ in 0..qt.max_depth {
-            evolve_cover_for_foci(&qt, &mut cover, &foci, &error, 768);
-        }
+        assert!(projected_posting_error_floor(root, 49) > 0.0);
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(3, 1000.0),
+        )));
+        let prepared = prepare_terrain_cover(TerrainCoverRequest {
+            quadtree: qt,
+            oracle: oracle.clone(),
+            oracle_key: oracle.surface_key(),
+            demands: demands.to_vec(),
+            camera_patches: CameraPatchRetention::default(),
+            cover: HashSet::new(),
+            node_geometry: HashMap::new(),
+            bootstrap_ready: true,
+            settled_sig: None,
+            budget_refused: 0,
+            signature: 1,
+            preparation_signature: None,
+            preparation: None,
+            tile_resolution: terrain_quality().terrain_lod_tile_resolution,
+            probe_resolution: 5,
+            tile_budget: 768,
+            max_depth: qt.max_depth,
+            cover_edits_per_cycle: 64,
+            hysteresis_ratio: 1.3,
+        });
+        // Admission adds the mandatory camera patch to the published selection.
+        // The discretionary tree may stay coarse when terrain is behind the view.
+        let cover = prepared.selected.iter().map(|tile| tile.coord).collect();
 
         assert_eq!(
             required_focus_depth(&cover, &demands, &qt),
@@ -5902,7 +10319,7 @@ mod draw_partition_tests {
             .expect("forward point must remain covered");
         assert!(
             forward_depth < qt.max_depth,
-            "forward direction must not create a separate finest-detail island"
+            "a sky view must not force the distant point to finest detail"
         );
     }
 
@@ -5920,11 +10337,20 @@ mod draw_partition_tests {
             })
             .collect::<Vec<_>>();
         let demand = TerrainVisualDemand {
+            camera: Entity::PLACEHOLDER,
             focus: [0.0, 0.0],
             camera_y: 3.0,
             heading: None,
+            view_direction: DVec3::Y,
             screen_height_px: 1080.0,
-            fov_y_rad: std::f64::consts::FRAC_PI_4,
+            selection_clip: SelectionClip::new(
+                test_perspective(std::f64::consts::FRAC_PI_4, DVec3::Y * 3.0, DVec3::Y),
+                1080.0,
+                2.0,
+                DVec3::Y * 3.0,
+            )
+            .unwrap(),
+            projection: test_perspective(std::f64::consts::FRAC_PI_4, DVec3::Y * 3.0, DVec3::Y),
             required: true,
             near_detail_radius_m: 30.0,
             near_detail_hysteresis_m: 12.0,
@@ -5947,7 +10373,7 @@ mod draw_partition_tests {
             .children()
             .into_iter()
             .collect::<HashSet<_>>();
-        let mut tiles = LodTiles {
+        let mut tiles = LodView {
             cover: cover.clone(),
             cover_selected: cover
                 .iter()
@@ -5967,6 +10393,8 @@ mod draw_partition_tests {
             tiles.tiles.insert(
                 *coord,
                 TileSlot {
+                    resolution: 3,
+                    half_extent: 1.0,
                     entity: Entity::PLACEHOLDER,
                     r#gen: 7,
                     morph_end: 0.0,
@@ -6204,266 +10632,6 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn multiple_visual_foci_share_one_stable_cover() {
-        let qt = test_qt();
-        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
-        let foci = [([-700.0, 0.0], 5.0), ([700.0, 0.0], 5.0)];
-        let mut cover = HashSet::new();
-        for _ in 0..200 {
-            evolve_cover_for_foci(&qt, &mut cover, &foci, &err, 256);
-        }
-        let settled = cover.clone();
-        evolve_cover_for_foci(&qt, &mut cover, &foci, &err, 256);
-        assert_eq!(
-            cover, settled,
-            "multiple cameras must reach one fixed point"
-        );
-        assert_exact_cover(&cover);
-
-        for focus in foci.map(|(focus, _)| focus) {
-            let leaf = qt.node_containing(qt.max_depth, focus);
-            assert!(
-                covering_depth(&cover, leaf).is_none_or(|depth| depth >= 3),
-                "each active camera must retain local detail"
-            );
-        }
-    }
-
-    /// **The avatar camera must become a terrain-detail focus.**
-    ///
-    /// Regression for: `lunco_avatar::spawn_avatar_camera` spawns `Camera` +
-    /// `SceneCamera` and NO `Projection` — the render pipeline half (`Camera3d`,
-    /// which carries `Projection` as a required component) is attached later by
-    /// `lunco-render-bevy`'s `SceneCamera` binder, through `Commands`, so it lands
-    /// on a later flush (measured a full second later on a real scene load).
-    ///
-    /// `mark_terrain_visual_foci` filtered on `Added<Camera>` while its data query
-    /// demanded `&Projection`, so on the one tick the filter was true the component
-    /// did not exist yet — and `Added` never fires again. The camera the player
-    /// actually looks through therefore never got `TerrainVisualFocus`, so
-    /// `collect_terrain_detail_demands` produced NO visual focus at all: the
-    /// near-field error floor stayed 0, the opening cover build broke after one pass
-    /// (`required_focus_depth` is `None` with no demands), and the selection
-    /// signature became constant — so the idle gate and `settled_sig` both latched
-    /// and the terrain froze at its coarsest cover forever. Flying down to the
-    /// surface loaded no detail.
-    #[test]
-    fn camera_whose_projection_arrives_after_the_camera_still_becomes_a_focus() {
-        let mut app = App::new();
-        app.init_resource::<TerrainDetailDemands>()
-            .init_resource::<lunco_viewport_core::SceneViewport>()
-            .add_systems(
-                Update,
-                (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
-            );
-        let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
-        // EXACTLY `spawn_avatar_camera`'s shape: a bare `Camera`, no `Projection`.
-        let camera = app
-            .world_mut()
-            .spawn((
-                Camera {
-                    is_active: true,
-                    viewport: Some(Viewport {
-                        physical_size: UVec2::new(1920, 1080),
-                        ..default()
-                    }),
-                    ..default()
-                },
-                CellCoord::default(),
-                Transform::from_xyz(123.0, 10.0, -45.0),
-                ChildOf(grid),
-            ))
-            .id();
-        app.world_mut()
-            .resource_mut::<lunco_viewport_core::SceneViewport>()
-            .active_camera = Some(camera);
-
-        // Tick with the camera still render-free: nothing to mark yet, and
-        // crucially this is the tick that consumes `Added<Camera>`.
-        app.update();
-
-        // The `SceneCamera` binder catches up: `Camera3d` brings `Projection`.
-        app.world_mut()
-            .entity_mut(camera)
-            .insert(Camera3d::default());
-        app.update();
-
-        assert!(
-            app.world().get::<TerrainVisualFocus>(camera).is_some(),
-            "a camera that gains its projection after `Camera` must still be marked \
-             — `Added<Camera>` has already fired by then"
-        );
-        let demands = app.world().resource::<TerrainDetailDemands>();
-        assert_eq!(
-            demands.visual.len(),
-            1,
-            "the avatar camera must contribute a terrain-detail focus; with none the \
-             near-field error floor is 0 and the cover never refines"
-        );
-    }
-
-    #[test]
-    fn ecs_focus_marker_collects_only_active_perspective_cameras() {
-        let mut app = App::new();
-        app.init_resource::<TerrainDetailDemands>()
-            .init_resource::<lunco_viewport_core::SceneViewport>()
-            .add_systems(
-                Update,
-                (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
-            );
-        let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
-        let camera = app
-            .world_mut()
-            .spawn((
-                Camera {
-                    is_active: true,
-                    viewport: Some(Viewport {
-                        physical_size: UVec2::new(1920, 1080),
-                        ..default()
-                    }),
-                    ..default()
-                },
-                Camera3d::default(),
-                Projection::Perspective(default()),
-                CellCoord::default(),
-                Transform::from_xyz(123.0, 10.0, -45.0),
-                ChildOf(grid),
-            ))
-            .id();
-        app.world_mut()
-            .resource_mut::<lunco_viewport_core::SceneViewport>()
-            .active_camera = Some(camera);
-        let inactive_camera = app
-            .world_mut()
-            .spawn((
-                Camera {
-                    is_active: false,
-                    viewport: Some(Viewport {
-                        physical_size: UVec2::new(1920, 1080),
-                        ..default()
-                    }),
-                    ..default()
-                },
-                Camera3d::default(),
-                Projection::Perspective(default()),
-                CellCoord::default(),
-                Transform::IDENTITY,
-                ChildOf(grid),
-            ))
-            .id();
-
-        app.update();
-
-        assert!(app.world().get::<TerrainVisualFocus>(camera).is_some());
-        assert!(
-            app.world()
-                .get::<TerrainVisualFocus>(inactive_camera)
-                .is_some(),
-            "activation controls demand, not marker ownership"
-        );
-        let demands = app.world().resource::<TerrainDetailDemands>();
-        assert_eq!(demands.visual.len(), 1);
-        assert_eq!(demands.visual[0].position, DVec3::new(123.0, 10.0, -45.0));
-
-        // A stale renderable camera can temporarily retain `is_active` during
-        // a camera handoff. It is not the viewport owner and must not add a
-        // competing terrain-detail focus from its unrelated position.
-        app.world_mut().spawn((
-            Camera {
-                is_active: true,
-                viewport: Some(Viewport {
-                    physical_size: UVec2::new(1920, 1080),
-                    ..default()
-                }),
-                ..default()
-            },
-            Camera3d::default(),
-            Projection::Perspective(default()),
-            CellCoord::default(),
-            Transform::from_xyz(-300.0, 10.0, 900.0),
-            ChildOf(grid),
-            TerrainVisualFocus::default(),
-        ));
-        app.update();
-        assert_eq!(
-            app.world().resource::<TerrainDetailDemands>().visual.len(),
-            1
-        );
-    }
-
-    /// A scene camera may be nested below a moving rover or avatar rig. Its
-    /// `Transform` is then a mount-local offset, not a terrain-space position.
-    /// The terrain focus must use the fully composed BigSpace pose or CDLOD
-    /// keeps refining wherever that local offset happens to lie (commonly the
-    /// terrain origin) while the player stands on coarse ground elsewhere.
-    #[test]
-    fn nested_camera_detail_demand_uses_its_composed_world_pose() {
-        let mut app = App::new();
-        app.init_resource::<TerrainDetailDemands>()
-            .init_resource::<lunco_viewport_core::SceneViewport>()
-            .add_systems(
-                Update,
-                (mark_terrain_visual_foci, collect_terrain_detail_demands).chain(),
-            );
-        let grid = app.world_mut().spawn(Grid::new(1_000.0, 100.0)).id();
-        let rover_rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
-        let rover = app
-            .world_mut()
-            .spawn((
-                Transform::from_xyz(400.0, 0.0, -400.0).with_rotation(rover_rotation),
-                ChildOf(grid),
-            ))
-            .id();
-        let camera = app
-            .world_mut()
-            .spawn((
-                Camera {
-                    is_active: true,
-                    viewport: Some(Viewport {
-                        physical_size: UVec2::new(1920, 1080),
-                        ..default()
-                    }),
-                    ..default()
-                },
-                Camera3d::default(),
-                Projection::Perspective(default()),
-                Transform::from_xyz(0.0, 2.0, 5.0),
-                ChildOf(rover),
-            ))
-            .id();
-        app.world_mut()
-            .resource_mut::<lunco_viewport_core::SceneViewport>()
-            .active_camera = Some(camera);
-
-        app.update();
-
-        let demand = app
-            .world()
-            .resource::<TerrainDetailDemands>()
-            .visual
-            .first()
-            .copied()
-            .expect("active nested camera contributes a terrain-detail demand");
-        let expected_position =
-            DVec3::new(400.0, 0.0, -400.0) + rover_rotation.as_dquat() * DVec3::new(0.0, 2.0, 5.0);
-        let expected_forward = rover_rotation.as_dquat() * DVec3::NEG_Z;
-        assert!(
-            (demand.position - expected_position).length() < 1e-9,
-            "terrain focus used mount-local position {:?}, expected world position {expected_position:?}",
-            demand.position
-        );
-        assert!(
-            (demand.forward - expected_forward).length() < 1e-9,
-            "terrain focus used mount-local forward {:?}, expected world forward {expected_forward:?}",
-            demand.forward
-        );
-        assert!(
-            app.world().get::<TerrainVisualFocus>(camera).is_some(),
-            "the camera remains explicitly marked as the visual-detail authority"
-        );
-    }
-
-    #[test]
     fn retired_tile_survives_two_render_extractions_before_despawn() {
         let mut app = App::new();
         app.add_systems(Update, retire_terrain_tiles);
@@ -6582,7 +10750,7 @@ mod draw_partition_tests {
     }
 
     /// Zero returned edits ⇔ the cover is at its fixed point for these inputs —
-    /// the contract `LodTiles::settled_sig` latches on, so a budget-starved
+    /// the contract `LodView::settled_sig` latches on, so a budget-starved
     /// terrain stops re-ranking its refused split chains every frame while
     /// still reporting the starvation.
     #[test]
@@ -6625,6 +10793,55 @@ mod draw_partition_tests {
     // ── mesh cache (LRU + resident-derived cap) ──────────────────────────────
 
     #[test]
+    fn drawn_bounds_cover_fine_parent_and_stitch_hulls_and_reject_nonfinite_postings() {
+        let fine = [[-2.0, 1.0, -3.0], [4.0, 5.0, 6.0]];
+        let parent = [[-4.0, 8.0, 0.0], [0.0, -7.0, 9.0]];
+        assert_eq!(
+            terrain_draw_bounds(&fine, &parent),
+            Some(TerrainDrawBounds {
+                min: DVec3::new(-4.0, -7.0, -3.0),
+                max: DVec3::new(4.0, 8.0, 9.0),
+                parent_displacement: DVec3::new(4.0, 12.0, 3.0),
+            })
+        );
+        assert_eq!(terrain_draw_bounds(&[], &[]), None);
+        assert_eq!(terrain_draw_bounds(&fine, &[[f32::NAN; 3]; 2]), None);
+        assert_eq!(terrain_draw_bounds(&fine, &parent[..1]), None);
+    }
+
+    #[test]
+    fn mesh_byte_estimate_includes_every_streamed_vertex_attribute_and_index() {
+        let res = 3;
+        let vertices = res * res;
+        let mut mesh = grid_mesh(
+            vec![[0.0; 3]; vertices],
+            vec![[0.0, 1.0, 0.0]; vertices],
+            vec![[0.0; 2]; vertices],
+            vec![0; (res - 1) * (res - 1) * 6],
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, vec![[0.0; 3]; vertices]);
+        mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, vec![[0.0, 1.0, 0.0]; vertices]);
+        mesh.insert_attribute(ATTRIBUTE_MORPH_EDGE, vec![[0.0; 4]; vertices]);
+        assert_eq!(
+            tile_mesh_bytes(res),
+            mesh.get_vertex_buffer_size() + mesh.get_index_buffer_bytes().unwrap().len()
+        );
+        assert_eq!(measured_mesh_bytes(&mesh), tile_mesh_bytes(res));
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0; 3]; vertices + 1]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; vertices + 1]);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0; 2]; vertices + 1]);
+        mesh.insert_attribute(ATTRIBUTE_MORPH_TARGET, vec![[0.0; 3]; vertices + 1]);
+        mesh.insert_attribute(ATTRIBUTE_MORPH_NORMAL, vec![[0.0, 1.0, 0.0]; vertices + 1]);
+        mesh.insert_attribute(ATTRIBUTE_MORPH_EDGE, vec![[0.0; 4]; vertices + 1]);
+        assert_eq!(
+            measured_mesh_bytes(&mesh),
+            tile_mesh_bytes(res) + 72,
+            "boundary remesh vertices participate in admission even beyond the regular lattice"
+        );
+    }
+
+    #[test]
     fn mesh_cache_entry_cap_covers_the_resident_bound() {
         // T2: the cap must exceed one terrain's worst-case residents (cover +
         // parent fallbacks + coarse stand-ins) or the trim evicts the trailing
@@ -6646,16 +10863,24 @@ mod draw_partition_tests {
     #[test]
     fn mesh_cache_trims_lru_first_and_never_evicts_protected() {
         let mut cache = LodMeshCache::default();
+        let mut assets = Assets::<Mesh>::default();
         let terrain = Entity::PLACEHOLDER;
         let tile_res = terrain_quality().terrain_lod_tile_resolution;
-        let key = |x: u32| (terrain, c(3, x, 0), tile_res, None);
+        let key = |x: u32| (terrain, c(3, x, 0), tile_res);
+        let mut handles = Vec::new();
         for x in 0..4 {
-            cache.insert(key(x), Handle::default(), 0.0);
+            let handle = assets.add(Mesh::new(
+                bevy::mesh::PrimitiveTopology::TriangleList,
+                bevy::asset::RenderAssetUsages::default(),
+            ));
+            handles.push(handle.clone());
+            cache.insert(key(x), handle, 0.0, None, tile_mesh_bytes(tile_res));
         }
+        cache.begin_frame(HashSet::from([handles[3].id()]));
         // Touch 0 so 1 becomes the oldest unprotected entry.
         assert!(cache.get(&key(0)).is_some());
         // Trim to 2 entries; 3 stands in for the current frame's cover.
-        cache.trim(2, u64::MAX, |k| *k == key(3));
+        cache.trim(2, u64::MAX);
         assert_eq!(cache.map.len(), 2);
         assert!(
             cache.map.contains_key(&key(3)),
@@ -6665,17 +10890,143 @@ mod draw_partition_tests {
             cache.map.contains_key(&key(0)),
             "the most recently touched unprotected entry survives (LRU order)"
         );
-        // Byte accounting stays in step with the map through insert + trim.
         assert_eq!(
-            cache.bytes,
-            cache.map.values().map(|e| e.bytes).sum::<usize>()
+            cache.accounted_bytes(),
+            cache
+                .map
+                .values()
+                .map(|entry| entry.bytes as u64)
+                .sum::<u64>()
         );
         // The byte ceiling alone also forces eviction.
-        cache.trim(usize::MAX, tile_mesh_bytes(tile_res) as u64, |k| {
-            *k == key(3)
-        });
+        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.trim(usize::MAX, (tile_mesh_bytes(tile_res)) as u64);
         assert_eq!(cache.map.len(), 1);
         assert!(cache.map.contains_key(&key(3)));
+    }
+
+    #[test]
+    fn mesh_admission_keeps_invalidated_live_generations_and_counts_shared_handles_once() {
+        let mut assets = Assets::<Mesh>::default();
+        let mesh = |assets: &mut Assets<Mesh>| {
+            assets.add(Mesh::new(
+                bevy::mesh::PrimitiveTopology::TriangleList,
+                bevy::asset::RenderAssetUsages::default(),
+            ))
+        };
+        let old = mesh(&mut assets);
+        let fresh = mesh(&mut assets);
+        let mut cache = LodMeshCache::default();
+        let source = Entity::PLACEHOLDER;
+        let key = (source, QuadCoord::ROOT, 49);
+        let bytes = (tile_mesh_bytes(49)) as u64;
+        cache.insert(key, old.clone(), 0.0, None, bytes as usize);
+        cache.begin_frame(HashSet::from([old.id()]));
+        cache.drop_region(source, None, 10.0);
+        assert_eq!(
+            cache.accounted_bytes(),
+            bytes,
+            "invalidation cannot erase resident ownership"
+        );
+        assert!(!cache.admit_upload(bytes, bytes));
+        assert!(cache.admit_upload(bytes, bytes * 2));
+        cache.insert(key, fresh.clone(), 0.0, None, bytes as usize);
+        cache.insert(
+            (source, c(1, 0, 0), 49),
+            fresh.clone(),
+            0.0,
+            None,
+            bytes as usize,
+        );
+        assert_eq!(
+            cache.accounted_bytes(),
+            bytes * 2,
+            "shared views retain one mesh allocation"
+        );
+        cache.begin_frame(HashSet::from([fresh.id()]));
+        assert_eq!(
+            cache.accounted_bytes(),
+            bytes,
+            "retired handles leave accounting only after all live geometry releases them"
+        );
+        assert!(!cache.admit_upload(bytes, bytes));
+        cache.begin_frame(HashSet::new());
+        assert!(cache.admit_upload(bytes, bytes));
+        assert!(
+            cache.map.is_empty(),
+            "unreferenced cached aliases are evicted for admission"
+        );
+    }
+
+    #[test]
+    fn upload_limit_preserves_all_sources_and_newly_published_handles() {
+        let mut assets = Assets::<Mesh>::default();
+        let mut cache = LodMeshCache::default();
+        let bytes = (tile_mesh_bytes(49)) as u64;
+        let mut ids = HashSet::new();
+        for source in [Entity::from_bits(1), Entity::from_bits(2)] {
+            let handle = assets.add(Mesh::new(
+                bevy::mesh::PrimitiveTopology::TriangleList,
+                bevy::asset::RenderAssetUsages::default(),
+            ));
+            ids.insert(handle.id());
+            cache.insert(
+                (source, QuadCoord::ROOT, 49),
+                handle,
+                0.0,
+                None,
+                bytes as usize,
+            );
+        }
+        assert!(
+            !cache.admit_upload(bytes, bytes * 2),
+            "deferred tile spawns already own their admitted handles"
+        );
+        cache.begin_frame(ids);
+        assert!(
+            !cache.admit_upload(bytes, bytes),
+            "a lower cap cannot evict another source's residents"
+        );
+        assert_eq!(cache.map.len(), 2);
+        assert!(
+            !cache.admit_upload(bytes * 3, bytes * 2),
+            "an oversized cinematic tile remains an unsatisfied request"
+        );
+        assert_eq!(cache.map.len(), 2);
+    }
+
+    #[test]
+    fn drawn_surface_revision_tracks_readiness_and_refuses_exhaustion() {
+        let camera = Entity::from_bits(1);
+        let mut tiles = LodTiles::default();
+        let mut view = LodView::default();
+        assert_eq!(view.draw_revision, 0);
+        view.insert_slot(
+            QuadCoord::ROOT,
+            TileSlot {
+                resolution: 3,
+                half_extent: 1.0,
+                entity: camera,
+                r#gen: 0,
+                morph_end: 10.0,
+                ready: true,
+                drawn: true,
+                stitch_edges: [0.0; 4],
+            },
+        );
+        let inserted = view.draw_revision;
+        assert!(view.invalidate_material_readiness(camera));
+        assert!(view.draw_revision > inserted);
+        let invalidated = view.draw_revision;
+        assert!(!view.invalidate_material_readiness(camera));
+        assert_eq!(
+            view.draw_revision, invalidated,
+            "unchanged unavailable material does not wake identical collision sweeps"
+        );
+        view.draw_revision = u64::MAX;
+        view.bump_draw_revision();
+        tiles.views.insert(camera, view);
+        assert_eq!(tiles.draw_revision(camera), None);
     }
 
     #[test]

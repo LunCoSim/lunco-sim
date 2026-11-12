@@ -78,7 +78,7 @@ pub use loads::{
 };
 pub use node::IconNodeData;
 pub use palette::{DiagramProjectionLimits, PaletteSettings};
-pub use projection::ProjectionTask;
+pub use projection::{ProjectionDependencyWait, ProjectionOutcome, ProjectionTask};
 pub use pulse::{
     EdgePulseHandle, PulseEntry, PulseHandle, drive_pending_api_connections,
     drive_pending_api_focus,
@@ -315,6 +315,10 @@ pub struct CanvasDocState {
     /// or layout changes; it must never degrade into a blank canvas or a
     /// fabricated node.
     pub projection_error: Option<String>,
+    /// Source dependencies that are still loading for the next projection.
+    /// Its busy handle keeps the document lifecycle in Loading until a source
+    /// root change retries the projection or this wait reaches its deadline.
+    pub projection_wait: Option<ProjectionDependencyWait>,
     pub context_menu: Option<PendingContextMenu>,
     pub projection_task: Option<ProjectionTask>,
     /// Background decoration — the target class's own
@@ -400,6 +404,7 @@ impl Default for CanvasDocState {
             last_seen_target: None,
             target_unit_instance: None,
             projection_error: None,
+            projection_wait: None,
             context_menu: None,
             projection_task: None,
             background_diagram,

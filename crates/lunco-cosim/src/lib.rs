@@ -1402,7 +1402,7 @@ fn on_set_ports(
     let tick = cmd.tick;
     let command_id = active_id.get();
     let origin = active_id.origin();
-    let program_setpoint = authored_simulation_setpoint(origin);
+    let program_setpoint = authored_twin_program_setpoint(origin);
     let correlation_id = pending_request
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
@@ -1515,7 +1515,7 @@ fn on_set_ports_batch(
     let registry = registry.clone();
     let command_id = active_id.get();
     let origin = active_id.origin();
-    let program_setpoint = authored_simulation_setpoint(origin);
+    let program_setpoint = authored_twin_program_setpoint(origin);
     let correlation_id = pending_request
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
@@ -1587,27 +1587,32 @@ fn on_set_ports_batch(
     });
 }
 
-fn authored_simulation_setpoint(origin: Option<CommandOrigin>) -> bool {
+fn authored_twin_program_setpoint(origin: Option<CommandOrigin>) -> bool {
     matches!(
         origin,
         Some(CommandOrigin::Rhai { context, .. })
-            if context.clock == RuntimeClock::Simulation
-                && authored_simulation_route(context.route)
+            if context.route.is_some_and(authored_twin_program_route)
+                && matches!(
+                    (context.route.map(|route| route.cycle), context.clock),
+                    (Some(lunco_core::RuntimeCycle::Lifecycle), RuntimeClock::None)
+                        | (Some(lunco_core::RuntimeCycle::Simulation), RuntimeClock::Simulation)
+                )
     )
 }
 
-fn authored_simulation_route(route: Option<lunco_core::RuntimeRoute>) -> bool {
-    route.is_some_and(|route| {
-        route.scope == lunco_core::RuntimeScope::Twin
-            && route.cycle == lunco_core::RuntimeCycle::Simulation
-    })
+fn authored_twin_program_route(route: lunco_core::RuntimeRoute) -> bool {
+    route.scope == lunco_core::RuntimeScope::Twin
+        && matches!(
+            route.cycle,
+            lunco_core::RuntimeCycle::Lifecycle | lunco_core::RuntimeCycle::Simulation
+        )
 }
 
-fn authored_simulation_producer(producer: lunco_core_session::SessionInputProducer) -> bool {
+fn authored_twin_program_producer(producer: lunco_core_session::SessionInputProducer) -> bool {
     matches!(
         producer,
         lunco_core_session::SessionInputProducer::Rhai { route, .. }
-            if authored_simulation_route(route)
+            if route.is_some_and(authored_twin_program_route)
     )
 }
 
@@ -2006,7 +2011,7 @@ fn write_layered_inputs(
         world,
         &registry,
         prepared,
-        authored_simulation_setpoint(origin),
+        authored_twin_program_setpoint(origin),
     )
     .map_err(|(message, _)| message)
 }
@@ -2185,7 +2190,7 @@ fn on_commit_session_input_ports(
     let commit = trigger.event();
     let payload = commit.record().payload.clone();
     let targets = commit.targets().to_vec();
-    let program_setpoint = authored_simulation_producer(commit.record().producer);
+    let program_setpoint = authored_twin_program_producer(commit.record().producer);
     let target_gid = commit.record().target;
     let registry = registry.clone();
     commands.queue(move |world: &mut World| {
@@ -2571,8 +2576,35 @@ mod authority_input_release_tests {
     }
 
     #[test]
-    fn authored_twin_simulation_inputs_keep_the_program_hold_owner() {
-        assert!(authored_simulation_producer(
+    fn authored_twin_lifecycle_and_simulation_inputs_keep_the_program_hold_owner() {
+        let origin = |cycle, clock| {
+            let mut context = lunco_core::RuntimeExecutionContext::unclassified();
+            context.route = Some(lunco_core::RuntimeRoute::twin(cycle, 7));
+            context.clock = clock;
+            Some(lunco_core::CommandOrigin::Rhai {
+                context,
+                actor: Some(GlobalEntityId::from_raw(9)),
+                authority: None,
+                client_local: false,
+            })
+        };
+        assert!(authored_twin_program_setpoint(origin(
+            lunco_core::RuntimeCycle::Lifecycle,
+            RuntimeClock::None,
+        )));
+        assert!(authored_twin_program_setpoint(origin(
+            lunco_core::RuntimeCycle::Simulation,
+            RuntimeClock::Simulation,
+        )));
+        assert!(!authored_twin_program_setpoint(origin(
+            lunco_core::RuntimeCycle::Lifecycle,
+            RuntimeClock::Simulation,
+        )));
+        assert!(!authored_twin_program_setpoint(origin(
+            lunco_core::RuntimeCycle::Visualization,
+            RuntimeClock::Presentation,
+        )));
+        assert!(authored_twin_program_producer(
             lunco_core_session::SessionInputProducer::Rhai {
                 route: Some(lunco_core::RuntimeRoute::twin(
                     lunco_core::RuntimeCycle::Simulation,
@@ -2582,7 +2614,17 @@ mod authority_input_release_tests {
                 producer_id: None,
             }
         ));
-        assert!(!authored_simulation_producer(
+        assert!(authored_twin_program_producer(
+            lunco_core_session::SessionInputProducer::Rhai {
+                route: Some(lunco_core::RuntimeRoute::twin(
+                    lunco_core::RuntimeCycle::Lifecycle,
+                    7,
+                )),
+                actor: Some(GlobalEntityId::from_raw(9)),
+                producer_id: None,
+            }
+        ));
+        assert!(!authored_twin_program_producer(
             lunco_core_session::SessionInputProducer::Rhai {
                 route: Some(lunco_core::RuntimeRoute::twin(
                     lunco_core::RuntimeCycle::Command,
@@ -2592,7 +2634,7 @@ mod authority_input_release_tests {
                 producer_id: None,
             }
         ));
-        assert!(!authored_simulation_producer(
+        assert!(!authored_twin_program_producer(
             lunco_core_session::SessionInputProducer::ApiTransport { producer_id: 9 }
         ));
     }

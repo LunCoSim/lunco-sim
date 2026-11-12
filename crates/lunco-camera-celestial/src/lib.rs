@@ -29,7 +29,9 @@ impl Plugin for CelestialSurfaceCameraPlugin {
         );
         app.add_systems(
             PostUpdate,
-            update_celestial_clip_planes.after(TransformSystems::Propagate),
+            update_celestial_clip_planes
+                .after(TransformSystems::Propagate)
+                .before(bevy::camera::CameraUpdateSystems),
         );
     }
 }
@@ -40,36 +42,82 @@ impl Plugin for CelestialSurfaceCameraPlugin {
 /// camera and body share the same BigSpace frame. The generic math stays in
 /// `lunco-camera-core`; this adapter owns only the celestial-body query.
 fn update_celestial_clip_planes(
+    mut commands: Commands,
     mut q_camera: Query<
-        (&mut Projection, &GlobalTransform),
-        (With<Camera>, With<lunco_camera_core::AdaptiveNearPlane>),
+        (
+            Entity,
+            &mut Projection,
+            &GlobalTransform,
+            &lunco_camera_core::AdaptiveNearPlane,
+        ),
+        With<Camera>,
     >,
     q_bodies: Query<(&CelestialBody, &GlobalTransform)>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
-    for (mut projection, cam_gt) in q_camera.iter_mut() {
+    let mut failures = Vec::new();
+    for (entity, mut projection, cam_gt, source) in q_camera.iter_mut() {
         let Projection::Perspective(current) = &*projection else {
+            commands
+                .entity(entity)
+                .try_remove::<lunco_camera_core::AdaptiveNearPlane>();
             continue;
         };
         let cam_pos = cam_gt.translation().as_dvec3();
         let mut min_dist = f64::INFINITY;
         let mut max_far = 0.0_f64;
-        for (body, body_gt) in q_bodies.iter() {
-            let center_distance = cam_pos.distance(body_gt.translation().as_dvec3());
-            min_dist = min_dist.min(center_distance - body.radius_m);
-            max_far = max_far.max(center_distance + body.radius_m);
+        let mut invalid = !cam_pos.is_finite()
+            || lunco_camera_core::math::projection_clip_range(
+                f64::from(current.near),
+                f64::from(current.far),
+            )
+            .is_none();
+        for (body, body_gt) in &q_bodies {
+            let center = body_gt.translation().as_dvec3();
+            let distance = cam_pos.distance(center);
+            if !body.radius_m.is_finite()
+                || body.radius_m <= 0.0
+                || !center.is_finite()
+                || !distance.is_finite()
+            {
+                invalid = true;
+                break;
+            }
+            min_dist = min_dist.min(distance - body.radius_m);
+            max_far = max_far.max(distance + body.radius_m);
         }
-        let Some((near, far)) = lunco_camera_core::math::adaptive_clip_planes(min_dist, max_far)
-        else {
-            error!("[camera] cannot derive finite clip planes from celestial body bounds");
+        let next = (!invalid)
+            .then(|| lunco_camera_core::math::adaptive_clip_planes(min_dist, max_far, source))
+            .flatten();
+        let Some((near, far)) = next else {
+            failures.push(lunco_core::RuntimeDiagnostic{
+                code:"camera-clipping".into(),severity:lunco_core::DiagnosticSeverity::Error,
+                producer:"camera-clipping".into(),subject:format!("{entity:?}"),
+                message:"camera clipping source range or celestial bounds are invalid or exceed projection range".into(),
+            });
             continue;
         };
-        let moved = (current.near - near).abs() > near.abs() * 1e-4
-            || (current.far - far).abs() > far.abs() * 1e-4;
-        if moved {
+        let changed = (current.near - near).abs() > near.abs() * 1e-4
+            || (current.far - far).abs() > far.abs() * 1e-4
+            || f64::from(current.near) < source.source_near_m
+            || f64::from(current.far) < source.source_far_m;
+        if changed {
             if let Projection::Perspective(perspective) = &mut *projection {
                 perspective.near = near;
                 perspective.far = far;
             }
+        }
+    }
+    failures.sort_by(|a, b| a.subject.cmp(&b.subject));
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        let previous = diagnostics
+            .findings
+            .iter()
+            .filter(|finding| finding.producer == "camera-clipping")
+            .cloned()
+            .collect::<Vec<_>>();
+        if previous != failures {
+            diagnostics.replace_producer("camera-clipping", failures);
         }
     }
 }

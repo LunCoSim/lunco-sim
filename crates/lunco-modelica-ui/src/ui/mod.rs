@@ -634,7 +634,7 @@ impl Plugin for ModelicaUiPlugin {
             // and never recovered).
             .add_observer(panels::package_browser::on_source_bundle_became_ready)
             .add_observer(panels::package_browser::on_library_editor_index_became_ready)
-            .add_observer(panels::package_browser::on_source_root_became_ready)
+            .add_observer(panels::package_browser::on_source_root_changed)
             .add_systems(Update, cleanup_removed_simulators)
             .add_systems(Update, link_added_simulators)
             // `drain_document_changes` + the A3 journal-wire auto-bridge moved

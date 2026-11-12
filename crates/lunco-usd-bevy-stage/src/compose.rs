@@ -87,19 +87,21 @@ pub async fn fetch_layer_closure_with_limits(
     .await
 }
 
-/// Prepare a fresh closure through the registered readers used by the loader.
-/// One-shot queries retain their own result without installing a cached stage.
-pub async fn fetch_layer_closure_from_asset_reader(
+/// Prepare a fresh source closure through the registered readers used by the
+/// loader. The input retains the document's captured root and session layers;
+/// transitive dependencies are fetched through the same asset owners as normal
+/// stage loading. Exact source identifiers in `source_overrides` use the
+/// current root bytes of open documents before the registered asset reader.
+pub async fn fetch_stage_recipe_from_asset_reader(
     asset_server: &AssetServer,
     origin: AssetPath<'static>,
-    root_bytes: Vec<u8>,
+    input: StageRecipe,
+    source_overrides: &HashMap<String, Vec<u8>>,
     roots: Option<&lunco_assets_core::TwinRoots>,
     limits: StageClosureLimits,
 ) -> Result<StageRecipe> {
-    let root_id = lunco_assets_core::asset_path::anchor_of(&origin);
-    let input = StageRecipe::new(root_id.clone(), HashMap::from([(root_id, root_bytes)]));
     Ok(fetch_layer_closure_inner(
-        &mut ClosureReader::Registered(asset_server),
+        &mut ClosureReader::Registered(asset_server, source_overrides),
         input,
         limits,
         roots,
@@ -109,9 +111,32 @@ pub async fn fetch_layer_closure_from_asset_reader(
     .recipe)
 }
 
+/// Prepare a root-only source input through the registered readers used by the
+/// loader. Use [`fetch_stage_recipe_from_asset_reader`] when captured session
+/// layers or authored document layers must be retained.
+pub async fn fetch_layer_closure_from_asset_reader(
+    asset_server: &AssetServer,
+    origin: AssetPath<'static>,
+    root_bytes: Vec<u8>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+    limits: StageClosureLimits,
+) -> Result<StageRecipe> {
+    let root_id = lunco_assets_core::asset_path::anchor_of(&origin);
+    let input = StageRecipe::new(root_id.clone(), HashMap::from([(root_id, root_bytes)]));
+    fetch_stage_recipe_from_asset_reader(
+        asset_server,
+        origin,
+        input,
+        &HashMap::new(),
+        roots,
+        limits,
+    )
+    .await
+}
+
 enum ClosureReader<'a, 'b> {
     Loader(&'a mut LoadContext<'b>),
-    Registered(&'a AssetServer),
+    Registered(&'a AssetServer, &'a HashMap<String, Vec<u8>>),
 }
 
 async fn fetch_layer_closure_inner(
@@ -166,15 +191,23 @@ async fn fetch_layer_closure_inner(
                     );
                     raw
                 }
-                ClosureReader::Registered(server) => read_registered_asset_bytes(
-                    server,
-                    &path,
-                    limits.max_bytes.saturating_sub(total_bytes),
-                )
-                .await
-                .map_err(|error| {
-                    anyhow!("required USD session `{identifier}` could not be read: {error}")
-                })?,
+                ClosureReader::Registered(server, source_overrides) => {
+                    if let Some(bytes) = source_overrides.get(identifier) {
+                        bytes.clone()
+                    } else {
+                        read_registered_asset_bytes(
+                            server,
+                            &path,
+                            limits.max_bytes.saturating_sub(total_bytes),
+                        )
+                        .await
+                        .map_err(|error| {
+                            anyhow!(
+                                "required USD session `{identifier}` could not be read: {error}"
+                            )
+                        })?
+                    }
+                }
             };
             total_bytes = total_bytes
                 .checked_add(raw.len())
@@ -271,31 +304,34 @@ async fn fetch_layer_closure_inner(
                     );
                     join_all_ordered(reads).await
                 }
-                ClosureReader::Registered(asset_server) => {
-                    let reads =
-                        request_batch.iter().map(
-                            |(
-                                referring_id,
-                                child_id,
-                                child_path,
-                                child_depth,
-                                dependency_order,
-                            )| async {
+                ClosureReader::Registered(asset_server, source_overrides) => {
+                    let asset_server = *asset_server;
+                    let reads = request_batch.iter().map(
+                        |(referring_id, child_id, child_path, child_depth, dependency_order)| {
+                            let override_bytes = source_overrides.get(child_id).cloned();
+                            async move {
+                                let result = match override_bytes {
+                                    Some(bytes) => Ok(bytes),
+                                    None => {
+                                        read_registered_asset_bytes(
+                                            asset_server,
+                                            child_path,
+                                            limits.max_bytes.saturating_sub(total_bytes),
+                                        )
+                                        .await
+                                    }
+                                };
                                 (
                                     *dependency_order,
                                     referring_id.clone(),
                                     child_id.clone(),
                                     *child_depth,
                                     None,
-                                    read_registered_asset_bytes(
-                                        asset_server,
-                                        child_path,
-                                        limits.max_bytes.saturating_sub(total_bytes),
-                                    )
-                                    .await,
+                                    result,
                                 )
-                            },
-                        );
+                            }
+                        },
+                    );
                     join_all_ordered(reads).await
                 }
             };
@@ -528,6 +564,69 @@ mod tests {
         assert_eq!(reverse_application, [0, 1, 2, 3]);
         assert_eq!(authored_application, [0, 1, 2, 3]);
         assert_eq!(reverse_closure, authored_closure);
+    }
+
+    #[test]
+    fn open_document_root_overrides_registered_reader_during_closure_fetch() {
+        use bevy::asset::{
+            AssetApp, AssetPlugin,
+            io::{
+                AssetSourceBuilder, AssetSourceId,
+                memory::{Dir, MemoryAssetReader},
+            },
+        };
+        use bevy::prelude::{App, MinimalPlugins};
+        use std::path::Path;
+
+        let files = Dir::default();
+        files.insert_asset_text(
+            Path::new("child.usda"),
+            "#usda 1.0\ndef Xform \"DiskVersion\" {}\n",
+        );
+        let root = tempfile::tempdir().unwrap();
+        let roots = lunco_assets_core::TwinRoots::default();
+        let authority = roots
+            .register_authority_with_display_name("fixture", "Fixture", root.path())
+            .unwrap();
+        let root_id = lunco_assets_core::twin_uri(&authority, "root.usda");
+        let child_id = lunco_assets_core::twin_uri(&authority, "child.usda");
+        let root_bytes = format!("#usda 1.0\n(\n    subLayers = [@{child_id}@]\n)\n").into_bytes();
+        let open_document_bytes = b"#usda 1.0\ndef Xform \"OpenDocumentVersion\" {}\n".to_vec();
+
+        let mut app = App::new();
+        app.register_asset_source(
+            AssetSourceId::Name(lunco_assets_core::TWIN_SCHEME.into()),
+            AssetSourceBuilder::new(move || {
+                Box::new(MemoryAssetReader {
+                    root: files.clone(),
+                })
+            }),
+        );
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.finish();
+        app.cleanup();
+        let server = app.world().resource::<AssetServer>();
+        let origin =
+            lunco_assets_core::asset_path::load_asset_path(&root_id, None, Some(&roots), None)
+                .unwrap();
+        let input = StageRecipe::new(
+            root_id.clone(),
+            HashMap::from([(root_id.clone(), root_bytes)]),
+        );
+        let overrides = HashMap::from([(child_id.clone(), open_document_bytes.clone())]);
+
+        let prepared =
+            bevy::tasks::futures_lite::future::block_on(fetch_stage_recipe_from_asset_reader(
+                server,
+                origin,
+                input,
+                &overrides,
+                Some(&roots),
+                StageClosureLimits::default(),
+            ))
+            .unwrap();
+
+        assert_eq!(prepared.bytes.get(&child_id), Some(&open_document_bytes));
     }
 }
 

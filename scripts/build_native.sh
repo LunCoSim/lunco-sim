@@ -5,14 +5,11 @@
 # Builds a LunCoSim desktop binary (lunica or luncosim) for the
 # host platform (Linux, macOS, Windows) and assembles a self-contained
 # distributable directory containing the binary, the assets/ tree with the
-# relevant cache subdirs (fonts) packed INSIDE it, and a
-# launcher script.
+# manifest-declared bundle files, and a launcher script.
 #
-# The packed cache lives at assets/.cache/ because that is the second root the
-# `lunco://` resolver reads (assets/ → assets/.cache/ → the machine-wide cache
-# — see lunco_assets::cache_roots). A package therefore carries its own payload
-# and resolves it with no environment variable and no network: running the
-# binary directly works exactly as running the launcher does.
+# Bundled files live in the normal `assets/` tree; downloaded runtime datasets
+# use the shared `~/.lunco/cache` and Twin datasets use the Twin's `.cache`.
+
 #
 # Usage:
 #     ./scripts/build_native.sh <binary> [--release] [--package|--velopack] [options]
@@ -28,8 +25,8 @@
 #     --version <semver>  SemVer2 version used by Velopack (or env override)
 #     --msi-version <version>  Ordered Windows Installer version (or LUNCO_MSI_VERSION)
 #     --target <triple>  Cross-compile target (default: host triple)
-#     --no-cache         Skip bundling assets/.cache/ subdirs (binary + assets only)
-#     --skip-download    Skip the cache asset download step (use existing global cache)
+#     --no-cache         Skip manifest-declared bundle files (binary + assets only)
+#     --skip-download    Skip the cache asset download step (use existing shared cache)
 #     --no-assets        Skip bundling the assets/ tree
 #     --out <dir>        Output directory (default: dist/<binary>-<platform>-<arch>/)
 #     --extra <args>     Pass extra args to cargo build
@@ -54,7 +51,7 @@
 #   dist/<binary>-<platform>-<arch>/
 #     <binary>[.exe]          — the compiled binary
 #     assets/                  — scene files, config, models, shaders
-#     assets/.cache/           — packaged UI fonts
+#     assets/fonts/             — packaged UI font
 #     run.sh / run.bat         — launcher
 #     README.md                — quick-start for end users
 # ============================================================================
@@ -185,9 +182,9 @@ sync_dir() {
     local src="$1" dest="$2" no_delete="${3:-}"
     if command -v rsync >/dev/null 2>&1; then
         if [ "$no_delete" = "no-delete" ]; then
-            rsync -a --exclude='.lunco/' --exclude='history/' "$src" "$dest"
+            rsync -a --exclude='.lunco/' --exclude='history/' --exclude='.cache/' "$src" "$dest"
         else
-            rsync -a --delete --exclude='.lunco/' --exclude='history/' "$src" "$dest"
+            rsync -a --delete --exclude='.lunco/' --exclude='history/' --exclude='.cache/' "$src" "$dest"
         fi
         return
     fi
@@ -211,9 +208,11 @@ sync_dir() {
         return 1
     fi
 
-    # The fallback cannot exclude source paths; prune session state after its
-    # successful copy, exactly matching rsync's exclusion rule.
-    find "$dest" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
+    # The fallback cannot exclude source paths; prune runtime state and local
+    # caches after its successful copy, matching the rsync exclusion rule.
+    find "$dest" -type d \
+        \( -name '.lunco' -o -name 'history' -o -name '.cache' \) -prune \
+        -exec rm -rf {} +
 }
 
 # ── Download cache assets for a binary ────────────────────────────────────
@@ -228,7 +227,7 @@ download_cache_for() {
     cache_dir="$(resolve_cache_dir)"
     mkdir -p "$cache_dir"
     if [ -z "$cache_dir" ]; then
-        warn "Unable to resolve the OS-global cache — cannot download assets. Set LUNCOSIM_CACHE."
+        warn "Unable to resolve the shared .lunco cache — cannot download assets. Set LUNCOSIM_CACHE."
         return 0
     fi
     info "Downloading cache assets for $binary → $cache_dir"
@@ -251,9 +250,8 @@ write_launcher_unix() {
     local launcher="$dir/run.sh"
     cat > "$launcher" <<EOF
 #!/usr/bin/env bash
-# Launcher for $binary. It only enters the package directory: the bundled data
-# lives in assets/.cache/, which the app resolves on its own, so running the
-# binary directly behaves identically to running this script.
+# Launcher for $binary. It only enters the package directory; bundled files
+# live in assets/, so running the binary directly behaves identically to this script.
 cd "\$(dirname "\$0")"
 exec "./$binary" "\$@"
 EOF
@@ -385,12 +383,12 @@ Or run the binary directly (from this directory):
 
 - \`$binary\` — the application binary
 - \`assets/\` — scene files, config, models, shaders
-- \`assets/.cache/\` — packaged UI fonts
+- \`assets/fonts/\` — packaged UI font
 - \`docs/\` — architecture docs, tutorials, app guides
 - \`skills/\` — project-level agent skills (runbook workflows)
 - \`AGENTS.md\` — AI agent guidelines for working on the codebase
 - \`icons/\` — native artwork and Linux hicolor icons used by the package
-- \`run.sh\` / \`run.bat\` — launcher that sets the cache path
+- \`run.sh\` / \`run.bat\` — launcher for the staged application
 
 ## Updates
 
@@ -425,15 +423,10 @@ EOF
 
 ## Cache directory
 
-Bundled data lives in \`assets/.cache/\` and is found automatically — it is
-the second place the app looks for any asset, after \`assets/\` itself. No
-environment variable is involved, so running the binary directly is the same
-as running the launcher.
-
-Anything not bundled (and anything you download from Settings ▸ Data & libraries) comes from the shared machine cache:
-  - Linux:   ~/.cache/lunco/
-  - macOS:   ~/Library/Caches/lunco/
-  - Windows: %LOCALAPPDATA%\\lunco\\
+Downloaded engine assets and processed datasets use the shared cache at
+\`~/.lunco/cache/\`. Twin-owned downloads and derived files stay in that
+Twin's \`.cache/\`. Set \`LUNCOSIM_CACHE\` to choose another shared cache
+location.
 
 Populate it with: \`cargo run -p lunco-assets -- download\`
 
@@ -675,6 +668,9 @@ info "Binary staged: $BIN_NAME ($(du -h "$OUT_DIR/$BIN_NAME" | cut -f1))"
 if [ "$NO_ASSETS" -eq 0 ] && [ -d "$PROJECT_DIR/assets" ]; then
     info "Copying assets/ → $OUT_DIR/assets/"
     sync_dir "$PROJECT_DIR/assets/" "$OUT_DIR/assets/"
+    find "$OUT_DIR/assets" -type d \
+        \( -name '.lunco' -o -name 'history' -o -name '.cache' \) -prune \
+        -exec rm -rf {} +
 else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
 fi
@@ -703,25 +699,24 @@ if [ "$NO_ASSETS" -eq 0 ]; then
     fi
 fi
 
-# Stage manifest-declared package artifacts into assets/.cache/ — the resolver's
-# second root, so a package finds its own payload without LUNCOSIM_CACHE and
-# without a launcher. The manifest decides what belongs to this binary; user
-# datasets such as Earth/Moon imagery have no bundle target and cannot enter.
-PACKED_CACHE="$OUT_DIR/assets/.cache"
+# Stage manifest-declared bundle files into the normal engine asset tree. The
+# manifest decides what belongs to this binary; user datasets such as Earth and
+# Moon imagery have no bundle target and stay in the shared global cache.
+ASSET_DESTINATION="$OUT_DIR/assets"
 if [ "$NO_CACHE" -eq 0 ]; then
     CACHE_SRC="$(resolve_cache_dir)"
     if [ -n "$CACHE_SRC" ] && [ -d "$CACHE_SRC" ]; then
-        info "Staging manifest-declared artifacts → $PACKED_CACHE/"
+        info "Staging manifest-declared bundle files → $ASSET_DESTINATION/"
         cargo run -q -p lunco-assets -- stage \
             --binary "${BINARY}-native" \
             --cache "$CACHE_SRC" \
-            --destination "$PACKED_CACHE"
+            --destination "$ASSET_DESTINATION"
     else
         error "No cache directory found — required bundle artifacts cannot be staged"
         exit 1
     fi
 else
-    info "Skipping packed cache (--no-cache)"
+    info "Skipping bundle files (--no-cache)"
 fi
 
 # Write launcher script

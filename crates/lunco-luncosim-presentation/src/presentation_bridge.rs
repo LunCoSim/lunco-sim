@@ -25,10 +25,13 @@ pub(crate) fn register(app: &mut App) {
         );
     app.add_systems(
         Update,
-        (
-            report_terrain_stream_status,
-            report_terrain_generation_status,
-        )
+        report_terrain_generation_status
+            .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
+    );
+    app.add_systems(
+        PostUpdate,
+        report_terrain_stream_status
+            .after(lunco_terrain_surface::stream_viz::TerrainPresentationSet::PublishDemands)
             .run_if(resource_exists::<lunco_status_core::status_bus::StatusBus>),
     );
     app.add_systems(
@@ -571,11 +574,11 @@ fn mirror_recording_to_terrain_frame_driven(
 /// [`StatusBus`](lunco_status_core::status_bus::StatusBus) so scene-open tile
 /// baking is visible ("streaming terrain N/M" + progress bar) instead of an
 /// unexplained black viewport. The active progress entry is the sole live
-/// streaming state; once it clears, publish the current terminal count so the
-/// status bar cannot fall back to an obsolete start message.
+/// streaming state; terminal counts are retained only when the user opts in.
 fn report_terrain_stream_status(
     status: Res<lunco_terrain_surface::TerrainStreamStatus>,
     derived: Res<lunco_terrain_surface::TerrainDerivedStatus>,
+    settings: Option<Res<lunco_settings::TerrainSettings>>,
     // `Option`: the `ui` FEATURE is compile-time, but `--no-ui` headless is a
     // RUNTIME choice on the same binary — the workbench (and its `StatusBus`)
     // is simply not added there, and a bare `ResMut` panics the whole app.
@@ -589,7 +592,7 @@ fn report_terrain_stream_status(
     // render-material publication finishes. Keep the typed live state active
     // until both fulfilment dimensions settle; otherwise the readiness gate
     // sees a false idle transition and the overlay disappears too early.
-    let streaming = status.wanted > 0 && (status.resident < status.wanted || status.pending > 0);
+    let streaming = status.pending > 0 || (status.wanted > 0 && status.resident < status.wanted);
     let completed = mirror.streaming
         && status.wanted > 0
         && status.resident >= status.wanted
@@ -620,7 +623,11 @@ fn report_terrain_stream_status(
     } else {
         bus.remove_progress(STREAM_SOURCE);
     }
-    if completed {
+    if completed
+        && settings
+            .as_deref()
+            .is_some_and(|settings| settings.show_streaming_events)
+    {
         bus.push(
             STREAM_SOURCE,
             lunco_status_core::status_bus::StatusLevel::Info,
@@ -672,6 +679,7 @@ mod terrain_status_tests {
             ..Default::default()
         })
         .insert_resource(lunco_terrain_surface::TerrainDerivedStatus::default())
+        .insert_resource(lunco_settings::TerrainSettings::default())
         .insert_resource(lunco_status_core::status_bus::StatusBus::default())
         .insert_resource(TerrainStatusMirrorState::default())
         .add_systems(Update, report_terrain_stream_status);
@@ -756,11 +764,32 @@ mod terrain_status_tests {
                 bus.active_progress()
                     .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE)
             );
-            let history: Vec<_> = bus.history().collect();
-            assert_eq!(history.len(), 1);
-            assert_eq!(history[0].message, "Terrain streaming ready (2/2)");
+            assert!(
+                bus.history().next().is_none(),
+                "streaming updates are off by default"
+            );
         }
 
+        app.world_mut()
+            .resource_mut::<lunco_settings::TerrainSettings>()
+            .show_streaming_events = true;
+        app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>()
+            .pending = 1;
+        app.update();
+        app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>()
+            .pending = 0;
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .history()
+                .next()
+                .unwrap()
+                .message,
+            "Terrain streaming ready (2/2)"
+        );
         app.update();
         assert_eq!(
             app.world()
@@ -769,6 +798,46 @@ mod terrain_status_tests {
                 .count(),
             1,
             "a settled terrain must not publish duplicate terminal events"
+        );
+        app.world_mut()
+            .resource_mut::<lunco_settings::TerrainSettings>()
+            .show_streaming_events = false;
+        app.world_mut()
+            .resource_mut::<lunco_status_core::status_bus::StatusBus>()
+            .push(
+                lunco_status_core::status_bus::TERRAIN_SOURCE,
+                lunco_status_core::status_bus::StatusLevel::Warn,
+                "Terrain warning",
+            );
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .history()
+                .any(|event| event.message == "Terrain warning")
+        );
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() =
+            lunco_terrain_surface::TerrainStreamStatus {
+                pending: 1,
+                selection_pending: 1,
+                ..Default::default()
+            };
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .active_progress()
+                .any(|event| event.source == lunco_status_core::status_bus::TERRAIN_SOURCE),
+            "a newly consumed output blocks capture before its first cover is selected"
+        );
+        *app.world_mut()
+            .resource_mut::<lunco_terrain_surface::TerrainStreamStatus>() = Default::default();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<lunco_status_core::status_bus::StatusBus>()
+                .active_progress()
+                .all(|event| event.source != lunco_status_core::status_bus::TERRAIN_SOURCE)
         );
     }
 }
@@ -886,6 +955,7 @@ fn report_terrain_generation_status(
 /// both consumers on this shared mirror avoids dropping readiness signals.
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
     projecting: Query<(), With<lunco_usd_bevy_scene::UsdSceneProjectionQueued>>,
@@ -918,15 +988,23 @@ fn report_scene_spawn_status(
         return;
     }
     if let Some(g) = in_flight {
+        let source =
+            lunco_assets_core::asset_path::source_uri_for_address(&g.path, roots.as_deref());
+        let path = match source {
+            Ok(path) => path,
+            Err(error) => {
+                warn!("[scene-status] cannot resolve the public scene source URI: {error}");
+                bus.remove_progress(VISUAL_SOURCE);
+                bus.set_progress(SOURCE, "scene source unavailable", 0, 0);
+                return;
+            }
+        };
         let message = if projecting > 0 {
-            format!("projecting scene {} ({projecting} prims queued)", g.path)
+            format!("projecting scene {path} ({projecting} prims queued)")
         } else if pending_meshes > 0 {
-            format!(
-                "loading scene {} (streaming {pending_meshes} meshes)",
-                g.path
-            )
+            format!("loading scene {path} (streaming {pending_meshes} meshes)")
         } else {
-            format!("loading scene {}", g.path)
+            format!("loading scene {path}")
         };
         // `total = 0` is the bus's "indeterminate" encoding — the number of
         // descendants can grow as each projected prim exposes its children.

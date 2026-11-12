@@ -66,6 +66,12 @@ For a camera, compose the selected camera's authoritative f64 pose into the
 persistent `WorldGrid` and update the grid-direct `OriginAnchor`'s
 `(CellCoord, Transform)` split. `OriginAnchor` is the sole owner of
 `FloatingOrigin`; cameras never receive or transfer that marker. For a
+navigation precision check, use `RenderPrecisionQuery` and the anchor's typed
+`RenderOriginController` lease. Certify future native rebasing as well as the
+current transform; camera travel alone cannot bound an origin-cell jump. Include
+nested grid remainder narrowing and GPU arithmetic in the declared camera skin
+budget, and verify against actual native propagation across a cell boundary.
+For a
 site-anchored scene, celestial placement mounts only the authored site root.
 The root becomes the nested site `Grid` and `ActivePhysicsFrame` as soon as its
 `SiteAnchor` is projected, then is atomically migrated beneath the matching
@@ -337,9 +343,23 @@ not rebind possession. `camera.follow` exposes subject identity, authored follow
 mode, grid-frame orientation, body-frame motion, rig settings and obstruction
 facts to a Twin-scoped Rhai policy. Return presentation decisions, including
 interpolation weights, rather than writing private spatial state. Rust retains
-frame conversion and collision ownership. A policy can choose offsets and easing
+frame conversion and collision ownership. The spring arm checks both scene
+colliders and the analytic DEM in the active physics frame, since the collider
+ring does not cover a long boom. A policy can choose offsets and easing
 per vessel without a Rust vessel-type dispatch. See
 [the camera follow contract](../../docs/architecture/camera-follow-policy.md).
+
+Free-flight movement, scroll transit and follow booms sweep a lens-centred sphere
+against the full composed terrain in the active physics frame and shape-cast
+native props. Native DEM collider realizations are excluded from this camera
+query. Cast the physical radius and apply skin as a directional contact pullback;
+an enlarged collision shell can block clear tangent departure. Recast every
+projected slide against all sources and props. Source-safe travel also checks the retained presented mesh, stitch and
+morph context. Pending geometry holds the pose and requests refinement; invalid
+geometry or exhausted capacity rejects motion visibly. Lateral input adds no
+automatic upward step; contact-plane sliding follows actual source/prop contacts.
+The Twin's explicit through-soil opt-out retains its
+existing owner. Read the reflected `CameraCollisionEnvelope` to measure clearance.
 
 Verify changes with physics held: live distance/height/angle/mode updates,
 invalid-batch rejection without partial mutation, policy fault/diagnostic/recovery,

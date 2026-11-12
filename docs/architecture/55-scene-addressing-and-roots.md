@@ -2,21 +2,6 @@
 
 > Status: Active · Audience: contributors on scene loading, twins, and path resolution
 >
-> Supersedes the former ad-hoc "promote an out-of-assets path" loader.
-
-## The former failure mode
-
-Historically, opening a scene outside the workspace `assets/` directory failed:
-
-```
-WARN [scene] `/home/rod/Documents/models/summer_space_school/sim/scenes/traverse.usda`
-     is outside assets dir — load it via the Twin (`twin://`) source
-```
-
-The runtime now resolves the owning root before loading and reports an invalid
-root visibly. The rest of this document is the current contract; the historical
-failure is retained only to explain why the boundary exists.
-
 ## Address identities and the boundary
 
 A scene enters the runtime in one of two address forms. A filesystem path is an
@@ -27,7 +12,8 @@ scene lifecycle starts:
 |---|---|---|
 | bare relative (`scenes/x.usda`) | *implicitly* `assets/` | authoring/CLI input only; never a `LoadScene` address |
 | `lunco://<rel>` | the engine asset library | shipped/portable refs |
-| `twin://<name>/<rel>` | a registered Twin root | the Twin-open flow |
+| `twin://<source-identity>/<rel>` | a stable Twin source | scene UI and user commands |
+| `twin://<authority>/<rel>` | a registered Twin mount | internal asset loading |
 | absolute fs path | nothing | **every user-facing picker** |
 
 The last is what a human always has — a file dialog, a CLI arg, a drag-drop —
@@ -53,14 +39,6 @@ observer (`lunco-usd-commands/src/lib.rs`) both resolve the owning root and ente
 The root resolver and async Twin scan are shared; only the entry-point adapter
 differs (startup configuration versus the typed `OpenFile` command).
 
-### The root cause
-
-`assets/` is **privileged**. It is the default `AssetSource`; everything else is
-a second-class citizen needing a "promotion" step. Every branch of the form
-"…but what if it's outside assets?" descends from that asymmetry. Adding a
-promotion path (as an earlier patch in this branch did) preserves the asymmetry
-and adds a fourth conversion site. It is the wrong direction.
-
 ## Principle
 
 > There is exactly one question: **given a path a user chose, what is its root,
@@ -69,12 +47,17 @@ and adds a fourth conversion site. It is the wrong direction.
 Two corollaries, both non-negotiable:
 
 **Every scene address is scheme-qualified.** Bare relative paths do not survive
-past the boundary. There are exactly two schemes:
+past the boundary. User-facing scene commands accept stable source URIs:
 
 | Scheme | Root | Use |
 |---|---|---|
 | `lunco://` | the workspace asset library (`assets/`) | **all shipped/in-tree assets** |
-| `twin://<root>/…` | a registered user root (Twin or Folder) | anything the user opened |
+| `twin://<source-identity>/…` | a registered Twin source | anything the user opened |
+
+The asset reader uses `twin://<authority>/…` internally for each admitted
+mount. The user-facing source URI resolves to that address at scene-command
+admission. The authority stays out of status text, scene menus, and
+`CurrentScenePath`.
 
 **`assets/` is addressed via `lunco://`, never as the implicit default.** It is
 one root among several with no special powers. Its content is reached by
@@ -117,33 +100,102 @@ pub fn root_for_file(file: &Path) -> PathBuf   // nearest twin.toml ancestor, el
 Implemented. The services `load_startup_scene` and the interactive open path both use this
 resolver; neither performs its own ancestor walk.
 
-### 3. Mount addresses and stable source identity
+### 3. Stable source URIs and internal mount leases
 
-`TwinRoots` owns both the load authority for one mount lifetime and its stable
-logical source name. Simultaneous roots with the same requested logical name
-are disambiguated as `name-2`, `name-3`, … . Repeated admission of the same live
-root/name is idempotent. Unmount removes the root and composed overlays; a
-reopened folder receives a new load authority even when its logical name is
-unchanged. No retired load authority is rebound, so Bevy's same-path asset
-cache and late readers cannot supply a replacement Twin with outgoing bytes.
+The user-facing scene URI is stable across reloads and Twin reopenings:
+`twin://<source-identity>/<relative-path>`. The loading notice, scenario-menu
+entries and `CurrentScenePath` publish this address, never the asset-cache
+authority. Generic simulation hold reasons stay pathless; detailed
+`/api/ready` scene-load labels publish the stable source URI. The readiness
+owner converts its internal load lease with `source_uri_for_address` before
+creating the ticket and uses a generic `Twin scene` label if that conversion is
+unavailable. The same displayed URI is accepted by `LoadScene` after reopening.
+`lunco_assets_core::asset_path::source_uri` owns conversion from a load address;
+`load_source_uri` resolves a user command against the currently mounted source
+before scene-transition admission. The command rejects internal mount authorities,
+including live ones; only a stable logical source identity is accepted. Unknown
+sources are rejected before teardown. A logical source identity that collides
+with a current or retired mount authority is rejected at mount admission.
+Background readers retain exact mount leases rather than resolving public
+addresses again after their owner retires.
 
-Callers must use the authority returned by registration for `twin://` loads,
-document coordinates, overlays, relative dependencies, and Rhai imports.
+`TwinRoots` assigns a fresh opaque UUID authority for each mount lifetime and
+keeps source identity and display metadata separately. The authority remains
+inside the Rust asset owner: Twin lifecycle hooks, Twin policy actions, and
+Twin-level scripting APIs do not receive it. The lifecycle owner binds its
+known workspace Twin to reflected commands that declare a typed `twin_id`
+field. Application-level selection may use that workspace ID; Twin policy does
+not. A Twin manifest UUID
+produces the stable source component `uuid-<simple-uuid>`; legacy manifests and
+plain folders without a UUID use their percent-encoded display name. Renaming a
+UUID-backed Twin preserves its source identity; for a source without a UUID,
+the display name is its stable identity. Duplicate live UUIDs are rejected. Any
+duplicate source identity from a different live root is rejected; the registry
+does not assign an order-dependent suffix. The display label is never used as
+an asset cache key.
+
+The Rhai boundary applies the same scope rule to query, command, hook,
+policy-status, and compound reflected `get`/`get_setting` results: Twin-scoped
+scripts do not receive workspace selector fields such as `twin_id`,
+`owner_twin_id`, `target_twin_id`, `active_twin`, `workspace_twin`, `scope_id`,
+or mount-authority fields, including nested records in arrays or maps. Direct
+reflected reads of a selector field or nested workspace Twin ID return no value
+in Twin scope; app-scoped scripts retain them. Twin settings and generic engine
+exposure values pass through the same projection, so an extension cannot
+reintroduce a selector through a scalar or nested map.
+`ScriptingCatalog` hides those identity parameters from Twin-scoped command and
+query discovery, and `ScriptComplete` applies the same filtering to completion
+schemas. Twin-scoped query schemas omit response descriptions that could name
+application selectors. The Rust bridge still binds the typed command target
+from the active runtime owner. Mount-local authorities in script values and
+diagnostics are translated through `TwinRoots` to stable source identities,
+including late failures from retired mounts. Unknown opaque mount tokens are
+redacted when their lease metadata is unavailable. Application-scoped scripts
+and external application APIs retain workspace selector fields, but never
+receive the internal mount lease. Rhai callers request only the catalog sections they
+consume so the typed result stays within the shared runtime value limit;
+omitting `sections` preserves the full application catalog.
+
+Repeated admission of the same live root and source identity is idempotent.
+Unmount removes the root and composed overlays; a reopened Twin receives a new
+authority while keeping its source identity. No retired authority is rebound,
+so Bevy's same-path asset cache and late readers cannot supply a replacement
+Twin with outgoing bytes.
+
+Internal asset owners use the authority returned by registration for `twin://`
+loads, document coordinates, overlays, relative dependencies, and Rhai source
+imports. These are Rust-held mount leases.
 `lunco_assets_core::stable_source_path(path, roots)` converts a Bevy `AssetPath`
 to the stable, scheme-stripped source used for USD content provenance.
 Non-Twin sources require no registry; Twin sources require the supplied
-`TwinRoots` owner. Retired mounts keep
-only authority-to-logical-name strings for that conversion; no roots, bytes,
-or handles remain. An unknown Twin authority is an error, never a raw-name
-identity fallback.
+`TwinRoots` owner. Retired mounts keep only authority-to-logical-identity
+strings for that conversion; no roots, bytes, or handles remain. Live mount
+metadata also carries the display label used by runtime consumers. An unknown
+Twin authority is an error, never a raw-name identity fallback. Application-
+level workspace selection may use `TwinId`. Twin-scoped Rhai facts expose the
+stable source identity and a separate display name; they do not expose the
+workspace ID or mount lease.
 
-Scenario manifests export the logical source name; each peer resolves it to
-its own current mount authority. Different local mount histories therefore
-keep matching content identities. `logical_name` performs that export and
-`mounted_name_for_logical` lets a downloaded scenario reuse an existing local
-root. These conversions belong to the asset owner. Load addresses and script
-import registry keys retain their mount lifetime instead of being normalized
-to a reusable logical name.
+Scenario manifests export the stable source identity; each peer resolves it
+to its own current mount authority. Twins with authored UUIDs therefore keep
+matching content identities across names, paths, and local mount histories.
+`logical_identity_for_authority` performs that lookup and
+`mounted_authority_for_logical` lets a downloaded scenario reuse an existing
+local root. These conversions belong to the asset owner.
+Load addresses and script import registry keys retain their mount lifetime
+instead of being normalized to a reusable logical identity.
+
+Composed USD asset facts can retain an authored stable source identity, such as
+`twin://astrobotic-griffin-1/models/controller.mo`. Scene dataset admission
+resolves that logical source against the currently mounted Twin before reading
+its root or dataset declarations. A current opaque mount authority is also
+accepted internally; a retired authority is never reinterpreted as a source
+identity. If neither address names a current mount, the scene reports a generic
+missing-source fault without exposing the mount lease.
+
+A Twin without an authored UUID derives its source identity from its encoded
+display name. Two same-named legacy roots therefore cannot be mounted at once;
+author distinct UUIDs when both must be open simultaneously.
 
 ### Document source admission and lifetime
 
@@ -153,6 +205,14 @@ through `stage_asset_for_document`; they do not rediscover it by filename.
 Source-text and stage assets can share a literal path while retaining different
 typed identities. Before projection commits an ID, no live document stage is
 available through this boundary.
+
+An explicit `LoadScene` for a Twin's default scene can arrive while its initial
+document source is still being prepared. `PendingTwinDocs` retains that stable
+URI and root selection, coalesces later requests for the same source, and
+dispatches the selected request only after the exact document stage-input lease
+has been published. The asynchronous stage loader therefore observes one
+document-input owner for its whole preparation; it never starts from raw file
+bytes and changes to document-backed input mid-load.
 
 A file location is the transport and save identity, independent of the document's
 runtime owner. `FileDocumentAdmission::capture` records the current canonical
@@ -331,7 +391,7 @@ or dome replacements report the error and retain the previous valid intent.
 ### 4. One mount path, always doc-first
 
 ```
-resolve root  →  register root  →  open document  →  set overlay  →  LoadScene(twin://…)
+resolve root  →  register root  →  open document  →  set overlay  →  LoadScene(stable twin://…)
 ```
 
 The overlay is registered **before** `LoadScene`, or the load reads base-only
@@ -349,7 +409,7 @@ implementation:
 | `OpenFile { path }` | **filesystem path** (or scheme); empty opens the picker | resolves the owning root, registers it, mounts doc-first |
 | `OpenFolder { path }` | folder | same mount, root given explicitly |
 | `OpenTwin { path }` | folder, strict (requires `twin.toml`) | same mount |
-| `LoadScene { path }` | **scheme address only** (`lunco://`, `twin://`) | loads an already-addressable asset |
+| `LoadScene { path }` | `lunco://` or stable `twin://<source-identity>/…` | loads an already-addressable asset; internal mount authorities are rejected |
 
 `OpenFile` is already the UI's File→Open command and already accepts an
 arbitrary path, so opening any `.usda` anywhere works from the UI with **no new
@@ -380,12 +440,14 @@ call `OpenFile`, which is already API-accessible. Still no new commands.
 - Root discovery is owned by `lunco_twin::root_for_file`.
 - `TwinRoots` returns the mount authority and never rebinds it after retirement.
 - Open flows register the root, mount the document overlay, and only then load
-  the `twin://` scene.
+  the stable logical-source `twin://` scene URI. The asset-cache authority stays
+  inside the reader and document bridges.
 - Filesystem scene paths are canonicalized through `lunco-storage` before root
   discovery and containment checks. If canonicalization fails, `OpenFile`
   reports the error and stops; it never falls back to a lexical path.
-- `LoadScene` accepts already-addressable scheme paths; filesystem paths go
-  through `OpenFile`, which owns root discovery and document mounting.
+- `LoadScene` accepts `lunco://` paths and stable logical-source `twin://`
+  paths; it rejects internal mount authorities. Filesystem paths go through
+  `OpenFile`, which owns root discovery and document mounting.
 - Invalid roots and registry failures are reported at their owner. They are not
   converted into an empty scene or a base-only fallback.
 

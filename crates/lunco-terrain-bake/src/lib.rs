@@ -15,6 +15,7 @@
 
 pub mod bake;
 pub mod dem;
+pub mod regional;
 pub mod stamp;
 
 #[cfg(target_arch = "wasm32")]
@@ -155,11 +156,6 @@ pub fn finish_bake(raw: &HeightGrid, site: &str, job: &DemBakeJob, stage: BakeSt
     for stamp in &job.stamps {
         stamp.apply(&mut tile);
     }
-    // Snap the shipped grid to the cache's f32 representation — see
-    // [`quantize_heights_f32`]. This runs on BOTH platforms' live path (native
-    // task and web worker call this same function), so a cache-hit peer and a
-    // fresh-bake peer read bit-identical heights.
-    quantize_heights_f32(&mut tile);
     BakedGrid {
         grid: tile,
         base_grid,
@@ -207,7 +203,10 @@ pub struct BakeReplyHeader {
 
 /// Bump when [`encode_grid_blob`]'s layout or the bake semantics change, so
 /// stale cache entries are never matched (content-addressed → no explicit purge).
-pub const GRID_CACHE_VERSION: u64 = 2;
+pub const GRID_CACHE_VERSION: u64 = 3;
+
+/// OPFS namespace for full-resolution worker-baked DEM grids.
+pub const DEM_GRID_CACHE_NAMESPACE: &str = "terrain/dem-grid";
 
 /// Cache key for a Full-stage DEM bake: FNV-1a over the format version, the raw
 /// the site id, the raw GeoTIFF bytes, and the bincoded [`DemBakeJob`]
@@ -227,49 +226,50 @@ pub fn grid_cache_key(meta_yaml: &[u8], tif: &[u8], job: &DemBakeJob) -> u64 {
     h.finish()
 }
 
-/// Snap a grid's heights through the f32 representation the OPFS cache blob
-/// stores ([`encode_grid_blob`]) — the ONE quantization both bake paths share.
-/// [`finish_bake`] runs it on the live grid, so a cache-hit peer (f32 blob →
-/// f64) and a fresh-bake peer hold bit-identical heights: an un-quantized live
-/// grid differed from its own cached round-trip by ~1e-4 m, enough to straddle
-/// the collider quantization lattice and diverge contacts between peers. Metre
-/// heights fit f32 comfortably — the same precision the tile meshes render at.
-pub fn quantize_heights_f32(grid: &mut HeightGrid) {
-    for h in &mut grid.heights {
-        *h = *h as f32 as f64;
-    }
-}
-
 /// Encode a stamped grid as the OPFS cache blob — a raw little-endian layout
 /// (no serde, like the tile-mesh cache): `[res: u32][half_extent: f64]
-/// [native_res: u32]` then `res²` **f32** heights (halves the blob; lossless for
-/// a [`finish_bake`] grid, which is already snapped by [`quantize_heights_f32`]).
+/// [native_res: u32]` then `res²` f64 heights, identical to the live grid.
 pub fn encode_grid_blob(grid: &HeightGrid, native_res: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16 + grid.heights.len() * 4);
+    let mut out = Vec::with_capacity(16 + grid.heights.len() * 8);
     out.extend_from_slice(&(grid.res as u32).to_le_bytes());
     out.extend_from_slice(&(grid.half_extent as f64).to_le_bytes());
     out.extend_from_slice(&(native_res as u32).to_le_bytes());
     for &h in &grid.heights {
-        out.extend_from_slice(&(h as f32).to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
     }
     out
 }
 
 /// Decode [`encode_grid_blob`]'s layout back into `(grid, native_res)`,
-/// widening heights to f64. `None` on any size mismatch (truncated / foreign
+/// `None` on any size mismatch (truncated / foreign
 /// blob) → the caller treats it as a cache miss and rebakes.
 pub fn decode_grid_blob(bytes: &[u8]) -> Option<(HeightGrid, usize)> {
     let res = u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?) as usize;
-    let half_extent = f64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?) as f32;
-    let native_res = u32::from_le_bytes(bytes.get(12..16)?.try_into().ok()?) as usize;
-    let body = bytes.get(16..)?;
-    if body.len() != res.checked_mul(res)?.checked_mul(4)? {
+    let stored_half = f64::from_le_bytes(bytes.get(4..12)?.try_into().ok()?);
+    let half_extent = stored_half as f32;
+    if res < 2
+        || !stored_half.is_finite()
+        || stored_half <= 0.0
+        || !half_extent.is_finite()
+        || f64::from(half_extent) != stored_half
+    {
         return None;
     }
-    let heights = body
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().expect("chunks_exact(4)")) as f64)
+    let native_res = u32::from_le_bytes(bytes.get(12..16)?.try_into().ok()?) as usize;
+    if native_res < res {
+        return None;
+    }
+    let body = bytes.get(16..)?;
+    if body.len() != res.checked_mul(res)?.checked_mul(8)? {
+        return None;
+    }
+    let heights: Vec<f64> = body
+        .chunks_exact(8)
+        .map(|c| f64::from_le_bytes(c.try_into().expect("chunks_exact(8)")))
         .collect();
+    if heights.iter().any(|height| !height.is_finite()) {
+        return None;
+    }
     Some((
         HeightGrid {
             res,
@@ -313,22 +313,34 @@ mod tests {
         let grid = HeightGrid {
             res: 3,
             half_extent: 1500.0,
-            heights: vec![0.0, -1.25, 2.5, 3.75, -4.0, 5.5, 6.0, 7.125, -8.25],
+            heights: vec![
+                0.0,
+                -1.234567890123,
+                2.5,
+                3.75,
+                -4.0,
+                5.5,
+                6.0,
+                7.125,
+                -8.25,
+            ],
         };
         let blob = encode_grid_blob(&grid, 4097);
         let (back, native_res) = decode_grid_blob(&blob).expect("decodes");
         assert_eq!(back.res, grid.res);
         assert_eq!(back.half_extent, grid.half_extent);
         assert_eq!(native_res, 4097);
-        // f32-exact inputs survive the f64→f32→f64 round trip bit-for-bit.
         assert_eq!(back.heights, grid.heights);
+        assert!(decode_grid_blob(&blob[..blob.len() - 1]).is_none());
+        let mut corrupt = blob.clone();
+        corrupt[16..24].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(decode_grid_blob(&corrupt).is_none());
+        corrupt = blob.clone();
+        corrupt[4..12].copy_from_slice(&1.0000000000000002_f64.to_le_bytes());
+        assert!(decode_grid_blob(&corrupt).is_none());
     }
 
-    /// **Cache-hit and fresh-bake peers must hold bit-identical heights.** The
-    /// live grid is snapped through [`quantize_heights_f32`] inside
-    /// [`finish_bake`], so encoding it to the f32 cache blob and decoding back
-    /// is lossless — the T17 divergence (live f64 vs cached f32, ~1e-4 m,
-    /// straddling the collider quantization lattice) cannot recur.
+    /// Fresh and cached grids retain the same full-precision elevations.
     #[test]
     fn finish_bake_output_matches_its_own_cache_round_trip() {
         let res = 33usize;
@@ -345,6 +357,14 @@ mod tests {
             stamps: Vec::new(),
         };
         let baked = finish_bake(&raw, "site", &job, BakeStage::Full);
+        assert_eq!(baked.grid.heights, baked.base_grid.heights);
+        assert!(
+            baked
+                .grid
+                .heights
+                .iter()
+                .any(|&height| f64::from(height as f32) != height)
+        );
         let blob = encode_grid_blob(&baked.grid, baked.native_res);
         let (back, _) = decode_grid_blob(&blob).expect("decodes");
         assert_eq!(

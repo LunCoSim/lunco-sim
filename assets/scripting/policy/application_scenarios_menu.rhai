@@ -73,7 +73,6 @@ fn twin_default_scene_item(twin, scene) {
     let twin_id = twin.id;
     let twin_id_text = twin_id.to_string();
     args.twin_id = twin_id_text.parse_int();
-    args.authority = twin.authority;
     args.relative_path = scene.relative_path;
     let item = menu_action("Load Default Scene", "scenarios", "load", args);
     if scene.description != () { item.tooltip = scene.description; }
@@ -107,7 +106,6 @@ fn viewport_action(scene, twin, primary) {
         args: #{
             open_twin: true,
             twin_id: twin.id.to_string().parse_int(),
-            authority: twin.authority,
             relative_path: scene.relative_path
         }
     };
@@ -116,7 +114,7 @@ fn viewport_action(scene, twin, primary) {
 
 fn active_viewport_actions(ctx) {
     let actions = [];
-    if ctx.active_twin == () || ctx.active_twin.authority == () || !ctx.catalog_ready
+    if ctx.active_twin == () || !ctx.active_twin.source_ready || !ctx.catalog_ready
         || ctx.catalog_error != () { return actions; }
     let twin = ctx.active_twin;
     let default_scene = ();
@@ -141,7 +139,7 @@ fn viewport_guidance(ctx) {
     }
     let twin = ctx.active_twin;
     let name = twin_label(twin);
-    if twin.authority == () { return "Preparing " + name + "…"; }
+    if !twin.source_ready { return "Preparing " + name + "…"; }
     if ctx.catalog_error != () { return "Scene list unavailable: " + ctx.catalog_error; }
     if !ctx.catalog_ready { return "Loading scenes for " + name + "…"; }
     let count = 0;
@@ -230,7 +228,7 @@ fn twin_groups(ctx) {
                 break;
             }
         }
-        if default_scene != () && twin.authority != () {
+        if default_scene != () && twin.source_ready {
             children.push(twin_default_scene_item(twin, default_scene));
             if scenarios.len() > 0 { children.push(divider()); }
         }

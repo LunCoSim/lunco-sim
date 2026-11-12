@@ -786,12 +786,22 @@ Modelica documents keep the ordinary entity-removal behavior and are never
 deleted by this path.
 
 Generated source roots use the ordinary Modelica search-path contract. The
-shared `ModelicaEngineHandle` discovers a structured package root by its
-qualified-name first segment and loads it asynchronously; `source_roots` may
-prewarm a policy dependency but is not a library-specific resolver. UI and
-projection code never waits on the engine mutex: source-root admission settles
-before the worker's single DAE compile, while the standard completion event
-reprojects the same source/AST canvas.
+source-root registry resolves each qualified-name first segment to its
+registered source-set owner and dispatches it through the Modelica worker;
+`source_roots` may prewarm a policy dependency but is not a library-specific
+resolver. Root reads and compiler-session installation stay with that worker.
+The authoring engine mirrors the accepted source set under its operation lease,
+and its typed completion event reprojects the current source/AST canvas.
+
+For an open diagram whose declarations need a source root, projection asks the
+source-root registry to admit it through the Modelica worker pipeline and leaves
+the last committed canvas visible while it waits. The registry owns root
+identity, operation ordering, and load state; the authoring engine mirrors the
+worker-accepted source set under its operation lease. A typed source-root change
+wakes projection to use the current document snapshot. Worker-load and
+authoring-mirror failures remain terminal diagnostics; an accepted source set
+that installs no declarations in the authoring session is a mirror failure.
+Projection does not rediscover or load package files itself.
 
 The generated-domain projector is also lifecycle-driven at the ECS boundary.
 Prim-path arrivals queue discovery. Identity arrivals/removals queue only
@@ -1922,6 +1932,9 @@ Each frame:
    miss stays in an explicit loading state and is retried from the generic
    source-root completion event. No Modelica parse or inheritance walk is
    allowed to block canvas painting.
+   Source-root authoring mirrors use shared `AsyncWorkAdmission`; when its
+   bounded queue is full, the worker response and exact source snapshot remain
+   ordered for retry after capacity or source-operation revision changes.
 3. **Canvas render** — user interaction happens in `lunco-canvas`; it
    owns pan/zoom/selection/drag state between frames.
 4. **User action → op emission** —

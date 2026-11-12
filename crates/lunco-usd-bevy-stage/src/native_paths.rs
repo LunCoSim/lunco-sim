@@ -368,7 +368,7 @@ def Scope "World" (
         std::fs::create_dir_all(root.path().join("sim/images")).unwrap();
         std::fs::write(root.path().join("sim/images/present.png"), b"fixture").unwrap();
         let roots = lunco_assets_core::TwinRoots::default();
-        let authority = roots.register("fixture", root.path()).unwrap();
+        let authority = roots.register_authority("fixture", root.path()).unwrap();
         let source = format!("twin://{authority}/sim/scene.usda");
         let recipe = lunco_usd_compose::recipe::StageRecipe::new(
             &source,

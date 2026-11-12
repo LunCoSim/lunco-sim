@@ -1426,13 +1426,15 @@ pub fn tire_patch_force(
 ///
 /// The caller apportions actual chassis mass by measured contact normal load.
 /// Suction or aerodynamic preload must not be mistaken for additional mass,
-/// and contacts may be vertical. The requested impulse uses the fixed step.  The result is capped by the authored friction cone; an
-/// over-steep or under-gripped surface still slides physically.
+/// and contacts may be vertical. `correction_mass` is the mass whose velocity
+/// the contact force directly corrects. The fixed-step request is capped by
+/// the authored friction cone; an under-gripped surface still slides.
 fn parking_brake_force_with_velocity(
     gravity: DVec3,
     contact_normal: DVec3,
     normal_force: f64,
     supported_mass: f64,
+    correction_mass: f64,
     friction_mu: f64,
     tangential_velocity: DVec3,
     dt: f64,
@@ -1448,14 +1450,16 @@ fn parking_brake_force_with_velocity(
         || friction_mu <= 0.0
         || supported_mass <= 0.0
         || !supported_mass.is_finite()
+        || correction_mass <= 0.0
+        || !correction_mass.is_finite()
     {
         return DVec3::ZERO;
     }
 
     let tangent_gravity = gravity - normal * gravity.dot(normal);
     let tangent_velocity = tangential_velocity - normal * tangential_velocity.dot(normal);
-    let requested_accel = -tangent_gravity - tangent_velocity / dt;
-    let mut requested = requested_accel * supported_mass;
+    let mut requested =
+        -tangent_gravity * supported_mass - tangent_velocity * (correction_mass / dt);
     // A sliding contact cannot propel its own slip. Static friction may hold
     // against gravity at zero velocity, where it performs no work.
     let slip_squared = tangent_velocity.length_squared();
@@ -1795,6 +1799,7 @@ mod tire_patch_tests {
             DVec3::Y,
             normal_force,
             normal_force / 1.62,
+            normal_force / 1.62,
             1.5,
             DVec3::ZERO,
             1.0 / 60.0,
@@ -1817,6 +1822,7 @@ mod tire_patch_tests {
                 DVec3::Z,
                 10000.0 * scale,
                 487.5 * scale,
+                487.5 * scale,
                 1.4,
                 DVec3::ZERO,
                 1.0 / 60.0,
@@ -1835,6 +1841,7 @@ mod tire_patch_tests {
             DVec3::Y,
             10000.0,
             100.0,
+            100.0,
             1.4,
             DVec3::ZERO,
             1.0 / 60.0,
@@ -1844,6 +1851,7 @@ mod tire_patch_tests {
             DVec3::new(0.0, -9.80665, 0.0),
             DVec3::Z,
             1000.0,
+            487.5,
             487.5,
             0.2,
             DVec3::ZERO,
@@ -1863,12 +1871,29 @@ mod tire_patch_tests {
             DVec3::Y,
             400.0,
             400.0 / 1.62,
+            400.0 / 1.62,
             1.5,
             DVec3::new(2.0, 0.0, -1.0),
             0.1,
         );
         assert!(force.x < 0.0 && force.z > 0.0);
         assert!(force.length() <= 1.5 * 400.0 + 1.0e-9);
+    }
+
+    #[test]
+    fn parking_contact_uses_wheel_mass_for_velocity_and_load_share_for_gravity() {
+        let force = super::parking_brake_force_with_velocity(
+            DVec3::new(0.0, -1.0, -0.2),
+            DVec3::Y,
+            1_000.0,
+            100.0,
+            25.0,
+            1.0,
+            DVec3::new(0.1, 0.0, 0.0),
+            0.1,
+        );
+        assert!((force.x + 25.0).abs() < 1e-12);
+        assert!((force.z - 20.0).abs() < 1e-12);
     }
 
     #[test]
@@ -1983,6 +2008,7 @@ mod tire_patch_tests {
             DVec3::new(0.0, -1.62, -0.8),
             DVec3::Y,
             400.0,
+            400.0 / 1.62,
             400.0 / 1.62,
             1.5,
             velocity,
@@ -2783,12 +2809,14 @@ fn apply_wheel_drive(
                         let parking_force = if inputs.is_some_and(|i| i.brake_active) {
                             gravity
                                 .map(|g| {
+                                    let supported_mass = f64::from(mass.value()) * normal_force
+                                        / total_normal_load[&parent_entity];
                                     parking_brake_force_with_velocity(
                                         g.acceleration(),
                                         hit.normal.as_dvec3(),
                                         normal_force,
-                                        f64::from(mass.value()) * normal_force
-                                            / total_normal_load[&parent_entity],
+                                        supported_mass,
+                                        supported_mass,
                                         wheel.friction_mu,
                                         relative_velocity,
                                         dt,

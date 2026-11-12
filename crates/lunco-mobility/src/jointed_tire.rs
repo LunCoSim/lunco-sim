@@ -74,11 +74,48 @@ struct TireContact {
     /// Native rigid-body support; absent for a fixed world collider.
     support: Option<Entity>,
     point: DVec3,
+    normal: DVec3,
     normal_force: f64,
     forward: DVec3,
     right: DVec3,
     v_long: f64,
     v_lat: f64,
+    relative_velocity: DVec3,
+}
+
+fn add_external_support_load(
+    loads: &mut std::collections::HashMap<Entity, Vec<f64>>,
+    island: Entity,
+    other_island: Option<Entity>,
+    load: f64,
+) {
+    if other_island != Some(island) && crate::contact_has_positive_load(load) {
+        loads.entry(island).or_default().push(load);
+    }
+}
+
+fn admitted_wheel_mass(
+    mass: Option<&ComputedMass>,
+    wheel: Entity,
+    holds: Option<&mut lunco_physics::PhysicsHolds>,
+    faults: Option<&mut lunco_core::RuntimeFaults>,
+) -> Option<f64> {
+    let value = mass.map(|mass| f64::from(mass.value()));
+    if let Some(value) = value.filter(|value| value.is_finite() && *value > 0.0) {
+        return Some(value);
+    }
+    if let Some(holds) = holds {
+        holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+    }
+    if let Some(faults) = faults {
+        faults.raise(
+            "physics-wheel-mass-invalid",
+            Some(wheel),
+            "wheel contact mass",
+            "dynamic wheel mass must be finite and positive",
+        );
+    }
+    None
 }
 
 fn body_state(
@@ -135,13 +172,16 @@ pub fn apply_jointed_tire_forces(
             Option<&lunco_physics::PhysicsOrderKey>,
             &JointedWheelTire,
             Option<&crate::WheelHeatPorts>,
+            Option<&ComputedMass>,
         ),
         Without<lunco_core::SimulationObjectPaused>,
     >,
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
-    q_body_modes: Query<(&RigidBody, Has<RigidBodyDisabled>)>,
+    q_body_modes: Query<(Entity, &RigidBody, Has<RigidBodyDisabled>)>,
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
+    islands: Res<lunco_physics::DynamicJointIslandMasses>,
+    q_gravity: Query<&lunco_physics::kinematics::LocalGravity>,
     collisions: Collisions,
     mut pending: Local<Vec<lunco_physics::BodyForce>>,
     mut force_scratch: Local<lunco_physics::ForceBatchScratch>,
@@ -156,7 +196,7 @@ pub fn apply_jointed_tire_forces(
         return;
     }
     let wheel_order = match lunco_physics::ordered_physics_entities(
-        q_tires.iter().map(|(entity, key, _, _)| (entity, key)),
+        q_tires.iter().map(|(entity, key, _, _, _)| (entity, key)),
         "jointed wheel tire force",
     ) {
         Ok(order) => order,
@@ -171,19 +211,106 @@ pub fn apply_jointed_tire_forces(
             return;
         }
     };
+    if wheel_order.is_empty() {
+        return;
+    }
     pending.clear();
+
+    // Apportion each articulated vehicle's mass across all its loaded external
+    // contacts, including native wheels and non-wheel support. Internal
+    // contacts cannot support their own joint island.
+    let mut tire_islands = std::collections::HashSet::new();
+    let mut loads: std::collections::HashMap<Entity, Vec<f64>> = std::collections::HashMap::new();
+    let is_braking = |motor: &JointTorqueActuator| {
+        q_inputs
+            .get(motor.control_entity)
+            .ok()
+            .is_some_and(|inputs| inputs.brake_active)
+    };
+    for (wheel, _, tire, _, _) in &q_tires {
+        if !q_body_modes
+            .get(wheel)
+            .is_ok_and(|(_, body, disabled)| *body == RigidBody::Dynamic && !disabled)
+        {
+            continue;
+        }
+        let Ok((motor, _)) = q_joints.get(tire.drive_joint) else {
+            continue;
+        };
+        if motor.brake_torque <= 0.0 || !is_braking(motor) {
+            continue;
+        }
+        if let Some(island) = islands.get(wheel) {
+            tire_islands.insert(island.island);
+        }
+    }
+    if !tire_islands.is_empty() {
+        for (body, mode, disabled) in &q_body_modes {
+            if *mode != RigidBody::Dynamic || disabled {
+                continue;
+            }
+            let Some(island) = islands.get(body) else {
+                continue;
+            };
+            if !tire_islands.contains(&island.island) {
+                continue;
+            }
+            for pair in collisions.collisions_with(body) {
+                let other = if pair.body1 == Some(body) {
+                    pair.body2
+                } else if pair.body2 == Some(body) {
+                    pair.body1
+                } else {
+                    continue;
+                };
+                if other.is_some_and(|body| !q_body_modes.contains(body)) {
+                    continue;
+                }
+                let other_island = other
+                    .and_then(|body| islands.get(body))
+                    .map(|other| other.island);
+                for manifold in &pair.manifolds {
+                    if crate::contact_normal_for_body(pair, manifold, body).is_none() {
+                        continue;
+                    }
+                    for point in &manifold.points {
+                        let load = lunco_physics::contact_force_from_impulse(
+                            f64::from(point.normal_impulse),
+                            full_dt,
+                        );
+                        add_external_support_load(&mut loads, island.island, other_island, load);
+                    }
+                }
+            }
+        }
+    }
+    let total_loads: std::collections::HashMap<_, f64> = loads
+        .into_iter()
+        .map(|(island, mut loads)| {
+            loads.sort_by(f64::total_cmp);
+            (island, loads.into_iter().sum())
+        })
+        .collect();
 
     {
         let q_state = bodies.p1();
         for wheel in wheel_order {
             if !q_body_modes
                 .get(wheel)
-                .is_ok_and(|(body, disabled)| *body == RigidBody::Dynamic && !disabled)
+                .is_ok_and(|(_, body, disabled)| *body == RigidBody::Dynamic && !disabled)
             {
                 continue;
             }
-            let Ok((_, _, tire, heat_ports)) = q_tires.get(wheel) else {
+            let Ok((_, _, tire, heat_ports, wheel_mass)) = q_tires.get(wheel) else {
                 continue;
+            };
+            let Some(wheel_mass) = admitted_wheel_mass(
+                wheel_mass,
+                wheel,
+                holds.as_deref_mut(),
+                faults.as_deref_mut(),
+            ) else {
+                return;
             };
             let Ok((motor, joint)) = q_joints.get(tire.drive_joint) else {
                 continue;
@@ -214,10 +341,7 @@ pub fn apply_jointed_tire_forces(
                 Ok(port) => port.value,
                 Err(_) => continue,
             };
-            let braking = q_inputs
-                .get(motor.control_entity)
-                .ok()
-                .is_some_and(|inputs| inputs.brake_active);
+            let braking = is_braking(motor);
             let other_velocity_at = |other: Option<Entity>, point: DVec3| {
                 other
                     .and_then(|entity| body_state(&q_state, entity))
@@ -271,14 +395,18 @@ pub fn apply_jointed_tire_forces(
                             - other_velocity_at(other, wheel_state.position);
                         let v_long = contact_velocity.dot(forward);
                         let v_lat = contact_velocity.dot(right);
+                        let relative_velocity = wheel_state.velocity_at_point(point.point)
+                            - other_velocity_at(other, point.point);
                         contacts.push(TireContact {
                             support: other,
                             point: point.point,
+                            normal,
                             normal_force,
                             forward,
                             right,
                             v_long,
                             v_lat,
+                            relative_velocity,
                         });
                     }
                 }
@@ -380,40 +508,61 @@ pub fn apply_jointed_tire_forces(
                     return;
                 }
             };
-            let tire_heat = contacts
-                .iter()
-                .map(|contact| {
-                    step.intervals
-                        .iter()
-                        .filter(|s| s.duration > 0.0)
-                        .map(|interval| {
-                            let (long, lat) = patch(contact, interval.speed);
-                            interval.duration / full_dt
-                                * (long * (interval.speed * tire.radius - contact.v_long)
-                                    - lat * contact.v_lat)
-                        })
-                        .sum::<f64>()
-                })
-                .sum::<f64>();
-            if let Some(heat) = heat_ports {
-                if let Some(endpoint) = heat.tire {
-                    if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
-                        port.value = tire_heat;
+            let island = islands.get(wheel);
+            let mut tire_heat = 0.0;
+            for contact in &contacts {
+                let static_hold = if braking
+                    && motor.brake_torque > drive_torque.abs()
+                    && let (Some(island), Ok(gravity)) = (island, q_gravity.get(wheel))
+                    && let (Some(mass), Some(total_load)) =
+                        (island.mass_kg, total_loads.get(&island.island))
+                    && *total_load > 0.0
+                    && !contact.support.is_some_and(|body| {
+                        islands
+                            .get(body)
+                            .is_some_and(|other| other.island == island.island)
+                    }) {
+                    let supported_mass = mass * contact.normal_force / total_load;
+                    // The normal-load share carries island gravity. The
+                    // correction impulse lands on this wheel, so use its
+                    // measured mass instead of the full articulation mass.
+                    Some(
+                        crate::parking_brake_force_with_velocity(
+                            gravity.acceleration(),
+                            contact.normal,
+                            contact.normal_force,
+                            supported_mass,
+                            wheel_mass,
+                            tire.friction_mu,
+                            contact.relative_velocity,
+                            full_dt,
+                        )
+                        .clamp_length_max(
+                            (motor.brake_torque - drive_torque.abs()) / tire.radius
+                                * contact.normal_force
+                                / total_normal_force,
+                        ),
+                    )
+                } else {
+                    None
+                };
+                let mut force = DVec3::ZERO;
+                for interval in step.intervals.iter().filter(|s| s.duration > 0.0) {
+                    let fraction = interval.duration / full_dt;
+                    if let Some(hold) = static_hold
+                        && interval.start_speed == 0.0
+                        && interval.speed == 0.0
+                    {
+                        force += hold * fraction;
+                        tire_heat -= hold.dot(contact.relative_velocity) * fraction;
+                    } else {
+                        let (long, lat) = patch(contact, interval.speed);
+                        force += (contact.forward * long + contact.right * lat) * fraction;
+                        tire_heat += fraction
+                            * (long * (interval.speed * tire.radius - contact.v_long)
+                                - lat * contact.v_lat);
                     }
                 }
-            }
-            for contact in &contacts {
-                let (f_long, f_lat) = step.intervals.iter().filter(|s| s.duration > 0.0).fold(
-                    (0.0, 0.0),
-                    |(long, lat), interval| {
-                        let (f_long, f_lat) = patch(contact, interval.speed);
-                        (
-                            long + interval.duration / full_dt * f_long,
-                            lat + interval.duration / full_dt * f_lat,
-                        )
-                    },
-                );
-                let force = contact.forward * f_long + contact.right * f_lat;
                 // A zero-torque tire patch is a persistent contact reaction,
                 // not a wake-up event. Preserve the command bit with the
                 // pending force so a real drive or brake command can wake a
@@ -433,7 +582,7 @@ pub fn apply_jointed_tire_forces(
                 if let Some(support) = contact.support
                     && q_body_modes
                         .get(support)
-                        .is_ok_and(|(body, disabled)| *body == RigidBody::Dynamic && !disabled)
+                        .is_ok_and(|(_, body, disabled)| *body == RigidBody::Dynamic && !disabled)
                 {
                     pending.push(lunco_physics::BodyForce {
                         local_force: DVec3::ZERO,
@@ -444,6 +593,11 @@ pub fn apply_jointed_tire_forces(
                         wake: drive_torque != 0.0 || braking,
                     });
                 }
+            }
+            if let Some(endpoint) = heat_ports.and_then(|heat| heat.tire)
+                && let Ok(mut port) = q_ports.p1().get_mut(endpoint)
+            {
+                port.value = tire_heat;
             }
         }
     }
@@ -467,6 +621,51 @@ pub fn apply_jointed_tire_forces(
             holds.as_deref_mut(),
             faults.as_deref_mut(),
             physics_time.as_deref_mut(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{add_external_support_load, admitted_wheel_mass};
+    use avian3d::prelude::ComputedMass;
+    use bevy::prelude::Entity;
+    use std::collections::HashMap;
+
+    #[test]
+    fn parking_support_load_includes_native_and_body_contacts_but_excludes_internal_contacts() {
+        let rover = Entity::from_raw_u32(1).unwrap();
+        let other = Entity::from_raw_u32(2).unwrap();
+        let mut loads = HashMap::new();
+        // Shared tire, native-material wheel, and chassis support respectively.
+        for load in [100.0, 200.0, 100.0] {
+            add_external_support_load(&mut loads, rover, None, load);
+        }
+        // A contact between bodies in one joint island cannot support it.
+        add_external_support_load(&mut loads, rover, Some(rover), 500.0);
+        add_external_support_load(&mut loads, other, None, 50.0);
+        add_external_support_load(&mut loads, rover, None, 0.0);
+        assert_eq!(loads[&rover].iter().sum::<f64>(), 400.0);
+        assert_eq!(loads[&other].iter().sum::<f64>(), 50.0);
+        assert_eq!(100.0 / loads[&rover].iter().sum::<f64>(), 0.25);
+    }
+
+    #[test]
+    fn parking_invalid_wheel_mass_holds_and_reports_without_panicking() {
+        let wheel = Entity::from_raw_u32(3).unwrap();
+        let mut holds = lunco_physics::PhysicsHolds::default();
+        let mut faults = lunco_core::RuntimeFaults::default();
+        assert!(admitted_wheel_mass(None, wheel, Some(&mut holds), Some(&mut faults)).is_none());
+        assert!(holds.holds(lunco_physics::PhysicsHolds::SAFETY_FAILURE));
+        let fault = faults.first.as_ref().unwrap();
+        assert_eq!(fault.kind, "physics-wheel-mass-invalid");
+        assert_eq!(fault.entity, Some(wheel));
+        assert!(fault.detail.contains("finite and positive"));
+
+        let mass = ComputedMass::new(25.0);
+        assert_eq!(
+            admitted_wheel_mass(Some(&mass), wheel, None, None),
+            Some(25.0)
         );
     }
 }

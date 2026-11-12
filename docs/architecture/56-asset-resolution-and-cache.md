@@ -63,14 +63,23 @@ scheme: naming the mistake legibly would make it permanent.
 
 | Scheme | Resolves to | For |
 |---|---|---|
-| `lunco://` | `assets/`, then `assets/.cache`, then the machine-global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
-| `twin://<name>/…` | the Twin's authored root, then `<twin>/.cache`, then the global cache | Twin-owned content, downloaded scenarios, and intentional global reuse |
+| `lunco://` | `assets/`, then the shared global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
+| `twin://<source-identity>/…` | the current mount resolved from that stable source identity | authored content and user-facing scene addresses |
+| `twin://<authority>/…` | the exact live mount's authored root, then its `.cache`, then the global cache | internal reads that carry a mount lease |
 | (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
 
-Both schemes resolve **authored first, then the cache that travels with the
-unit, then the shared machine-global pool**. So a downloaded binary is reachable at its logical
-address without any authored file naming a cache, and a file the author
-committed always wins over a materialised copy of it.
+Authored USD asset facts may keep the stable source identity in their composed
+dependency list. `SceneDatasetRequirements` resolves that identity to the current
+mount before reading Twin scope metadata. It also accepts an exact live authority
+for internal asset facts; a retired authority remains invalid and cannot be
+reinterpreted as a stable source identity. User scene commands use the same
+stable URI, with `asset_path::load_source_uri` resolving it at admission.
+
+Engine assets resolve from `assets/`, then the shared global cache. Twin assets
+resolve from the Twin's authored root, its `.cache`, then the shared global
+cache. A downloaded binary is reachable at its logical address without any
+authored file naming a cache, and authored files always win over materialized
+copies.
 
 The same boundary resolves delivered directories. A processed dataset such as
 a DEM site may produce a directory containing several runtime products; its
@@ -78,34 +87,37 @@ consumer asks `TwinRoots::resolve_directory` (or the corresponding dataset
 artifact URI) and never reconstructs a `.cache` path or treats the directory as
 a single file.
 
-### The unit you ship carries its own data
+### Engine and Twin caches
 
-`assets/.cache` and `<twin>/.cache` are the same idea applied to the two things
-we distribute:
+There are two runtime cache owners:
 
-- a **package** is a folder — binary, `assets/`, and the large binaries it
-  needs. Those binaries are cache artifacts (downloaded, derived, git-ignored),
-  so they cannot live in `assets/` proper; `build_native.sh` stages them into
-  `assets/.cache/`, the resolver's second root. The package therefore resolves
-  its own payload with no environment variable and no network — running the
-  binary directly behaves exactly like running the launcher.
-- a **Twin** is a folder someone tars up and sends. Its downloads and its
-  derived products both land in `<twin>/.cache`, so the archive arrives
-  complete: `DatasetRegistry` probes read roots rather than the one root it
-  would have written to, and reports those datasets *installed* instead of
-  offering to re-fetch files already on disk.
+- Engine datasets and Twin entries marked `shared = true` use the global
+  `~/.lunco/cache`, shared across worktrees and Twins.
+- Twin-owned downloads and derived products use `<twin>/.cache`, so the Twin
+  folder can be transferred with its data.
 
-During native development, downloads and processed outputs go directly to the
-machine-global cache. The packer copies selected manifest artifacts from that
-cache into `assets/.cache`, so a package remains self-contained while source
-runs and packaged runs use the same logical identities. `lunco_assets_core::asset_read_roots()`
-is the single place that constructs the order for an admitted engine or Twin root;
-the `AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
-reader all use it, so a file the loader finds is a file the validator finds.
+On native platforms, the shared cache defaults to `~/.lunco/cache`. Set
+`LUNCOSIM_CACHE` to select another location.
+
+`lunco-assets-core` is the only owner that constructs the global and Twin-local
+cache paths (`cache_dir()` and `twin_cache_dir()`) and their ordered reader
+roots. `lunco-assets-datasets::dataset_cache_root()` is the single selector for
+a declaration's shared or scope-local cache; the engine scope's local base is
+the global cache. Callers pass the scope's local cache base to
+`entry_dest_path()` and dataset processing; they do not construct
+`.cache` paths or choose shared storage independently.
+
+Packaged files are ordinary files under `assets/`, not a third cache root.
+Native and web packers stage only manifest-declared bundle files into that
+asset tree. Engine reads use `engine_asset_read_roots()` from
+`lunco-assets-core`; Twin reads use `asset_read_roots()`. The registered
+`AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
+reader use the engine roots, so a file the loader finds is a file the validator
+finds.
 
 Native engine and Twin readers, directory lookup, synchronous byte reads and
-dataset installation scans use `resolve_native_asset` over `asset_read_roots`.
-The first existing entry owns the address. A wrong entry kind, escaped link,
+dataset installation scans use `resolve_native_asset` over their respective
+engine or Twin root lists. The first existing entry owns the address. A wrong entry kind, escaped link,
 permission failure or malformed path is terminal; only absence advances to the
 next root. Dataset validity is checked after selection, so an invalid authored
 artifact cannot expose a cached artifact at the same address.
@@ -162,7 +174,7 @@ Logical runtime reads do not acquire an ambient working-directory search.
 A **downloaded scenario is a Twin root** over its cache directory. Its load
 authority is local to the mount, while content provenance uses the shared
 logical source identity. The canonical ownership and conversion contract is
-[`Mount addresses and stable source identity`](55-scene-addressing-and-roots.md#3-mount-addresses-and-stable-source-identity).
+[`Source URIs and internal mount leases`](55-scene-addressing-and-roots.md#3-source-uris-and-internal-mount-leases).
 
 ## Choosing a form when you author
 
@@ -265,7 +277,7 @@ re-derives that mapping:
 
 The same document-relative operation is available to authored Rhai as
 `asset_source_relative_uri(document, relative)`. It performs URI algebra only
-and preserves the document's registered source authority; the production
+and preserves the document's stable source identity; the production
 `scripting_asset_contracts` scene is the acceptance test for that public
 surface, while the runtime shader loader calls the Rust owner directly.
 
@@ -383,18 +395,16 @@ finishes. Open Twin manifests use the same worker boundary. Independent scans
 can overlap; their typed registry results commit in discovery order, and
 `TwinClosed` discards any pending result owned by that root.
 
-**The app requests only declared network assets.** A native engine manifest may
-opt one runtime dependency into a single startup request when its file is
-missing; all other downloads require an explicit request. Opening a Twin never
-requests its declared assets automatically. A missing Twin dataset is
-presented at Twin open in a consent window with an explicit selection; the same
-request remains available in Settings ▸ Data & libraries, the Twin inspector,
-and the Files section's Twin assets rows. Those rows are a read-only projection
-of the registry: Download, Retry, and Cancel emit the typed dataset commands,
-while progress, processing, integrity failure, and installed state continue to
-come from `DatasetRegistry`. This is a rule about trust, not bandwidth: a
-simulator that phones home when you open a file has to be *explained* rather
-than *read*.
+**The app requests declared network assets only after an explicit user action.**
+Opening a Twin never requests its declared assets automatically. A missing Twin
+dataset is presented at Twin open in a consent window with an explicit
+selection; the same request remains available in Settings ▸ Data & libraries,
+the Twin inspector, and the Files section's Twin assets rows. Those rows are a
+read-only projection of the registry: Download, Retry, and Cancel emit the
+typed dataset commands, while progress, processing, integrity failure, and
+installed state continue to come from `DatasetRegistry`. This is a rule about
+trust, not bandwidth: a simulator that phones home when you open a file has to
+be *explained* rather than *read*.
 
 Fetching lives in the explicit provisioning package family. Domain crates
 consume artifacts delivered by the shared asset runtime and do not choose
@@ -481,9 +491,12 @@ then the global cache. `shared = true` selects the global cache as the write
 owner for a reusable product; it does not create a second logical URI or a
 second reader path.
 
-One resolver — `entry_dest_path` — answers this for the CLI downloader, the
-runtime registry and the process step alike, so a file fetched from the app and
-one fetched from a terminal cannot land in different places.
+`dataset_cache_root` selects the cache owner and `entry_dest_path` resolves the
+manifest path under that owner. The CLI downloader, runtime registry and
+processing path use these same functions, so a file fetched from the app and
+one fetched from a terminal cannot land in different places. Raw source reads
+use the shared `lunco-assets-core` ordered roots and the same manifest-relative
+path, without resolving a second filesystem cache path.
 
 A Twin declaration may set `shared = true` for a product deliberately reused by
 multiple Twins. That entry writes to the engine-wide cache and the Twin reader
@@ -645,20 +658,18 @@ declared but not downloaded until a consumer needs it.
 Each `AssetEntry` may declare exact distribution targets in `bundle`. The
 `lunco-assets download --bundle TARGET` and `stage --binary TARGET` commands
 use that same metadata, so download selection and delivered selection cannot
-drift. Native targets stage into `assets/.cache`; web targets stage into the
-web bundle root. Entries with no target remain user-provisioned resources and
+drift. Native and web targets stage into the packaged `assets/` tree at each
+artifact's logical path. Entries with no target remain user-provisioned resources and
 never enter a release by accident.
 
 Package-only manifest inputs (`package_only = true`) are fetched and integrity-
 checked by the existing CI bundle download/staging commands. They require a
 bundle target and cannot be recommended downloads. The runtime registry does
-not admit them. DejaVu Sans is both bundled for offline use and admitted to the
-runtime catalog with `download_on_start = true`, so a missing copy is requested
-once at native startup and remains available for manual retry in Settings.
-The egui theme and USD diagnostic labels wait until the registry reports the
-font installed, then load it through `lunco-assets-runtime`.
-Earth/Moon imagery and source libraries remain user-requested downloads. The
-same bundle rule applies to native and web staging.
+not admit them. DejaVu Sans is a runtime catalog entry for explicit download or
+retry, and is bundled for offline use by every native and web application
+target. The egui theme and USD diagnostic labels wait until the registry reports
+the font installed, then load it through `lunco-assets-runtime`. Earth/Moon
+imagery and source libraries remain user-requested downloads.
 
 Target names distinguish delivery profiles where the same binary has different
 packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
@@ -674,10 +685,9 @@ filename; the final artifact still lands only at the `entry_dest_path` resolved
 above.
 
 This keeps the manifest authoritative without bundling runtime datasets that
-must remain user-consented. The packaged `lunco://` reader checks authored
-assets, packed cache, and the machine-global cache in that order; Twin reads
-additionally check the Twin's authored/cache roots and then the same
-machine-global cache.
+must remain user-consented. The packaged `lunco://` reader checks authored and
+packaged assets, then the shared global cache; Twin reads additionally check
+the Twin's authored files and `.cache` before that same global cache.
 
 ## Source libraries and resource views
 

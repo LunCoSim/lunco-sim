@@ -2644,12 +2644,27 @@ pub fn run() -> u8 {
     );
 
     let expected_runtime = app.world().resource::<ExpectedRuntimeFaults>().0.clone();
-    if let Some(result) = finish_terminal_runtime_fault(
-        &app,
-        &cli,
-        &format!("ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}"),
-    ) {
-        return result;
+    let declared_scene_fault = app
+        .world()
+        .resource::<ExpectedSceneLoadFailures>()
+        .expected
+        .as_ref()
+        .is_some_and(|expected| {
+            matches!(&expected.outcome, Some(SceneLoadTerminalOutcome::Failed { error, .. })
+                if error.contains(&expected.detail_contains)
+                    && app.world().resource::<lunco_core::RuntimeFaults>().first.as_ref()
+                        .is_some_and(|fault| fault.kind == "scene-load-failed"
+                            && fault.subject == expected.path
+                            && fault.detail.contains(error)))
+        });
+    if !declared_scene_fault {
+        if let Some(result) = finish_terminal_runtime_fault(
+            &app,
+            &cli,
+            &format!("ticks={ticks}  updates={updates}  sim={sim_seconds:.2}s  {cfg}"),
+        ) {
+            return result;
+        }
     }
 
     if !expected_runtime.is_empty() {

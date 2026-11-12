@@ -10,7 +10,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_map_weights, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
+import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_local_overlap_weight, terrain_map_weights, terrain_authored_normal_weight, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -122,10 +122,16 @@ import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter
 //!@engine  site_weight_albedo
 //!@engine  site_weight_rough
 //!@engine  site_weight_ao
+//!@engine  site_authored_surface_on
+//!@engine  regional_uv_scale
+//!@engine  regional_albedo_on
 //!@default site_blend_widths_m 1.0,1.0,1.0,1.0
 //!@default site_weight_albedo 0.0
 //!@default site_weight_rough 0.0
 //!@default site_weight_ao 0.0
+//!@default site_authored_surface_on 0.0
+//!@default regional_uv_scale 0.0
+//!@default regional_albedo_on 0.0
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
@@ -187,6 +193,9 @@ struct Material {
     site_weight_albedo: f32, // engine-filled: site-local albedo contribution
     site_weight_rough: f32, // engine-filled: site-local roughness contribution
     site_weight_ao: f32, // engine-filled: site-local ambient-occlusion contribution
+    site_authored_surface_on: f32,
+    regional_uv_scale: f32,
+    regional_albedo_on: f32,
     site_blend_widths_m: vec4<f32>, // engine-filled: visual-only site-to-globe material blend
     stitch_edges:     vec4<f32>, // engine-filled: coarser-neighbour edge mask
     site_base_color: vec4<f32>,
@@ -215,6 +224,12 @@ var detail_normal_smp: sampler;
 var detail_surface_tex: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(22)
 var detail_surface_smp: sampler;
+// Regional reference-geometry reflectance: RGB is coverage-premultiplied in
+// linear light and alpha carries the measured-coverage fraction.
+@group(constants::MATERIAL_BIND_GROUP) @binding(25)
+var regional_albedo_tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(26)
+var regional_albedo_smp: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
@@ -293,7 +308,28 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let mid_scale   = mat.mid_scale;
     let mid_bump    = mat.mid_bump;
     let mottle      = mat.mottle;
-    let authored_albedo_weight = clamp(mat.weight_albedo, 0.0, 1.0);
+    // Local maps have no observations outside their crop. Fade their influence
+    // across the registered transition instead of extending edge texels over
+    // the regional surface.
+    var local_map_weight = 1.0;
+    @if((VERTEX_UVS_A)) local_map_weight = terrain_continuation_weight(
+        in.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
+    // A local normal map and a regional mesh encode different resolutions of
+    // the same relief. Blend to the mesh within their overlap so the normal
+    // raster does not end at a visible square around the local crop.
+    var local_overlap_weight = local_map_weight;
+    @if((VERTEX_UVS_A)) local_overlap_weight = terrain_local_overlap_weight(
+        in.uv, mat.terrain_half_extent, mat.site_blend_widths_m, mat.regional_uv_scale);
+    var regional_sample = vec4(0.0);
+    @if((VERTEX_UVS_A)) if (mat.regional_albedo_on > 0.5) {
+        let regional_uv = (in.uv - vec2(0.5)) * mat.regional_uv_scale + vec2(0.5);
+        regional_sample = textureSample(regional_albedo_tex, regional_albedo_smp, regional_uv);
+    }
+    var local_color_weight = local_map_weight;
+    @if((VERTEX_UVS_A)) if (mat.regional_albedo_on > 0.5) {
+        local_color_weight = mix(local_map_weight, local_overlap_weight, clamp(regional_sample.a, 0.0, 1.0));
+    }
+    let authored_albedo_weight = clamp(mat.weight_albedo, 0.0, 1.0) * local_color_weight;
     let procedural_albedo_weight = 1.0 - authored_albedo_weight;
     var albedo = mat.albedo;
     var site_material_weight = 0.0;
@@ -351,11 +387,20 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let macro_rough = mix(0.5, macro_h, macro_fade);
     var roughness = clamp(mat.roughness + (macro_rough - 0.5) * rough_mix, 0.05, 1.0);
 
+    @if((VERTEX_UVS_A)) if (mat.regional_albedo_on > 0.5) {
+        if (regional_sample.a > 1e-5) {
+            let reflectance = clamp(regional_sample.rgb / regional_sample.a, vec3(0.0), vec3(1.0));
+            albedo = mix(albedo, reflectance, clamp(regional_sample.a, 0.0, 1.0));
+        }
+    }
+
     // ── Non-destructive raster layers (planar UV; weight 0 = no contribution).
     // Guarded by VERTEX_UVS_A: with no UVs we stay pure procedural.
     @if((VERTEX_UVS_A)) let uv = in.uv;
-    @if((VERTEX_UVS_A)) var map_n = textureSample(normal_tex, normal_smp, uv);
-    @if((VERTEX_UVS_A)) var map_s = textureSample(surface_tex, surface_smp, uv);
+    @if((VERTEX_UVS_A)) let site_grad = terrain_continuation_gradients(uv);
+    @if((VERTEX_UVS_A)) let local_uv = clamp(uv, vec2(0.0), vec2(1.0));
+    @if((VERTEX_UVS_A)) var map_n = textureSampleGrad(normal_tex, normal_smp, local_uv, site_grad[0], site_grad[1]);
+    @if((VERTEX_UVS_A)) var map_s = textureSampleGrad(surface_tex, surface_smp, local_uv, site_grad[0], site_grad[1]);
     @if((VERTEX_UVS_A)) let map_footprint = pw / mat.map_texel_size_m;
     @if((VERTEX_UVS_A)) site_material_weight = terrain_continuation_weight(
         uv, mat.terrain_half_extent, mat.site_blend_widths_m);
@@ -370,19 +415,18 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         mat.weight_ao,
         mat.weight_normal,
     );
-    @if((VERTEX_UVS_A)) let map_weight_normal = map_weights.x;
-    @if((VERTEX_UVS_A)) let map_weight_rough = map_weights.y;
-    @if((VERTEX_UVS_A)) let map_weight_ao = map_weights.z;
-    @if((VERTEX_UVS_A)) let map_weight_tone = map_weights.w;
+    @if((VERTEX_UVS_A)) let map_weight_normal = map_weights.x * local_overlap_weight;
+    @if((VERTEX_UVS_A)) let map_weight_rough = map_weights.y * local_map_weight;
+    @if((VERTEX_UVS_A)) let map_weight_ao = map_weights.z * local_map_weight;
+    @if((VERTEX_UVS_A)) let map_weight_tone = map_weights.w * local_map_weight;
     @if((VERTEX_UVS_A)) var map_ao = 1.0;
     // Albedo is already a linear material colour. The asset pipeline separates
     // source-image illumination from local surface detail before writing this
     // sRGB-authored texture; this shader must not relight the source image.
     @if((VERTEX_UVS_A)) if (authored_albedo_weight > 0.0) {
-        let a = textureSample(albedo_tex, albedo_smp, uv).rgb;
+        let a = textureSampleGrad(albedo_tex, albedo_smp, local_uv, site_grad[0], site_grad[1]).rgb;
         albedo = mix(albedo, a, authored_albedo_weight);
     }
-    @if((VERTEX_UVS_A)) let site_grad = terrain_continuation_gradients(uv);
     @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
     @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
@@ -413,20 +457,26 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         ), 0.05, 1.0);
         map_ao = mix(
             map_ao,
-            site_surface.g,
+            terrain_surface_occlusion(site_surface, 1.0, mat.site_authored_surface_on),
             clamp(mat.site_weight_ao, 0.0, 1.0) * site_material_weight,
         );
     }
-    // The DEM map owns the landform band, independently of the grain band.
+    // Preserve mesh relief finer than an authored normal raster's texels.
     // Recover the detail's tangent slope around the geometric normal, then
-    // project it onto the selected landform normal. A full-weight DEM must not
-    // erase grain or inherit camera-dependent tile-normal interpolation.
+    // project it onto the selected landform normal without erasing grain.
+    let geometric_n = normalize(in.world_normal);
+    let normal_variation = length(fwidth(geometric_n));
     @if((VERTEX_UVS_A)) if (map_weight_normal > 0.0) {
         let n_baked = dem_normal_to_world(
             map_n.xyz, in.instance_index);
-        let geometric_n = normalize(in.world_normal);
         let detail_slope = geometric_n - n / max(dot(n, geometric_n), 1e-4);
-        let landform_n = normalize(mix(geometric_n, n_baked, map_weight_normal));
+        let normal_size = textureDimensions(normal_tex);
+        let normal_texel_m = 2.0 * mat.terrain_half_extent
+            / f32(min(normal_size.x, normal_size.y));
+        let authored_weight = terrain_authored_normal_weight(
+            map_weight_normal, mat.terrain_geometry_on, pw / normal_texel_m, normal_variation);
+        let landform_weight = select(map_weight_normal, authored_weight, mat.authored_normal_on > 0.5);
+        let landform_n = normalize(mix(geometric_n, n_baked, landform_weight));
         let landform_slope = detail_slope - landform_n * dot(detail_slope, landform_n);
         n = normalize(landform_n - landform_slope);
     }
@@ -523,6 +573,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
     @if((VERTEX_UVS_A)) march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
+    @if((VERTEX_UVS_A)) march_blend *= local_map_weight;
     @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
         sun_vis = sun_visibility_resolved(
             shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
@@ -543,7 +594,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // its whole job is to stay readable where the light does not reach.
     @if((VERTEX_UVS_A)) if (mat.weight_mineral > 0.0) {
         let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
-        color = vec4(mix(color.rgb, m, mat.weight_mineral), color.a);
+        color = vec4(mix(color.rgb, m, mat.weight_mineral * local_map_weight), color.a);
     }
 
     @if((VERTEX_UVS_A)) color = vec4(mix(color.rgb, annotations.overlay.rgb, annotations.overlay.a), color.a);

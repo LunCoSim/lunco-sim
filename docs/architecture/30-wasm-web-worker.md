@@ -81,6 +81,22 @@ a transport layer that bridges the channels to the worker over
    - `InstallLibraryIndexFromSource(bytes)` → worker-owned editor-index decode,
      sent back in bounded metadata chunks.
    - `Ping(tag)` → `WireResult::Log("pong: {tag} (source_docs={})")`.
+
+Source-root preparation and parsing also stay in the Modelica Web Worker. Its
+load acknowledgement carries the parsed documents from the exact accepted
+snapshot to the authoring mirror, so the page does not parse the same files a
+second time. The mirror operation retains a shared admission permit and the
+source-root lease. If admission is full or a prior mirror still owns that
+root's commit gate, the response remains ordered at the head of the page-side
+response backlog until shared capacity or source-operation revisions change;
+the operation revision is sampled before each nonblocking lock attempt so a
+release between contention and deferral cannot be missed. Gate releases advance
+that revision even when an operation is stale or already retired; reservations
+also advance it. Response handling never waits for the mirror lock. The
+authoring-session commit still runs as a cooperative task on the page thread
+because the Rumoca authoring session is page-owned. Moving that session and its
+readers to the Modelica Web Worker remains TODO; admission limits concurrent
+ownership but does not move this commit off-thread.
 7. **Result fan-in.** Worker posts each `WireResult` back. Main's
    `onmessage` decodes:
    - `Result(r)` → `tx_res.send(r)` — picked up by the existing

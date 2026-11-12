@@ -127,8 +127,8 @@ publish when their writable stream closes. Detached retired downloads may finish
 persisting immutable cache bytes, but cannot change another revision or publish
 into its live download state.
 
-`mount_scenario_twin` returns `ScenarioTwinMount` with its actual authority,
-root, load path, and ownership. It acquires retirement ownership only for a newly
+`mount_scenario_twin` returns `ScenarioTwinMount` with its stable scene URI,
+actual internal authority, root, and ownership. It acquires retirement ownership only for a newly
 registered authority; existing exact cache mounts retain their previous owner.
 Repeated admission by the same connection and host mount preserves its existing
 ownership only when authority and root also match. It reuses only that exact cache

@@ -37,7 +37,7 @@ impl PendingShaderSources {
                 let mount = if let Some((authority, _)) = lunco_assets_core::parse_twin_uri(path) {
                     let root = roots
                         .ok_or("Twin asset registry is unavailable")?
-                        .root_of(authority)
+                        .root_for(authority)
                         .map_err(|error| error.to_string())?
                         .ok_or_else(|| format!("shader source mount `{authority}` is retired"))?;
                     Some((authority.to_owned(), root))
@@ -86,7 +86,7 @@ pub fn publish_shader_sources(
 ) {
     pending.0.retain(|path, pending| {
         if let Some((authority, root)) = &pending.mount {
-            match roots.as_deref().map(|roots| roots.root_of(authority)) {
+            match roots.as_deref().map(|roots| roots.root_for(authority)) {
                 Some(Ok(Some(current))) if &current == root => {}
                 Some(Err(error)) => {
                     warn!("SET_SHADER_SOURCE: {path}: {error}");

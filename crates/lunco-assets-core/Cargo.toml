@@ -15,6 +15,7 @@ lunco-twin = { path = "../lunco-twin" }
 thiserror = { workspace = true }
 dirs = "5"
 percent-encoding = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

@@ -598,16 +598,22 @@ impl SettingsSection for ProfileSettings {
 }
 
 /// Persisted terrain/ground settings.
-#[derive(Resource, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+#[derive(Resource, Reflect, serde::Serialize, serde::Deserialize, Clone, PartialEq, Debug)]
+#[reflect(Resource)]
 pub struct TerrainSettings {
+    /// Include completed terrain-streaming updates in Recent Events.
+    #[serde(default)]
+    pub show_streaming_events: bool,
     /// Radius around a visual-detail camera that the terrain streamer refines
     /// aggressively. A camera marker can override this for a specific view.
     #[serde(default = "TerrainSettings::default_visual_detail_radius_m")]
+    #[reflect(ignore)]
     pub visual_detail_radius_m: f64,
     /// Additional distance for retaining already-refined camera terrain. This
     /// is hysteresis only: it avoids fine-to-coarse-to-fine churn while the
     /// camera moves, without requesting new detail outside the radius above.
     #[serde(default = "TerrainSettings::default_visual_detail_hysteresis_m")]
+    #[reflect(ignore)]
     pub visual_detail_hysteresis_m: f64,
 }
 
@@ -627,6 +633,7 @@ impl TerrainSettings {
 impl Default for TerrainSettings {
     fn default() -> Self {
         Self {
+            show_streaming_events: false,
             visual_detail_radius_m: Self::DEFAULT_VISUAL_DETAIL_RADIUS_M,
             visual_detail_hysteresis_m: Self::DEFAULT_VISUAL_DETAIL_HYSTERESIS_M,
         }
@@ -635,6 +642,28 @@ impl Default for TerrainSettings {
 
 impl SettingsSection for TerrainSettings {
     const KEY: &'static str = "terrain";
+}
+
+#[cfg(test)]
+mod terrain_settings_tests {
+    use super::TerrainSettings;
+
+    #[test]
+    fn streaming_event_preference_defaults_off_and_roundtrips() {
+        let old: TerrainSettings =
+            serde_json::from_str(r#"{"visual_detail_radius_m":70.0}"#).unwrap();
+        assert!(!old.show_streaming_events);
+        assert_eq!(old.visual_detail_radius_m, 70.0);
+        let enabled = TerrainSettings {
+            show_streaming_events: true,
+            ..old
+        };
+        let stored = serde_json::to_string(&enabled).unwrap();
+        assert_eq!(
+            serde_json::from_str::<TerrainSettings>(&stored).unwrap(),
+            enabled
+        );
+    }
 }
 
 /// Persistent allocation policy for native texture preparation.

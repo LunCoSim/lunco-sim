@@ -171,6 +171,23 @@ fn action_color(tool: TerrainTool, alt: bool, ctrl: bool) -> Color {
     }
 }
 
+fn hide_terrain_brush_ghost(
+    commands: &mut Commands,
+    ghosts: &Query<
+        (
+            Entity,
+            &mut CellCoord,
+            &mut Transform,
+            &mut lunco_render::PbrLook,
+        ),
+        (With<TerrainBrushGhost>, Without<big_space::prelude::Grid>),
+    >,
+) {
+    for ghost in ghosts.iter().map(|row| row.0) {
+        commands.entity(ghost).try_insert(Visibility::Hidden);
+    }
+}
+
 /// Follow the cursor with a translucent brush-footprint disc while armed. Casts
 /// a ray through the active window camera onto the terrain **height oracle**
 /// (same approach as the spawn ghost — the collider ring only exists near
@@ -210,27 +227,30 @@ pub fn update_terrain_brush_ghost(
     // A terrain brush preview is scene input too.  Never project the cursor
     // through an egui panel onto an unseen surface behind the chrome.
     if egui_focus.wants_pointer {
-        for (ghost, _, _, _) in q_ghost.iter() {
-            commands.entity(ghost).try_despawn();
-        }
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     }
 
     // The viewport owns presentation selection. Query order is not a camera
     // contract, and sensor/RTT cameras may also be active.
     let Some(camera_entity) = viewport.active_camera else {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };
     let Ok((camera, cam_tf, target)) = cameras.get(camera_entity) else {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };
     if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     }
     let Some(cursor) = pointer.position() else {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };
     let Ok(ray) = camera.viewport_to_world(cam_tf, cursor) else {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };
     let origin = ray.origin.as_dvec3();
@@ -242,9 +262,10 @@ pub fn update_terrain_brush_ghost(
     let Some((origin_grid, dir_grid)) =
         surface.ray_to_grid(lunco_spatial::coords::RenderPos(origin), dir)
     else {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };
-    let Some(point) = cursor_surface_hit(
+    let point = match cursor_surface_hit(
         &surface,
         &raycaster,
         origin_grid,
@@ -252,9 +273,17 @@ pub fn update_terrain_brush_ghost(
         10_000.0,
         SurfacePickPolicy::TerrainFirst,
         |_| true,
-    )
-    .map(|hit| hit.point.0) else {
-        return;
+    ) {
+        Ok(Some(hit)) => hit.point.0,
+        Ok(None) => {
+            hide_terrain_brush_ghost(&mut commands, &q_ghost);
+            return;
+        }
+        Err(error) => {
+            warn_once!("terrain brush pick could not be certified: {error}");
+            hide_terrain_brush_ghost(&mut commands, &q_ghost);
+            return;
+        }
     };
 
     let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
@@ -267,6 +296,7 @@ pub fn update_terrain_brush_ghost(
     let Some((world_grid, brush_cell, brush_local)) =
         surface.grid_local(lunco_spatial::coords::GridPos(point + DVec3::Y * 0.05))
     else {
+        hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };
     let transform = Transform::from_translation(brush_local).with_scale(Vec3::new(
@@ -275,7 +305,7 @@ pub fn update_terrain_brush_ghost(
         state.radius,
     ));
 
-    if let Some((_, mut cell, mut tf, mut look)) = q_ghost.iter_mut().next() {
+    if let Some((ghost, mut cell, mut tf, mut look)) = q_ghost.iter_mut().next() {
         // `set_if_neq`, NOT `*tf = transform`: the latter goes through `DerefMut`, so
         // it marks `Changed<Transform>` EVERY frame the brush is armed — whether or
         // not the cursor moved (and every downstream propagation with it). Compare
@@ -289,6 +319,7 @@ pub fn update_terrain_brush_ghost(
         if look.base_color != color.to_linear() {
             look.base_color = color.to_linear();
         }
+        commands.entity(ghost).try_insert(Visibility::Visible);
     } else {
         // Unit-radius flat disc; scaled by `radius` each frame via the transform.
         let mesh = meshes.add(Cylinder::new(1.0, 0.02).mesh().resolution(48).build());

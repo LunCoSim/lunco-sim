@@ -581,8 +581,9 @@ closes every editor document before `TwinAdded`; unfinished UI preparations are
 canceled and file-read completions are fenced by their admitted runtime owner.
 Individual document closure also cancels parse preparation, save-close
 continuations, and document-owned modals before retiring the editor state.
-Reopening the same Twin starts fresh. `RestartScene` leaves editable documents
-resident while rebuilding their scene-owned execution.
+Reopening the same Twin starts a new workspace/mount lifetime. `RestartScene`
+reloads its source while retaining the Twin and editable documents;
+`ResetSceneRuntime` rebuilds scene-owned execution from the mounted stage.
 
 Operation IDs fence an in-flight file read from installing a source set after
 its owner closes. If the worker has not created its channel yet, pending unloads

@@ -7,19 +7,72 @@ use std::path::Path;
 
 use crate::scene::{
     ClearScene, LoadScene, SceneEntities, SceneLoadInFlight, SceneStageAssetOutcome,
-    clear_scene_entities, resolve_root_prim, spawn_scene_root_world, validate_scene_address,
+    clear_scene_entities, resolve_root_prim, spawn_scene_root_with_stage, spawn_scene_root_world,
+    validate_scene_address,
 };
+use bevy::asset::AssetPath;
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task};
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document as _, OpenOutcome};
 use lunco_doc_bevy::{DocumentChanged, DocumentRegistry, OpenFile};
+use lunco_storage::Storage;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_bevy_stage::{UsdStageAsset, source::UsdSourceBytes};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages, source::UsdSourceBytes};
 use lunco_usd_core::commands::{EmptyViewportReason, is_usd_path};
-use lunco_usd_document::document::UsdDocument;
+use lunco_usd_document::document::{PreparedUsdSource, UsdDocument};
 use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
 use lunco_workspace::{TwinClosed, WorkspaceResource};
+
+#[derive(Resource, Default)]
+pub(crate) struct PendingSceneRestart(Option<PendingSceneRestartWork>);
+
+struct PendingSceneRestartWork {
+    id: lunco_core::SceneTransitionId,
+    transition: lunco_core::SceneTransition,
+    previous_generation: u64,
+    root: Entity,
+    stage: Handle<UsdStageAsset>,
+    asset_path: AssetPath<'static>,
+    label: String,
+    root_prim: String,
+    document: Option<RestartDocumentRefresh>,
+}
+
+struct RestartDocumentRefresh {
+    doc: lunco_doc::DocumentId,
+    authority: String,
+    relative_path: String,
+    path: Option<std::path::PathBuf>,
+    generation: u64,
+    mount_revision: u64,
+    reset_document: bool,
+    task: Task<Result<PreparedRestartDocument, String>>,
+}
+
+struct RestartDocumentSnapshot {
+    doc: lunco_doc::DocumentId,
+    authority: String,
+    relative_path: String,
+    document: UsdDocument,
+}
+
+struct PreparedRestartDocument {
+    source: Option<PreparedUsdSource>,
+    overlays: Vec<PreparedRestartOverlay>,
+}
+
+struct PreparedRestartOverlay {
+    authority: String,
+    relative_path: String,
+    doc: lunco_doc::DocumentId,
+    source_generation: u64,
+    generation: u64,
+    authoring_recipe_revision: Option<(u64, u64)>,
+    authoring_recipe: lunco_usd_compose::recipe::StageRecipe,
+    input: lunco_usd_document::document::DocumentStageInput,
+}
 
 /// Telemetry mnemonic for a default Twin scene whose authoritative source did
 /// not become available. This is a scene-load failure, not a simulation fault:
@@ -126,10 +179,8 @@ pub(crate) fn announce_repaired_twin_scene(
 /// Open one Twin-relative scene selected by the active Rhai loading policy.
 #[Command(default)]
 pub struct OpenTwinScene {
-    /// Workspace identity of the Twin whose source authority was mounted.
+    /// Workspace identity of the Twin whose source owns the scene.
     pub twin_id: u64,
-    /// Exact `twin://` authority returned by the asset owner.
-    pub name: String,
     /// Indexed path relative to the Twin root.
     pub relative_path: String,
 }
@@ -233,28 +284,28 @@ fn on_open_twin_scene(
             request.relative_path
         ));
     }
-    let mounted_root = roots
+    let roots = roots
         .as_deref()
-        .ok_or_else(|| "TwinRoots is not installed".to_owned())?
-        .root_for(&request.name)
-        .map_err(|error| error.to_string())?;
-    if mounted_root.as_deref() != Some(twin.root.as_path()) {
-        return Err(format!(
-            "Twin asset authority `{}` does not belong to Twin {}",
-            request.name, request.twin_id
-        ));
-    }
+        .ok_or_else(|| "TwinRoots is not installed".to_owned())?;
+    let authority = roots
+        .authority_for_root(&twin.root)
+        .map_err(|_| "Twin asset source is unavailable".to_owned())?
+        .ok_or_else(|| "Twin asset source is unavailable".to_owned())?;
     let (Some(asset_server), Some(usd_sources)) = (asset_server, usd_sources) else {
         return Err("the USD asset pipeline is not installed".to_owned());
     };
 
-    let scene_uri = lunco_assets_core::twin_uri(&request.name, &request.relative_path);
+    let internal_scene_uri = lunco_assets_core::twin_uri(&authority, &request.relative_path);
+    let scene_uri =
+        lunco_assets_core::asset_path::source_uri_for_address(&internal_scene_uri, Some(roots))
+            .map_err(|_| "Twin scene source is unavailable".to_owned())?;
     info!(
         "[twin] doc-backing starting scene `{scene_uri}` (twin `{}`) — mount follows",
         twin.root.display()
     );
-    let source_path = lunco_assets_core::asset_path::load_asset_path(&scene_uri, None, None, None)
-        .map_err(|error| format!("invalid Twin scene source `{scene_uri}`: {error}"))?;
+    let source_path =
+        lunco_assets_core::asset_path::load_asset_path(&internal_scene_uri, None, None, None)
+            .map_err(|_| "Twin scene source is unavailable".to_owned())?;
     let handle = asset_server.load::<UsdSourceBytes>(source_path);
     let source_ready = usd_sources.get(handle.id()).is_some();
     let source_failed = asset_server
@@ -265,7 +316,7 @@ fn on_open_twin_scene(
         handle,
         twin_id,
         source_ready,
-        request.name.clone(),
+        authority,
         request.relative_path.clone(),
         twin.root.join(relative),
         twin.root.clone(),
@@ -312,9 +363,11 @@ fn on_load_scene(
     // without one, so the request ends at the visible prerequisite boundary.
     asset_server: Option<Res<AssetServer>>,
     stages: Option<Res<Assets<UsdStageAsset>>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut pending_twin: Option<ResMut<crate::twin_projection::PendingTwinDocs>>,
     mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
 ) -> Result<Ack, String> {
-    let path = validate_scene_address(&trigger.event().path).map_err(|error| {
+    let public_path = validate_scene_address(&trigger.event().path).map_err(|error| {
         warn!("{error}");
         error
     })?;
@@ -323,24 +376,31 @@ fn on_load_scene(
         warn!("[load-scene] {error}");
         return Err(error);
     }
+    let path = lunco_assets_core::asset_path::load_source_uri(&public_path, roots.as_deref())
+        .map(|path| lunco_assets_core::asset_path::anchor_of(&path))
+        .map_err(|error| {
+            warn!("[load-scene] source URI could not be admitted: {error}");
+            error.to_string()
+        })?;
     let root_prim = resolve_root_prim(&path, &trigger.event().root_prim);
+
+    if pending_twin.as_deref_mut().is_some_and(|pending| {
+        pending.defer_scene_load(&path, public_path.clone(), root_prim.clone())
+    }) {
+        info!("[load-scene] queued Twin scene until its document source is ready");
+        return Ok(Ack::new(OpId::new()));
+    }
 
     let request = lunco_core::SceneTransitionRequest::load(path.clone(), root_prim);
     match coordinator.admit(request) {
         lunco_core::SceneTransitionAdmission::AlreadyActive => {
-            info!("[load-scene] `{}` is already mounting — no-op", path);
+            info!("[load-scene] `{public_path}` is already mounting — no-op");
         }
         lunco_core::SceneTransitionAdmission::Queued => {
-            info!(
-                "[load-scene] queued `{}` behind the active scene transaction",
-                path
-            );
+            info!("[load-scene] queued `{public_path}` behind the active scene transaction");
         }
         lunco_core::SceneTransitionAdmission::Admitted => {
-            info!(
-                "[load-scene] admitted `{}` for the next scene lifecycle phase",
-                path
-            );
+            info!("[load-scene] admitted `{public_path}` for the next scene lifecycle phase");
         }
     }
     Ok(Ack::new(OpId::new()))
@@ -373,13 +433,19 @@ pub(crate) fn execute_admitted_load_scene(
     };
     let path = path.clone();
     let root_prim = root_prim.clone();
+    let display_path = crate::scene::stable_source_address(&path, roots.as_deref())
+        .unwrap_or_else(|_| "Twin scene".to_owned());
 
     let transition = lunco_core::SceneTransition::load(path.clone(), root_prim.clone());
     let transition_id = coordinator.start(transition.clone());
     let asset_path = match lunco_assets_core::asset_path::load_asset_path(&path, None, None, None) {
         Ok(path) => path,
         Err(error) => {
-            let error = format!("invalid USD scene address `{path}`: {error}");
+            let error = if lunco_assets_core::parse_twin_uri(&path).is_some() {
+                format!("Twin scene source `{display_path}` is unavailable")
+            } else {
+                format!("invalid USD scene address `{display_path}`: {error}")
+            };
             warn!("{error}");
             commands.trigger(lunco_core::SceneTransitionFailed {
                 id: transition_id,
@@ -396,6 +462,11 @@ pub(crate) fn execute_admitted_load_scene(
         roots.as_deref(),
         &asset_server,
     ) {
+        let error = if lunco_assets_core::parse_twin_uri(&path).is_some() {
+            format!("Twin scene source `{display_path}` could not be prepared")
+        } else {
+            error
+        };
         warn!("[load-scene] {error}");
         commands.trigger(lunco_core::SceneTransitionFailed {
             id: transition_id,
@@ -446,7 +517,7 @@ pub(crate) fn execute_admitted_load_scene(
     }) {
         info!(
             "[load-scene] `{}` @ `{}` already loaded — no-op",
-            path, root_prim
+            display_path, root_prim
         );
         commands.trigger(lunco_core::SceneTransitionCompleted {
             id: transition_id,
@@ -455,7 +526,10 @@ pub(crate) fn execute_admitted_load_scene(
         return;
     }
 
-    info!("[load-scene] reload path=`{}` root=`{}`", path, root_prim);
+    info!(
+        "[load-scene] reload path=`{}` root=`{}`",
+        display_path, root_prim
+    );
 
     // Invalidate outgoing roots NOW, before Bevy applies the deferred
     // despawns below.  The visual sync system may still query those entities
@@ -555,163 +629,737 @@ fn refresh_doc_backed_scene_source(
     Ok(())
 }
 
-/// Refresh the active doc-backed Twin from its source file before the shared
-/// [`RestartScene`] lifecycle handler reloads its asset. The lower simulation
-/// layer deliberately does not know documents; it queues its asset reload, which
-/// gives this observer one synchronous place to update the composed Twin overlay.
-///
-/// A normal restart retains dirty documents; a full reset is a separately
-/// confirmed intent which discards both their authored and runtime layers. The
-/// document registry owns both policies so every file-backed domain keeps the
-/// same identity and history invariants.
-pub(crate) fn on_restart_scene_refresh_active_document(
-    trigger: On<lunco_core::SceneTransitionStarted>,
-    asset_server: Option<Res<AssetServer>>,
-    q_usd: Query<(&UsdPrimPath, Has<UsdSceneRoot>)>,
-    mut registry: ResMut<DocumentRegistry<UsdDocument>>,
-    mut backed: Option<ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    twins: Option<Res<lunco_assets_core::twin_source::TwinRoots>>,
-    assets: Option<Res<Assets<UsdStageAsset>>>,
+/// Admit a source reload while keeping the currently committed scene mounted
+/// until its authoritative document source has been read and parsed.
+pub(crate) fn execute_admitted_restart_scene(
+    trigger: On<lunco_core::SceneTransitionAdmitted>,
+    asset_server: Res<AssetServer>,
+    admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
+    registry: Option<Res<DocumentRegistry<UsdDocument>>>,
+    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    twins: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
+    mut pending: ResMut<PendingSceneRestart>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
+    mount_state: Option<Res<lunco_core::SceneMountState>>,
     role: Option<Res<lunco_core_session::NetworkRole>>,
+    mut commands: Commands,
 ) {
-    let lunco_core::SceneTransition::Restart { reset_document, .. } = &trigger.event().transition
+    let lunco_core::SceneTransitionRequest::Restart { reset_document } = &trigger.event().request
     else {
         return;
     };
-    // The authoritative host/standalone process owns the source file. Clients
-    // restart the currently replicated asset and must not invent a local base.
-    if role.as_deref().is_some_and(|role| !role.is_authoritative()) {
+    if pending.0.is_some() {
+        fail_restart_before_start(
+            &mut commands,
+            "a scene source reload is already being prepared".to_owned(),
+        );
         return;
     }
-    let (Some(asset_server), Some(backed), Some(twins)) =
-        (asset_server, backed.as_deref_mut(), twins)
-    else {
+    let Some(previous_generation) = coordinator.completed_generation() else {
+        coordinator.finish_noop();
+        warn!("[restart-scene] no committed scene is loaded — nothing to reload");
         return;
     };
-    let Some(stage_path) = q_usd
-        .iter()
-        .find(|(_, is_root)| *is_root)
-        .and_then(|(prim, _)| asset_server.get_path(prim.stage_handle.id()))
-        .map(|path| path.to_string())
-    else {
-        return;
-    };
-
-    let active = registry.ids().find_map(|doc| {
-        let (name, rel) = backed.coords_of(doc)?;
-        (lunco_assets_core::twin_uri(&name, &rel) == stage_path).then_some((doc, name, rel))
-    });
-    let Some((doc, name, _rel)) = active else {
-        return;
-    };
-    let Some(path) = registry
-        .host(doc)
-        .and_then(|host| host.document().origin().canonical_path())
-        .map(std::path::Path::to_owned)
-    else {
-        return;
-    };
-    let Ok(bytes) = lunco_storage::read_file_sync(&path) else {
-        warn!(
-            "[restart-scene] cannot reread `{}`; keeping the mounted source",
-            path.display()
+    let root = mount_state
+        .as_deref()
+        .and_then(lunco_core::SceneMountState::active_root)
+        .and_then(|root| q_usd.get(root).ok())
+        .filter(|(_, _, is_root)| *is_root);
+    let Some((root, prim, _)) = root else {
+        coordinator.finish_noop();
+        fail_restart_before_start(
+            &mut commands,
+            "RestartScene requires the committed primary scene root".to_owned(),
         );
         return;
     };
-    let prepared = match lunco_usd_document::document::PreparedUsdSource::from_bytes(bytes) {
-        Ok(prepared) => prepared,
+
+    let stage = prim.stage_handle.clone();
+    let root_prim = prim.path.clone();
+    let Some(asset_path) = asset_server
+        .get_path(stage.id())
+        .map(|path| path.into_owned())
+    else {
+        coordinator.finish_noop();
+        fail_restart_before_start(
+            &mut commands,
+            "RestartScene requires a reloadable asset source; use ResetSceneRuntime for an in-memory stage"
+                .to_owned(),
+        );
+        return;
+    };
+    let internal_label = asset_path.to_string();
+    let label = match crate::scene::stable_source_address(&internal_label, twins.as_deref()) {
+        Ok(label) => label,
         Err(error) => {
-            warn!(
-                "[restart-scene] refusing invalid USD source `{}`: {error}",
-                path.display()
-            );
+            coordinator.finish_noop();
+            fail_restart_before_start(&mut commands, error);
             return;
         }
     };
-    let (_, outcome) = if *reset_document {
-        registry.reset_prepared_file(path, prepared)
-    } else {
-        registry.open_prepared_file(path, prepared, true)
-    };
-    match outcome {
-        OpenOutcome::Refreshed => {
-            if *reset_document {
-                info!("[restart-scene] fully reset active Twin from disk before remount")
-            } else {
-                info!("[restart-scene] refreshed active Twin source before remount")
-            }
-        }
-        OpenOutcome::KeptDirty => {
-            warn!(
-                "[restart-scene] active Twin has unsaved edits; retaining them instead of overwriting from disk"
-            );
-        }
-        OpenOutcome::KeptUnparsable => {
-            warn!("[restart-scene] source did not parse as USDA; retaining the mounted document")
-        }
-        OpenOutcome::Allocated => {}
+    if *reset_document && role.as_deref().is_some_and(|role| !role.is_authoritative()) {
+        coordinator.finish_noop();
+        fail_restart_before_start(
+            &mut commands,
+            "full document reset is owned by the authoritative session".to_owned(),
+        );
+        return;
     }
-    // A referenced Editor document may have advanced since its last mount.
-    // Its resolver overlay must advance too before the replacement asset reads
-    // the closure; otherwise reload consumes older component parameters.
-    let Some(recipe) = q_usd
-        .iter()
-        .find(|(_, root)| *root)
-        .and_then(|(prim, _)| assets.as_deref()?.get(prim.stage_handle.id()))
-        .and_then(|asset| asset.recipe.as_ref())
+    let transition = lunco_core::SceneTransition::Restart {
+        path: label.clone(),
+        root_prim: root_prim.clone(),
+        reset_document: *reset_document,
+    };
+    let id = coordinator.start(transition.clone());
+
+    let document = if role.as_deref().is_some_and(|role| !role.is_authoritative()) {
+        Ok(None)
+    } else {
+        prepare_restart_document_refresh(
+            Some(&internal_label),
+            *reset_document,
+            previous_generation,
+            id,
+            registry.as_deref(),
+            backed.as_deref(),
+            twins.as_deref(),
+            &asset_server,
+            &admission,
+        )
+    };
+    let document = match document {
+        Ok(document) => document,
+        Err(error) => {
+            reject_active_restart(id, &error, &mut coordinator, &mut commands);
+            return;
+        }
+    };
+
+    info!("[restart-scene] preparing source reload for `{label}`");
+    pending.0 = Some(PendingSceneRestartWork {
+        id,
+        transition,
+        previous_generation,
+        root,
+        stage,
+        asset_path,
+        label,
+        root_prim,
+        document,
+    });
+}
+
+fn prepare_restart_document_refresh(
+    stage_path: Option<&str>,
+    reset_document: bool,
+    scope_generation: u64,
+    transition_id: lunco_core::SceneTransitionId,
+    registry: Option<&DocumentRegistry<UsdDocument>>,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    twins: Option<&lunco_assets_core::TwinRoots>,
+    asset_server: &AssetServer,
+    admission: &lunco_core_runtime::AsyncWorkAdmission,
+) -> Result<Option<RestartDocumentRefresh>, String> {
+    let Some((authority, relative_path)) = stage_path.and_then(lunco_assets_core::parse_twin_uri)
     else {
-        warn!("[restart-scene] mounted Twin has no source closure; cannot refresh its overlays");
+        return if reset_document {
+            Err("full document reset requires an open Twin-backed USD document".to_owned())
+        } else {
+            Ok(None)
+        };
+    };
+    let Some(backed) = backed else {
+        return if reset_document {
+            Err("full document reset requires the active Twin document projection".to_owned())
+        } else {
+            Ok(None)
+        };
+    };
+    let Some(doc) = backed.doc_for(authority, relative_path) else {
+        return if reset_document {
+            Err("full document reset requires an open active Twin USD document".to_owned())
+        } else {
+            Ok(None)
+        };
+    };
+    let registry = registry.ok_or("the active Twin USD document registry is unavailable")?;
+    let twins = twins.ok_or("the active Twin asset registry is unavailable")?;
+    if twins
+        .root_for(authority)
+        .map_err(|_| "Twin asset registry is unavailable".to_owned())?
+        .is_none()
+    {
+        return Err("Twin asset source retired during reload admission".to_owned());
+    }
+    let host = registry
+        .host(doc)
+        .ok_or_else(|| format!("active Twin USD document {doc} is unavailable"))?;
+    let document = host.document();
+    if document.parse_error().is_some() {
+        return Err(format!(
+            "active Twin USD document {doc} has invalid authored source"
+        ));
+    }
+    let generation = document.generation();
+    let path = document
+        .origin()
+        .canonical_path()
+        .map(std::path::Path::to_owned);
+    if reset_document && path.is_none() {
+        return Err("full document reset requires a file-backed USD source".to_owned());
+    }
+    let should_read_source = reset_document || !document.is_dirty();
+    let mount_revision = twins.revision().map_err(|error| error.to_string())?;
+    let pool =
+        AsyncComputeTaskPool::try_get().ok_or("USD reload preparation task pool is unavailable")?;
+    let permit = admission
+        .admit_external(
+            lunco_core_runtime::AsyncWorkPriority::Interactive,
+            lunco_core_runtime::AsyncWorkKey::new(
+                lunco_core_runtime::AsyncWorkKind::UsdPreparation,
+                scope_generation,
+                u128::from(doc.raw()),
+                generation,
+                transition_id.get(),
+            ),
+        )
+        .map_err(|error| format!("USD reload preparation admission rejected: {error:?}"))?;
+    let task_path = path.clone();
+    let root_id = lunco_assets_core::twin_uri(authority, relative_path);
+    let task_authority = authority.to_owned();
+    let task_relative_path = relative_path.to_owned();
+    let candidate = document.clone();
+    let mut referenced_documents = Vec::new();
+    for (referenced_doc, referenced_authority, referenced_path, _, _, _) in backed.entries() {
+        if referenced_doc == doc {
+            continue;
+        }
+        if let Some(host) = registry.host(referenced_doc) {
+            referenced_documents.push(RestartDocumentSnapshot {
+                doc: referenced_doc,
+                authority: referenced_authority,
+                relative_path: referenced_path,
+                document: host.document().clone(),
+            });
+        }
+    }
+    let source_roots = twins.clone();
+    let source_server = asset_server.clone();
+    let task = pool.spawn(async move {
+        let result = async {
+            let source = if should_read_source {
+                if let Some(path) = task_path.as_ref() {
+                    let storage = lunco_storage::FileStorage::new();
+                    let handle = lunco_storage::StorageHandle::File(path.clone());
+                    let bytes = storage
+                        .read(&handle)
+                        .await
+                        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                    Some(PreparedUsdSource::from_bytes(bytes)?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if reset_document && source.is_none() {
+                return Err("full document reset completed without prepared file source".to_owned());
+            }
+
+            let mut candidate = candidate;
+            if let Some(source) = source.as_ref() {
+                let accepted = if reset_document {
+                    <UsdDocument as lunco_doc::PreparedFileBacked>::reset_prepared_source(
+                        &mut candidate,
+                        source.clone(),
+                    )
+                } else {
+                    <UsdDocument as lunco_doc::PreparedFileBacked>::reload_prepared_source(
+                        &mut candidate,
+                        source.clone(),
+                    )
+                };
+                if !accepted {
+                    return Err(
+                        "prepared USD source could not be applied to its candidate document"
+                            .to_owned(),
+                    );
+                }
+            }
+
+            let initial = candidate
+                .capture_stage_input(&root_id, false)
+                .map_err(|error| error.to_string())?;
+            let seed = restart_source_seed(&initial)?;
+            let mut source_overrides = std::collections::HashMap::from([(
+                root_id.clone(),
+                initial.root_bytes.as_ref().clone(),
+            )]);
+            let mut referenced_inputs = Vec::new();
+            for referenced in referenced_documents {
+                let uri =
+                    lunco_assets_core::twin_uri(&referenced.authority, &referenced.relative_path);
+                let input = referenced
+                    .document
+                    .capture_stage_input(&uri, false)
+                    .map_err(|error| error.to_string());
+                if let Ok(input) = &input {
+                    source_overrides.insert(uri.clone(), input.root_bytes.as_ref().clone());
+                }
+                referenced_inputs.push((referenced, uri, input));
+            }
+            let origin = lunco_assets_core::asset_path::load_asset_path(&root_id, None, None, None)
+                .map_err(|error| format!("invalid USD reload source `{root_id}`: {error}"))?;
+            let authoring_recipe =
+                lunco_usd_bevy_stage::compose::fetch_stage_recipe_from_asset_reader(
+                    &source_server,
+                    origin,
+                    seed,
+                    &source_overrides,
+                    Some(&source_roots),
+                    lunco_usd_compose::recipe::StageClosureLimits::default(),
+                )
+                .await
+                .map_err(|error| format!("could not refresh the USD source closure: {error}"))?;
+            // The old canonical stage's layer revision does not identify this
+            // freshly fetched closure. Leave the revision unset until the new
+            // stage becomes the authoring authority.
+            let authoring_recipe_revision = None;
+            candidate
+                .set_authoring_recipe(authoring_recipe_revision, Some(authoring_recipe.clone()));
+            let candidate_input = candidate
+                .capture_stage_input(&root_id, false)
+                .map_err(|error| error.to_string())?;
+            let dependencies: std::collections::HashSet<_> =
+                authoring_recipe.bytes.keys().cloned().collect();
+            let mut overlays = vec![PreparedRestartOverlay {
+                authority: task_authority.clone(),
+                relative_path: task_relative_path.clone(),
+                doc,
+                source_generation: generation,
+                generation: candidate.generation(),
+                authoring_recipe_revision,
+                authoring_recipe: authoring_recipe.clone(),
+                input: candidate_input,
+            }];
+            for (mut referenced, uri, input) in referenced_inputs {
+                if !dependencies.contains(&uri) {
+                    continue;
+                }
+                let input = input.map_err(|error| {
+                    format!(
+                        "dependent USD document {} cannot be prepared for `{uri}`: {error}",
+                        referenced.doc
+                    )
+                })?;
+                let seed = restart_source_seed(&input)?;
+                let origin = lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None)
+                    .map_err(|error| format!("invalid dependent USD source `{uri}`: {error}"))?;
+                let authoring_recipe =
+                    lunco_usd_bevy_stage::compose::fetch_stage_recipe_from_asset_reader(
+                        &source_server,
+                        origin,
+                        seed,
+                        &source_overrides,
+                        Some(&source_roots),
+                        lunco_usd_compose::recipe::StageClosureLimits::default(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        format!("could not refresh dependent USD source `{uri}`: {error}")
+                    })?;
+                let authoring_recipe_revision = None;
+                referenced.document.set_authoring_recipe(
+                    authoring_recipe_revision,
+                    Some(authoring_recipe.clone()),
+                );
+                let generation = referenced.document.generation();
+                let input = referenced
+                    .document
+                    .capture_stage_input(&uri, false)
+                    .map_err(|error| error.to_string())?;
+                overlays.push(PreparedRestartOverlay {
+                    authority: referenced.authority,
+                    relative_path: referenced.relative_path,
+                    doc: referenced.doc,
+                    source_generation: generation,
+                    generation,
+                    authoring_recipe_revision,
+                    authoring_recipe,
+                    input,
+                });
+            }
+            overlays.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+            Ok(PreparedRestartDocument { source, overlays })
+        }
+        .await;
+        drop(permit);
+        result
+    });
+    Ok(Some(RestartDocumentRefresh {
+        doc,
+        authority: authority.to_owned(),
+        relative_path: relative_path.to_owned(),
+        path,
+        generation,
+        mount_revision,
+        reset_document,
+        task,
+    }))
+}
+
+fn restart_source_seed(
+    input: &lunco_usd_document::document::DocumentStageInput,
+) -> Result<lunco_usd_compose::recipe::StageRecipe, String> {
+    let root_id = input.recipe.root_id.clone();
+    let root_bytes = input
+        .recipe
+        .bytes
+        .get(&root_id)
+        .cloned()
+        .ok_or_else(|| format!("candidate source recipe has no root bytes for {root_id}"))?;
+    let mut seed = lunco_usd_compose::recipe::StageRecipe::new(
+        root_id,
+        std::collections::HashMap::from([(input.recipe.root_id.clone(), root_bytes)]),
+    );
+    seed.session_layer = input.recipe.session_layer.clone();
+    if let Some(session) = seed.session_layer.as_ref() {
+        let bytes = input.recipe.bytes.get(session).cloned().ok_or_else(|| {
+            format!("candidate source recipe has no session-layer bytes for {session}")
+        })?;
+        seed.bytes.insert(session.clone(), bytes);
+    }
+    Ok(seed)
+}
+
+/// Commit a prepared source reload at the lifecycle boundary. Every identity
+/// and source lease is checked again before document or mount state changes.
+pub(crate) fn drain_pending_scene_restart(
+    mut pending: ResMut<PendingSceneRestart>,
+    mut coordinator: ResMut<lunco_core::SceneTransitionCoordinator>,
+    asset_server: Res<AssetServer>,
+    mut registry: Option<ResMut<DocumentRegistry<UsdDocument>>>,
+    mut backed: Option<ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    twins: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut canonical: Option<NonSendMut<CanonicalStages>>,
+    q_usd: Query<(Entity, &UsdPrimPath, Has<UsdSceneRoot>)>,
+    scene: SceneEntities,
+    mut mount_state: Option<ResMut<lunco_core::SceneMountState>>,
+    mut commands: Commands,
+) {
+    let polled = match pending.0.as_mut().and_then(|work| work.document.as_mut()) {
+        Some(document) => bevy::tasks::block_on(bevy::tasks::futures_lite::future::poll_once(
+            &mut document.task,
+        ))
+        .map(|result| result.map(Some)),
+        None => Some(Ok(None)),
+    };
+    let Some(prepared) = polled else {
         return;
     };
-    let dependencies = recipe
-        .bytes
-        .keys()
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
-    if let Err(error) = publish_restart_document_overlays(
-        &mut registry,
-        backed,
-        &twins,
-        &asset_server,
-        doc,
-        &name,
-        &dependencies,
-    ) {
-        warn!("[restart-scene] could not publish the refreshed Twin sources: {error}");
+    let Some(work) = pending.0.take() else {
+        return;
+    };
+    let prepared = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            reject_active_restart(work.id, &error, &mut coordinator, &mut commands);
+            return;
+        }
+    };
+    if coordinator.active_id() != Some(work.id)
+        || coordinator.active() != Some(&work.transition)
+        || coordinator.completed_generation() != Some(work.previous_generation)
+        || mount_state
+            .as_deref()
+            .and_then(lunco_core::SceneMountState::active_root)
+            != Some(work.root)
+        || !q_usd.get(work.root).is_ok_and(|(_, prim, is_root)| {
+            is_root && prim.stage_handle.id() == work.stage.id() && prim.path == work.root_prim
+        })
+    {
+        reject_active_restart(
+            work.id,
+            "the mounted scene changed while its source reload was preparing",
+            &mut coordinator,
+            &mut commands,
+        );
+        return;
+    }
+
+    if let Some(refresh) = work.document.as_ref() {
+        let Some(twins) = twins.as_deref() else {
+            reject_active_restart(
+                work.id,
+                "the active Twin asset registry retired during reload preparation",
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        };
+        let (Some(registry_ref), Some(backed_ref)) = (registry.as_deref(), backed.as_deref())
+        else {
+            reject_active_restart(
+                work.id,
+                "the active Twin document projection retired during reload preparation",
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        };
+        if twins.revision().ok() != Some(refresh.mount_revision)
+            || twins.root_for(&refresh.authority).ok().flatten().is_none()
+            || backed_ref.doc_for(&refresh.authority, &refresh.relative_path) != Some(refresh.doc)
+            || registry_ref
+                .host(refresh.doc)
+                .is_none_or(|host| host.document().generation() != refresh.generation)
+        {
+            reject_active_restart(
+                work.id,
+                "the active Twin document or mount changed while its source reload was preparing",
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        }
+
+        let Some(prepared_document) = prepared else {
+            reject_active_restart(
+                work.id,
+                "USD reload preparation completed without its document candidate",
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        };
+        let Some(active_overlay) = prepared_document
+            .overlays
+            .iter()
+            .find(|overlay| overlay.doc == refresh.doc)
+        else {
+            reject_active_restart(
+                work.id,
+                format!(
+                    "active USD document {} has no prepared source input",
+                    refresh.doc
+                ),
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        };
+        let dependencies: std::collections::HashSet<_> = active_overlay
+            .authoring_recipe
+            .bytes
+            .keys()
+            .cloned()
+            .collect();
+        let mut prepared_docs = std::collections::HashSet::new();
+        for overlay in &prepared_document.overlays {
+            if !prepared_docs.insert(overlay.doc)
+                || twins.root_for(&overlay.authority).ok().flatten().is_none()
+                || backed_ref.doc_for(&overlay.authority, &overlay.relative_path)
+                    != Some(overlay.doc)
+                || backed_ref.coords_of(overlay.doc)
+                    != Some((overlay.authority.clone(), overlay.relative_path.clone()))
+                || registry_ref
+                    .host(overlay.doc)
+                    .is_none_or(|host| host.document().generation() != overlay.source_generation)
+            {
+                reject_active_restart(
+                    work.id,
+                    format!(
+                        "Twin document {} changed or retired while its source reload was preparing",
+                        overlay.doc
+                    ),
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            }
+        }
+        for (doc, authority, relative_path, _, _, _) in backed_ref.entries() {
+            if dependencies.contains(&lunco_assets_core::twin_uri(&authority, &relative_path))
+                && !prepared_docs.contains(&doc)
+            {
+                reject_active_restart(
+                    work.id,
+                    format!(
+                        "dependent Twin document {doc} opened while its source reload was preparing"
+                    ),
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            }
+        }
+
+        if let Some(prepared_source) = prepared_document.source {
+            let Some(registry) = registry.as_deref_mut() else {
+                reject_active_restart(
+                    work.id,
+                    "the active Twin USD document registry retired during reload preparation",
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            };
+            let Some(path) = refresh.path.as_ref() else {
+                reject_active_restart(
+                    work.id,
+                    "prepared USD source has no file identity",
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            };
+            let (doc, outcome) = if refresh.reset_document {
+                registry.reset_prepared_file(path.clone(), prepared_source)
+            } else {
+                registry.open_prepared_file(path.clone(), prepared_source, true)
+            };
+            if doc != refresh.doc || outcome != OpenOutcome::Refreshed {
+                reject_active_restart(
+                    work.id,
+                    format!("USD source refresh was rejected: {outcome:?}"),
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            }
+        }
+        let Some(registry) = registry.as_deref_mut() else {
+            reject_active_restart(
+                work.id,
+                "the active Twin USD document registry retired during reload preparation",
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        };
+        for overlay in &prepared_document.overlays {
+            if registry
+                .host(overlay.doc)
+                .is_none_or(|host| host.document().generation() != overlay.generation)
+            {
+                reject_active_restart(
+                    work.id,
+                    format!(
+                        "committed Twin document {} does not match its prepared stage input",
+                        overlay.doc
+                    ),
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            }
+        }
+        for overlay in &prepared_document.overlays {
+            let Some(host) = registry.host_mut(overlay.doc) else {
+                reject_active_restart(
+                    work.id,
+                    format!(
+                        "prepared Twin document {} retired before overlay commit",
+                        overlay.doc
+                    ),
+                    &mut coordinator,
+                    &mut commands,
+                );
+                return;
+            };
+            host.document_mut().set_authoring_recipe(
+                overlay.authoring_recipe_revision,
+                Some(overlay.authoring_recipe.clone()),
+            );
+        }
+        let Some(backed) = backed.as_deref_mut() else {
+            reject_active_restart(
+                work.id,
+                "the active Twin document projection retired during reload preparation",
+                &mut coordinator,
+                &mut commands,
+            );
+            return;
+        };
+        if let Err(error) = publish_restart_document_overlays(
+            backed,
+            twins,
+            &asset_server,
+            prepared_document.overlays,
+        ) {
+            reject_active_restart(work.id, error, &mut coordinator, &mut commands);
+            return;
+        }
+    }
+
+    if let Some(stages) = canonical.as_deref_mut() {
+        stages.retire(work.stage.id());
+    }
+    info!("[restart-scene] reloading `{}` from its source", work.label);
+    if let Some(state) = mount_state.as_deref_mut() {
+        state.begin_replacement();
+    }
+    commands.remove_resource::<SceneLoadInFlight>();
+    commands.remove_resource::<lunco_usd_bevy_scene::FailedSceneLoad>();
+    commands.insert_resource(SceneLoadInFlight {
+        transition_id: work.id,
+        path: work.label.clone(),
+        stage_id: work.stage.id(),
+    });
+    commands.trigger(lunco_core::SceneTransitionStarted {
+        id: work.id,
+        transition: work.transition.clone(),
+    });
+    clear_scene_entities(&mut commands, &scene);
+    let PendingSceneRestartWork {
+        stage,
+        asset_path,
+        label,
+        root_prim,
+        ..
+    } = work;
+    commands.queue(move |world: &mut World| {
+        world.resource::<AssetServer>().reload(asset_path);
+        spawn_scene_root_with_stage(world, &label, &root_prim, stage.clone());
+    });
+}
+
+fn reject_active_restart(
+    id: lunco_core::SceneTransitionId,
+    error: impl Into<String>,
+    coordinator: &mut lunco_core::SceneTransitionCoordinator,
+    commands: &mut Commands,
+) {
+    let error = error.into();
+    if coordinator.fail(id) {
+        warn!("[restart-scene] source reload stopped before teardown: {error}");
+        lunco_core::trigger_runtime_error(commands, "scene-reload-preparation-failed", error);
     }
 }
 
+fn fail_restart_before_start(commands: &mut Commands, error: String) {
+    warn!("[restart-scene] {error}");
+    lunco_core::trigger_runtime_error(commands, "scene-reload-rejected", error);
+}
+
 fn publish_restart_document_overlays(
-    registry: &mut DocumentRegistry<UsdDocument>,
     backed: &mut lunco_usd_bevy_twin::DocBackedTwinScenes,
     twins: &lunco_assets_core::twin_source::TwinRoots,
     server: &AssetServer,
-    active_doc: lunco_doc::DocumentId,
-    name: &str,
-    dependencies: &std::collections::HashSet<String>,
+    overlays: Vec<PreparedRestartOverlay>,
 ) -> Result<(), String> {
-    let mut sources = Vec::new();
-    for (doc, twin, rel, _, _, _) in backed.entries() {
-        if twin != name
-            || (doc != active_doc
-                && !dependencies.contains(&lunco_assets_core::twin_uri(&twin, &rel)))
+    for overlay in overlays {
+        if backed.coords_of(overlay.doc)
+            != Some((overlay.authority.clone(), overlay.relative_path.clone()))
         {
-            continue;
+            return Err(format!(
+                "document {} projection lease changed while its source reload was preparing",
+                overlay.doc
+            ));
         }
-        let document = registry
-            .host_mut(doc)
-            .ok_or_else(|| format!("document {doc} is not open"))?
-            .document_mut();
-        document.clear_view();
-        let input = document
-            .capture_stage_input(&lunco_assets_core::twin_uri(&twin, &rel), false)
-            .map_err(|error| error.to_string())?;
-        sources.push((rel, doc, document.generation(), input));
-    }
-    sources.sort_by(|a, b| a.0.cmp(&b.0));
-    for (_rel, doc, generation, source) in sources {
-        backed.publish_stage_input(doc, twins, server, source)?;
-        backed.mark_overlay_synced(doc, generation);
+        backed.publish_stage_input(overlay.doc, twins, server, overlay.input)?;
+        backed.mark_overlay_synced(overlay.doc, overlay.generation);
     }
     Ok(())
 }

@@ -91,6 +91,8 @@ pub enum TextureLayer {
     /// Site-local albedo supplied to a lunar-surface continuation shader while
     /// the ordinary `Albedo` layer remains the body-wide surface image.
     ContinuationAlbedo,
+    /// Coverage-premultiplied regional reflectance in the regional terrain frame.
+    RegionalAlbedo,
     /// Site-local packed roughness/AO supplied to a lunar-surface continuation
     /// shader while the ordinary `Surface` layer remains body-wide.
     ContinuationSurface,

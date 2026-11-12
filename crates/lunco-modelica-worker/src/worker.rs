@@ -47,9 +47,9 @@ use cache::{CompiledArtifactCache, PreparedSolveCache, PreparedSolveKey};
 mod bridge;
 mod compile;
 pub use bridge::{
-    handle_modelica_responses, on_remove_modelica, reconcile_modelica_preparation_progress,
-    request_modelica_compiles, retire_closed_twin_models, retire_replication_models,
-    spawn_modelica_requests, validate_modelica_variable_ownership,
+    ModelicaResponseBacklog, handle_modelica_responses, on_remove_modelica,
+    reconcile_modelica_preparation_progress, request_modelica_compiles, retire_closed_twin_models,
+    retire_replication_models, spawn_modelica_requests, validate_modelica_variable_ownership,
 };
 pub use compile::{
     PendingCompileAdmissions, PendingLifecycleCompletion, dispatch_modelica_compile_requests,
@@ -1790,7 +1790,7 @@ fn commit_ready_compiler_completions(
                     loaded_source_root_id: Some(commit.root_id),
                     loaded_source_root_namespaces: commit.namespaces,
                     loaded_source_root_sources: commit.sources,
-                    loaded_source_root_files: commit.files,
+                    loaded_source_root_documents: commit.documents,
                     source_root_operation_id: Some(source_root_operation_id),
                     error: commit.error,
                     ..Default::default()
@@ -5118,7 +5118,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
             let compiler = w.compiler.get_or_insert_with(ModelicaCompiler::new);
             let t0 = web_time::Instant::now();
             let prepared = prepare_source_root_payload(id.clone(), payload);
-            let files = prepared.source_files();
+            let documents = prepared.parsed_documents();
             let report = compiler.install_source_root(prepared);
             if report.diagnostics.is_empty() && report.inserted_file_count > 0 {
                 w.library_gen += 1;
@@ -5143,7 +5143,7 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                 Vec::new()
             };
             send(ModelicaResult {
-                loaded_source_root_files: if err.is_none() { files } else { Vec::new() },
+                loaded_source_root_documents: if err.is_none() { documents } else { Vec::new() },
                 loaded_source_root_sources: if err.is_none() {
                     compiler.source_root_source_facts(&id)
                 } else {

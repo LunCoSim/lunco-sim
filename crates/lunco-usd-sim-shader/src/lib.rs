@@ -666,6 +666,7 @@ fn read_shader_inputs(
 fn texture_layer_for_input(snake: &str) -> Option<TextureLayer> {
     match snake {
         "albedo_map" => Some(TextureLayer::Albedo),
+        "regional_albedo_map" => Some(TextureLayer::RegionalAlbedo),
         "mineral_map" => Some(TextureLayer::Mineral),
         "surface_map" => Some(TextureLayer::Surface),
         "normal_map" => Some(TextureLayer::Normal),

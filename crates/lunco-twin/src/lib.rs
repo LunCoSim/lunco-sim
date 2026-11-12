@@ -428,6 +428,21 @@ pub struct Twin {
 }
 
 impl Twin {
+    /// Human-readable name from the manifest, or the folder name for a plain
+    /// directory Twin.
+    pub fn display_name(&self) -> String {
+        self.manifest
+            .as_ref()
+            .map(|manifest| manifest.name.clone())
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                self.root
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "Twin".to_string())
+    }
+
     /// Whether this Twin persists its edit journal to
     /// `<root>/history/journal.json`.
     ///

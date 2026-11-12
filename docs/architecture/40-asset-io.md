@@ -96,12 +96,11 @@ plaintext fixtures under both `assets/http-path-fixture/default` and
 | `payload%20one.txt` | `literal-percent20` |
 | `payload one.txt` | `literal-space` |
 
-Create only `assets/http-path-fixture/library/.cache/cache # % 月.txt` with
-payload `packed-cache`; leave `missing # % 月.txt` absent in every root. The
-async test exercises actual default/library reader builders, packed-cache
-fallback, distinct decoded filenames, typed missing-file errors and the worker
-fetch transport. These temporary transport fixtures are neither Twin assets
-nor authored USD; browser seam evidence is separate from full app acceptance.
+Leave `missing # % 月.txt` absent in both roots. The async test exercises the
+actual default/library reader builders, distinct decoded filenames, typed
+missing-file errors and the worker fetch transport. These temporary transport
+fixtures are neither Twin assets nor authored USD; browser seam evidence is
+separate from full app acceptance.
 
 USD composition classifies binary arcs by the full logical filename extension.
 Literal `#`, `?` and `%` remain filename data; only explicit HTTP URLs use their
@@ -258,17 +257,11 @@ another dataset or changing its parameters is an `Assets.toml` edit. Rust change
 are needed only when adding a new processing algorithm or owner.
 
 `DatasetScope::id()` owns the scope identity used by `ListDatasets` and download
-actions: `engine` or `twin:<name>`. Display labels are not query selectors.
+actions: `engine` or `twin:<source_identity>`. UUID-backed Twins use
+`uuid-<simple-uuid>`; display labels are not query selectors.
 An unknown or undiscovered scope rejects explicitly; a discovered empty scope
 may return no entries. `RequestDataset` and `CancelDataset` return terminal
 command results for invalid identities or states.
-
-Native engine manifests may set `download_on_start = true` for app-owned runtime
-dependencies. After the complete engine manifest scan, the provisioning owner
-requests each opted-in asset once when its delivered file is missing. A failed
-or cancelled request waits for an explicit retry or the next application
-launch. Twin manifests cannot set this policy, and package-only build inputs
-cannot appear in the runtime catalog.
 
 The provisioning worker reports discrete download, preparation, cancellation,
 completion, and failure transitions through shared telemetry. The worker also

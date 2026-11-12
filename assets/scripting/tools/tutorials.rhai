@@ -75,11 +75,6 @@ fn start_path(path) {
     let current = path[0];
     let args = #{source_asset: current.source_asset, scene_asset: current.scene_asset,
         twin_asset: current.twin_asset, reload_policy: "restart", params: #{lesson_path: path}};
-    let route = execution_context();
-    if route.scope == "twin" {
-        if route.owner_id == () { throw "tutorial navigation has no exact Twin owner"; }
-        args.owner_twin_id = route.owner_id;
-    }
     let result = start(args);
     if result == () || !result.ok { throw "tutorial launch rejected: " + result.to_string(); }
 }

@@ -59,9 +59,15 @@ type RayCoverEntry = ([f64; 4], [f64; 2], usize);
 const CELL_PAGE_SIDE: usize = 4;
 const CELL_PAGE_LEN: usize = CELL_PAGE_SIDE * CELL_PAGE_SIDE;
 
+#[derive(Clone, Copy)]
+struct BoundsCertificate {
+    bounds: [f64; 2],
+    cell_cost: usize,
+}
+
 #[derive(Default)]
 struct CellPage {
-    values: [Option<[f64; 2]>; CELL_PAGE_LEN],
+    values: [Option<BoundsCertificate>; CELL_PAGE_LEN],
     used: usize,
 }
 
@@ -70,7 +76,7 @@ struct CellPage {
 /// Empty pages retire immediately; the exact page key fences the hot slot.
 #[derive(Default)]
 struct BoundsStore {
-    rectangles: HashMap<CellBoundsKey, [f64; 2]>,
+    rectangles: HashMap<CellBoundsKey, BoundsCertificate>,
     page_slots: HashMap<[usize; 2], usize>,
     pages: Vec<Option<CellPage>>,
     free: Vec<usize>,
@@ -97,7 +103,7 @@ impl BoundsStore {
         Some(index)
     }
 
-    fn get(&mut self, key: &CellBoundsKey) -> Option<[f64; 2]> {
+    fn get(&mut self, key: &CellBoundsKey) -> Option<BoundsCertificate> {
         match *key {
             CellBoundsKey::Cell { x, z } => {
                 let (key, index) = Self::location(x, z);
@@ -108,7 +114,7 @@ impl BoundsStore {
         }
     }
 
-    fn insert(&mut self, key: CellBoundsKey, value: [f64; 2]) {
+    fn insert(&mut self, key: CellBoundsKey, value: BoundsCertificate) {
         match key {
             CellBoundsKey::Cell { x, z } => {
                 let (key, index) = Self::location(x, z);
@@ -174,15 +180,31 @@ pub struct SurfaceOcclusionCache {
     cells: BoundsStore,
     order: std::collections::VecDeque<CellBoundsKey>,
     ray_cover: std::collections::VecDeque<RayCoverEntry>,
+    batch: Option<HashMap<CellBoundsKey, BoundsCertificate>>,
+    batch_needs_reset: bool,
 }
 impl SurfaceOcclusionCache {
+    /// Start a deterministic, bounded group of related terrain rays. Each
+    /// enclosure is admitted and charged once within this group, regardless of
+    /// whether it was retained from an earlier group.
+    pub(crate) fn begin_batch(&mut self) {
+        self.batch_needs_reset = true;
+    }
+
     /// Fence retained bounds once for the immutable query surface.
     fn prepare(&mut self, surface: &SurfaceOracle, capacity: usize) {
+        if self.batch_needs_reset {
+            self.batch.get_or_insert_with(HashMap::new).clear();
+            self.batch_needs_reset = false;
+        }
         let key = surface.surface_key();
         if self.surface != Some(key) {
             self.surface = Some(key);
             self.cells.clear();
             self.order.clear();
+            if let Some(batch) = self.batch.as_mut() {
+                batch.clear();
+            }
         }
         while self.cells.len() > capacity {
             if let Some(oldest) = self.order.pop_front() {
@@ -197,21 +219,46 @@ impl SurfaceOcclusionCache {
         key: CellBoundsKey,
         rect: [f64; 4],
         capacity: usize,
+        remaining: &mut usize,
     ) -> Result<[f64; 2], String> {
-        if let Some(bounds) = self.cells.get(&key) {
-            return Ok(bounds);
+        if let Some(batch) = self.batch.as_ref() {
+            if let Some(certificate) = batch.get(&key) {
+                return Ok(certificate.bounds);
+            }
+            if batch.len() >= capacity {
+                return Err("terrain occlusion batch certificate budget exceeded".into());
+            }
         }
+        if let Some(certificate) = self.cells.get(&key) {
+            if *remaining < certificate.cell_cost {
+                *remaining = 0;
+                return Err("regional DEM cell enclosure budget exceeded".into());
+            }
+            *remaining -= certificate.cell_cost;
+            if let Some(batch) = self.batch.as_mut() {
+                batch.insert(key, certificate);
+            }
+            return Ok(certificate.bounds);
+        }
+        let before = *remaining;
         let bounds = {
             let _span = bevy::log::debug_span!("terrain_occlusion_bounds_miss").entered();
-            surface.height_bounds_in_cell(key.cell(), rect)?
+            surface.height_bounds_in_cell(key.cell(), rect, remaining)?
         };
         while self.cells.len() >= capacity {
             if let Some(oldest) = self.order.pop_front() {
                 self.cells.remove(&oldest);
             }
         }
-        self.cells.insert(key, bounds);
+        let certificate = BoundsCertificate {
+            bounds,
+            cell_cost: before - *remaining,
+        };
+        self.cells.insert(key, certificate);
         self.order.push_back(key);
+        if let Some(batch) = self.batch.as_mut() {
+            batch.insert(key, certificate);
+        }
         Ok(bounds)
     }
 
@@ -226,6 +273,7 @@ impl SurfaceOcclusionCache {
         ray: OcclusionRay,
         interval: [f64; 2],
         budget: SurfaceOcclusionBudget,
+        remaining: &mut usize,
     ) -> Result<Option<bool>, String> {
         let mut pending = std::mem::take(&mut self.ray_cover);
         pending.push_back((rect, interval, 0));
@@ -297,7 +345,8 @@ impl SurfaceOcclusionCache {
                         cell,
                         coordinates: child.map(f64::to_bits),
                     };
-                    let bounds = self.bounds(surface, key, child, budget.max_cached_cells)?;
+                    let bounds =
+                        self.bounds(surface, key, child, budget.max_cached_cells, remaining)?;
                     match classify_enclosure(bounds, points) {
                         Some(true) => return Ok(Some(true)),
                         Some(false) => {}
@@ -386,7 +435,7 @@ impl SurfaceOracle {
             return Err("invalid terrain occlusion budget".into());
         }
         let ray = OcclusionRay { origin, direction };
-        let half = self.half_extent() as f64;
+        let half = self.domain_half_extent() as f64;
         let slab = |o: f64, d: f64| -> Option<(f64, f64)> {
             if d == 0.0 {
                 (o.abs() <= half).then_some((f64::NEG_INFINITY, f64::INFINITY))
@@ -417,7 +466,8 @@ impl SurfaceOracle {
             return Err("terrain ray interval exceeds finite coordinates".into());
         }
         cache.prepare(self, budget.max_cached_cells);
-        let spacing = self.spacing() as f64;
+        let shared_regional_cells = self.has_regional_surface() && cache.batch.is_some();
+        let spacing = self.occlusion_spacing();
         let mut examined = 0;
         let mut ambiguous = false;
         let mut pending = std::collections::VecDeque::new();
@@ -440,12 +490,12 @@ impl SurfaceOracle {
                 if !pa.is_finite() || !pb.is_finite() {
                     return Err("terrain ray interval exceeds finite coordinates".into());
                 }
-                let bounds = cache.bounds(self, key, rect, budget.max_cached_cells)?;
+                let bounds = cache.bounds(self, key, rect, budget.max_cached_cells, remaining)?;
                 if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
                     return Ok(Some(result));
                 }
                 if let Some(result) =
-                    cache.refine_ray_enclosure(self, cell, rect, ray, [a, b], budget)?
+                    cache.refine_ray_enclosure(self, cell, rect, ray, [a, b], budget, remaining)?
                 {
                     return Ok(Some(result));
                 }
@@ -463,6 +513,7 @@ impl SurfaceOracle {
                             pa.x.max(pb.x),
                             pa.z.max(pb.z),
                         ],
+                        remaining,
                     )?
                 };
                 if let Some(result) = classify_enclosure(bounds, [pa, pb]) {
@@ -490,13 +541,13 @@ impl SurfaceOracle {
             };
         let p = origin + direction * near;
         let cell_axis = |v: f64, d: f64| {
-            let f = ((v + half) / spacing).clamp(0.0, (self.base_resolution() - 1) as f64);
+            let f = ((v + half) / spacing).clamp(0.0, (self.domain_resolution() - 1) as f64);
             let i = if d < 0.0 {
                 f.ceil() as isize - 1
             } else {
                 f.floor() as isize
             };
-            i.clamp(0, self.base_resolution() as isize - 2) as usize
+            i.clamp(0, self.domain_resolution() as isize - 2) as usize
         };
         let mut cell = [cell_axis(p.x, direction.x), cell_axis(p.z, direction.z)];
         // Advance integer cell identities at the crossed boundaries. Recovering
@@ -510,7 +561,7 @@ impl SurfaceOracle {
                     f64::INFINITY
                 } else {
                     let i = cell[axis] + usize::from(d > 0.0);
-                    let boundary = if i == self.base_resolution() - 1 {
+                    let boundary = if i == self.domain_resolution() - 1 {
                         half
                     } else {
                         -half + i as f64 * spacing
@@ -524,7 +575,7 @@ impl SurfaceOracle {
             ];
             let end = far.min(exits[0]).min(exits[1]);
             let boundary = |i: usize| {
-                if i == self.base_resolution() - 1 {
+                if i == self.domain_resolution() - 1 {
                     half
                 } else {
                     -half + i as f64 * spacing
@@ -537,9 +588,32 @@ impl SurfaceOracle {
                 boundary(cell[1] + 1),
             ];
             if end > near {
-                let key = CellBoundsKey::Cell {
-                    x: cell[0],
-                    z: cell[1],
+                // A regional cell may contain hundreds of finer site cells.
+                // Enclose the ray footprint, not the full coarse square, so
+                // transverse site detail cannot exhaust the fixed work quota.
+                let (key, rect) = if self.has_regional_surface() && !shared_regional_cells {
+                    let [a, b] = ray.endpoints([near, end]);
+                    let footprint = [
+                        a.x.min(b.x).clamp(rect[0], rect[2]),
+                        a.z.min(b.z).clamp(rect[1], rect[3]),
+                        a.x.max(b.x).clamp(rect[0], rect[2]),
+                        a.z.max(b.z).clamp(rect[1], rect[3]),
+                    ];
+                    (
+                        CellBoundsKey::Rectangle {
+                            cell,
+                            coordinates: footprint.map(f64::to_bits),
+                        },
+                        footprint,
+                    )
+                } else {
+                    (
+                        CellBoundsKey::Cell {
+                            x: cell[0],
+                            z: cell[1],
+                        },
+                        rect,
+                    )
                 };
                 match classify(key, near, end, rect)? {
                     Some(true) => return Ok(true),
@@ -556,7 +630,7 @@ impl SurfaceOracle {
                     let d = if axis == 0 { direction.x } else { direction.z };
                     cell[axis] = cell[axis]
                         .checked_add_signed(if d > 0.0 { 1 } else { -1 })
-                        .filter(|index| *index < self.base_resolution() - 1)
+                        .filter(|index| *index < self.domain_resolution() - 1)
                         .ok_or("terrain cell traversal left its clipped interval")?;
                 }
             }
@@ -626,6 +700,198 @@ mod tests {
     use lunco_obstacle_field::field::HeightGrid;
     use lunco_terrain_core::{BrushModifier, HeightModifier};
     use std::sync::Arc;
+
+    #[test]
+    fn regional_solar_batch_shares_bounded_enclosures_deterministically() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+
+        let geo = |half: f64, res| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, 26.0, 3.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let local = Arc::new(HeightGrid::new_flat(512, 500.0));
+        let regional = Arc::new(HeightGrid::new_flat(801, 8000.0));
+        let pair = RegisteredRegionalSurface::new(
+            local,
+            geo(500.0, 512),
+            regional,
+            geo(8000.0, 801),
+            500.0,
+            0.0,
+        )
+        .unwrap();
+        let surface = SurfaceOracle::registered(Arc::new(pair), Vec::new());
+        let budget = SurfaceOcclusionBudget::default();
+        let direction = DVec3::new(0.98538, 0.14716, 0.08582).normalize();
+        let mut cache = SurfaceOcclusionCache::default();
+        let mut used = Vec::new();
+        for _ in 0..2 {
+            cache.begin_batch();
+            let mut remaining = budget.max_tick_intervals;
+            for sample in 0..9 {
+                let origin = DVec3::new(-380.03, 30.0, -380.50 + sample as f64 * 0.1);
+                assert_eq!(
+                    surface.occludes_ray(origin, direction, budget, &mut remaining, &mut cache),
+                    Ok(false)
+                );
+            }
+            used.push(budget.max_tick_intervals - remaining);
+        }
+        assert_eq!(used[0], used[1]);
+        assert!(used[0] < budget.max_tick_intervals);
+        cache.begin_batch();
+        let mut remaining = budget.max_tick_intervals;
+        assert_eq!(
+            surface.occludes_ray(
+                DVec3::new(-380.03, -1.0, -380.5),
+                direction,
+                budget,
+                &mut remaining,
+                &mut cache,
+            ),
+            Ok(true)
+        );
+        cache.begin_batch();
+        let mut remaining = 1;
+        assert!(
+            surface
+                .occludes_ray(
+                    DVec3::new(-380.03, 30.0, -380.5),
+                    direction,
+                    budget,
+                    &mut remaining,
+                    &mut cache,
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn regional_solar_ray_bounds_only_its_fine_grid_footprint() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+
+        let geo = |half: f64, res| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, 26.0, 3.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let local = Arc::new(HeightGrid::new_flat(512, 500.0));
+        let regional = Arc::new(HeightGrid::new_flat(801, 8000.0));
+        let pair = RegisteredRegionalSurface::new(
+            local,
+            geo(500.0, 512),
+            regional,
+            geo(8000.0, 801),
+            500.0,
+            0.0,
+        )
+        .unwrap();
+        let surface = SurfaceOracle::registered(Arc::new(pair), Vec::new());
+        let budget = SurfaceOcclusionBudget::default();
+        let origin = DVec3::new(-380.03, 30.0, -380.50);
+        let direction = DVec3::new(0.98538, 0.14716, 0.08582).normalize();
+        let mut cache = SurfaceOcclusionCache::default();
+        let mut remaining = budget.max_tick_intervals;
+        assert_eq!(
+            surface.occludes_ray(origin, direction, budget, &mut remaining, &mut cache),
+            Ok(false)
+        );
+        let cold_remaining = remaining;
+        remaining = budget.max_tick_intervals;
+        assert_eq!(
+            surface.occludes_ray(origin, direction, budget, &mut remaining, &mut cache),
+            Ok(false)
+        );
+        assert_eq!(remaining, cold_remaining);
+    }
+
+    #[test]
+    fn registered_surface_occlusion_and_cache_work_are_consistent() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+
+        let local = Arc::new(HeightGrid::new_flat(9, 4.0));
+        let mut regional = HeightGrid::new_flat(17, 16.0);
+        for z in 0..regional.res {
+            regional.heights[z * regional.res + 13] = 10.0;
+        }
+        let geo = |half: f64, res| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, 26.0, 3.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let pair = RegisteredRegionalSurface::new(
+            local,
+            geo(4.0, 9),
+            Arc::new(regional),
+            geo(16.0, 17),
+            3.0,
+            0.0,
+        )
+        .unwrap();
+        let surface = SurfaceOracle::registered(Arc::new(pair), Vec::new());
+        let sampled = crate::surface_query::height_in_footprint(
+            &surface,
+            lunco_spatial::coords::GridPos(DVec3::new(10.0, 0.0, 0.0)),
+        );
+        assert!((sampled.unwrap() - 10.0).abs() < 1e-9);
+        assert!(
+            crate::surface_query::height_in_footprint(
+                &surface,
+                lunco_spatial::coords::GridPos(DVec3::new(17.0, 0.0, 0.0)),
+            )
+            .is_none()
+        );
+        let hit =
+            crate::oracle::raycast_surface(&surface, DVec3::new(10.0, 20.0, 0.0), -DVec3::Y, 30.0)
+                .unwrap()
+                .unwrap();
+        assert!((hit.y - 10.0).abs() < 0.01);
+        let budget = SurfaceOcclusionBudget::default();
+        let mut cache = SurfaceOcclusionCache::default();
+        for (y, expected) in [(2.0, true), (20.0, false)] {
+            let mut cold_remaining = budget.max_tick_intervals;
+            let cold = surface
+                .occludes_ray(
+                    DVec3::new(-15.0, y, 0.3),
+                    DVec3::X,
+                    budget,
+                    &mut cold_remaining,
+                    &mut cache,
+                )
+                .unwrap();
+            let mut warm_remaining = budget.max_tick_intervals;
+            let warm = surface
+                .occludes_ray(
+                    DVec3::new(-15.0, y, 0.3),
+                    DVec3::X,
+                    budget,
+                    &mut warm_remaining,
+                    &mut cache,
+                )
+                .unwrap();
+            assert_eq!(cold, expected);
+            assert_eq!((warm, warm_remaining), (cold, cold_remaining));
+        }
+        let mut cold_budget = 1;
+        let mut warm_budget = 1;
+        let cold = surface.occludes_ray(
+            DVec3::new(-15.0, 20.0, 0.3),
+            DVec3::X,
+            budget,
+            &mut cold_budget,
+            &mut SurfaceOcclusionCache::default(),
+        );
+        let warm = surface.occludes_ray(
+            DVec3::new(-15.0, 20.0, 0.3),
+            DVec3::X,
+            budget,
+            &mut warm_budget,
+            &mut cache,
+        );
+        assert!(cold.is_err() && warm.is_err());
+        assert_eq!(cold_budget, warm_budget);
+    }
 
     #[test]
     fn certified_cache_preserves_quotas_capacity_and_surface_invalidation() {

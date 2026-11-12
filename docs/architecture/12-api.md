@@ -415,7 +415,9 @@ pub struct Foo { pub doc_id: u64 }   // use DocumentId
 
 ## Command Execution (Side Effects)
 
-Commands are typed — each domain crate defines its own command structs. The API discovers marked reflected commands automatically. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. The registered concrete serde implementation owns omission: command and per-field defaults apply only to omitted values, and omitted optional fields are `None`. Optional wire values are raw values or `null`; enums use their serialized spellings, including declared renames. Supplied malformed values and unknown command fields reject before dispatch. The schema's Rust `Default` flag describes type registration rather than every field's omission rule. For a static, documented catalog generated from that runtime schema, see [`../commands-reference.md`](../commands-reference.md).
+Commands are typed — each domain crate defines its own command structs. The API discovers marked reflected commands automatically. Use `GET /api/commands/schema` to see the full list of available commands and their parameters. Application-level callers may select a workspace Twin by its `TwinId`; Twin-scoped Rhai commands receive their target from the typed runtime owner, and the bridge binds it to reflected Twin identity fields inside Rust. Twin-scoped Rhai query, command, hook, and policy-status results omit workspace selector fields recursively. Compound reflected `get()` and `get_setting()` reads follow the same rule, and direct selector-field reads return no value. `get_twin_setting()` and `get_exposure()` project their returned values through the same boundary. Script values and diagnostics translate private mount authorities to stable source identities. Both `ScriptingCatalog` and `ScriptComplete` hide workspace selector parameters from Twin-scoped command and query discovery; query response descriptions are withheld in that scope. Rhai code can select `ScriptingCatalog` sections with `sections: ["commands", "queries"]` to stay within the runtime value limit. Application scripts and external application APIs retain the workspace selector contract; no script scope receives the private mount lease. The registered concrete serde implementation owns omission: command and per-field defaults apply only to omitted values, and omitted optional fields are `None`. Optional wire values are raw values or `null`; enums use their serialized spellings, including declared renames. Supplied malformed values and unknown command fields reject before dispatch. The schema's Rust `Default` flag describes type registration rather than every field's omission rule. For a static, documented catalog generated from that runtime schema, see [`../commands-reference.md`](../commands-reference.md).
+Unknown opaque mount tokens in diagnostics are replaced with a generic Twin
+source marker when no lease metadata can map them to a stable identity.
 
 ### Common Commands
 
@@ -431,7 +433,7 @@ Commands are typed — each domain crate defines its own command structs. The AP
 | **Camera** | `FollowTarget` | Chase-camera a target through a selected or local camera rig. |
 | | `FocusTarget` | Orbit-camera a target through a selected or local camera rig. |
 | | `CaptureScreenshot` | Trigger an in-sim screenshot. |
-| **USD** | `LoadScene` | Mount or reload a USD stage from a root-qualified `lunco://` or `twin://` address. |
+| **USD** | `LoadScene` | Mount or reload a USD stage from `lunco://` or a stable logical-source `twin://` address; internal mount authorities are rejected. |
 | **Workspace** | `SetProjectSceneLoading` | Persist or reset the specified open Twin's project-local automatic default-scene setting. The deferred response reports the storage outcome. |
 | | `ApplyUsdOp` | Mutate a USD document via an atomic Op. |
 | | `ApplyUsdOps` | Apply an ordered multi-op USD intent as one journal/undo change set. |

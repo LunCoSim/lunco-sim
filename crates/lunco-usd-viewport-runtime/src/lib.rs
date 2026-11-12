@@ -1061,6 +1061,12 @@ fn create_preview_view(
             Name::new(format!("UsdPreviewCamera-{}-{}", preview.0, view.0)),
         ))
         .id();
+    commands
+        .entity(camera)
+        .insert(lunco_render::camera::SceneViewDemand {
+            source: camera,
+            output: lunco_render::camera::SceneViewOutput::Preview { id: view.0 },
+        });
     let light = commands
         .spawn((
             DirectionalLight {
@@ -3357,7 +3363,7 @@ fn release_preview_projection(world: &mut World, doc: DocumentId) {
     else {
         return;
     };
-    if let Err(error) = world.resource::<TwinRoots>().unregister_name(&name) {
+    if let Err(error) = world.resource::<TwinRoots>().unregister_authority(&name) {
         report_preview_error(
             world,
             "twin-asset-unmount-failed",
@@ -3480,7 +3486,7 @@ fn resolve_viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(S
         // does not install WorkspacePlugin. Among matching roots, choose the
         // deepest one so nested authorities remain deterministic.
         let roots = world.resource::<TwinRoots>();
-        if let Ok(names) = roots.names() {
+        if let Ok(names) = roots.authorities() {
             let mut matches = names
                 .into_iter()
                 .filter_map(|name| {
@@ -3510,7 +3516,10 @@ fn resolve_viewport_twin_coords(world: &mut World, doc: DocumentId) -> Option<(S
     // different base (same doc re-registered from a new location), the registry
     // hands back a disambiguated one — and the overlay must be keyed to that,
     // or the viewport serves its composed source under a name nobody reads.
-    let name = match world.resource::<TwinRoots>().register(&name, base) {
+    let name = match world
+        .resource::<TwinRoots>()
+        .register_authority(&name, base)
+    {
         Ok(name) => name,
         Err(error) => {
             world.trigger(lunco_telemetry_core::TelemetryEvent {

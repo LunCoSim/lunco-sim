@@ -119,9 +119,9 @@ impl RuntimeRoute {
         }
     }
 
-    /// Construct a Twin route with both its scene generation and stable Twin
-    /// identity. The identity scopes retained work; the generation fences work
-    /// produced by an older scene composition.
+    /// Construct a Twin route with its workspace identity and scene generation.
+    /// The identity scopes retained work; the generation fences work produced
+    /// by an older scene composition.
     pub const fn twin_owned(cycle: RuntimeCycle, generation: u64, twin_id: u64) -> Self {
         Self {
             scope: RuntimeScope::Twin,
@@ -293,9 +293,7 @@ impl RuntimeExecutionContext {
     /// Resolve the target without changing the invocation's owner or cadence.
     /// Twin-owned calls cannot redirect work to another Twin.
     pub fn target_twin(self) -> Result<Option<u64>, RuntimeExecutionContextError> {
-        let twin_route = self
-            .route
-            .filter(|route| route.scope == RuntimeScope::Twin);
+        let twin_route = self.route.filter(|route| route.scope == RuntimeScope::Twin);
         let owner = twin_route.and_then(|route| route.owner_id);
         if self.target_twin_id == Some(0)
             || owner == Some(0)

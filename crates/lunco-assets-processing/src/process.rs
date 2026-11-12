@@ -252,7 +252,6 @@ pub fn process_asset_with_registry(
             source_path,
             process,
             &output_path,
-            cache_root,
             twin_root,
             control,
             registry,
@@ -679,7 +678,7 @@ fn process_dem(
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     control.check()?;
-    let mut src = decode_gray_source(source)?;
+    let mut src = decode_gray_source_window(source, cfg, true, control)?;
     apply_dem_height_units(
         &mut src.samples,
         cfg.source_height_scale_m_per_unit,
@@ -716,6 +715,7 @@ fn process_dem(
             sampled.center_lat,
             sampled.center_lon,
         );
+        geo = geo.with_projection(sampled.projection);
         // Frame provenance: only the manifest can know which lunar frame the
         // source product is in, so a declared `frame` is stamped and an absent
         // one leaves the raster honestly silent. A typo must fail loudly here —
@@ -832,13 +832,75 @@ fn decode_gray_source(source: &Path) -> Result<GraySource, std::io::Error> {
     })
 }
 
+/// Decode only the projected sample footprint for registered TIFF and PDS sources.
+/// Sources without supported projection metadata use extent-based decoding.
+fn decode_gray_source_window(
+    source: &Path,
+    cfg: &ProcessConfig,
+    nodes: bool,
+    control: &ProcessControl,
+) -> std::io::Result<GraySource> {
+    if source
+        .extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|s| s.eq_ignore_ascii_case("img"))
+    {
+        if let Some(mut projected) = crate::pds_img::projected_metadata(source)? {
+            let (x, y, w, h) = crate::raster::source_window(
+                &projected.geo,
+                projected.width,
+                projected.height,
+                cfg,
+                nodes,
+                control,
+            )?;
+            control.check()?;
+            let window =
+                crate::pds_img::PdsImage::decode_region(source, Some((x, y, w, h)), Some(control))?;
+            projected.geo.origin_m[0] += x as f64 * projected.geo.pixel_size_m[0];
+            projected.geo.origin_m[1] -= y as f64 * projected.geo.pixel_size_m[1];
+            return Ok(GraySource {
+                w: window.width,
+                h: window.height,
+                samples: window.samples,
+                extent: None,
+                scale_m: None,
+                projection: None,
+                geo: Some(projected.geo),
+            });
+        }
+        return decode_gray_source(source);
+    }
+    let Some(mut geo) = read_source_projection(source)? else {
+        return decode_gray_source(source);
+    };
+    let mut decoder =
+        tiff::decoder::Decoder::new(std::fs::File::open(source)?).map_err(tiff_io_err)?;
+    let (width, height) = decoder.dimensions().map_err(tiff_io_err)?;
+    let (x, y, w, h) = crate::raster::source_window(&geo, width, height, cfg, nodes, control)?;
+    control.check()?;
+    let samples = lunco_geotiff::decode_gray_window_f64(std::fs::File::open(source)?, x, y, w, h)
+        .map_err(|e| io_err(format!("decoding grayscale TIFF window: {e}")))?;
+    geo.origin_m[0] += x as f64 * geo.pixel_size_m[0];
+    geo.origin_m[1] -= y as f64 * geo.pixel_size_m[1];
+    Ok(GraySource {
+        w: w as usize,
+        h: h as usize,
+        samples,
+        extent: None,
+        scale_m: None,
+        projection: None,
+        geo: Some(geo),
+    })
+}
+
 fn process_coverage(
     source: &Path,
     output: &Path,
     cfg: &ProcessConfig,
     control: &ProcessControl,
 ) -> std::io::Result<()> {
-    let mut src = decode_gray_source(source)?;
+    let mut src = decode_gray_source_window(source, cfg, true, control)?;
     if cfg
         .parameters
         .get("zero_is_nodata")
@@ -882,6 +944,16 @@ fn sample_gray(
         return crate::raster::sample(geo, &src.samples, src.w, src.h, cfg, nodes, control);
     }
     let (roi, scale, center_lat, center_lon) = resolve_roi(cfg, src, kind)?;
+    if cfg
+        .parameters
+        .get("output_projection")
+        .is_some_and(|value| value.as_str() != Some("equirectangular"))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "orthographic output requires a georeferenced spherical source raster",
+        ));
+    }
     let samples = resample_roi_bilinear(&src.samples, src.w, src.h, &roi, control)?;
     let span_m = (roi.win - 1) as f64 * scale;
     let spacing_m = if nodes {
@@ -897,6 +969,7 @@ fn sample_gray(
         center_lat,
         center_lon,
         radius_m: lunco_celestial_data::MOON_MEAN_RADIUS_M,
+        projection: lunco_geotiff::LocalProjection::Equirectangular,
     })
 }
 
@@ -1556,6 +1629,15 @@ fn process_albedo(
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     control.check()?;
+    let normalized_reflectance = match cfg.parameters.get("albedo_input") {
+        None => false,
+        Some(value) if value.as_str() == Some("normalized_reflectance") => true,
+        Some(_) => {
+            return Err(io_err(
+                "albedo_input must be 'normalized_reflectance' when supplied".into(),
+            ));
+        }
+    };
     let ext = source
         .extension()
         .and_then(|s| s.to_str())
@@ -1569,7 +1651,7 @@ fn process_albedo(
         ));
     }
 
-    let mut src = decode_gray_source(source)?;
+    let mut src = decode_gray_source_window(source, cfg, false, control)?;
     if is_gray_tiff && src.geo.is_none() {
         let extent = (
             cfg.src_min_lat,
@@ -1608,17 +1690,22 @@ fn process_albedo(
 
     // Orthophoto zeroes are unmapped coverage. Canonicalize that mask before
     // the shared valid-sample resampler so zeroes cannot darken adjacent data.
-    for chunk in src.samples.chunks_mut(4096) {
-        control.check()?;
-        for value in chunk {
-            if *value == 0.0 {
-                *value = f64::NAN;
+    if !normalized_reflectance {
+        for chunk in src.samples.chunks_mut(4096) {
+            control.check()?;
+            for value in chunk {
+                if *value == 0.0 {
+                    *value = f64::NAN;
+                }
             }
         }
     }
     let sampled = sample_gray(cfg, &src, "albedo", false, control)?;
     let out_n = sampled.resolution;
     let texel_m = sampled.spacing_m;
+    if normalized_reflectance {
+        return write_normalized_reflectance(&sampled.samples, out_n, output_path, control);
+    }
     reject_if_mostly_nodata(&sampled.samples, "albedo", 0.02)?;
     let gray = sampled.samples;
     let measured = |v: f64| v.is_finite() && v != 0.0;
@@ -1680,6 +1767,65 @@ fn process_albedo(
     std::fs::write(output_path.with_extension("mean"), format!("{base:.6}\n"))?;
     println!(
         "    albedo base {base:.4}, local detail {detail_strength:.3}, illumination radius {radius_m:.1} m ({radius_px} px)"
+    );
+    Ok(())
+}
+
+/// Retain photometrically normalized observations as linear values, with
+/// explicit alpha coverage for pixels without a valid measurement.
+fn write_normalized_reflectance(
+    values: &[f64],
+    resolution: usize,
+    output_path: &Path,
+    control: &ProcessControl,
+) -> Result<(), std::io::Error> {
+    if resolution.checked_mul(resolution) != Some(values.len()) || resolution == 0 {
+        return Err(io_err(
+            "invalid normalized reflectance raster dimensions".into(),
+        ));
+    }
+    let mut sum = 0.0;
+    let mut count = 0usize;
+    for (index, &value) in values.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            control.check()?;
+        }
+        if value.is_nan() {
+            continue;
+        }
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(io_err(
+                "normalized reflectance must be finite and in [0, 1]".into(),
+            ));
+        }
+        sum += value;
+        count += 1;
+    }
+    if count == 0 {
+        return Err(io_err(
+            "normalized reflectance has no measured coverage".into(),
+        ));
+    }
+    let mean = sum / count as f64;
+    let size = u32::try_from(resolution)
+        .map_err(|_| io_err("reflectance raster exceeds PNG dimensions".into()))?;
+    let mut png = image::RgbaImage::new(size, size);
+    for (index, pixel) in png.pixels_mut().enumerate() {
+        if index.is_multiple_of(4096) {
+            control.check()?;
+        }
+        let measured = !values[index].is_nan();
+        // Store premultiplied color so filtering preserves valid reflectance
+        // across missing-coverage boundaries. The reader divides by alpha.
+        let encoded = encode_linear_to_srgb_u8(if measured { values[index] } else { 0.0 });
+        pixel.0 = [encoded, encoded, encoded, if measured { 255 } else { 0 }];
+    }
+    png.save(output_path)
+        .map_err(|error| io_err(format!("writing reflectance PNG: {error}")))?;
+    std::fs::write(output_path.with_extension("mean"), format!("{mean:.6}\n"))?;
+    println!(
+        "    normalized reflectance coverage {count}/{} pixels",
+        values.len()
     );
     Ok(())
 }
@@ -1810,7 +1956,7 @@ fn process_normalmap(
     control: &ProcessControl,
 ) -> Result<(), std::io::Error> {
     control.check()?;
-    let src = decode_gray_source(source)?;
+    let src = decode_gray_source_window(source, cfg, true, control)?;
     let sampled = sample_gray(cfg, &src, "normalmap", true, control)?;
     let out_n = sampled.resolution;
     reject_if_mostly_nodata(&sampled.samples, "normalmap", 0.05)?;
@@ -2014,6 +2160,58 @@ mod tests {
     }
 
     #[test]
+    fn pds_cylindrical_crop_uses_registered_bounded_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("regional.IMG");
+        let pixels: Vec<u8> = (0..64).flat_map(|i| (i as f32).to_le_bytes()).collect();
+        lunco_storage::write_file_sync(&path, &pixels).unwrap();
+        let label = r#"PDS_VERSION_ID = PDS3
+OBJECT = IMAGE
+ LINES = 8
+ LINE_SAMPLES = 8
+ SAMPLE_BITS = 32
+ SAMPLE_TYPE = PC_REAL
+END_OBJECT = IMAGE
+OBJECT = IMAGE_MAP_PROJECTION
+ MAP_PROJECTION_TYPE = "SIMPLE CYLINDRICAL"
+ MAP_SCALE = 0.1 <km/pix>
+ A_AXIS_RADIUS = 1737.4 <km>
+ B_AXIS_RADIUS = 1737.4 <km>
+ C_AXIS_RADIUS = 1737.4 <km>
+ POSITIVE_LONGITUDE_DIRECTION = "EAST"
+ CENTER_LATITUDE = 0
+ CENTER_LONGITUDE = 0
+ LINE_PROJECTION_OFFSET = 3.5 <pix>
+ SAMPLE_PROJECTION_OFFSET = 3.5 <pix>
+END_OBJECT = IMAGE_MAP_PROJECTION
+END
+"#;
+        lunco_storage::write_file_sync(&dir.path().join("regional.LBL"), label.as_bytes()).unwrap();
+        let cfg: ProcessConfig = toml::from_str(
+            r#"
+            kind = "dem"
+            output = "terrain/test"
+            center_lat = 0.0
+            center_lon = 0.0
+            window_m = 200.0
+            target_resolution = [3, 3]
+            output_projection = "orthographic"
+        "#,
+        )
+        .unwrap();
+        let source = decode_gray_source_window(&path, &cfg, true, &control()).unwrap();
+        assert!(
+            source.w < 8 && source.h < 8,
+            "crop must not decode the full raster"
+        );
+        let sampled = sample_gray(&cfg, &source, "dem", true, &control()).unwrap();
+        assert_eq!(sampled.samples.len(), 9);
+        assert!((sampled.samples[4] - 31.5).abs() < 1e-6);
+        assert!((sampled.samples[0] - 22.5).abs() < 1e-3);
+        assert!((sampled.samples[8] - 40.5).abs() < 1e-3);
+    }
+
+    #[test]
     fn gltf_webp_extension_is_detected_without_rewriting_authored_json() {
         let document = draco_gltf::Document::from_json_bytes(
             br#"{"asset":{"version":"2.0"},"textures":[{"extensions":{"EXT_texture_webp":{"source":1}}}]}"#,
@@ -2143,6 +2341,23 @@ mod tests {
                 assert_eq!(height.to_bits(), expected.to_bits(), "measured node {i}");
             }
         }
+    }
+
+    #[test]
+    fn normalized_reflectance_retains_values_and_coverage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join("reflectance.png");
+        write_normalized_reflectance(&[0.0, 0.25, f64::NAN, 1.0], 2, &output, &control()).unwrap();
+        let image = image::open(&output).unwrap().to_rgba8();
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 0, 255]);
+        let encoded = encode_linear_to_srgb_u8(0.25);
+        assert_eq!(image.get_pixel(1, 0).0, [encoded, encoded, encoded, 255]);
+        assert_eq!(image.get_pixel(0, 1).0, [0, 0, 0, 0]);
+        assert_eq!(image.get_pixel(1, 1).0, [255, 255, 255, 255]);
+        assert!(
+            write_normalized_reflectance(&[0.0, 0.25, 1.01, 1.0], 2, &output, &control()).is_err()
+        );
+        assert!(write_normalized_reflectance(&[f64::NAN; 4], 2, &output, &control()).is_err());
     }
 
     #[test]
@@ -2366,6 +2581,53 @@ mod tests {
                 .unwrap();
         }
         buf.into_inner()
+    }
+
+    #[test]
+    fn geotiff_window_decode_reprojects_like_full_source() {
+        use tiff::encoder::{TiffEncoder, colortype};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source.tif");
+        let mut bytes = Cursor::new(Vec::new());
+        {
+            let mut encoder = TiffEncoder::new(&mut bytes).unwrap();
+            let mut image = encoder
+                .new_image::<colortype::Gray32Float>(101, 101)
+                .unwrap();
+            image.rows_per_strip(8).unwrap();
+            let geo =
+                lunco_geotiff::GeoTransform::centred_square(100.0, 101, 1_737_400.0, 0.0, 0.0);
+            lunco_geotiff::write_geo_tags(image.encoder(), &geo, "Moon 2000").unwrap();
+            image
+                .write_data(&(0..10201).map(|v| v as f32).collect::<Vec<_>>())
+                .unwrap();
+        }
+        std::fs::write(&path, bytes.into_inner()).unwrap();
+        let config: ProcessConfig = toml::from_str(
+            "kind = 'dem'\noutput = 'site'\ncenter_lat = 0.0\ncenter_lon = 0.0\nwindow_m = 20.0\ntarget_resolution = [11, 11]\n"
+        ).unwrap();
+        let full = decode_gray_source(&path).unwrap();
+        let window = decode_gray_source_window(&path, &config, true, &control()).unwrap();
+        assert!(window.w < full.w && window.h < full.h);
+        let reference = sample_gray(&config, &full, "dem", true, &control()).unwrap();
+        let actual = sample_gray(&config, &window, "dem", true, &control()).unwrap();
+        for (a, b) in reference.samples.iter().zip(actual.samples) {
+            assert!((a - b).abs() < 1e-8, "{a} != {b}");
+        }
+        let mut orthographic = config.clone();
+        orthographic.parameters.insert(
+            "output_projection".into(),
+            toml::Value::String("orthographic".into()),
+        );
+        let output = temp.path().join("orthographic");
+        process_dem(&path, &output, &orthographic, &control()).unwrap();
+        let image = std::fs::File::open(output.join("materials/textures/heightmap.tif")).unwrap();
+        let mut decoder = tiff::decoder::Decoder::new(image).unwrap();
+        let geo = lunco_geotiff::read_geo_tags(&mut decoder).unwrap();
+        assert_eq!(
+            geo.projection,
+            Some(lunco_geotiff::LocalProjection::Orthographic)
+        );
     }
 
     /// `kind = "dem"` must turn a **non-square** source DTM into a **square**

@@ -287,9 +287,11 @@ fn on_tick(me, params) {
         let child = document_entry(this.child);
         if parent_doc == () || child == () || parent_doc.origin.kind != "file" || child.origin.kind != "file"
             || parent_doc.dirty != false || child.dirty != false || !ready(this.child, "Child") { return; }
-        let root_id = "twin:" + this.expected_owner.twin.to_string() + ":Duplicate%20owner%20B:modelica:HeaderImports";
-        let loaded = cmd("LoadTwinModelicaSourceRoot", #{twin_id: this.expected_owner.twin,
-            name: "Duplicate%20owner%20B", id: root_id, path: "HeaderImports"});
+        let source_index = 0;
+        let root_id = "twin:" + this.expected_owner.twin.to_string()
+            + ":modelica:" + source_index.to_string();
+        let loaded = cmd("LoadTwinModelicaSourceRoot", #{source_index: source_index,
+            path: "HeaderImports"});
         if loaded == () || loaded.ok != true {
             this = finish(this, ["authored package root admission failed: " + loaded.to_string()]); return;
         }

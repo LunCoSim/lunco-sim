@@ -6,6 +6,7 @@ license.workspace = true
 description = "Celestial spatial adapter for generic surface camera frames"
 
 [dependencies]
+lunco-core = { path = "../lunco-core" }
 bevy = { workspace = true }
 big_space = { workspace = true }
 lunco-celestial = { path = "../lunco-celestial", default-features = false }

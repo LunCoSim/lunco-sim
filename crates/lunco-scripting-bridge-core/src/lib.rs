@@ -13,12 +13,11 @@
 //!
 //! Reads and command/query calls use typed values throughout this crate:
 //!
-//! - **Reads** ([`get_field`], resource fields, and hierarchy) read
-//!   live reflect data. They build the *native* value in ONE hop via the
-//!   [`ValueBuilder`] trait — `reflect → Dynamic` for rhai, `reflect → PyObject`
-//!   for Python — never through an intermediate wire value. The
-//!   reflect-walker ([`build_from_reflect`]) is written once and monomorphized
-//!   per language.
+//! - **Reads** ([`get_field`], resource fields, and hierarchy) read live reflect
+//!   data. Ordinary reads build the native value in one hop. Twin-scoped
+//!   compound reads pass through the typed `HookValue` ABI so the owner can
+//!   remove application-owned Twin selectors before constructing the backend
+//!   value; they never pass through JSON.
 //! - **`cmd` / `query`** route through typed [`lunco_hooks::HookValue`] values.
 //!   The API crate owns the one explicit adapter to external JSON/reflection
 //!   contracts; this bridge never depends on or constructs JSON.
@@ -843,6 +842,277 @@ fn command_result_error(id: u64, status: &str, error: impl Into<String>) -> ApiV
     ])
 }
 
+/// Whether a reflected field or API parameter names application-owned Twin
+/// routing state. This contract is shared by runtime projection and authoring
+/// catalog filtering.
+pub fn is_workspace_twin_selector_name(name: &str) -> bool {
+    matches!(
+        name,
+        "twin_id"
+            | "owner_twin_id"
+            | "target_twin_id"
+            | "workspace_twin_id"
+            | "workspace_twin"
+            | "active_twin_id"
+            | "scope_id"
+            | "active_twin"
+            | "host_twin"
+            | "mount_authority"
+            | "asset_authority"
+    )
+}
+
+/// A selector may be named `twin` when its reflected type carries an
+/// application-owned Twin identity.
+pub fn is_workspace_twin_selector(name: &str, type_name: &str) -> bool {
+    is_workspace_twin_selector_name(name)
+        || (name == "twin" && (type_name.contains("u64") || type_name.contains("TwinId")))
+}
+
+/// Remove application-owned workspace Twin selectors from values returned to
+/// Twin-scoped scripts. The typed Rust execution context remains the authority
+/// used to bind command targets; authored Twin code does not need these ids.
+fn hide_workspace_twin_identity(value: ApiValue, parent: Option<&str>) -> ApiValue {
+    match value {
+        HookValue::Array(values) => HookValue::Array(
+            values
+                .into_iter()
+                .map(|value| hide_workspace_twin_identity(value, parent))
+                .collect(),
+        ),
+        HookValue::Map(fields) => {
+            let scope_is_twin = fields.iter().any(|(name, value)| {
+                name == "kind" && matches!(value, HookValue::Str(kind) if kind == "twin")
+            });
+            HookValue::Map(
+                fields
+                    .into_iter()
+                    .filter(|(name, value)| {
+                        let named_identity = is_workspace_twin_selector_name(name);
+                        let twin_scalar = name == "twin"
+                            && matches!(value, HookValue::Int(_) | HookValue::UInt(_));
+                        let nested_twin_id = parent == Some("workspace_twin") && name == "id";
+                        !(named_identity || twin_scalar || nested_twin_id)
+                    })
+                    .map(|(name, value)| {
+                        let nested_parent =
+                            matches!(name.as_str(), "twin" | "active_twin" | "workspace_twin")
+                                .then_some("workspace_twin")
+                                .or_else(|| {
+                                    (name == "scope" && scope_is_twin).then_some("workspace_twin")
+                                });
+                        (name, hide_workspace_twin_identity(value, nested_parent))
+                    })
+                    .collect(),
+            )
+        }
+        value => value,
+    }
+}
+
+#[cfg(feature = "workspace")]
+use lunco_assets_core::redact_opaque_twin_authorities as redact_opaque_authority_tokens;
+
+#[cfg(not(feature = "workspace"))]
+fn redact_opaque_authority_tokens(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut run_start = None;
+    for (index, character) in text.char_indices() {
+        if character.is_ascii_hexdigit() {
+            run_start.get_or_insert(index);
+        } else if let Some(start) = run_start.take() {
+            let run = &text[start..index];
+            if run.len() == 32 && text[..start].ends_with("twin://") {
+                output.push_str("[Twin source]");
+            } else {
+                output.push_str(run);
+            }
+            output.push(character);
+        } else {
+            output.push(character);
+        }
+    }
+    if let Some(start) = run_start {
+        let run = &text[start..];
+        if run.len() == 32 && text[..start].ends_with("twin://") {
+            output.push_str("[Twin source]");
+        } else {
+            output.push_str(run);
+        }
+    }
+    output
+}
+
+fn sanitize_mount_authority_text(text: String, world: Option<&World>) -> String {
+    #[cfg(feature = "workspace")]
+    if let Some(roots) =
+        world.and_then(|world| world.get_resource::<lunco_assets_core::TwinRoots>())
+    {
+        return roots
+            .stable_source_text(&text)
+            .unwrap_or_else(|_| redact_opaque_authority_tokens(&text));
+    }
+    #[cfg(not(feature = "workspace"))]
+    let _ = world;
+    redact_opaque_authority_tokens(&text)
+}
+
+fn sanitize_mount_authorities(value: ApiValue, world: Option<&World>) -> ApiValue {
+    match value {
+        HookValue::Array(values) => HookValue::Array(
+            values
+                .into_iter()
+                .map(|value| sanitize_mount_authorities(value, world))
+                .collect(),
+        ),
+        HookValue::Map(fields) => HookValue::Map(
+            fields
+                .into_iter()
+                .map(|(name, value)| {
+                    let name = sanitize_mount_authority_text(name, world);
+                    (name, sanitize_mount_authorities(value, world))
+                })
+                .collect(),
+        ),
+        HookValue::Str(value) => HookValue::Str(sanitize_mount_authority_text(value, world)),
+        value => value,
+    }
+}
+
+/// Project a standalone script-facing diagnostic through the same private
+/// mount-authority boundary used for typed script values.
+pub fn project_script_text(text: String) -> String {
+    with_world(|world| sanitize_mount_authority_text(text.clone(), Some(world)))
+        .unwrap_or_else(|| sanitize_mount_authority_text(text, None))
+}
+
+/// Project one typed script result. Mount authorities are always translated to
+/// stable source identities; Twin-scoped scripts also lose app-owned Twin
+/// selectors.
+pub fn project_script_value(value: ApiValue) -> ApiValue {
+    let projected = if execution_context()
+        .route
+        .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin)
+    {
+        hide_workspace_twin_identity(value, None)
+    } else {
+        value
+    };
+    with_world(|world| sanitize_mount_authorities(projected.clone(), Some(world)))
+        .unwrap_or_else(|| sanitize_mount_authorities(projected, None))
+}
+
+fn twin_scope_identity_path(path: &str) -> bool {
+    let segments = path.split('.').collect::<Vec<_>>();
+    segments.iter().any(|name| {
+        is_workspace_twin_selector_name(name) || matches!(*name, "twin" | "workspace_twin")
+    }) || segments.windows(2).any(|pair| pair == ["scope", "id"])
+}
+
+fn project_reflected_script_read<B: ValueBuilder>(
+    world: &World,
+    builder: &B,
+    path: &str,
+    value: &dyn bevy::reflect::PartialReflect,
+) -> Option<B::Value> {
+    let twin_scope = execution_context()
+        .route
+        .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin);
+    if !twin_scope {
+        return build_from_reflect(builder, value);
+    }
+    if twin_scope_identity_path(path) {
+        return None;
+    }
+    let compound = matches!(
+        value.reflect_ref(),
+        bevy::reflect::ReflectRef::List(_)
+            | bevy::reflect::ReflectRef::Array(_)
+            | bevy::reflect::ReflectRef::Map(_)
+            | bevy::reflect::ReflectRef::Tuple(_)
+            | bevy::reflect::ReflectRef::TupleStruct(_)
+            | bevy::reflect::ReflectRef::Struct(_)
+    );
+    if !compound {
+        if let Some(text) = value
+            .try_as_reflect()
+            .and_then(|value| value.as_any().downcast_ref::<String>())
+        {
+            let text = sanitize_mount_authority_text(text.clone(), Some(world));
+            return Some(builder.string(&text));
+        }
+        return build_from_reflect(builder, value);
+    }
+    let typed = build_from_reflect(&ApiValueBuilder, value)?;
+    let projected = hide_workspace_twin_identity(typed, None);
+    Some(build_from_value(
+        builder,
+        &sanitize_mount_authorities(projected, Some(world)),
+    ))
+}
+
+/// Bind command identity fields from the active execution owner. The identity
+/// stays in the typed runtime context and reflected command boundary; Rhai
+/// receives no workspace Twin ID from a Twin-scoped callback.
+fn bind_execution_twin_identity(
+    params: ApiValue,
+    registration: &bevy::reflect::TypeRegistration,
+) -> Result<ApiValue, String> {
+    let bevy::reflect::TypeInfo::Struct(info) = registration.type_info() else {
+        return Ok(params);
+    };
+    let identity_fields: Vec<String> = (0..info.field_len())
+        .filter_map(|index| info.field_at(index))
+        .filter_map(|field| {
+            (field.name() == "twin_id"
+                || field.name() == "owner_twin_id"
+                || (field.name() == "twin" && field.type_id() == std::any::TypeId::of::<u64>()))
+            .then(|| field.name().to_owned())
+        })
+        .collect();
+    if identity_fields.is_empty() {
+        return Ok(params);
+    }
+
+    let context = execution_context();
+    let twin_route = context
+        .route
+        .filter(|route| route.scope == lunco_core::RuntimeScope::Twin);
+    let target = if let Some(route) = twin_route {
+        route.owner_id.ok_or_else(|| {
+            "Twin-scoped command cannot resolve its application-owned Twin target".to_owned()
+        })?
+    } else if let Some(target) = context.target_twin_id {
+        target
+    } else {
+        return Ok(params);
+    };
+
+    let ApiValue::Map(mut fields) = params else {
+        return Ok(params);
+    };
+    for name in identity_fields {
+        let index = fields.iter().position(|(field, _)| field == &name);
+        match index {
+            Some(index) if matches!(&fields[index].1, HookValue::Unit) => {
+                fields[index].1 = HookValue::UInt(target);
+            }
+            Some(_) if twin_route.is_some() => {
+                return Err(
+                    "Twin-scoped commands cannot supply application-owned Twin identity".into(),
+                );
+            }
+            Some(index) => match &fields[index].1 {
+                HookValue::UInt(value) if *value == target => {}
+                HookValue::Int(value) if u64::try_from(*value).ok() == Some(target) => {}
+                _ => return Err("command Twin target does not match its execution owner".into()),
+            },
+            None => fields.push((name, HookValue::UInt(target))),
+        }
+    }
+    Ok(HookValue::Map(fields))
+}
+
 /// Fire a typed command through `ApiCommandEvent` (the same entry point the
 /// HTTP API / MCP use) and return its typed `{ id, ok, status, data?, error? }`
 /// result. The bridge drains a bounded number of command queues; genuinely
@@ -850,7 +1120,7 @@ fn command_result_error(id: u64, status: &str, error: impl Into<String>) -> ApiV
 /// [`command_result`].
 pub fn cmd_value(name: &str, params: ApiValue) -> ApiValue {
     let id = OpId::new().0;
-    with_world(|world| {
+    let result = with_world(|world| {
         if let Err(error) = ensure_script_command_allowed(name) {
             return command_result_error(id, "rejected", error);
         }
@@ -879,6 +1149,10 @@ pub fn cmd_value(name: &str, params: ApiValue) -> ApiValue {
             Err(error) => {
                 return command_result_error(id, "rejected", error.message(name));
             }
+        };
+        let params = match bind_execution_twin_identity(params, registration) {
+            Ok(params) => params,
+            Err(error) => return command_result_error(id, "rejected", error),
         };
         let Some(entity_registry) = world.get_resource::<ApiEntityRegistry>() else {
             return command_result_error(id, "failed", "API entity registry is unavailable");
@@ -999,7 +1273,8 @@ pub fn cmd_value(name: &str, params: ApiValue) -> ApiValue {
             .and_then(|r| r.get(id).cloned());
         command_result_value(id, outcome.as_ref())
     })
-    .unwrap_or_else(|| command_result_error(id, "failed", "no world in scope"))
+    .unwrap_or_else(|| command_result_error(id, "failed", "no world in scope"));
+    project_script_value(result)
 }
 
 /// `cmd` as a native value: fire a typed command and lower the typed result.
@@ -1012,13 +1287,14 @@ pub fn cmd<B: ValueBuilder>(b: &B, name: &str, params: ApiValue) -> B::Value {
 /// lets Rhai tests and tools wait for that result without treating acceptance
 /// as success.
 pub fn command_result_value_for_id(id: u64) -> ApiValue {
-    with_world(|world| {
+    let result = with_world(|world| {
         let outcome = world
             .get_resource::<CommandResults>()
             .and_then(|results| results.get(id));
         command_result_value(id, outcome)
     })
-    .unwrap_or_else(|| command_result_error(id, "failed", "no world in scope"))
+    .unwrap_or_else(|| command_result_error(id, "failed", "no world in scope"));
+    project_script_value(result)
 }
 
 /// Native-value wrapper for [`command_result_value_for_id`].
@@ -1096,6 +1372,7 @@ pub fn query_value(name: &str, params: ApiValue) -> Result<Option<ApiValue>, Scr
             code: ApiErrorCode::InternalError,
             message: "no world in scope".to_owned(),
         })?
+        .map(|value| value.map(project_script_value))
         .map_err(|error| ScriptQueryError {
             code: error.code,
             message: format!("query '{name}' failed: {}", error.message),
@@ -1132,7 +1409,7 @@ pub fn query<B: ValueBuilder>(b: &B, name: &str, params: ApiValue) -> B::Value {
     match query_value(name, params) {
         Ok(Some(data)) => build_from_value(b, &data),
         Ok(None) => b.unit(),
-        Err(error) => build_from_value(b, &script_query_error_value(&error)),
+        Err(error) => build_from_value(b, &project_script_value(script_query_error_value(&error))),
     }
 }
 
@@ -1277,7 +1554,7 @@ pub fn get_field<B: ValueBuilder>(b: &B, gid: u64, path: &str) -> Option<B::Valu
         } else {
             reflected.reflect_path(sub.as_str()).ok()?
         };
-        build_from_reflect(b, field)
+        project_reflected_script_read(world, b, path, field)
     })
     .flatten()
 }
@@ -1322,7 +1599,7 @@ pub fn get_resource_field<B: ValueBuilder>(b: &B, path: &str) -> Option<B::Value
         } else {
             reflected.reflect_path(sub.as_str()).ok()?
         };
-        build_from_reflect(b, field)
+        project_reflected_script_read(world, b, path, field)
     })
     .flatten()
 }
@@ -1599,38 +1876,38 @@ pub fn twin_root() -> String {
     .unwrap_or_default()
 }
 
-/// `twin_name()` — current `twin://` mount authority of the active Twin, or `""`.
+/// Stable logical source identity of the active Twin, or `""`.
 ///
-/// This is the URI counterpart to [`twin_root`].  Rhai policy should use this
-/// name when asking a provider to resolve Twin-owned source sets. The asset
-/// registry assigns a fresh authority after reopening and disambiguates roots
-/// with equal authored names. An active Twin without a live mount is an error.
+/// Mount authorities are retained by the asset owner and never cross into
+/// scripting. Rhai source queries use this stable identity; Rust resolves it
+/// to the current mount at the owning operation boundary.
 #[cfg(feature = "workspace")]
-pub fn twin_name() -> Result<String, String> {
+pub fn twin_source_identity() -> String {
     with_world(|world| {
         let Some(workspace) = world.get_resource::<lunco_workspace::WorkspaceResource>() else {
-            return Ok(String::new());
+            return String::new();
         };
         let Some(id) = workspace.active_twin else {
-            return Ok(String::new());
+            return String::new();
         };
-        let twin = workspace
+        workspace
             .twin(id)
-            .ok_or_else(|| format!("active Twin {id:?} is absent from the workspace"))?;
-        let roots = world
-            .get_resource::<lunco_assets_core::twin_source::TwinRoots>()
-            .ok_or_else(|| "active Twin has no asset registry".to_owned())?;
-        roots
-            .name_for_root(&twin.root)
-            .map_err(|error| format!("cannot resolve active Twin mount: {error}"))?
-            .ok_or_else(|| {
-                format!(
-                    "active Twin `{}` has no live asset mount",
-                    twin.root.display()
-                )
-            })
+            .map(lunco_assets_core::logical_twin_source_identity)
+            .unwrap_or_default()
     })
-    .unwrap_or_else(|| Err("twin_name() requires a live world".to_owned()))
+    .unwrap_or_default()
+}
+
+/// `twin_display_name()` — human-readable name of the active Twin, or `""`.
+#[cfg(feature = "workspace")]
+pub fn twin_display_name() -> String {
+    with_world(|world| {
+        let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
+        let id = workspace.active_twin?;
+        Some(workspace.twin(id)?.display_name())
+    })
+    .flatten()
+    .unwrap_or_default()
 }
 
 /// `get_twin_setting("ui.camera_status")` — read a scalar setting from the
@@ -1638,18 +1915,26 @@ pub fn twin_name() -> Result<String, String> {
 /// represented as the backend's unit value by the caller.
 #[cfg(feature = "workspace")]
 pub fn get_twin_setting<B: ValueBuilder>(b: &B, key: &str) -> Option<B::Value> {
-    with_world(|world| {
+    if execution_context()
+        .route
+        .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin)
+        && twin_scope_identity_path(key)
+    {
+        return None;
+    }
+    let value = with_world(|world| {
         let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>()?;
         let twin_id = workspace.active_twin?;
         let value = workspace.twin(twin_id)?.manifest.as_ref()?.setting(key)?;
         Some(match value {
-            lunco_workspace::TwinSettingValue::Bool(value) => b.bool(*value),
-            lunco_workspace::TwinSettingValue::Integer(value) => b.int(*value),
-            lunco_workspace::TwinSettingValue::Number(value) => b.float(*value),
-            lunco_workspace::TwinSettingValue::Text(value) => b.string(value),
+            lunco_workspace::TwinSettingValue::Bool(value) => HookValue::Bool(*value),
+            lunco_workspace::TwinSettingValue::Integer(value) => HookValue::Int(*value),
+            lunco_workspace::TwinSettingValue::Number(value) => HookValue::Float(*value),
+            lunco_workspace::TwinSettingValue::Text(value) => HookValue::Str(value.clone()),
         })
     })
-    .flatten()
+    .flatten()?;
+    Some(build_from_value(b, &project_script_value(value)))
 }
 
 /// Read one scalar from the generic engine exposure registry. This is the
@@ -1657,16 +1942,17 @@ pub fn get_twin_setting<B: ValueBuilder>(b: &B, key: &str) -> Option<B::Value> {
 /// producer publishes facts, and a script can consume them without importing
 /// the producer's domain crate.
 pub fn get_exposure<B: ValueBuilder>(b: &B, namespace: &str, property: &str) -> Option<B::Value> {
-    with_world(|world| {
+    let value = with_world(|world| {
         let exposures = world.get_resource::<lunco_exposure_core::EngineExposures>()?;
         let value = exposures
             .surfaces
             .get(namespace)?
             .properties
             .get(property)?;
-        Some(exposure_value_to_native(b, value))
+        Some(exposure_value_to_native(&ApiValueBuilder, value))
     })
-    .flatten()
+    .flatten()?;
+    Some(build_from_value(b, &project_script_value(value)))
 }
 
 fn exposure_value_to_native<B: ValueBuilder>(
@@ -1914,6 +2200,233 @@ mod tests {
             ))
         );
     }
+
+    #[derive(Reflect)]
+    struct WorkspaceTwinProbe {
+        id: u64,
+    }
+
+    #[derive(Reflect)]
+    struct TwinIdentityProbe {
+        twin_id: u64,
+        workspace_twin: WorkspaceTwinProbe,
+        twin: WorkspaceTwinProbe,
+        label: String,
+    }
+
+    #[test]
+    fn twin_scoped_reflection_hides_identity_fields_and_keeps_app_scope_access() {
+        let mut world = World::new();
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Simulation,
+                7,
+            )),
+            ..lunco_core::RuntimeExecutionContext::unclassified()
+        };
+        let _world = WorldScope::enter(&mut world, context);
+        let probe = TwinIdentityProbe {
+            twin_id: 17,
+            workspace_twin: WorkspaceTwinProbe { id: 18 },
+            twin: WorkspaceTwinProbe { id: 19 },
+            label: "visible".into(),
+        };
+
+        let whole =
+            project_reflected_script_read(&world, &ApiValueBuilder, "TwinIdentityProbe", &probe)
+                .expect("compound reflected value");
+        assert_eq!(whole.get("twin_id"), None);
+        assert_eq!(
+            whole
+                .get("workspace_twin")
+                .and_then(|value| value.get("id")),
+            None
+        );
+        assert_eq!(whole.get("twin").and_then(|value| value.get("id")), None);
+        assert_eq!(whole.get("label"), Some(&HookValue::Str("visible".into())));
+        assert!(
+            project_reflected_script_read(
+                &world,
+                &ApiValueBuilder,
+                "TwinIdentityProbe.twin_id",
+                &probe.twin_id,
+            )
+            .is_none()
+        );
+        assert!(
+            project_reflected_script_read(
+                &world,
+                &ApiValueBuilder,
+                "TwinIdentityProbe.workspace_twin.id",
+                &probe.workspace_twin.id,
+            )
+            .is_none()
+        );
+        assert!(
+            project_reflected_script_read(
+                &world,
+                &ApiValueBuilder,
+                "TwinIdentityProbe.twin.id",
+                &probe.twin.id,
+            )
+            .is_none()
+        );
+
+        let _app =
+            ExecutionContextScope::enter(lunco_core::RuntimeExecutionContext::unclassified());
+        let whole =
+            project_reflected_script_read(&world, &ApiValueBuilder, "TwinIdentityProbe", &probe)
+                .expect("application-scoped reflected value");
+        assert_eq!(whole.get("twin_id"), Some(&HookValue::UInt(17)));
+        assert_eq!(
+            whole
+                .get("workspace_twin")
+                .and_then(|value| value.get("id")),
+            Some(&HookValue::UInt(18))
+        );
+    }
+
+    #[test]
+    fn twin_scoped_engine_exposure_cannot_reintroduce_workspace_identity() {
+        let mut surface = lunco_exposure_core::ExposureSurface::default();
+        surface.set_property(
+            "identity",
+            lunco_exposure_core::ExposureValue::Map(vec![
+                (
+                    "twin_id".into(),
+                    lunco_exposure_core::ExposureValue::Number(17.0),
+                ),
+                (
+                    "workspace_twin".into(),
+                    lunco_exposure_core::ExposureValue::Map(vec![(
+                        "id".into(),
+                        lunco_exposure_core::ExposureValue::Number(18.0),
+                    )]),
+                ),
+                (
+                    "label".into(),
+                    lunco_exposure_core::ExposureValue::Text("visible".into()),
+                ),
+            ]),
+        );
+        let mut exposures = lunco_exposure_core::EngineExposures::default();
+        exposures.replace_surface("test", surface);
+        let mut world = World::new();
+        world.insert_resource(exposures);
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Simulation,
+                7,
+            )),
+            ..lunco_core::RuntimeExecutionContext::unclassified()
+        };
+        let _world = WorldScope::enter(&mut world, context);
+
+        let value = get_exposure(&ApiValueBuilder, "test", "identity").unwrap();
+        assert_eq!(value.get("twin_id"), None);
+        assert_eq!(
+            value.get("workspace_twin").and_then(|twin| twin.get("id")),
+            None
+        );
+        assert_eq!(value.get("label"), Some(&HookValue::Str("visible".into())));
+        assert!(get_twin_setting(&ApiValueBuilder, "workspace_twin.id").is_none());
+
+        let _app =
+            ExecutionContextScope::enter(lunco_core::RuntimeExecutionContext::unclassified());
+        let value = get_exposure(&ApiValueBuilder, "test", "identity").unwrap();
+        assert_eq!(value.get("twin_id"), Some(&HookValue::Float(17.0)));
+        assert_eq!(
+            value.get("workspace_twin").and_then(|twin| twin.get("id")),
+            Some(&HookValue::Float(18.0))
+        );
+    }
+
+    #[cfg(feature = "workspace")]
+    #[test]
+    fn script_values_translate_mount_authorities_to_stable_source_identity() {
+        let roots = lunco_assets_core::TwinRoots::default();
+        let authority = roots
+            .register_authority("mission", std::env::current_dir().expect("current dir"))
+            .expect("mount source");
+        let retired_authority = roots
+            .register_authority(
+                "retired-mission",
+                std::env::current_dir().expect("current dir"),
+            )
+            .expect("mount retired source");
+        roots
+            .unregister_authority(&retired_authority)
+            .expect("retire source");
+        let mut world = World::new();
+        world.insert_resource(roots);
+        let context = lunco_core::RuntimeExecutionContext {
+            route: Some(lunco_core::RuntimeRoute::twin(
+                lunco_core::RuntimeCycle::Simulation,
+                7,
+            )),
+            ..lunco_core::RuntimeExecutionContext::unclassified()
+        };
+        let _world = WorldScope::enter(&mut world, context);
+        let value = project_script_value(HookValue::map([
+            (
+                "source",
+                HookValue::Str(format!("twin://{authority}/scenes/main.usda")),
+            ),
+            (
+                "late_error",
+                HookValue::Str(format!(
+                    "failed twin://{retired_authority}/scenes/main.usda"
+                )),
+            ),
+            ("twin_id", HookValue::UInt(7)),
+            (
+                "detail",
+                HookValue::Str(format!("source {authority} failed")),
+            ),
+            (
+                "workspace_twin",
+                HookValue::map([
+                    ("id", HookValue::UInt(7)),
+                    ("name", HookValue::Str("Mission".into())),
+                ]),
+            ),
+        ]));
+
+        assert_eq!(
+            value.get("source"),
+            Some(&HookValue::Str("twin://mission/scenes/main.usda".into()))
+        );
+        assert_eq!(
+            value.get("detail"),
+            Some(&HookValue::Str("source mission failed".into()))
+        );
+        assert_eq!(
+            value.get("late_error"),
+            Some(&HookValue::Str(
+                "failed twin://retired-mission/scenes/main.usda".into()
+            ))
+        );
+        assert_eq!(
+            value.get("workspace_twin").and_then(|twin| twin.get("id")),
+            None
+        );
+        assert_eq!(value.get("twin_id"), None);
+        assert_eq!(
+            project_script_text(format!(
+                "failed twin://{retired_authority}/scenes/main.usda"
+            )),
+            "failed twin://retired-mission/scenes/main.usda"
+        );
+        assert_eq!(
+            project_script_text(format!("failed twin://{authority}/scenes/main.usda")),
+            "failed twin://mission/scenes/main.usda"
+        );
+        assert_eq!(
+            project_script_text(format!("failed twin://{}/scenes/main.usda", "c".repeat(32))),
+            "failed twin://[Twin source]/scenes/main.usda"
+        );
+    }
+
     use lunco_core_session::{AuthorityRole, CommandPolicy, UserSession};
 
     #[test]

@@ -123,11 +123,23 @@ outgoing information. Monotonic publication counters are retained, and late
 outgoing handle completions cannot retire replacement work. Closing a
 non-active Twin leaves the active status intact.
 
-The scripting `twin_name()` bridge resolves the active workspace root through
-`TwinRoots::name_for_root`. It returns the current mount authority, including
-reopen and equal-name disambiguation. Source queries and required-input keys
-use that authority. The manifest name remains presentation metadata; an
-active Twin without a live asset mount is a scripting error.
+`TwinRoots` keeps the exact mount authority inside Rust asset ownership. Twin
+lifecycle facts and Twin policy actions contain neither that authority nor the
+workspace `TwinId`; the typed runtime keeps the owner privately and the Rust
+command bridge binds it to reflected identity fields. Application-level scene
+selection may use the workspace `TwinId` to address a Twin. Twin source queries use the stable
+`twin://<source-identity>/<relative-path>` address, and `twin_source_identity()`
+returns only its stable source component. A manifest UUID supplies that
+identity as `uuid-<simple-uuid>`; older manifests and plain folders without a
+UUID use the encoded display component. A remount receives a fresh internal
+mount authority so late Bevy asset reads cannot bind to another source, while
+the public URI remains stable. Two live roots cannot claim one source identity:
+the second admission fails with a typed duplicate-identity error. See
+[source URI ownership](55-scene-addressing-and-roots.md#3-stable-source-uris-and-internal-mount-leases).
+Twin-scoped reflection reads, typed results, and diagnostics omit workspace
+Twin selectors and translate mount-local authorities to stable source
+identities. App-scoped scripts may use workspace Twin IDs; no script scope
+receives the internal mount authority.
 Catalog preflight also carries the discovered asset's admitted Twin root into
 the existing composition validator. Its filesystem path alone cannot resolve
 authored `twin://` reference arcs. Retired scan generations cannot publish
@@ -418,6 +430,25 @@ current workspace. `SetProjectSceneLoading` writes or removes the project
 override; `GetSceneLoadingSettings` reports the scopes, the next-open decision,
 the admitted decision, and the runtime scene override.
 
+#### Runtime view restoration
+
+`ui.restore_view_state` is a project-local override in the same file. It
+defaults to `true`; **Settings → Project → Restore cameras and graphs** can
+turn it off or return it to the default. The toggle controls whether scenes in
+the project restore camera feeds, selected graph channels, and window
+sizes/positions. Each scene has its own view snapshot. Those snapshots remain
+personal workspace state in the user's project-keyed workspace store, not in
+USD or the shared Twin. Scene switching retains unmatched snapshots; capture
+runs after the scene transition commits so teardown cannot save an empty layout
+under the outgoing scene path.
+
+```json
+{ "ui": { "restore_view_state": false } }
+```
+
+A malformed `ui` preference is logged and uses the default without blocking
+the authored scene from opening.
+
 #### Finite-world physics escape containment
 
 Finite-world escape containment defaults to `false`, so dynamic objects can
@@ -469,7 +500,8 @@ With a Twin open and no mounted scene, the viewport lists its declared default
 when admitted and every other regular scene selected by its `[usd].scenes`
 globs. Test scenes stay in the Twin's **Scenarios → Test Scenes** submenu and
 do not appear in this list. Scene buttons dispatch the ordinary Twin scene
-command with the active Twin's mounted authority. Application welcome actions
+command with the active workspace Twin ID and a relative path; the Rust
+command owner resolves the current private mount lease. Application welcome actions
 appear only when no Twin is active.
 
 To set the project override through the HTTP API, obtain the active `twin_id`
@@ -833,13 +865,13 @@ system) reads and writes through it.
 ## 6. Startup flow
 
 Opening a folder or Twin first runs the Rust bootstrap that parses the manifest,
-indexes files, establishes the Twin identity and `twin://` authority, and emits
+indexes files, establishes the workspace Twin and stable source identity, and emits
 the mounted event. The `twin.lifecycle` Rhai policy then receives the typed
 manifest, indexed relative paths and the admitted scene-selection inputs, then
 returns an ordered command plan. That policy selects an explicit scene or the
 enabled default USD scene, tool libraries, timelines, SysML/KerML
 sources, and Modelica roots. Typed Rust commands validate active-Twin identity,
-path ownership, and asset authority, then use the domain's asynchronous loader.
+path ownership, and the current private mount lease, then use the domain's asynchronous loader.
 Rust owns the filesystem and lifecycle mechanisms; Rhai owns content selection
 and load order.
 

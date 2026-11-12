@@ -27,7 +27,10 @@ use bevy::reflect::TypeInfo;
 use lunco_api::queries::{
     ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult, ApiVisibility,
 };
-use lunco_api_core::{ApiErrorCode, ApiValue, api_value, api_value_from_serializable};
+use lunco_api_core::{
+    ApiErrorCode, ApiQueryParameterSchema, ApiQuerySchema, ApiValue, api_value,
+    api_value_from_serializable,
+};
 use std::collections::BTreeMap;
 
 fn query_ok(value: ApiValue) -> ApiQueryResult {
@@ -36,6 +39,123 @@ fn query_ok(value: ApiValue) -> ApiQueryResult {
 
 fn query_error(code: ApiErrorCode, message: impl Into<String>) -> ApiQueryResult {
     Err(ApiQueryError::new(code, message))
+}
+
+fn workspace_twin_selector(name: &str, type_name: &str) -> bool {
+    lunco_scripting_bridge_core::is_workspace_twin_selector(name, type_name)
+}
+
+const SCRIPTING_CATALOG_SECTIONS: &[&str] = &[
+    "verbs",
+    "hooks",
+    "policy_hooks",
+    "policy_status",
+    "prelude",
+    "tools",
+    "commands",
+    "queries",
+    "reflection",
+];
+
+fn requested_catalog_sections(params: &ApiValue) -> Result<Vec<&'static str>, ApiQueryError> {
+    let Some(value) = params.get("sections") else {
+        return Ok(SCRIPTING_CATALOG_SECTIONS.to_vec());
+    };
+    let ApiValue::Array(values) = value else {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "ScriptingCatalog: `sections` must be a non-empty array of section names",
+        ));
+    };
+    if values.is_empty() {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "ScriptingCatalog: `sections` must be a non-empty array of section names",
+        ));
+    }
+
+    let mut sections = Vec::with_capacity(values.len());
+    for value in values {
+        let Some(name) = value.as_str() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                "ScriptingCatalog: each section name must be a string",
+            ));
+        };
+        let Some(section) = SCRIPTING_CATALOG_SECTIONS
+            .iter()
+            .copied()
+            .find(|section| *section == name)
+        else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::DeserializationError,
+                format!(
+                    "ScriptingCatalog: unknown section `{name}`; expected one of {}",
+                    SCRIPTING_CATALOG_SECTIONS.join(", ")
+                ),
+            ));
+        };
+        if !sections.contains(&section) {
+            sections.push(section);
+        }
+    }
+    Ok(sections)
+}
+
+fn twin_scoped_script() -> bool {
+    lunco_scripting_bridge_core::execution_context()
+        .route
+        .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin)
+}
+
+fn redact_twin_command_selectors(commands: &mut [lunco_api_core::CommandSchema]) {
+    for command in commands {
+        command
+            .fields
+            .retain(|field| !workspace_twin_selector(&field.name, &field.type_name));
+    }
+}
+
+fn redact_twin_query_selectors(queries: &mut [ApiQuerySchema]) {
+    for query in queries {
+        if let Some(parameters) = query.parameters.as_mut() {
+            parameters.retain(|parameter| {
+                !workspace_twin_selector(&parameter.name, &parameter.type_name)
+            });
+        }
+        query.exactly_one_of.retain(|group| {
+            !group
+                .iter()
+                .any(|name| lunco_scripting_bridge_core::is_workspace_twin_selector_name(name))
+        });
+        query.response = None;
+    }
+}
+
+fn scripting_catalog_query_schema() -> ApiQuerySchema {
+    ApiQuerySchema {
+        name: "ScriptingCatalog".to_owned(),
+        description: Some(
+            "Discover the scripting authoring surface. Request selected sections when consuming the result from Rhai; the full catalog is intended for application-level discovery.".to_owned(),
+        ),
+        parameters: Some(vec![ApiQueryParameterSchema {
+            name: "sections".to_owned(),
+            type_name: "array<string>".to_owned(),
+            required: false,
+            description: "Optional non-empty list of catalog sections to return. Omit to return the full catalog.".to_owned(),
+            allowed_values: Some(
+                SCRIPTING_CATALOG_SECTIONS
+                    .iter()
+                    .map(|section| (*section).to_owned())
+                    .collect(),
+            ),
+        }]),
+        exactly_one_of: Vec::new(),
+        response: Some(format!(
+            "Selected sections from: {}",
+            SCRIPTING_CATALOG_SECTIONS.join(", ")
+        )),
+    }
 }
 
 fn required_field<'a>(value: &'a ApiValue, name: &str) -> Result<&'a ApiValue, ApiQueryError> {
@@ -513,14 +633,19 @@ const VERB_DOCS: &[(&str, &str, &str)] = &[
         "READ. Absolute root of the active Twin, or an empty string.",
     ),
     (
-        "twin_name",
-        "string | error",
-        "READ. Current twin:// mount authority of the active Twin, or an empty string when none is active. An active Twin without a live mount is an error.",
+        "twin_source_identity",
+        "string",
+        "READ. Stable logical source identity of the active Twin, or an empty string when none is active. Asset operations resolve it to the current mount internally. Use twin_display_name() for UI text.",
+    ),
+    (
+        "twin_display_name",
+        "string",
+        "READ. Human-readable active Twin name, or an empty string when none is active.",
     ),
     (
         "asset_source_relative_uri",
         "string | error",
-        "READ. Resolve a safe document-relative asset while preserving the document's registered source authority (for example, twin://name). This is URI algebra only; it does not read files.",
+        "READ. Resolve a safe document-relative asset while preserving its stable source identity (for example, twin://mission). This is URI algebra only; it does not read files.",
     ),
     (
         "is_unattended",
@@ -820,11 +945,15 @@ impl ApiQueryProvider for ScriptCompleteProvider {
             }
         }
         let type_registry = world.resource::<AppTypeRegistry>().clone();
-        let commands = {
+        let twin_scope = twin_scoped_script();
+        let mut commands = {
             let registry = type_registry.read();
             let visibility = world.get_resource::<ApiVisibility>();
             lunco_api::discover_commands(&registry, visibility)
         };
+        if twin_scope {
+            redact_twin_command_selectors(&mut commands);
+        }
         for command in commands {
             let name = command.name.clone();
             let detail = command
@@ -840,7 +969,11 @@ impl ApiQueryProvider for ScriptCompleteProvider {
                 api_value!({ "label": name, "kind": "command", "detail": detail }),
             );
         }
-        for query in lunco_api::discover_queries(world.get_resource::<ApiQueryRegistry>()) {
+        let mut queries = lunco_api::discover_queries(world.get_resource::<ApiQueryRegistry>());
+        if twin_scope {
+            redact_twin_query_selectors(&mut queries);
+        }
+        for query in queries {
             let name = query.name.clone();
             let detail = query
                 .description
@@ -915,60 +1048,86 @@ impl ApiQueryProvider for ScriptingCatalogProvider {
         "ScriptingCatalog"
     }
 
-    fn execute(&self, world: &World, _params: &ApiValue) -> ApiQueryResult {
-        // Built-in verbs + hooks (static).
-        let verbs: Vec<ApiValue> = native_verb_entries()?
-            .into_iter()
-            .map(|entry| {
-                api_value!({
-                    "name": entry.name,
-                    "signature": entry.signature,
-                    "returns": entry.returns,
-                    "doc": entry.doc,
+    fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
+        let requested = requested_catalog_sections(params)?;
+        let includes = |section: &str| requested.contains(&section);
+        let twin_scope = twin_scoped_script();
+        let mut fields = Vec::with_capacity(requested.len());
+
+        if includes("verbs") {
+            let verbs = native_verb_entries()?
+                .into_iter()
+                .map(|entry| {
+                    api_value!({
+                        "name": entry.name,
+                        "signature": entry.signature,
+                        "returns": entry.returns,
+                        "doc": entry.doc,
+                    })
                 })
-            })
-            .collect();
-        let hooks: Vec<ApiValue> = HOOKS
-            .iter()
-            .map(|(name, doc)| api_value!({ "name": *name, "doc": *doc }))
-            .collect();
-        let policy_hooks = hook_surface();
+                .collect();
+            fields.push(("verbs".to_owned(), ApiValue::Array(verbs)));
+        }
+        if includes("hooks") {
+            let hooks = HOOKS
+                .iter()
+                .map(|(name, doc)| api_value!({ "name": *name, "doc": *doc }))
+                .collect();
+            fields.push(("hooks".to_owned(), ApiValue::Array(hooks)));
+        }
+        if includes("policy_hooks") {
+            fields.push(("policy_hooks".to_owned(), ApiValue::Array(hook_surface())));
+        }
+        if includes("prelude") {
+            fields.push((
+                "prelude".to_owned(),
+                ApiValue::Array(prelude_surface(world)),
+            ));
+        }
+        if includes("tools") {
+            fields.push(("tools".to_owned(), ApiValue::Array(tool_surface())));
+        }
+        if includes("commands") {
+            let type_registry = world.resource::<AppTypeRegistry>().clone();
+            let mut commands = {
+                let reg = type_registry.read();
+                let visibility = world.get_resource::<ApiVisibility>();
+                lunco_api::discover_commands(&reg, visibility)
+            };
+            if twin_scope {
+                redact_twin_command_selectors(&mut commands);
+            }
+            fields.push((
+                "commands".to_owned(),
+                api_value_from_serializable(&commands)?,
+            ));
+        }
+        if includes("queries") {
+            let mut queries =
+                lunco_api::discover_queries(Some(world.resource::<ApiQueryRegistry>()));
+            if twin_scope {
+                redact_twin_query_selectors(&mut queries);
+            }
+            fields.push(("queries".to_owned(), api_value_from_serializable(&queries)?));
+        }
+        if includes("reflection") {
+            fields.push((
+                "reflection".to_owned(),
+                ApiValue::Array(reflected_surface(world)),
+            ));
+        }
+        if includes("policy_status") {
+            fields.push((
+                "policy_status".to_owned(),
+                lunco_scripting_rhai_world::world_bridge::policy_status_value(world),
+            ));
+        }
 
-        // Prelude helpers and tool libraries (incl. file-loaded ones) use the
-        // same helpers as `ScriptComplete`, keeping both discovery surfaces in
-        // lockstep.
-        let prelude = prelude_surface(world);
-        let tools = tool_surface();
+        query_ok(ApiValue::Map(fields))
+    }
 
-        // Reflected commands (cmd targets) — reuse the canonical discovery walk,
-        // respecting API visibility so internal commands stay hidden.
-        let type_registry = world.resource::<AppTypeRegistry>().clone();
-        let commands = {
-            let reg = type_registry.read();
-            let visibility = world.get_resource::<ApiVisibility>();
-            lunco_api::discover_commands(&reg, visibility)
-        };
-        let commands = api_value_from_serializable(&commands)?;
-
-        // Registered read-only providers (query targets), from the same
-        // registry the runtime executes.
-        let queries = api_value_from_serializable(&lunco_api::discover_queries(Some(
-            world.resource::<ApiQueryRegistry>(),
-        )))?;
-        let reflection = reflected_surface(world);
-        let policy_status = lunco_scripting_rhai_world::world_bridge::policy_status_value(world);
-
-        query_ok(api_value!({
-            "verbs": verbs,
-            "hooks": hooks,
-            "policy_hooks": policy_hooks,
-            "policy_status": policy_status,
-            "prelude": prelude,
-            "tools": tools,
-            "commands": commands,
-            "queries": queries,
-            "reflection": reflection,
-        }))
+    fn schema(&self) -> ApiQuerySchema {
+        scripting_catalog_query_schema()
     }
 }
 

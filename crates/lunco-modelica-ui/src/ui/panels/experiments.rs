@@ -1981,7 +1981,7 @@ fn render_experiments_plot_inner(
                             .color(col_warning),
                     )
                     .on_hover_text(
-                        "Picked variables have different units; y-axis label suppressed.",
+                        "These quantities share one vertical axis and use different units. Use Variables to select comparable quantities, or duplicate Graphs and split them across plots.",
                     );
                 }
             });
@@ -2119,11 +2119,44 @@ fn render_experiments_plot_inner(
                 line.color = egui::Color32::from_rgb(r, g, b);
             }
         }
-        let plot_response = render_multi_series_plot(ui, &series, overlays, &options);
-        plot_response.response.context_menu(|ui| {
-            lunco_viz::kinds::line_plot::render_appearance_menu(ui, ctx, viz_id.0, &style, plot_response.time_span_s);
-        });
-        if let Some(x) = plot_response.clicked_x {
+        let clicked_x = if series.is_empty() && overlays.is_empty() {
+            let (heading, guidance) = if runs_info.is_empty() {
+                (
+                    "No simulation results yet",
+                    "Use Fast Run in the model toolbar to create results, or select live channels in Telemetry.",
+                )
+            } else if variable_catalog.is_empty() {
+                (
+                    "No result variables available",
+                    "Select live channels in Telemetry to add them to this plot.",
+                )
+            } else {
+                (
+                    "Choose variables to plot",
+                    "Open Variables above, or select live channels in Telemetry.",
+                )
+            };
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.heading(heading);
+                    ui.label(guidance);
+                });
+            });
+            None
+        } else {
+            let plot_response = render_multi_series_plot(ui, &series, overlays, &options);
+            plot_response.response.context_menu(|ui| {
+                lunco_viz::kinds::line_plot::render_appearance_menu(
+                    ui,
+                    ctx,
+                    viz_id.0,
+                    &style,
+                    plot_response.time_span_s,
+                );
+            });
+            plot_response.clicked_x
+        };
+        if let Some(x) = clicked_x {
             new_scrub = Some(Some(x));
         }
 

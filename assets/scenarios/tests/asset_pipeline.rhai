@@ -19,7 +19,8 @@ fn verify_runtime_download_catalog() {
     }
     checks.push(t_true(earth && moon,"planetary imagery remains in the downloadable catalog"));
     checks.push(t_true(font,"the application fallback font is listed in the downloadable catalog"));
-    checks.push(t_true(font_state!="missing","the fallback font's startup download has been admitted"));
+    checks.push(t_true(font_state=="missing" || font_state=="installed",
+        "a missing fallback font remains available for explicit download without startup work"));
     t_report(checks);
 }
 
@@ -49,6 +50,21 @@ fn verify_pipeline(scope, key, state, artifact_count, step_count) {
         t_eq(dataset.recipe.artifacts.len(),artifact_count,"declared artifacts are exposed through the native query"),
         t_eq(dataset.recipe.steps.len(),step_count,"declared processing stages retain their identity"),
         t_true(dataset.artifact_uri.starts_with("twin://"),"artifact retains logical Twin ownership"),
+    ]);
+}
+
+fn verify_dataset_state(scope, key, state) {
+    let dataset = pipeline_dataset(scope, key);
+    t_report([
+        t_eq(dataset.state.kind, state, "processed asset freshness has the expected lifecycle state"),
+        t_true(dataset.processed, "freshness is checked for manifest-owned processing"),
+    ]);
+}
+
+fn verify_texture_dimensions(width, height, expected_width, expected_height) {
+    t_report([
+        t_eq(width, expected_width, "rebaked texture has the current recipe width"),
+        t_eq(height, expected_height, "rebaked texture has the current recipe height"),
     ]);
 }
 

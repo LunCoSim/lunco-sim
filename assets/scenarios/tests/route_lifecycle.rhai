@@ -444,6 +444,15 @@ fn route_lifecycle_timeout(me) {
             + ", active_route=" + active_route.to_string()
             + ", selection=" + query("InspectSelection", #{}).to_string()
             + ", viewport_selection=" + query("InspectUsdSelection", #{}).to_string();
+        if this.waiting_for == "the live route edit and sensor transition" {
+            detail += ", route_events=#{started:" + this.started.to_string()
+                + ", stopped:" + this.stopped.to_string()
+                + ", reached:" + this.reached.to_string()
+                + ", expected_source:" + find_path(ROUTE).to_string()
+                + "}, autopilot_enable=" + port(this.subject, "autopilot_enable").to_string()
+                + ", guidance_throttle=" + port(this.subject, "guidance_throttle").to_string()
+                + ", program_active=" + port(this.subject, "program_active").to_string();
+        }
     }
     if this.waiting_for == "the nested simulation projection and event verdict" {
         detail += "; application_event_received=" + this.nested_admission_received.to_string()
@@ -464,7 +473,7 @@ fn route_step_route_fixture_action(me) {
     let route = query("QueryUsdPrim", #{ path: ROUTE, children: true });
     if route == () || route.ok == false || route.doc_id == () { return; }
     this.doc = route.doc_id;
-    this.subject = find_path(SUBJECT_PATH);
+    this.subject = find_path_in_document(this.doc, SUBJECT_PATH);
     if this.subject < 0 || point_count(this.doc) != 3 || !ribbon_present(this.doc)
         || !ribbon_view_ready(this.doc, 3)
         || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
@@ -494,6 +503,22 @@ fn route_step_route_fixture_action(me) {
         "route ribbon is open and never connects the last point to the first"));
     this.checks.push(t_true(ribbon_present(this.doc),
         "route ribbon keeps one disposable USD identity for its live mesh"));
+    let ribbon_view = query("ResolveUsdTarget", #{
+        doc_id: this.doc,
+        path: ROUTE + "/RouteRibbon",
+        edit_target: "@view@",
+    });
+    let ribbon_runtime = query("ResolveUsdTarget", #{
+        doc_id: this.doc,
+        path: ROUTE + "/RouteRibbon",
+        edit_target: "@runtime@",
+    });
+    this.checks.push(t_true(ribbon_view != () && ribbon_view.ok != false
+        && ribbon_view.composed_exists == true && ribbon_view.authored_here == true
+        && ribbon_runtime != () && ribbon_runtime.ok != false
+        && ribbon_runtime.authored_here == false
+        && ribbon_runtime.authored_in_document == false,
+        "route ribbon exists only in the disposable runtime view layer"));
     this.checks.push(t_true(listed.ok && listed.programs.len() == 1
         && listed.programs[0]["path"] == this.program_path,
         "generic program discovery lists the authored executable"));
@@ -1342,6 +1367,12 @@ fn route_step_edit_active_route_action(me) {
     }
     if point_count(this.doc) != 3 || !ribbon_present(this.doc) { return; }
     if this.started == 0 || this.stopped != 0 { return; }
+    let autopilot_enable = port(this.subject, "autopilot_enable");
+    if autopilot_enable == () || autopilot_enable < 0.99 {
+        return;
+    }
+    this.checks.push(t_true(true,
+        "Twin lifecycle safe-stop state does not mask the active authored autopilot setpoint"));
     let guidance = port(this.subject, "guidance_throttle");
     if guidance == () || guidance.abs() < 0.01 { return; }
     let program_active = port(this.subject, "program_active");

@@ -87,9 +87,9 @@ impl OwnerFence {
             workspace.map(|workspace| &**workspace),
             replication.as_ref(),
         ) && self.mount.as_ref().is_none_or(|(authority, root)| {
-            world
-                .get_resource::<TwinRoots>()
-                .is_some_and(|roots| roots.root_of(authority).ok().flatten().as_ref() == Some(root))
+            world.get_resource::<TwinRoots>().is_some_and(|roots| {
+                roots.root_for(authority).ok().flatten().as_ref() == Some(root)
+            })
         }) && self.policies.iter().all(|(domain, admitted)| {
             let current = lunco_hooks::get(&lunco_lint::hook_id(domain));
             match (admitted, current) {
@@ -187,7 +187,7 @@ fn capture_fence(
             .get_resource::<TwinRoots>()
             .ok_or_else(|| rejected("Twin asset registry is unavailable"))?;
         let root = roots
-            .root_of(authority)
+            .root_for(authority)
             .map_err(|error| rejected(error.to_string()))?
             .ok_or_else(|| rejected(format!("Twin mount `{authority}` is retired or unknown")))?;
         mount = Some((authority.to_owned(), root));
@@ -197,10 +197,10 @@ fn capture_fence(
                 .get_resource::<TwinRoots>()
                 .ok_or_else(|| rejected("Active Twin asset registry is unavailable"))?;
             let authority = roots
-                .names()
+                .authorities()
                 .map_err(|error| rejected(error.to_string()))?
                 .into_iter()
-                .find(|name| roots.root_of(name).ok().flatten().as_ref() == Some(&twin.root))
+                .find(|name| roots.root_for(name).ok().flatten().as_ref() == Some(&twin.root))
                 .ok_or_else(|| rejected("Active Twin has no current asset mount"))?;
             mount = Some((authority, twin.root.clone()));
         }
@@ -331,7 +331,7 @@ pub(crate) fn poll_operation(
     }) || prepared.mounts.iter().any(|(name, root)| {
         world
             .get_resource::<TwinRoots>()
-            .is_none_or(|roots| roots.root_of(name).ok().flatten().as_ref() != Some(root))
+            .is_none_or(|roots| roots.root_for(name).ok().flatten().as_ref() != Some(root))
     }) {
         return Err(rejected(
             "Validation source owner retired before publication",
@@ -774,9 +774,9 @@ async fn prepare(
                         .as_ref()
                         .ok_or("USD file validation requires the current registered asset mount")?;
                     let mut logical = None;
-                    for name in roots.names().map_err(|error| error.to_string())? {
+                    for name in roots.authorities().map_err(|error| error.to_string())? {
                         if let Some(root) =
-                            roots.root_of(&name).map_err(|error| error.to_string())?
+                            roots.root_for(&name).map_err(|error| error.to_string())?
                         {
                             if let Ok(relative) = resolved.path.strip_prefix(root) {
                                 logical = Some(lunco_assets_core::twin_uri(&name, relative));
@@ -848,7 +848,7 @@ fn read_identities(
         if let Some(authority) = twin_authority(&revision.path) {
             let root = roots
                 .ok_or("Twin registry unavailable at source preparation")?
-                .root_of(authority)
+                .root_for(authority)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| {
                     format!("Twin source mount `{authority}` retired during preparation")
@@ -1107,8 +1107,10 @@ mod tests {
     fn retired_mount_cannot_publish_into_reopened_root() {
         let folder = tempfile::tempdir().unwrap();
         let roots = TwinRoots::default();
-        let authority = roots.register("preparation", folder.path()).unwrap();
-        let root = roots.root_of(&authority).unwrap().unwrap();
+        let authority = roots
+            .register_authority("preparation", folder.path())
+            .unwrap();
+        let root = roots.root_for(&authority).unwrap().unwrap();
         let fence = OwnerFence {
             runtime: DocumentRuntimeOwner::Application,
             mount: Some((authority.clone(), root)),
@@ -1118,8 +1120,10 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(roots.clone());
         assert!(fence.is_current(&world));
-        roots.unregister_name(&authority).unwrap();
-        let replacement = roots.register("preparation", folder.path()).unwrap();
+        roots.unregister_authority(&authority).unwrap();
+        let replacement = roots
+            .register_authority("preparation", folder.path())
+            .unwrap();
         assert_ne!(replacement, authority);
         assert!(!fence.is_current(&world));
     }

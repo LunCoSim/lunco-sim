@@ -1077,10 +1077,10 @@ mod tests {
             )
             .unwrap();
         let twins = TwinRoots::default();
-        let name = twins
-            .register("moonbase", root.path())
+        let authority = twins
+            .register_authority("moonbase", root.path())
             .expect("register root");
-        let uri = format!("twin://{name}/scenes/base.usda");
+        let uri = format!("twin://{authority}/scenes/base.usda");
         assert_eq!(
             resolve_scheme(&uri, None, Some(&twins.snapshot().unwrap())),
             Some(scene)
@@ -1092,14 +1092,14 @@ mod tests {
         let twins = TwinRoots::default();
         let assets = PathBuf::from("/proj/assets");
         let root = tempfile::tempdir().expect("temporary Twin root");
-        let name = twins
-            .register("moonbase", root.path())
+        let authority = twins
+            .register_authority("moonbase", root.path())
             .expect("register root");
         for reference in [
             "lunco://../outside.usda",
             "lunco://vessels/../../outside.usda",
-            &format!("twin://{name}/../outside.usda"),
-            &format!("twin://{name}/scenes/../../outside.usda"),
+            &format!("twin://{authority}/../outside.usda"),
+            &format!("twin://{authority}/scenes/../../outside.usda"),
         ] {
             assert_eq!(
                 resolve_scheme(reference, Some(&assets), Some(&twins.snapshot().unwrap())),

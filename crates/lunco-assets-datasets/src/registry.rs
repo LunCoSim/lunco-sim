@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_core::Command;
 
-use crate::{AssetEntry, AssetManifest, entry_dest_path, process_output_path};
+use crate::{AssetEntry, AssetManifest, dataset_cache_root, entry_dest_path, process_output_path};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{installed_destination_present, processed_output_present};
 
@@ -68,8 +68,12 @@ pub enum DatasetScope {
     Engine,
     /// A Twin manifest and its absolute root.
     Twin {
-        /// `twin://` authority.
-        name: String,
+        /// Stable source identity used for dataset IDs across mount lifetimes.
+        source_identity: String,
+        /// Live `twin://` authority. Offline verification has no runtime address.
+        authority: Option<String>,
+        /// Human-readable manifest or folder label.
+        display_name: String,
         /// Absolute Twin root.
         root: PathBuf,
     },
@@ -84,36 +88,34 @@ impl DatasetScope {
             _ => false,
         }
     }
-    /// Stable command/query identity, distinct from the human-readable label.
+    /// Stable command/query identity, distinct from the mount and display names.
     pub fn id(&self) -> String {
         match self {
             Self::Engine => "engine".to_owned(),
-            Self::Twin { name, .. } => format!("twin:{name}"),
+            Self::Twin {
+                source_identity, ..
+            } => format!("twin:{source_identity}"),
         }
     }
 
-    /// Resolve the cache that owns a Twin's download.
-    pub fn twin_cache_root(root: &Path, shared: bool) -> PathBuf {
-        if shared {
-            lunco_assets_core::cache_dir()
-        } else {
-            lunco_assets_core::twin_cache_dir(root)
+    /// Local cache base for this scope before a declaration selects shared storage.
+    pub fn local_cache_root(&self) -> PathBuf {
+        match self {
+            Self::Engine => lunco_assets_core::cache_dir(),
+            Self::Twin { root, .. } => lunco_assets_core::twin_cache_dir(root),
         }
     }
 
     /// Cache that owns the downloaded and derived artifacts.
     pub fn cache_root(&self, shared: bool) -> PathBuf {
-        match self {
-            Self::Engine => lunco_assets_core::cache_dir(),
-            Self::Twin { root, .. } => Self::twin_cache_root(root, shared),
-        }
+        dataset_cache_root(&self.local_cache_root(), shared)
     }
 
     /// Roots searched for a delivered artifact, in precedence order.
     pub fn read_roots(&self) -> std::io::Result<Vec<PathBuf>> {
         Ok(match self {
             Self::Engine => {
-                lunco_assets_core::asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
+                lunco_assets_core::engine_asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
             }
             Self::Twin { root, .. } => lunco_assets_core::asset_read_roots(root),
         })
@@ -123,7 +125,7 @@ impl DatasetScope {
     pub fn label(&self) -> &str {
         match self {
             Self::Engine => "engine",
-            Self::Twin { name, .. } => name,
+            Self::Twin { display_name, .. } => display_name,
         }
     }
 }
@@ -239,11 +241,7 @@ impl DatasetEntry {
             .into_iter()
             .map(|(id, spec)| {
                 #[cfg(not(target_arch = "wasm32"))]
-                let state = match crate::source_read_path(
-                    spec,
-                    &self.scope.cache_root(spec.shared),
-                    &self.read_roots,
-                ) {
+                let state = match crate::source_read_path(spec, &self.read_roots) {
                     Ok(_) => DatasetInputState::Ready,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         DatasetInputState::Missing
@@ -295,10 +293,10 @@ impl DatasetEntry {
                 path.display()
             );
         }
-        format!(
-            "Prepared artifact {} is missing. Prepare this dataset before loading it.",
-            self.artifact_uri()
-        )
+        let location = self
+            .artifact_uri()
+            .unwrap_or_else(|| format!("{} in Twin {}", self.artifact_rel, self.scope.label()));
+        format!("Prepared artifact {location} is missing. Prepare this dataset before loading it.")
     }
 
     /// Exact read roots validated with this declaration on its scan worker.
@@ -319,32 +317,37 @@ impl DatasetEntry {
             else {
                 return Ok(None);
             };
-            if !artifact_present(&self.spec, &path, None) {
+            let process = self.spec.process.as_ref();
+            let owner = match &self.scope {
+                DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                DatasetScope::Engine => None,
+            };
+            let source = match process {
+                Some(_) => match crate::source_read_path(&self.spec, &self.read_roots) {
+                    Ok(source) => Some(source),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                        ) =>
+                    {
+                        None
+                    }
+                    Err(error) => return Err(error.to_string()),
+                },
+                None => None,
+            };
+            if process.is_some_and(|process| process.pipeline.is_some()) && source.is_none() {
                 return Ok(None);
             }
-            if let Some(process) = &self.spec.process {
-                if process.pipeline.is_some() {
-                    let cache = self.scope.cache_root(self.spec.shared);
-                    let owner = match &self.scope {
-                        DatasetScope::Twin { root, .. } => Some(root.as_path()),
-                        DatasetScope::Engine => None,
-                    };
-                    let source = match crate::source_read_path(&self.spec, &cache, &self.read_roots)
-                    {
-                        Ok(source) => source,
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
-                            ) =>
-                        {
-                            return Ok(None);
-                        }
-                        Err(error) => return Err(error.to_string()),
-                    };
-                    if !crate::pipeline::inputs_current(&path, process, &source, &cache, owner) {
-                        return Ok(None);
-                    }
+            if !artifact_present(&self.spec, &path, source.as_deref()) {
+                return Ok(None);
+            }
+            if let (Some(process), Some(source)) = (process, source.as_deref()) {
+                if process.pipeline.is_some()
+                    && !crate::pipeline::inputs_current(&path, process, source, owner)
+                {
+                    return Ok(None);
                 }
             }
             Ok(Some(path))
@@ -353,15 +356,24 @@ impl DatasetEntry {
         Ok(None)
     }
 
-    /// Resolve the consumer-facing asset URI.
-    pub fn artifact_uri(&self) -> String {
+    /// Resolve the consumer-facing asset URI using the stable source identity.
+    /// Offline verification has no live Twin scope and cannot produce an address.
+    pub fn artifact_uri(&self) -> Option<String> {
         match &self.scope {
-            DatasetScope::Engine => {
-                lunco_assets_path::uri(lunco_assets_core::LUNCO_SCHEME, &self.artifact_rel)
-            }
-            DatasetScope::Twin { name, .. } => {
-                lunco_assets_core::twin_uri(name, &self.artifact_rel)
-            }
+            DatasetScope::Engine => Some(lunco_assets_path::uri(
+                lunco_assets_core::LUNCO_SCHEME,
+                &self.artifact_rel,
+            )),
+            DatasetScope::Twin {
+                source_identity,
+                authority,
+                ..
+            } => authority.as_ref().map(|_| {
+                lunco_assets_path::uri(
+                    lunco_assets_core::TWIN_SCHEME,
+                    &format!("{source_identity}/{}", self.artifact_rel),
+                )
+            }),
         }
     }
 }
@@ -501,13 +513,6 @@ impl DatasetRegistry {
         };
         let mut added = 0;
         for (key, spec) in manifest.assets {
-            if spec.download_on_start && !matches!(&scope, DatasetScope::Engine) {
-                self.record_failure(format!(
-                    "dataset '{key}' in scope '{}' cannot use download_on_start; this policy is for engine manifests",
-                    scope.label()
-                ));
-                continue;
-            }
             if spec.package_only {
                 continue;
             }
@@ -519,8 +524,9 @@ impl DatasetRegistry {
                 ));
                 continue;
             }
-            let destination_root = scope.cache_root(spec.shared);
-            let path = match entry_dest_path(&spec, Some(&destination_root)) {
+            let local_cache_root = scope.local_cache_root();
+            let owner_cache_root = scope.cache_root(spec.shared);
+            let path = match entry_dest_path(&spec, Some(&local_cache_root)) {
                 Ok(path) => path,
                 Err(error) => {
                     self.record_failure(format!(
@@ -547,7 +553,7 @@ impl DatasetRegistry {
                 };
                 let output_path = match process_output_path(
                     process,
-                    Some(&scope.cache_root(spec.shared)),
+                    Some(&owner_cache_root),
                     twin_root,
                 ) {
                     Ok(path) => path,
@@ -574,7 +580,7 @@ impl DatasetRegistry {
                     .and_then(|process| process.pipeline.as_ref())
                 {
                     for source in pipeline.sources.values() {
-                        let input = entry_dest_path(source, Some(&destination_root))
+                        let input = entry_dest_path(source, Some(&local_cache_root))
                             .map_err(lunco_storage::StorageError::Io)?;
                         sources.push((
                             input.clone(),
@@ -734,9 +740,17 @@ impl DatasetRegistry {
 
     /// Scan and register an opened Twin's `Assets.toml`.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn scan_twin(&mut self, name: &str, root: &Path) -> usize {
+    pub fn scan_twin(
+        &mut self,
+        source_identity: &str,
+        authority: Option<&str>,
+        display_name: &str,
+        root: &Path,
+    ) -> usize {
         let scope = DatasetScope::Twin {
-            name: name.to_owned(),
+            source_identity: source_identity.to_owned(),
+            authority: authority.map(str::to_owned),
+            display_name: display_name.to_owned(),
             root: root.to_path_buf(),
         };
         self.forget_scope(&scope);
@@ -753,7 +767,7 @@ impl DatasetRegistry {
                 return 0;
             }
         };
-        self.register_scoped(&text, name, scope)
+        self.register_scoped(&text, display_name, scope)
     }
 
     /// Record a registry-owned failure for the runtime telemetry drain.
@@ -1003,7 +1017,9 @@ impl DatasetRegistry {
 pub fn dataset_id(scope: &DatasetScope, group: &str, key: &str) -> String {
     match scope {
         DatasetScope::Engine => format!("engine/{group}/{key}"),
-        DatasetScope::Twin { name, .. } => format!("twin/{name}/{key}"),
+        DatasetScope::Twin {
+            source_identity, ..
+        } => format!("twin/{source_identity}/{key}"),
     }
 }
 
@@ -1084,7 +1100,9 @@ dest = "data/demo.csv"
         std::fs::write(&authored, b"").unwrap();
         std::fs::write(&cached, b"valid cached artifact").unwrap();
         let scope = DatasetScope::Twin {
-            name: "fixture".into(),
+            source_identity: "fixture".into(),
+            authority: Some("opaque-authority".into()),
+            display_name: "fixture".into(),
             root: root.path().to_path_buf(),
         };
         let mut invalid = DatasetRegistry::default();
@@ -1117,13 +1135,48 @@ dest = "data/demo.csv"
         assert_eq!(entry.scope.id(), "engine");
         assert_eq!(
             DatasetScope::Twin {
-                name: "named-fixture".into(),
+                source_identity: "stable-fixture".into(),
+                authority: Some("opaque-authority".into()),
+                display_name: "Named fixture".into(),
                 root: PathBuf::from("/fixture"),
             }
             .id(),
-            "twin:named-fixture"
+            "twin:stable-fixture"
         );
-        assert_eq!(entry.artifact_uri(), "lunco://data/demo.csv");
+        assert_eq!(
+            entry.artifact_uri().as_deref(),
+            Some("lunco://data/demo.csv")
+        );
+
+        let offline_scope = DatasetScope::Twin {
+            source_identity: "stable-fixture".into(),
+            authority: None,
+            display_name: "Named fixture".into(),
+            root: PathBuf::from("/fixture"),
+        };
+        let mut offline_registry = DatasetRegistry::default();
+        assert_eq!(
+            offline_registry.register_scoped(MANIFEST, "Named fixture", offline_scope),
+            1
+        );
+        let offline_entry = &offline_registry.entries()[0];
+        assert_eq!(offline_entry.id, "twin/stable-fixture/demo_vectors");
+        assert_eq!(offline_entry.scope.id(), "twin:stable-fixture");
+        assert_eq!(offline_entry.scope.label(), "Named fixture");
+        assert_eq!(offline_entry.artifact_uri(), None);
+        assert_eq!(
+            dataset_id(
+                &DatasetScope::Twin {
+                    source_identity: "stable-fixture".into(),
+                    authority: Some("fresh-authority".into()),
+                    display_name: "Renamed presentation label".into(),
+                    root: PathBuf::from("/fixture"),
+                },
+                "ignored-group",
+                "demo_vectors"
+            ),
+            offline_entry.id
+        );
     }
 
     #[test]
@@ -1166,7 +1219,9 @@ dest = "data/demo.csv"
     fn delivered_paths_are_scope_relative() {
         let mut registry = DatasetRegistry::default();
         let scope = DatasetScope::Twin {
-            name: "school".into(),
+            source_identity: "school".into(),
+            authority: Some("opaque-authority".into()),
+            display_name: "School".into(),
             root: PathBuf::from("/twins/school"),
         };
         assert_eq!(
@@ -1177,30 +1232,6 @@ dest = "data/demo.csv"
             registry
                 .declared_artifact(&scope, Path::new("data/demo.csv"))
                 .is_some()
-        );
-    }
-
-    #[test]
-    fn startup_download_policy_is_rejected_for_twin_manifests() {
-        let manifest = r#"
-[font]
-name = "Font"
-url = "https://example.invalid/font.ttf"
-download_on_start = true
-"#;
-        let scope = DatasetScope::Twin {
-            name: "fixture".into(),
-            root: PathBuf::from("/fixture"),
-        };
-        let mut registry = DatasetRegistry::default();
-
-        assert_eq!(registry.register_scoped(manifest, "fixture", scope), 0);
-        assert!(registry.entries().is_empty());
-        assert!(
-            registry
-                .take_pending_failures()
-                .iter()
-                .any(|failure| failure.contains("download_on_start"))
         );
     }
 
@@ -1226,7 +1257,9 @@ output_root = "cache"
 output = "terrain/site/materials/textures/albedo.png"
 "#;
         let scope = DatasetScope::Twin {
-            name: "school".into(),
+            source_identity: "school".into(),
+            authority: Some("opaque-authority".into()),
+            display_name: "School".into(),
             root: PathBuf::from("/twins/school"),
         };
         let mut registry = DatasetRegistry::default();
@@ -1255,15 +1288,23 @@ fn dataset_scope_for_uri(
 ) -> Result<Option<(DatasetScope, PathBuf)>, String> {
     let (scope, relative) = if let Some(relative) = lunco_assets_core::parse_lunco_uri(uri) {
         (DatasetScope::Engine, relative)
-    } else if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(uri) {
+    } else if let Some((authority, relative)) = lunco_assets_core::parse_twin_uri(uri) {
+        let roots = roots.ok_or("Twin asset registry is unavailable")?;
         let root = roots
-            .ok_or("Twin asset registry is unavailable")?
-            .root_of(name)
+            .root_for(authority)
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Twin asset authority retired: {name}"))?;
+            .ok_or_else(|| format!("Twin asset authority retired: {authority}"))?;
+        let display_name = roots
+            .display_name_for_authority(authority)
+            .map_err(|e| e.to_string())?;
+        let source_identity = roots
+            .logical_identity_for_authority(authority)
+            .map_err(|e| e.to_string())?;
         (
             DatasetScope::Twin {
-                name: name.to_owned(),
+                source_identity,
+                authority: Some(authority.to_owned()),
+                display_name,
                 root,
             },
             relative,

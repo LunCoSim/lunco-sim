@@ -19,6 +19,74 @@ pub fn anchor_of(path: &AssetPath) -> String {
     }
 }
 
+/// Stable source URI for presentation and user commands. A Twin's asset-cache
+/// authority belongs to its load lease, never to its public source address.
+pub fn source_uri(
+    path: &AssetPath<'_>,
+    roots: Option<&crate::TwinRoots>,
+) -> Result<String, crate::TwinRootsError> {
+    if path.source() == &AssetSourceId::Name(crate::TWIN_SCHEME.into()) {
+        Ok(uri(
+            crate::TWIN_SCHEME,
+            &crate::stable_source_path(path, roots)?,
+        ))
+    } else {
+        Ok(anchor_of(path))
+    }
+}
+
+/// Convert an internal Twin load address or an existing public URI into the
+/// stable URI used by presentation and user commands.
+pub fn source_uri_for_address(
+    reference: &str,
+    roots: Option<&crate::TwinRoots>,
+) -> Result<String, crate::TwinRootsError> {
+    let path = load_asset_path(reference, None, None, None)?;
+    if path.source() != &AssetSourceId::Name(crate::TWIN_SCHEME.into()) {
+        return Ok(anchor_of(&path));
+    }
+    let canonical = anchor_of(&path);
+    let Some((identity, relative)) = crate::parse_twin_uri(&canonical) else {
+        return Err(crate::TwinRootsError::SourceNotMounted);
+    };
+    let roots = roots.ok_or(crate::TwinRootsError::RegistryUnavailable)?;
+    let logical_identity = match roots.logical_identity_for_authority(identity) {
+        Ok(logical_identity) => logical_identity,
+        Err(crate::TwinRootsError::UnknownAuthority(_))
+            if roots.mounted_authority_for_logical(identity)?.is_some() =>
+        {
+            identity.to_owned()
+        }
+        Err(crate::TwinRootsError::UnknownAuthority(_)) => {
+            return Err(crate::TwinRootsError::SourceNotMounted);
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(uri(
+        crate::TWIN_SCHEME,
+        &format!("{logical_identity}/{relative}"),
+    ))
+}
+
+/// Admit a user-facing source URI into the current asset-cache lease. Stable
+/// logical identities resolve here; internal mount authorities are rejected.
+/// Asynchronous asset reads retain their exact origin.
+pub fn load_source_uri(
+    reference: &str,
+    roots: Option<&crate::TwinRoots>,
+) -> Result<AssetPath<'static>, crate::TwinRootsError> {
+    let path = load_asset_path(reference, None, None, None)?;
+    let canonical = anchor_of(&path);
+    let Some((identity, relative)) = crate::parse_twin_uri(&canonical) else {
+        return Ok(path);
+    };
+    let roots = roots.ok_or(crate::TwinRootsError::RegistryUnavailable)?;
+    if let Some(authority) = roots.mounted_authority_for_logical(identity)? {
+        return load_asset_path(&crate::twin_uri(authority, relative), None, None, None);
+    }
+    Err(crate::TwinRootsError::SourceNotMounted)
+}
+
 /// Resolve a document-relative asset through the document's registered Bevy
 /// source while preserving that source's authority.
 pub fn source_relative_uri(path: &AssetPath, relative: &str) -> Option<String> {
@@ -358,7 +426,7 @@ pub fn load_asset_path(
             ));
         }
         if let Some((logical, relative)) = crate::parse_twin_uri(&canonical)
-            && let Some(authority) = roots.mounted_name_for_logical(logical)?
+            && let Some(authority) = roots.mounted_authority_for_logical(logical)?
         {
             canonical = crate::twin_uri(authority, relative);
         }
@@ -420,14 +488,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_uris_remain_reusable_across_remounts_without_reviving_expired_leases() {
+        let folder = tempfile::tempdir().unwrap();
+        let roots = crate::TwinRoots::default();
+        let first = roots.register_authority("fixture", folder.path()).unwrap();
+        roots.unregister_authority(&first).unwrap();
+        let current = roots.register_authority("fixture", folder.path()).unwrap();
+        let origin =
+            load_asset_path(&crate::twin_uri(&current, "main.node"), None, None, None).unwrap();
+        let public_uri = source_uri(&origin, Some(&roots)).unwrap();
+        assert_eq!(public_uri, "twin://fixture/main.node");
+        assert_eq!(
+            source_uri_for_address(&anchor_of(&origin), Some(&roots)).unwrap(),
+            public_uri,
+            "converting a load address for display must publish its stable identity"
+        );
+        assert_eq!(
+            load_source_uri(&public_uri, Some(&roots)).unwrap(),
+            origin,
+            "a displayed source URI must resolve to the admitted mount"
+        );
+        assert_eq!(
+            load_source_uri(&crate::twin_uri(&current, "main.node"), Some(&roots)),
+            Err(crate::TwinRootsError::SourceNotMounted),
+            "public scene commands must reject even a live internal mount lease"
+        );
+        assert!(
+            load_source_uri(&crate::twin_uri(&first, "main.node"), Some(&roots),).is_err(),
+            "an expired load lease must not rebind through user admission"
+        );
+        for _ in 0..3 {
+            let previous = load_source_uri(&public_uri, Some(&roots)).unwrap();
+            let authority = crate::parse_twin_uri(&anchor_of(&previous))
+                .unwrap()
+                .0
+                .to_owned();
+            roots.unregister_authority(&authority).unwrap();
+            assert!(load_source_uri(&public_uri, Some(&roots)).is_err());
+            let fresh = roots.register_authority("fixture", folder.path()).unwrap();
+            let current = load_source_uri(&public_uri, Some(&roots)).unwrap();
+            assert_eq!(anchor_of(&current), crate::twin_uri(fresh, "main.node"));
+            assert_eq!(source_uri(&current, Some(&roots)).unwrap(), public_uri);
+            assert!(load_source_uri(&anchor_of(&previous), Some(&roots)).is_err());
+        }
+    }
+
+    #[test]
     fn authored_dependencies_bind_to_reopened_mount_without_reviving_retired_origins() {
         let folder = tempfile::tempdir().unwrap();
         let roots = crate::TwinRoots::default();
-        let first = roots.register("fixture", folder.path()).unwrap();
+        let first = roots.register_authority("fixture", folder.path()).unwrap();
         let old_origin =
             load_asset_path(&crate::twin_uri(&first, "main.node"), None, None, None).unwrap();
-        roots.unregister_name(&first).unwrap();
-        let second = roots.register("fixture", folder.path()).unwrap();
+        roots.unregister_authority(&first).unwrap();
+        let second = roots.register_authority("fixture", folder.path()).unwrap();
         assert_ne!(first, second);
         let origin =
             load_asset_path(&crate::twin_uri(&second, "main.node"), None, None, None).unwrap();
@@ -486,7 +600,7 @@ mod tests {
             Some(lunco_storage::canonicalize_file_path(&folder.path().join("part.node")).unwrap())
         );
         assert!(prepared.validate_owner(Some(&roots)).is_ok());
-        roots.unregister_name(&second).unwrap();
+        roots.unregister_authority(&second).unwrap();
         assert!(prepared.validate_owner(Some(&roots)).is_err());
     }
 
@@ -555,7 +669,7 @@ mod tests {
         lunco_storage::write_file_sync(&root.join("sim/scenes/textures/a.png"), b"layer")
             .expect("layer file");
         let roots = crate::TwinRoots::default();
-        let authority = roots.register("fixture", root).expect("mount");
+        let authority = roots.register_authority("fixture", root).expect("mount");
         let search = |authored: &str| {
             let identifier = format!("twin://{authority}/sim/scenes/{authored}");
             let reference =
@@ -599,7 +713,9 @@ mod tests {
             "a missing search path keeps its Twin-root identity for its consumer"
         );
         prepared.validate_owner(Some(&roots)).expect("live mount");
-        roots.unregister_name(&authority).expect("retire mount");
+        roots
+            .unregister_authority(&authority)
+            .expect("retire mount");
         assert!(prepared.validate_owner(Some(&roots)).is_err());
     }
 
@@ -614,7 +730,7 @@ mod tests {
         let outside = folder.path().join("foreign.txt");
         lunco_storage::write_file_sync(&outside, b"outside").expect("foreign payload");
         let roots = crate::TwinRoots::default();
-        let authority = roots.register("fixture", &root).expect("mount");
+        let authority = roots.register_authority("fixture", &root).expect("mount");
         let origin = AssetPath::from_path_buf(std::path::Path::new(&authority).join("scene.usda"))
             .with_source(crate::TWIN_SCHEME);
         #[cfg(windows)]
@@ -649,8 +765,12 @@ mod tests {
         assert!(load_asset_path(&foreign, Some(&origin), Some(&roots), Some(&prepared)).is_err());
         assert!(load_asset_path(&missing, Some(&origin), Some(&roots), Some(&prepared)).is_err());
         assert!(load_asset_path(&reference, Some(&origin), Some(&roots), None).is_err());
-        roots.unregister_name(&authority).expect("retire mount");
-        let replacement = roots.register("fixture", &root).expect("reopen mount");
+        roots
+            .unregister_authority(&authority)
+            .expect("retire mount");
+        let replacement = roots
+            .register_authority("fixture", &root)
+            .expect("reopen mount");
         assert_ne!(replacement, authority);
         assert_eq!(
             load_asset_path(&reference, Some(&origin), Some(&roots), Some(&prepared)),
@@ -675,7 +795,9 @@ mod tests {
     fn native_load_paths_keep_filesystem_characters_and_separate_labels() {
         let folder = tempfile::tempdir().expect("mount folder");
         let roots = crate::TwinRoots::default();
-        let authority = roots.register("fixture", folder.path()).expect("mount");
+        let authority = roots
+            .register_authority("fixture", folder.path())
+            .expect("mount");
         let root = roots
             .root_for(&authority)
             .expect("registry")
@@ -732,7 +854,9 @@ mod tests {
         let folder = tempfile::tempdir().expect("mount folder");
         let outside = tempfile::tempdir().expect("other folder");
         let roots = crate::TwinRoots::default();
-        let authority = roots.register("fixture", folder.path()).expect("mount");
+        let authority = roots
+            .register_authority("fixture", folder.path())
+            .expect("mount");
         let origin = AssetPath::from_path_buf(std::path::Path::new(&authority).join("scene.usda"))
             .with_source(crate::TWIN_SCHEME);
         let root = roots
@@ -761,8 +885,10 @@ mod tests {
             prepared_load_asset_path(&uri, Some(&unknown), Some(&roots)),
             Err(crate::TwinRootsError::UnknownAuthority("unknown".into()))
         );
-        roots.unregister_name(&authority).expect("unmount");
-        roots.register("fixture", folder.path()).expect("reopen");
+        roots.unregister_authority(&authority).expect("unmount");
+        roots
+            .register_authority("fixture", folder.path())
+            .expect("reopen");
         assert_eq!(
             prepared_load_asset_path(&uri, Some(&origin), Some(&roots)),
             Err(crate::TwinRootsError::UnknownAuthority(authority))
@@ -797,7 +923,9 @@ mod tests {
     fn windows_native_load_paths_normalize_verbatim_mount_roots() {
         let folder = tempfile::tempdir().expect("mount folder");
         let roots = crate::TwinRoots::default();
-        let authority = roots.register("fixture", folder.path()).expect("mount");
+        let authority = roots
+            .register_authority("fixture", folder.path())
+            .expect("mount");
         let root = roots.root_for(&authority).expect("registry").expect("root");
         assert!(root.to_string_lossy().starts_with(r"\\?\"));
         lunco_storage::ensure_directory_sync(&root.join("textures")).expect("texture folder");
@@ -863,13 +991,9 @@ mod tests {
         ] {
             assert_eq!(web_url(&reference), encoded);
         }
-        // This is the same mapper supplied to both Bevy browser readers,
-        // after their configured root has been joined to the logical path.
+        // This is the same mapper supplied to the Bevy browser reader, after
+        // the engine asset root has been joined to the logical path.
         assert_eq!(http_asset_path(&format!("assets/{relative}")), encoded);
-        assert_eq!(
-            http_asset_path(&format!("assets/.cache/{relative}")),
-            encoded.replacen("assets/", "assets/.cache/", 1)
-        );
         assert_eq!(web_url("/part # %.tif"), "/part%20%23%20%25.tif");
         assert_ne!(web_url("part%20one.tif"), web_url("part one.tif"));
         assert_eq!(

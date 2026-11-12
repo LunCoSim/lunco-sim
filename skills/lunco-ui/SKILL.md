@@ -51,12 +51,20 @@ cannot hide the empty live state. Verify its buttons with
 ## Graph readability
 
 Analyze places the live viewport in the center and Graphs in the bottom dock,
-with Telemetry and Ports alongside. Author this through
-`assets/scripting/policy/workbench_perspectives.rhai`; increment the perspective
-revision when changing default placement so saved layouts adopt it. Hosts
-without a live viewport use a central graph. Verify placement and graph reopening
-with `scripts/api/test_workbench_perspectives.py --port <free-port>` and inspect
-its Analyze screenshots.
+with Telemetry and Ports alongside. Lunica keeps the model workspace central;
+the Modelica view's **Graphs** toolbar button opens the canonical plot in a
+resizable bottom dock on demand, and **View → Lunica → Graphs** provides the
+same entry point. The plot's Variables and Runs pickers select result curves;
+live channels can also be chosen in Telemetry. Empty plots explain how to add
+data, and mixed-unit plots explain that they share one vertical axis. Author
+default placement through `assets/scripting/policy/workbench_perspectives.rhai`;
+increment the perspective revision when changing default placement so saved
+layouts adopt it. Hosts without a live viewport use a central graph. Verify
+placement and graph reopening with
+`scripts/api/test_workbench_perspectives.py --port <free-port>` and inspect its
+Lunica and Analyze screenshots. The no-model workspace and Welcome surfaces
+share equally sized primary actions, centered as a pair and stacked in narrow
+panels.
 
 For a viewport demonstration, enable **Settings → HUD → Telemetry graphs**.
 Use the card's **Parameters** picker to browse source/component groups or
@@ -87,12 +95,16 @@ edge, including in justified parents. Truncate names and bound indentation on
 narrow panels; keep numeric cells on one line.
 
 For small multiples, use `ConfigureSignalGrid` with an explicit source, signal
-and caption for every cell. Discover active sampled channels through
+and caption for every cell. Discover active scalar channels through
 `ListTelemetryChannels`; inspect allocated plot ids with `InspectSignalGrid`.
 Style them through `ConfigureLinePlot`, then reveal registered instance kind
 `signal_grid` in a dock or floating host. The shared grid supports up to 64
 channels and reuses native plots, rather than adding an alternate renderer or
 duplicating telemetry. A few cells support explanation; dense views show scope.
+An admitted channel can be plotted before its first sample; its native plot
+shows the waiting-for-telemetry state. Restored graphs retry unresolved signal
+selections on descriptor changes rather than scanning them every frame, and
+retired or invalid sources are logged and left closed.
 Time-series grids share their native X viewport and cursor by default. A
 late-starting sensor or an idle channel therefore stays aligned with the other
 measurements. Y scales and units remain independent; phase-space X bindings
@@ -125,8 +137,11 @@ Verify the saved width and rendered stroke in the actual plot panel.
 
 The main Camera picker includes mounted sensor cameras, grouped by controlled
 USD owner with path-aware search. Use **Image controls…** for the selected main
-camera. Each camera window keeps source, resolution and **Style** controls
-on one toolbar line, with the graph HUD frame and `+`/`×` buttons. Its image controls affect only that feed; depth range,
+camera. Start the first independent camera view from **Settings → HUD → + Add
+camera view**; the menu shows the active count out of eight and disables the
+action at the limit. Each camera window keeps source, resolution and **Style**
+controls on one toolbar line, with the graph HUD frame and `+`/`×` buttons.
+Its image controls affect only that feed; depth range,
 noise, seed, animation, quantization and shader asset are live typed settings.
 See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)
 for owners, shader bindings, physical scope and completion events. Verify both

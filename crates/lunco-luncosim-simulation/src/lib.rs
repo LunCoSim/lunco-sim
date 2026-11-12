@@ -775,7 +775,9 @@ mod ground_collider_gate_tests {
             .world_mut()
             .spawn(lunco_usd_terrain::DemDatasetScanPending::new(
                 lunco_assets_datasets::DatasetScope::Twin {
-                    name: "scan-fixture".to_owned(),
+                    source_identity: "scan-fixture".to_owned(),
+                    authority: None,
+                    display_name: "Scan fixture".to_owned(),
                     root: std::path::PathBuf::new(),
                 },
             ))

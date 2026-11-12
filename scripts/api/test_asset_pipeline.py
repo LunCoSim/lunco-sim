@@ -115,6 +115,18 @@ tool_version={json.dumps(sys.version.split()[0])}
 args=["{{copier}}","{{input}}","{{output}}","{url}/processed"]
 timeout_s=10
 ''')
+    with (root / "Assets.toml").open("a") as manifest:
+        manifest.write(f'''
+[texture]
+name="Texture freshness probe"
+url="{url}/input.png"
+dest="sources/texture.png"
+sha256="{digest}"
+[texture.process]
+kind="texture"
+target_resolution=[2,2]
+output="products/texture.png"
+''')
 
 
 def main():
@@ -212,7 +224,7 @@ def main():
                 return wait_for(lambda: next((row for row in execute(session,"ListDatasets").get("datasets",[])
                     if row["scope"].startswith(scope) and row["key"]==key),None), "dataset manifest admission")
 
-            scope = "twin:ArtifactPipelineProbe"
+            scope = "twin:"
             row = open_twin(dynamic, scope, "product")
             scope = row["scope"]
             verdict((ROOT/"assets/scripting/tests/test_download_policies.rhai").read_text())
@@ -256,7 +268,7 @@ def main():
 
             retire()
             (dynamic / ".cache/sources/reference.png").unlink()
-            row = open_twin(dynamic,"twin:ArtifactPipelineProbe","product")
+            row = open_twin(dynamic,"twin:","product")
             scope = row["scope"]
             verdict(f'verify_pipeline("{scope}","product","missing",3,4);')
             execute(session,"RequestDataset",id=row["id"])
@@ -267,7 +279,7 @@ def main():
             shadow = dynamic / "products/probe"
             shadow.mkdir(parents=True)
             (shadow / "image.png").write_bytes(b"incomplete authored override")
-            row = open_twin(dynamic,"twin:ArtifactPipelineProbe","product")
+            row = open_twin(dynamic,"twin:","product")
             scope = row["scope"]
             execute(session,"ProcessDataset",id=row["id"])
             wait_for(lambda: terminal(scope,"product","failed"),"consumer override validation")
@@ -277,7 +289,7 @@ def main():
             shutil.rmtree(shadow)
             # The generated fixture is unmounted and has no open source buffer.
             (dynamic / "tools/plan.rhai").write_text('fn plan(facts) { throw "intentional pipeline rejection"; }\n')
-            row = open_twin(dynamic, "twin:ArtifactPipelineProbe", "product")
+            row = open_twin(dynamic, "twin:", "product")
             scope = row["scope"]
             verdict(f'verify_pipeline("{scope}","product","missing",3,4);')
             execute(session, "ProcessDataset", id=row["id"])
@@ -285,6 +297,31 @@ def main():
             verdict(f'verify_pipeline_failure("{scope}","product","intentional pipeline rejection");')
             capture_view(scope,"product","process","failed-processing","intentional pipeline rejection")
             verdict("verify_preserved_artifact(" + json.dumps(old) + "," + json.dumps((artifact / "image.png").read_bytes().hex()) + ");")
+
+            retire()
+            texture = open_twin(dynamic, "twin:ArtifactPipelineProbe", "texture")
+            scope = texture["scope"]
+            execute(session, "RequestDataset", id=texture["id"])
+            wait_for(lambda: terminal(scope, "texture", "installed"), "simple texture preparation")
+            verdict(f'verify_dataset_state("{scope}","texture","installed");')
+
+            manifest_path = dynamic / "Assets.toml"
+            manifest = manifest_path.read_text()
+            old_recipe = '[texture.process]\nkind="texture"\ntarget_resolution=[2,2]'
+            new_recipe = '[texture.process]\nkind="texture"\ntarget_resolution=[1,1]'
+            if manifest.count(old_recipe) != 1:
+                raise RuntimeError("could not isolate the texture recipe for the freshness check")
+            manifest_path.write_text(manifest.replace(old_recipe, new_recipe, 1))
+            retire()
+            texture = open_twin(dynamic, "twin:ArtifactPipelineProbe", "texture")
+            scope = texture["scope"]
+            verdict(f'verify_dataset_state("{scope}","texture","missing");')
+            execute(session, "ProcessDataset", id=texture["id"], force=False)
+            wait_for(lambda: terminal(scope, "texture", "installed"), "stale texture recipe rebuild")
+            verdict(f'verify_dataset_state("{scope}","texture","installed");')
+            with Image.open(dynamic / ".cache/products/texture.png") as baked:
+                width, height = baked.size
+            verdict(f'verify_texture_dimensions({width},{height},1,1);')
         if process.returncode!=0:raise RuntimeError(f"production session exited with {process.returncode}: {log}")
         assert_render_log_clean(log)
 
@@ -310,9 +347,11 @@ def main():
             shutil.copytree(source, griffin / ".cache/sources/nobile03")
             if (griffin / "terrain").exists():
                 raise RuntimeError("source archive unexpectedly contains generated authored terrain")
-            scope = "twin:astrobotic-griffin-1"
-            row = open_twin(griffin, scope, "nobile03_dem")
+            row = open_twin(griffin, "twin:", "nobile03_dem")
             scope = row["scope"]
+            source_identity = execute(session, "RunRhai", code="print(twin_source_identity());")["stdout"].strip()
+            if not source_identity:
+                raise RuntimeError("active Twin has no stable source identity")
             verdict(f'verify_pipeline("{scope}","nobile03_dem","missing",3,3);')
             wait_for(lambda: dataset(scope,"nobile03_dem")["required_for_scene"],
                 "composed terrain dataset requirement")
@@ -326,7 +365,7 @@ def main():
             wait_for(lambda: terminal(scope, "nobile03_dem", "installed"), "native NOBILE03 preparation")
             verdict(f'verify_pipeline("{scope}","nobile03_dem","installed",3,3);')
             wait_for(lambda: execute(session,"TerrainHeights",points=[[0.0,0.0]])[0].get("found"), "terrain admission after artifact publication")
-            verdict(f'verify_pipeline_terrain("{scope}","nobile03_dem","twin://astrobotic-griffin-1/terrain/nobile03");')
+            verdict(f'verify_pipeline_terrain("{scope}","nobile03_dem","twin://{source_identity}/terrain/nobile03");')
             def scene_ready():
                 readiness=execute(session,"GetReadiness")
                 if readiness.get("faulted"):

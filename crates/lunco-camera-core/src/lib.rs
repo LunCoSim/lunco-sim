@@ -206,6 +206,20 @@ pub fn replace_camera_diagnostic(
     }
 }
 
+/// Enforced camera navigation envelope derived from its runtime near plane.
+/// Positions and terrain remain f64; the native prop shape is an explicit
+/// checked backend conversion. Navigation publishes this only while collision
+/// policy is enabled; terrain publication consumes that same admission contract.
+/// This component is runtime state, never authored.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, ReadOnly)]
+pub struct CameraCollisionEnvelope {
+    pub radius_m: f64,
+    pub skin_m: f64,
+    pub sweep_tolerance_m: f64,
+}
+use lunco_core::ReflectReadOnly;
+
 /// Hook seam for an application's initial presentation decision.
 ///
 /// Camera runtimes supply derived facts and realize the policy's closed
@@ -662,10 +676,27 @@ impl SurfaceCameraFrame {
     }
 }
 
-/// Marker for camera clipping-plane adaptation.
-#[derive(Component, Reflect, Clone, Debug, Default)]
-#[reflect(Component)]
-pub struct AdaptiveNearPlane;
+/// Source clipping floors retained independently of celestial adaptation.
+/// Authored USD ranges remain f64; the projection owner performs the checked
+/// conversion to the native rendering range. Neither plane may fall below its
+/// source value when celestial precision adapts.
+#[derive(Component, Reflect, Clone, Copy, Debug, PartialEq)]
+#[reflect(Component, ReadOnly)]
+pub struct AdaptiveNearPlane {
+    pub source_near_m: f64,
+    pub source_far_m: f64,
+}
+
+impl AdaptiveNearPlane {
+    /// Admit only a positive, ordered source range representable by projection.
+    pub fn new(source_near_m: f64, source_far_m: f64) -> Option<Self> {
+        math::projection_clip_range(source_near_m, source_far_m)?;
+        Some(Self {
+            source_near_m,
+            source_far_m,
+        })
+    }
+}
 
 /// Marker for surface-relative camera and movement mode.
 #[derive(Component, Reflect, Clone, Debug)]

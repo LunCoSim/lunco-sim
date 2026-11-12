@@ -36,6 +36,7 @@ use lunco_core::{Command, on_command};
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment, TheLocalEmbodiment};
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
+use lunco_spatial::world::RenderOriginController;
 use lunco_spatial::{OriginAnchor, WorldGrid};
 use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_viewport_core::SceneViewport;
@@ -967,7 +968,16 @@ pub fn update_camera_origin(
     vp: Res<SceneViewport>,
     q_grids: Query<&Grid>,
     q_world_grid: Query<Entity, With<WorldGrid>>,
-    mut q_origin: Query<(&mut CellCoord, &mut Transform), With<OriginAnchor>>,
+    mut q_origin: Query<
+        (
+            Entity,
+            &mut CellCoord,
+            &mut Transform,
+            Option<&RenderOriginController>,
+        ),
+        With<OriginAnchor>,
+    >,
+    mut commands: Commands,
     q_parents: Query<&ChildOf>,
     q_spatial: Query<(Option<&CellCoord>, &Transform), Without<OriginAnchor>>,
     diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
@@ -979,7 +989,8 @@ pub fn update_camera_origin(
     let mut world_grid_iter = q_world_grid.iter();
     let world_grid = world_grid_iter.next();
     let world_grid_count = usize::from(world_grid.is_some()) + world_grid_iter.count();
-    if let Ok((mut origin_cell, mut origin_transform)) = q_origin.single_mut() {
+    if let Ok((anchor, mut origin_cell, mut origin_transform, binding)) = q_origin.single_mut() {
+        let mut next_binding = None;
         if let Some(world_grid) = world_grid.filter(|_| world_grid_count == 1) {
             if let Some(active) = vp.active_camera {
                 if let Some((camera_position, _camera_rotation)) =
@@ -992,6 +1003,10 @@ pub fn update_camera_origin(
                             world_grid_component.translation_to_grid(camera_position);
                         origin_cell.set_if_neq(new_cell);
                         origin_transform.set_if_neq(Transform::from_translation(new_translation));
+                        next_binding = Some(RenderOriginController {
+                            camera: active,
+                            world_grid,
+                        });
                     } else {
                         origin_cell.set_if_neq(CellCoord::default());
                         origin_transform.set_if_neq(Transform::IDENTITY);
@@ -1014,6 +1029,13 @@ pub fn update_camera_origin(
         } else {
             origin_cell.set_if_neq(CellCoord::default());
             origin_transform.set_if_neq(Transform::IDENTITY);
+        }
+        if binding.copied() != next_binding {
+            if let Some(binding) = next_binding {
+                commands.entity(anchor).insert(binding);
+            } else {
+                commands.entity(anchor).remove::<RenderOriginController>();
+            }
         }
         if vp.active_camera.is_some() && world_grid_count != 1 {
             origin_errors.push(
@@ -3067,6 +3089,13 @@ mod tests {
             Vec3::new(321.25, -44.5, 17.75)
         );
         assert!(anchor_has_origin);
+        let mut bindings = app
+            .world_mut()
+            .query_filtered::<&RenderOriginController, With<OriginAnchor>>();
+        assert_eq!(
+            *bindings.single(app.world()).unwrap(),
+            RenderOriginController { camera, world_grid }
+        );
         assert!(
             app.world()
                 .get::<big_space::prelude::FloatingOrigin>(camera)
@@ -3078,6 +3107,15 @@ mod tests {
                 .resource::<lunco_core::RuntimeDiagnostics>()
                 .findings
                 .is_empty()
+        );
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .active_camera = None;
+        app.update();
+        assert_eq!(
+            bindings.iter(app.world()).count(),
+            0,
+            "an absent output retires its controller lease"
         );
     }
 

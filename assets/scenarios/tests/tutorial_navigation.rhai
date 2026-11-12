@@ -13,7 +13,7 @@ fn on_start(me, ctx) {
     this.checks.push(t_true(rejected, "an unknown installed lesson is rejected rather than guessed"));
     this.twin = query("ReadActiveTwinContract", #{}).twin_id;
     let contribution = invoke_hook("application.asset.lifecycle", ["json_scope_changed", #{
-        scope: "twin", twin_id: this.twin.to_string(), twin_name: "Navigation test",
+        scope: "twin", twin_id: this.twin.to_string(), twin_display_name: "Navigation test",
         asset_root_uri: "lunco://", payload: [#{asset_uri: "lunco://tutorials/catalog.json",
             persisted_result: false, text: ctx.catalog, error: ()}]
     }]);
@@ -27,7 +27,7 @@ fn on_start(me, ctx) {
     }
     this.first = this.launch.source_asset;
     this.second = this.launch.params.lesson_path[1].source_asset;
-    this.checks.push(t_true(this.launch.owner_twin_id == this.twin
+    this.checks.push(t_true(!this.launch.contains("owner_twin_id")
         && this.launch.params.lesson_path.len() > 1, "the catalog supplies a scoped continuation"));
     tutorials::start(this.launch);
 }

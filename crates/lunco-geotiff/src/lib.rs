@@ -13,13 +13,9 @@
 //!
 //! ## What we write, and why it is the honest description
 //!
-//! A **local metric frame centred on the crop**, not a planetary projection.
-//!
-//! That is a deliberate choice, not a shortcut. The sim works in scene metres with
-//! the crop centre at the origin; a true lunar equirectangular would add a
-//! conversion at every boundary, and every conversion is a chance to flip a sign.
-//! The frame we declare is the frame the data is actually in, which is the only
-//! description that cannot be wrong.
+//! A spherical projection centred on the crop, with coordinates in metres.
+//! Equirectangular crops are locally metric at their centre; orthographic crops
+//! use the site's tangent-plane coordinates throughout the projected hemisphere.
 //!
 //! ## The lunar frame is declared, never assumed
 //!
@@ -49,7 +45,9 @@ use tiff::encoder::{DirectoryEncoder, TiffKind};
 use tiff::tags::Tag;
 
 mod projection;
-pub use projection::{RasterProjection, SphericalRaster, read_spherical_raster};
+pub use projection::{
+    RasterProjection, SphericalRaster, orthographic_geographic_offset, read_spherical_raster,
+};
 
 // GeoKey ids (OGC 01-004, Annex F). `geotiff-core` names the ones it models; the
 // projection-parameter keys below are not in its constant set, so they are spelled
@@ -79,6 +77,17 @@ const LINEAR_UNITS_METRE: u16 = 9001;
 const ANGULAR_UNITS_DEGREE: u16 = 9102;
 /// `CT_Equirectangular`.
 const COORD_TRANS_EQUIRECTANGULAR: u16 = 17;
+/// `CT_Orthographic`, a body-centred tangent-plane projection.
+const COORD_TRANS_ORTHOGRAPHIC: u16 = 21;
+
+/// Projection used to describe a crop's local metric coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalProjection {
+    /// Equirectangular, with a standard parallel at the crop centre.
+    Equirectangular,
+    /// Orthographic projection onto the crop centre's tangent plane.
+    Orthographic,
+}
 
 /// Which lunar reference frame a raster's coordinates are in.
 ///
@@ -117,8 +126,7 @@ impl LunarFrame {
 
 /// Where a raster sits, in the scene's own metric frame.
 ///
-/// Deliberately *not* a full CRS: this describes a local metre grid centred on the
-/// crop, which is what our data actually is.
+/// This describes the crop's metric grid and supported spherical projection.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeoTransform {
     /// Ground metres per pixel, both axes (square pixels only — a non-square DEM
@@ -132,19 +140,14 @@ pub struct GeoTransform {
     /// Body radius the frame is on, metres. Carried so a consumer can tell a
     /// lunar raster from a terrestrial one.
     pub body_radius_m: f64,
-    /// Geodetic latitude of the crop centre, degrees — the projection's standard
-    /// parallel.
-    ///
-    /// This is why the file declares an equirectangular projection rather than a
-    /// bare local grid: near its own origin, projected metres ARE local metres, so
-    /// the frame is identical — but the projection parameters carry *where on the
-    /// body* the crop sits, which a local grid cannot express. That fact used to
-    /// live only in `metadata.yaml`'s `coordinates:` block, and it is the last
-    /// thing that kept the sidecar alive.
+    /// Geodetic latitude of the crop centre, degrees. The selected projection
+    /// carries that point together with the metric local grid.
     pub center_lat_deg: f64,
     /// Geodetic longitude of the crop centre, degrees — the projection's natural
     /// origin longitude (central meridian).
     pub center_lon_deg: f64,
+    /// Projection mapping body coordinates onto this local grid.
+    pub projection: Option<LocalProjection>,
     /// Lunar reference frame the lat/lon above are in. `None` means the file
     /// does not say — unknown, never a default guess.
     pub frame: Option<LunarFrame>,
@@ -175,6 +178,7 @@ impl GeoTransform {
             body_radius_m,
             center_lat_deg,
             center_lon_deg,
+            projection: Some(LocalProjection::Equirectangular),
             frame: None,
         }
     }
@@ -184,6 +188,12 @@ impl GeoTransform {
     /// declared explicitly rather than defaulted by the constructor.
     pub fn with_frame(mut self, frame: LunarFrame) -> Self {
         self.frame = Some(frame);
+        self
+    }
+
+    /// Select the standard projection recorded in the output GeoTIFF.
+    pub fn with_projection(mut self, projection: LocalProjection) -> Self {
+        self.projection = Some(projection);
         self
     }
 
@@ -220,10 +230,9 @@ where
         &[0.0, 0.0, 0.0, tf.origin_x_m, tf.origin_y_m, 0.0][..],
     )?;
 
-    // A user-defined equirectangular projection on a sphere, with its natural
-    // origin AT the crop centre. That is what makes projected metres equal local
-    // metres near the origin, so the sim's frame and the file's frame are the same
-    // frame — no conversion, and no sign to get wrong.
+    // A user-defined spherical projection with its origin at the crop centre.
+    // Orthographic coordinates are the body's tangent-plane coordinates;
+    // equirectangular coordinates are locally metric near the origin.
     //
     // `geotiff-core` owns the encoding: key ordering, the value-offset indices into
     // the doubles array, and the ASCII terminators. Hand-rolling that is how you
@@ -258,16 +267,28 @@ where
     keys.set(KEY_PROJECTION, GeoKeyValue::Short(USER_DEFINED));
     keys.set(
         KEY_PROJ_COORD_TRANS,
-        GeoKeyValue::Short(COORD_TRANS_EQUIRECTANGULAR),
+        GeoKeyValue::Short(match tf.projection {
+            Some(LocalProjection::Equirectangular) => COORD_TRANS_EQUIRECTANGULAR,
+            Some(LocalProjection::Orthographic) => COORD_TRANS_ORTHOGRAPHIC,
+            None => {
+                return Err(tiff::TiffError::FormatError(
+                    tiff::TiffFormatError::CompressedDataCorrupt(
+                        "crop projection is not declared".into(),
+                    ),
+                ));
+            }
+        }),
     );
     keys.set(
         KEY_PROJ_LINEAR_UNITS,
         GeoKeyValue::Short(LINEAR_UNITS_METRE),
     );
-    keys.set(
-        KEY_PROJ_STD_PARALLEL1,
-        GeoKeyValue::Double(vec![tf.center_lat_deg]),
-    );
+    if tf.projection == Some(LocalProjection::Equirectangular) {
+        keys.set(
+            KEY_PROJ_STD_PARALLEL1,
+            GeoKeyValue::Double(vec![tf.center_lat_deg]),
+        );
+    }
     keys.set(
         KEY_PROJ_CENTER_LONG,
         GeoKeyValue::Double(vec![tf.center_lon_deg]),
@@ -401,8 +422,18 @@ pub fn read_geo_tags<R: Read + Seek>(
         // Absent is not an error: a third-party raster may carry a full EPSG code
         // instead of user-defined axes, and the radius is informational for us.
         body_radius_m: double_key(KEY_GEOG_SEMI_MAJOR).unwrap_or(0.0),
-        center_lat_deg: double_key(KEY_PROJ_STD_PARALLEL1).unwrap_or(0.0),
+        center_lat_deg: double_key(KEY_PROJ_CENTER_LAT)
+            .or_else(|| double_key(KEY_PROJ_STD_PARALLEL1))
+            .unwrap_or(0.0),
         center_lon_deg: double_key(KEY_PROJ_CENTER_LONG).unwrap_or(0.0),
+        projection: match keys
+            .as_ref()
+            .and_then(|k| k.get_short(KEY_PROJ_COORD_TRANS))
+        {
+            Some(COORD_TRANS_ORTHOGRAPHIC) => Some(LocalProjection::Orthographic),
+            Some(COORD_TRANS_EQUIRECTANGULAR) => Some(LocalProjection::Equirectangular),
+            _ => None,
+        },
         // Exact-token match on GTCitation; absent or anything else → None. An
         // undeclared frame is UNKNOWN, not MOON_ME by assumption — ME and PA
         // disagree by ≈ 875 m and only provenance can tell them apart.
@@ -480,6 +511,10 @@ pub enum GrayDecodeError {
     /// The raster decoded, but its samples are not a numeric Gray layout
     /// (e.g. RGB/palette) — there is no single elevation per pixel to read.
     UnsupportedSamples,
+    /// The requested window lies outside the image or cannot be represented.
+    InvalidWindow,
+    /// The output sample buffer could not be allocated.
+    Allocation,
 }
 
 impl std::fmt::Display for GrayDecodeError {
@@ -489,6 +524,8 @@ impl std::fmt::Display for GrayDecodeError {
             Self::UnsupportedSamples => {
                 write!(f, "unsupported TIFF sample format (need numeric Gray)")
             }
+            Self::InvalidWindow => write!(f, "invalid grayscale TIFF window"),
+            Self::Allocation => write!(f, "cannot allocate grayscale TIFF window"),
         }
     }
 }
@@ -498,8 +535,87 @@ impl std::error::Error for GrayDecodeError {
         match self {
             Self::Tiff(e) => Some(e),
             Self::UnsupportedSamples => None,
+            Self::InvalidWindow => None,
+            Self::Allocation => None,
         }
     }
+}
+
+/// Decode a rectangular sample window, reading only intersecting TIFF chunks.
+/// Coordinates and dimensions are in source pixels; the result is row-major.
+/// Nodata follows the same contract as [`decode_gray_f64`].
+pub fn decode_gray_window_f64<R: Read + Seek>(
+    reader: R,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> Result<Vec<f64>, GrayDecodeError> {
+    let mut dec =
+        tiff::decoder::Decoder::new(reader)?.with_limits(tiff::decoder::Limits::unlimited());
+    let (image_width, image_height) = dec.dimensions()?;
+    if !matches!(dec.colortype()?, tiff::ColorType::Gray(_)) {
+        return Err(GrayDecodeError::UnsupportedSamples);
+    }
+    let end_x = x.checked_add(width).ok_or(GrayDecodeError::InvalidWindow)?;
+    let end_y = y
+        .checked_add(height)
+        .ok_or(GrayDecodeError::InvalidWindow)?;
+    if width == 0 || height == 0 || end_x > image_width || end_y > image_height {
+        return Err(GrayDecodeError::InvalidWindow);
+    }
+    let count = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or(GrayDecodeError::InvalidWindow)?;
+    let nodata = read_gdal_nodata(&mut dec);
+    let (chunk_width, chunk_height) = dec.chunk_dimensions();
+    if chunk_width == 0 || chunk_height == 0 {
+        return Err(GrayDecodeError::InvalidWindow);
+    }
+    let chunks_across = image_width.div_ceil(chunk_width);
+    let mut out = Vec::new();
+    out.try_reserve_exact(count)
+        .map_err(|_| GrayDecodeError::Allocation)?;
+    out.resize(count, 0.0);
+    for cy in y / chunk_height..=(end_y - 1) / chunk_height {
+        for cx in x / chunk_width..=(end_x - 1) / chunk_width {
+            let index = cy
+                .checked_mul(chunks_across)
+                .and_then(|v| v.checked_add(cx))
+                .ok_or(GrayDecodeError::InvalidWindow)?;
+            let (cw, ch) = dec.chunk_data_dimensions(index);
+            let samples = numeric_gray_samples(dec.read_chunk(index)?)?;
+            if samples.len() != (cw as usize).saturating_mul(ch as usize) {
+                return Err(GrayDecodeError::UnsupportedSamples);
+            }
+            let origin_x = cx * chunk_width;
+            let origin_y = cy * chunk_height;
+            for sy in y.max(origin_y)..end_y.min(origin_y + ch) {
+                for sx in x.max(origin_x)..end_x.min(origin_x + cw) {
+                    let src = (sy - origin_y) as usize * cw as usize + (sx - origin_x) as usize;
+                    let dst = (sy - y) as usize * width as usize + (sx - x) as usize;
+                    out[dst] = nodata_to_nan(samples[src], nodata);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn numeric_gray_samples(
+    result: tiff::decoder::DecodingResult,
+) -> Result<Vec<f64>, GrayDecodeError> {
+    use tiff::decoder::DecodingResult as D;
+    Ok(match result {
+        D::F32(v) => v.into_iter().map(f64::from).collect(),
+        D::F64(v) => v,
+        D::U8(v) => v.into_iter().map(f64::from).collect(),
+        D::I16(v) => v.into_iter().map(f64::from).collect(),
+        D::U16(v) => v.into_iter().map(f64::from).collect(),
+        D::I32(v) => v.into_iter().map(f64::from).collect(),
+        D::U32(v) => v.into_iter().map(f64::from).collect(),
+        _ => return Err(GrayDecodeError::UnsupportedSamples),
+    })
 }
 
 impl From<tiff::TiffError> for GrayDecodeError {
@@ -534,8 +650,6 @@ impl From<tiff::TiffError> for GrayDecodeError {
 pub fn decode_gray_f64<R: Read + Seek>(
     reader: R,
 ) -> Result<(usize, usize, Vec<f64>), GrayDecodeError> {
-    use tiff::decoder::DecodingResult as D;
-
     let mut dec =
         tiff::decoder::Decoder::new(reader)?.with_limits(tiff::decoder::Limits::unlimited());
     let (w, h) = dec.dimensions()?;
@@ -543,16 +657,7 @@ pub fn decode_gray_f64<R: Read + Seek>(
 
     let declared_nodata = read_gdal_nodata(&mut dec);
 
-    let samples: Vec<f64> = match dec.read_image()? {
-        D::F32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::F64(v) => v,
-        D::U8(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U16(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::I32(v) => v.into_iter().map(|x| x as f64).collect(),
-        D::U32(v) => v.into_iter().map(|x| x as f64).collect(),
-        _ => return Err(GrayDecodeError::UnsupportedSamples),
-    };
+    let samples = numeric_gray_samples(dec.read_image()?)?;
 
     let samples = samples
         .into_iter()
@@ -564,6 +669,82 @@ pub fn decode_gray_f64<R: Read + Seek>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grayscale_window_crosses_strips_and_preserves_nodata() {
+        use std::io::Cursor;
+        use tiff::encoder::{TiffEncoder, colortype};
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = TiffEncoder::new(Cursor::new(&mut bytes)).unwrap();
+            let mut image = encoder.new_image::<colortype::Gray32Float>(5, 5).unwrap();
+            image.rows_per_strip(2).unwrap();
+            let mut samples: Vec<f32> = (0..25).map(|v| v as f32).collect();
+            samples[12] = f32::MAX;
+            image.write_data(&samples).unwrap();
+        }
+        let out = decode_gray_window_f64(Cursor::new(&bytes), 1, 1, 3, 3).unwrap();
+        assert_eq!(&out[..4], &[6.0, 7.0, 8.0, 11.0]);
+        assert!(out[4].is_nan());
+        assert_eq!(&out[5..], &[13.0, 16.0, 17.0, 18.0]);
+        assert!(matches!(
+            decode_gray_window_f64(Cursor::new(&bytes), 4, 0, 2, 1),
+            Err(GrayDecodeError::InvalidWindow)
+        ));
+    }
+
+    #[test]
+    fn grayscale_window_crosses_tiles_and_padded_edges() {
+        use std::io::Cursor;
+        // A tiny uncompressed float TIFF with four 16x16 tiles. The last
+        // row and column of tiles contain padding beyond the 18x18 image.
+        let entries: [(u16, u16, u32, u32); 12] = [
+            (256, 4, 1, 18),
+            (257, 4, 1, 18),
+            (258, 3, 1, 32),
+            (259, 3, 1, 1),
+            (262, 3, 1, 1),
+            (277, 3, 1, 1),
+            (284, 3, 1, 1),
+            (322, 4, 1, 16),
+            (323, 4, 1, 16),
+            (324, 4, 4, 158),
+            (325, 4, 4, 174),
+            (339, 3, 1, 3),
+        ];
+        let mut bytes = b"II\x2a\x00\x08\x00\x00\x00".to_vec();
+        bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, ty, count, value) in entries {
+            bytes.extend_from_slice(&tag.to_le_bytes());
+            bytes.extend_from_slice(&ty.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        for tile in 0..4u32 {
+            bytes.extend_from_slice(&(190 + tile * 1024).to_le_bytes());
+        }
+        for _ in 0..4 {
+            bytes.extend_from_slice(&1024u32.to_le_bytes());
+        }
+        for tile_y in 0..2 {
+            for tile_x in 0..2 {
+                for row in 0..16 {
+                    for col in 0..16 {
+                        let value = ((tile_y * 16 + row) * 100 + tile_x * 16 + col) as f32;
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        let out = decode_gray_window_f64(Cursor::new(bytes), 15, 15, 3, 3).unwrap();
+        assert_eq!(
+            out,
+            [
+                1515.0, 1516.0, 1517.0, 1615.0, 1616.0, 1617.0, 1715.0, 1716.0, 1717.0
+            ]
+        );
+    }
 
     /// The sentinel that actually shipped in a lunar DEM and reached the surface
     /// oracle as a height. It is finite, so `is_finite()` alone never caught it.

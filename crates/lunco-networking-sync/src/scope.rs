@@ -45,7 +45,7 @@ impl SceneScopeFacts<'_, '_> {
                 let twin = self.workspace.as_ref()?.twin(host_twin)?;
                 let roots = self.roots.as_ref()?;
                 let authority = if self.scenes.is_empty() {
-                    let names = match roots.names() {
+                    let names = match roots.authorities() {
                         Ok(names) => names,
                         Err(error) => {
                             warn_once!("[net] cannot inspect hosted Twin mounts: {error}");

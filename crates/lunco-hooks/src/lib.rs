@@ -542,15 +542,18 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
     }
 
     fn route_fields(route: lunco_runtime_context::RuntimeRoute) -> Vec<(String, HookValue)> {
-        vec![
+        let mut fields = vec![
             ("scope".into(), label(route.scope)),
             ("cycle".into(), label(route.cycle)),
             ("generation".into(), HookValue::UInt(route.generation)),
-            (
+        ];
+        if route.scope != lunco_runtime_context::RuntimeScope::Twin {
+            fields.push((
                 "owner_id".into(),
                 route.owner_id.map_or(HookValue::Unit, HookValue::UInt),
-            ),
-        ]
+            ));
+        }
+        fields
     }
 
     let (scope, cycle, generation, owner_id) = context.route.map_or(
@@ -565,7 +568,11 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
                 label(route.scope),
                 label(route.cycle),
                 HookValue::UInt(route.generation),
-                route.owner_id.map_or(HookValue::Unit, HookValue::UInt),
+                if route.scope == lunco_runtime_context::RuntimeScope::Twin {
+                    HookValue::Unit
+                } else {
+                    route.owner_id.map_or(HookValue::Unit, HookValue::UInt)
+                },
             )
         },
     );
@@ -575,18 +582,11 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
         HookValue::Map(fields)
     });
 
-    HookValue::map([
+    let mut fields = vec![
         ("scope", scope),
         ("cycle", cycle),
         ("phase", label(context.phase)),
         ("generation", generation),
-        ("owner_id", owner_id),
-        (
-            "target_twin_id",
-            context
-                .target_twin_id
-                .map_or(HookValue::Unit, HookValue::UInt),
-        ),
         ("clock", label(context.clock)),
         (
             "sequence",
@@ -605,7 +605,20 @@ pub fn runtime_context_hook_value(context: RuntimeExecutionContext) -> HookValue
                 .delta_seconds
                 .map_or(HookValue::Unit, HookValue::Float),
         ),
-    ])
+    ];
+    if !context
+        .route
+        .is_some_and(|route| route.scope == lunco_runtime_context::RuntimeScope::Twin)
+    {
+        fields.push(("owner_id", owner_id));
+        fields.push((
+            "target_twin_id",
+            context
+                .target_twin_id
+                .map_or(HookValue::Unit, HookValue::UInt),
+        ));
+    }
+    HookValue::map(fields)
 }
 
 /// The single, object-safe interface a scripting backend implements to fill any

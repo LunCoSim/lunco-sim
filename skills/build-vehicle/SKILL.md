@@ -145,6 +145,10 @@ The wheel projector binds the authored Modelica shaft torque and measured speed
 to that joint; it does not construct a second hinge. A raycast wheel has no
 native wheel hinge and applies its tire/contact result through its body mount.
 Keep exactly one suspension and tangential-contact owner for each realization.
+For a locked jointed wheel using the shared tire, parking hold uses the active
+joint-island mass and all loaded external contacts; its force replaces the
+slip-curve force and remains bounded by the authored grip and brake torque.
+Its velocity correction uses the contacted wheel body's measured mass.
 Motors, reductions, efficiency laws and thermal networks are authored higher
 level components, not wheel-core defaults.
 
@@ -534,5 +538,7 @@ Engineering failure policy uses `PauseSimulationObject`, not a physics-only
 freeze. The co-simulation owner includes the active mechanical island, owned
 controllers and all connected continuous models. Independent systems and an
 external mission supervisor remain live. Supply the measured condition and
-limit in `detail` for Recent Events; use `RestartScene` for recovery. The
+limit in `detail` for Recent Events; use `RestartScene` after correcting the
+authoritative source. Use `ResetSceneRuntime` for a deliberate retry from the
+currently mounted stage. The
 `paused_wheel_effort` production gate checks this with both wheel realizations.

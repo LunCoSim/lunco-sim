@@ -42,10 +42,26 @@ use std::sync::Arc;
 
 use crate::oracle::DemHeightField;
 
-/// A terrain surface hit: the point ON the surface, in the grid frame.
+#[path = "camera_sweep.rs"]
+mod camera_sweep;
+pub(crate) use camera_sweep::clip_to_swept_tube;
+pub use camera_sweep::{TerrainSphereHit, TerrainSphereSweep};
+
+/// A strict source-up translation cannot introduce a new height-column contact.
+/// The transverse allowance covers the admitted sweep's numerical tolerance.
+pub(crate) fn terrain_up_translation(delta: DVec3, tolerance_m: f64) -> bool {
+    delta.is_finite()
+        && tolerance_m.is_finite()
+        && tolerance_m > 0.0
+        && delta.y > 0.0
+        && delta.x.abs() <= tolerance_m * 1e-3
+        && delta.z.abs() <= tolerance_m * 1e-3
+}
+
+/// A terrain surface or clearance-surface hit in the active grid frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceHit {
-    /// Point on the terrain surface in [`Self::frame`].
+    /// Point on the requested surface in [`Self::frame`].
     pub point: GridPos,
     /// Concrete BigSpace frame in which [`Self::point`] is expressed.
     pub frame: Entity,
@@ -116,6 +132,51 @@ impl TerrainSurfaceSnapshot {
         self.frame
     }
 
+    /// Whether two snapshots retain the exact same admitted frame, terrain
+    /// identities, composed source keys and source poses. Camera input waits
+    /// use this lease to reject work from a replaced scene or source.
+    pub fn same_source(&self, other: &Self) -> bool {
+        self.frame == other.frame
+            && self.terrains.len() == other.terrains.len()
+            && self.terrains.iter().all(|entry| {
+                other.terrains.iter().any(|candidate| {
+                    candidate.entity == entry.entity
+                        && candidate.oracle.surface_key() == entry.oracle.surface_key()
+                        && candidate.position == entry.position
+                        && candidate.rotation == entry.rotation
+                })
+            })
+    }
+
+    /// Match this immutable lease against the complete live source set and
+    /// freshly resolved source poses in the active frame. Missing, additional,
+    /// disabled or replaced sources retire presentation preparation.
+    pub(crate) fn matches_live_sources(
+        &self,
+        frame: Entity,
+        sources: impl IntoIterator<Item = (Entity, u64, Option<(DVec3, DQuat)>)>,
+    ) -> bool {
+        if self.frame != frame {
+            return false;
+        }
+        let mut count = 0;
+        for (entity, key, pose) in sources {
+            count += 1;
+            let Some((position, rotation)) = pose else {
+                return false;
+            };
+            if !self.terrains.iter().any(|entry| {
+                entry.entity == entity
+                    && entry.oracle.surface_key() == key
+                    && entry.position == position
+                    && entry.rotation == rotation
+            }) {
+                return false;
+            }
+        }
+        count == self.terrains.len()
+    }
+
     /// Resolve a whole sparse stroke into one terrain-local plane. A convex
     /// DEM footprint contains every leg when its endpoints and width fit.
     /// Missing or ambiguous ownership is a terminal surface-contract error.
@@ -131,7 +192,7 @@ impl TerrainSurfaceSnapshot {
                 .iter()
                 .map(|point| inverse * (*point - terrain.position))
                 .collect();
-            let half = f64::from(terrain.oracle.half_extent()) - width_m * 0.5;
+            let half = f64::from(terrain.oracle.domain_half_extent()) - width_m * 0.5;
             if local
                 .iter()
                 .all(|point| point.is_finite() && point.x.abs() <= half && point.z.abs() <= half)
@@ -169,7 +230,7 @@ fn sample_terrain_surface(
             local.x,
             local.z,
             eps.max(1.0e-6),
-            oracle.half_extent() as f64,
+            oracle.domain_half_extent() as f64,
         ));
     let normal = normal.normalize_or_zero();
     (normal.is_finite() && normal.length_squared() > 1.0e-12).then_some(SurfaceSample {
@@ -229,7 +290,8 @@ pub fn update_terrain_physics_frame_poses(
 /// See the module docs: this deliberately holds NO `GlobalTransform`.
 #[derive(SystemParam)]
 pub struct GridSurfaceQuery<'w, 's> {
-    all_terrains: Query<'w, 's, (), With<DemHeightField>>,
+    all_terrains: Query<'w, 's, Entity, With<DemHeightField>>,
+    native_tiles: Query<'w, 's, Entity, With<crate::collider_ring::ColliderTileOf>>,
     terrains: Query<
         'w,
         's,
@@ -286,6 +348,121 @@ impl GridSurfaceQuery<'_, '_> {
             })
             .collect();
         Some(TerrainSurfaceSnapshot { frame, terrains })
+    }
+
+    /// Native terrain entities excluded from camera prop queries. Camera terrain
+    /// collision is supplied exactly once by the immutable oracle sweep.
+    pub fn native_terrain_colliders(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.all_terrains.iter().chain(self.native_tiles.iter())
+    }
+
+    /// Sweep a camera sphere against every composed terrain in the active frame.
+    /// Bounds certify the clear prefix. Contact requires an actual solid
+    /// witness within `radius_m + tolerance_m` of its admitted endpoint;
+    /// `tolerance_m` measures geometric separation, including at grazing angles.
+    pub fn sweep_sphere(
+        &self,
+        start: GridPos,
+        end: GridPos,
+        radius_m: f64,
+        tolerance_m: f64,
+        max_work: usize,
+    ) -> TerrainSphereSweep {
+        let unavailable = |reason: String| TerrainSphereSweep::Unavailable { reason };
+        if !start.0.is_finite()
+            || !end.0.is_finite()
+            || !radius_m.is_finite()
+            || radius_m <= 0.0
+            || !tolerance_m.is_finite()
+            || tolerance_m <= 0.0
+            || tolerance_m >= radius_m
+        {
+            return unavailable("invalid terrain camera sphere sweep".into());
+        }
+        if !self.has_terrain() {
+            return TerrainSphereSweep::Clear;
+        }
+        if max_work == 0 {
+            return unavailable("terrain camera sweep has no work budget".into());
+        }
+        let Some((frame, _)) = self.frame() else {
+            return unavailable("terrain camera sweep has no active frame".into());
+        };
+        if self
+            .terrains
+            .iter()
+            .filter(|(_, _, pose)| pose.frame == frame)
+            .count()
+            != self.all_terrains.iter().count()
+        {
+            return unavailable("terrain camera sweep has unresolved terrain frame".into());
+        }
+        let mut entries = self.terrains.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(entity, _, _)| entity.to_bits());
+        let mut remaining = max_work;
+        let mut best: Option<TerrainSphereHit> = None;
+        let mut overlap: Option<(TerrainSphereHit, f64)> = None;
+        let mut escape_allowed = true;
+        for (entity, terrain, pose) in entries {
+            let inverse = pose.rotation.inverse();
+            let a = inverse * (start.0 - pose.position);
+            let b = inverse * (end.0 - pose.position);
+            let delta = b - a;
+            let local = match camera_sweep::sweep(
+                &terrain.0,
+                a,
+                b,
+                radius_m,
+                tolerance_m,
+                &mut remaining,
+            ) {
+                Ok(local) => local,
+                Err(reason) => {
+                    return unavailable(format!(
+                        "{reason}; terrain={entity:?}; frame={frame:?}; source_key={:#018x}",
+                        terrain.0.surface_key()
+                    ));
+                }
+            };
+            let Some(local) = local else { continue };
+            let upward = terrain_up_translation(delta, tolerance_m);
+            // A requested translation along local terrain up increases the
+            // distance to every terrain column. Initial touching can separate
+            // without suppressing subsequent prop/other-terrain queries.
+            if local.time == 0.0 && local.penetration <= tolerance_m && upward {
+                continue;
+            }
+            let hit = TerrainSphereHit {
+                terrain: entity,
+                frame,
+                source_key: terrain.0.surface_key(),
+                time: local.time,
+                point: GridPos(pose.position + pose.rotation * local.point),
+                normal: pose.rotation * local.normal,
+            };
+            if local.penetration > tolerance_m {
+                escape_allowed &= upward;
+                if overlap
+                    .as_ref()
+                    .is_none_or(|(_, depth)| local.penetration > *depth)
+                {
+                    overlap = Some((hit, local.penetration));
+                }
+            } else if best.is_none_or(|previous| hit.time < previous.time) {
+                best = Some(hit);
+            }
+        }
+        if let Some((hit, penetration_m)) = overlap {
+            // An escape may not cross a second, initially clear terrain.
+            escape_allowed &= best.is_none();
+            TerrainSphereSweep::InitialOverlap {
+                hit,
+                penetration_m,
+                escape_allowed,
+            }
+        } else {
+            best.map_or(TerrainSphereSweep::Clear, TerrainSphereSweep::Hit)
+        }
     }
 
     /// Interpret an annotation query in its owning terrain's local plane.
@@ -361,6 +538,13 @@ impl GridSurfaceQuery<'_, '_> {
         })
     }
 
+    /// Terrain-local up in the active physics frame for an identified surface.
+    pub fn terrain_up(&self, terrain: Entity) -> Option<DVec3> {
+        let (frame, _) = self.frame()?;
+        let (_, _, pose) = self.terrains.get(terrain).ok()?;
+        (pose.frame == frame).then(|| pose.rotation * DVec3::Y)
+    }
+
     /// Slope angle under a grid-absolute point, in radians.
     ///
     /// This keeps seminar/runtime diagnostics on the same analytic terrain
@@ -383,33 +567,58 @@ impl GridSurfaceQuery<'_, '_> {
     /// terrain's colliders exist only in a streamed ring around dynamic bodies
     /// and are band-limited below the drawn micro-relief, so a collider cast over
     /// open ground either misses entirely or reports a surface above the drawn
-    /// one.
+    /// one. Returns an error when a present terrain has no complete pose in the
+    /// active frame or its surface cannot be certified.
     pub fn raycast(
         &self,
         origin: GridPos,
         direction: Dir3,
         max_distance: f64,
-    ) -> Option<SurfaceHit> {
-        if !origin.0.is_finite() {
-            return None;
+    ) -> Result<Option<SurfaceHit>, String> {
+        self.raycast_with_clearance(origin, direction, max_distance, 0.0)
+    }
+
+    /// Raycast against the surface offset along each terrain's local up axis.
+    /// The returned point lies on that offset surface in the active frame.
+    pub fn raycast_with_clearance(
+        &self,
+        origin: GridPos,
+        direction: Dir3,
+        max_distance: f64,
+        clearance: f64,
+    ) -> Result<Option<SurfaceHit>, String> {
+        if !origin.0.is_finite() || !clearance.is_finite() || clearance < 0.0 {
+            return Err("invalid terrain surface ray origin or clearance".into());
         }
-        let (frame, _) = self.frame()?;
+        if !max_distance.is_finite() && max_distance != f64::INFINITY || max_distance <= 0.0 {
+            return Err(
+                "terrain surface ray distance must be positive and finite or unbounded".into(),
+            );
+        }
+        if !self.has_terrain() {
+            return Ok(None);
+        }
+        let (frame, _) = self
+            .frame()
+            .ok_or("terrain ray has no active physics frame")?;
         let frame_direction = direction.as_dvec3();
         let mut best: Option<SurfaceHit> = None;
+        let mut matched = 0usize;
         for (entity, hf, pose) in self.terrains.iter() {
             if pose.frame != frame {
                 continue;
             }
+            matched += 1;
             let (terrain_position, terrain_rotation) = (pose.position, pose.rotation);
             let inverse = terrain_rotation.inverse();
-            let local_origin = inverse * (origin.0 - terrain_position);
+            let local_origin = inverse * (origin.0 - terrain_position) - DVec3::Y * clearance;
             let local_direction = inverse * frame_direction;
             let Some(local_point) =
-                crate::oracle::raycast_surface(&hf.0, local_origin, local_direction, max_distance)
+                crate::oracle::raycast_surface(&hf.0, local_origin, local_direction, max_distance)?
             else {
                 continue;
             };
-            let point = terrain_position + terrain_rotation * local_point;
+            let point = terrain_position + terrain_rotation * (local_point + DVec3::Y * clearance);
             let distance = (point - origin.0).length();
             if best.is_none_or(|b| distance < b.distance) {
                 best = Some(SurfaceHit {
@@ -420,7 +629,10 @@ impl GridSurfaceQuery<'_, '_> {
                 });
             }
         }
-        best
+        if self.all_terrains.iter().count() != matched {
+            return Err("terrain ray has an unresolved terrain in the active frame".into());
+        }
+        Ok(best)
     }
 
     /// Ray from a render-space origin (a camera/cursor ray) against the analytic
@@ -431,8 +643,21 @@ impl GridSurfaceQuery<'_, '_> {
         render_origin: RenderPos,
         direction: Dir3,
         max_distance: f64,
-    ) -> Option<SurfaceHit> {
-        let (origin, direction) = self.ray_to_grid(render_origin, direction)?;
+    ) -> Result<Option<SurfaceHit>, String> {
+        if !render_origin.0.is_finite() {
+            return Err("invalid terrain render-ray origin".into());
+        }
+        if !max_distance.is_finite() && max_distance != f64::INFINITY || max_distance <= 0.0 {
+            return Err(
+                "terrain surface ray distance must be positive and finite or unbounded".into(),
+            );
+        }
+        if !self.has_terrain() {
+            return Ok(None);
+        }
+        let (origin, direction) = self
+            .ray_to_grid(render_origin, direction)
+            .ok_or("terrain ray cannot resolve its active grid frame")?;
         self.raycast(origin, direction, max_distance)
     }
 
@@ -469,7 +694,7 @@ impl GridSurfaceQuery<'_, '_> {
 /// take a `SystemParam`, share this exact code instead of re-deriving the
 /// footprint test — the re-derivation is what let two of them drift apart.
 pub fn height_in_footprint(oracle: &crate::oracle::SurfaceOracle, p: GridPos) -> Option<f64> {
-    let half = oracle.half_extent() as f64;
+    let half = oracle.domain_half_extent() as f64;
     // Footprint test in the GRID frame — the oracle's own frame. No transform in
     // between (module docs).
     if p.0.x.abs() > half || p.0.z.abs() > half {
@@ -607,6 +832,30 @@ mod tests {
     use lunco_obstacle_field::field::HeightGrid;
     use std::sync::Arc;
 
+    #[test]
+    fn terrain_up_certificate_uses_source_axes_and_rejects_invalid_tolerance() {
+        let tolerance = 0.0001;
+        assert!(terrain_up_translation(DVec3::Y, tolerance));
+        assert!(!terrain_up_translation(DVec3::NEG_Y, tolerance));
+        assert!(!terrain_up_translation(
+            DVec3::new(0.001, 1.0, 0.0),
+            tolerance
+        ));
+        assert!(!terrain_up_translation(DVec3::Y, 0.0));
+        assert!(!terrain_up_translation(DVec3::Y, f64::NAN));
+        assert!(!terrain_up_translation(
+            DVec3::splat(f64::INFINITY),
+            tolerance
+        ));
+        let rotation =
+            bevy::math::DQuat::from_rotation_x(0.4) * bevy::math::DQuat::from_rotation_z(-0.3);
+        assert!(terrain_up_translation(
+            rotation.inverse() * (rotation * DVec3::Y),
+            tolerance
+        ));
+        assert!(!terrain_up_translation(rotation * DVec3::Y, tolerance));
+    }
+
     /// A DEM whose heights are ABSOLUTE body-datum metres — the real shape of a
     /// site like Apollo 15, whose ground sits ~1.9 km below the datum. Every
     /// pre-existing test used a terrain at y ≈ 0, where a frame bug and a correct
@@ -644,6 +893,111 @@ mod tests {
 
     fn world_with_terrain(elevation: f64) -> (App, Entity) {
         world_with_oracle(flat_dem_at(elevation, 500.0))
+    }
+
+    #[test]
+    fn camera_sphere_reports_rotated_overlap_escape_and_missing_pose() {
+        let (mut app, terrain) = world_with_terrain(0.0);
+        let rotation = Quat::from_rotation_z(0.4);
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(Transform::from_rotation(rotation));
+        let project = app
+            .world_mut()
+            .register_system(update_terrain_physics_frame_poses);
+        app.world_mut().run_system(project).unwrap();
+        let up = rotation.as_dquat() * DVec3::Y;
+        let system = app.world_mut().register_system(move |q: GridSurfaceQuery| {
+            (
+                q.sweep_sphere(GridPos(up * 0.01), GridPos(up), 0.025, 0.0001, 4096),
+                q.sweep_sphere(GridPos(up * 0.01), GridPos(up * 0.005), 0.025, 0.0001, 4096),
+                q.sweep_sphere(GridPos(up), GridPos(up * 0.01), 0.025, 0.0001, 1),
+            )
+        });
+        let (escape, inward, budget) = app.world_mut().run_system(system).unwrap();
+        assert!(matches!(
+            escape,
+            TerrainSphereSweep::InitialOverlap {
+                escape_allowed: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            inward,
+            TerrainSphereSweep::InitialOverlap {
+                escape_allowed: false,
+                ..
+            }
+        ));
+        assert!(matches!(budget, TerrainSphereSweep::Unavailable { .. }));
+        app.world_mut()
+            .spawn(DemHeightField(flat_dem_at(0.0, 10.0)));
+        let system = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            q.sweep_sphere(
+                GridPos(DVec3::Y),
+                GridPos(DVec3::Y * 2.0),
+                0.025,
+                0.0001,
+                4096,
+            )
+        });
+        assert!(matches!(
+            app.world_mut().run_system(system).unwrap(),
+            TerrainSphereSweep::Unavailable { .. }
+        ));
+    }
+
+    #[test]
+    fn camera_sphere_uses_registered_regional_source() {
+        use lunco_geotiff::{GeoTransform, LunarFrame};
+        use lunco_terrain_bake::regional::RegisteredRegionalSurface;
+        let local = Arc::new(HeightGrid::new_flat(9, 2.0));
+        let mut regional = HeightGrid::new_flat(17, 8.0);
+        regional.heights.fill(3.0);
+        let geo = |half: f64, res| {
+            GeoTransform::centred_square(half * 2.0, res, 1_737_400.0, 26.0, 3.0)
+                .with_frame(LunarFrame::MoonMe)
+        };
+        let source = RegisteredRegionalSurface::new(
+            local,
+            geo(2.0, 9),
+            Arc::new(regional),
+            geo(8.0, 17),
+            1.0,
+            0.0,
+        )
+        .unwrap();
+        let (mut app, _) = world_with_oracle(Arc::new(SurfaceOracle::registered(
+            Arc::new(source),
+            Vec::new(),
+        )));
+        let system = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            (
+                q.sweep_sphere(
+                    GridPos(DVec3::new(5.0, 2.0, 0.0)),
+                    GridPos(DVec3::new(7.0, 2.0, 0.0)),
+                    0.025,
+                    0.0001,
+                    8192,
+                ),
+                q.sweep_sphere(
+                    GridPos(DVec3::new(5.0, 8.0, 0.0)),
+                    GridPos(DVec3::new(7.0, 8.0, 0.0)),
+                    0.025,
+                    0.0001,
+                    8192,
+                ),
+            )
+        });
+        let (inside, above) = app.world_mut().run_system(system).unwrap();
+        assert!(matches!(
+            inside,
+            TerrainSphereSweep::InitialOverlap {
+                escape_allowed: false,
+                ..
+            }
+        ));
+        assert!(matches!(above, TerrainSphereSweep::Clear));
     }
 
     #[test]
@@ -697,6 +1051,33 @@ mod tests {
     }
 
     #[test]
+    fn clearance_cast_uses_the_terrain_local_up_axis() {
+        let (mut app, terrain) = world_with_terrain(0.0);
+        let rotation = Quat::from_rotation_z(0.4);
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(Transform::from_rotation(rotation));
+        let project = app
+            .world_mut()
+            .register_system(update_terrain_physics_frame_poses);
+        app.world_mut().run_system(project).unwrap();
+        let up = rotation.as_dquat() * DVec3::Y;
+        let origin = GridPos(up * 10.0);
+        let direction = Dir3::new((-up).as_vec3()).unwrap();
+        let sys = app.world_mut().register_system(move |q: GridSurfaceQuery| {
+            q.raycast_with_clearance(origin, direction, 20.0, 0.5)
+        });
+        let hit = app
+            .world_mut()
+            .run_system(sys)
+            .unwrap()
+            .unwrap()
+            .expect("offset terrain hit");
+        assert!((hit.distance - 9.5).abs() < 0.001);
+        assert!((hit.point.0 - up * 0.5).length() < 0.001);
+    }
+
+    #[test]
     fn raycast_from_above_hits_the_absolute_surface() {
         let (mut app, _) = world_with_terrain(SITE_ELEVATION);
         // Origin 100 m above the real ground — not 100 m above y=0, which is
@@ -705,7 +1086,12 @@ mod tests {
         let sys = app
             .world_mut()
             .register_system(move |q: GridSurfaceQuery| q.raycast(origin, Dir3::NEG_Y, 1000.0));
-        let hit = app.world_mut().run_system(sys).unwrap().expect("hit");
+        let hit = app
+            .world_mut()
+            .run_system(sys)
+            .unwrap()
+            .unwrap()
+            .expect("hit");
         assert!((hit.point.0.y - SITE_ELEVATION).abs() < 0.05, "{hit:?}");
         assert!((hit.distance - 100.0).abs() < 0.05, "{hit:?}");
     }
@@ -723,7 +1109,7 @@ mod tests {
         let sys = app
             .world_mut()
             .register_system(move |q: GridSurfaceQuery| q.raycast(origin, dir, f64::INFINITY));
-        let hit = app.world_mut().run_system(sys).unwrap();
+        let hit = app.world_mut().run_system(sys).unwrap().unwrap();
         assert!(hit.is_some(), "shallow cursor ray found no ground");
         assert!((hit.unwrap().point.0.y - SITE_ELEVATION).abs() < 0.05);
     }
@@ -732,11 +1118,39 @@ mod tests {
     fn no_terrain_is_distinguishable_from_no_hit() {
         let mut app = App::new();
         let sys = app.world_mut().register_system(|q: GridSurfaceQuery| {
-            (q.has_terrain(), q.height_at(GridPos(DVec3::ZERO)))
+            (
+                q.has_terrain(),
+                q.height_at(GridPos(DVec3::ZERO)),
+                q.raycast(GridPos(DVec3::ZERO), Dir3::NEG_Y, 10.0),
+                q.raycast_render(RenderPos(DVec3::ZERO), Dir3::NEG_Y, 10.0),
+            )
         });
-        let (has, height) = app.world_mut().run_system(sys).unwrap();
+        let (has, height, grid_ray, render_ray) = app.world_mut().run_system(sys).unwrap();
         assert!(!has);
         assert_eq!(height, None);
+        assert_eq!(grid_ray.unwrap(), None);
+        assert_eq!(render_ray.unwrap(), None);
+    }
+
+    #[test]
+    fn raycast_refuses_an_unresolved_terrain() {
+        let (mut app, _) = world_with_terrain(SITE_ELEVATION);
+        app.world_mut()
+            .spawn(DemHeightField(flat_dem_at(0.0, 10.0)));
+        let system = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            q.raycast(
+                GridPos(DVec3::new(0.0, SITE_ELEVATION + 100.0, 0.0)),
+                Dir3::NEG_Y,
+                1000.0,
+            )
+        });
+
+        let error = app
+            .world_mut()
+            .run_system(system)
+            .unwrap()
+            .expect_err("an unprojected DEM must not become a terrain miss");
+        assert!(error.contains("unresolved terrain"), "{error}");
     }
 
     #[test]

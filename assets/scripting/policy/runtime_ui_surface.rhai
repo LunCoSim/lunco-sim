@@ -1,22 +1,5 @@
 // One projection transaction consumes one typed immutable fact snapshot.
 // Visibility and properties are authored together and published atomically.
-fn preparation_active(status, blockers) {
-    if status == "compiling" { return true; }
-    if blockers == () { return false; }
-    for blocker in blockers {
-        if blocker.owner == "SceneLifecycle"
-            || blocker.owner == "SceneReferences"
-            || blocker.owner == "TerrainPreparation"
-            || blocker.owner == "DocumentPreparation"
-            || blocker.owner == "ModelicaPreparation"
-            || blocker.owner == "ScriptPreparation" {
-            return true;
-        }
-    }
-    false
-}
-
-
 fn status_label(status) {
     if status == "running" { return "RUNNING"; }
     if status == "compiling" { return "COMPILING"; }
@@ -144,6 +127,14 @@ fn angle_text(value, positive, negative) {
     number_text(abs(value), 100000.0) + "° " + if value < 0.0 { negative } else { positive }
 }
 
+fn runtime_ui_should_be_visible(facts) {
+    if facts.surface_id == "camera-status" { return true; }
+    if !facts.available { return false; }
+    if facts.visibility_mode == "always" { return true; }
+    if facts.visibility_mode == "possessed" { return facts.control_owner == "local"; }
+    false
+}
+
 fn coordinate_properties(coordinates, world_position) {
     if coordinates == () {
         return #{position: "COORDINATES UNAVAILABLE", height: "—", height_value: "—",
@@ -174,12 +165,7 @@ fn runtime_ui_surface(facts) {
     if !ui_owner && !(presentation && facts.surface_id == "camera-status") {
         throw "runtime.ui.surface requires Application/Ui/Preparation or camera Application/Presentation initialization/event context";
     }
-    let visible = if facts.surface_id == "camera-status" { true }
-        else if preparation_active(facts.status, facts.simulation_progress) { true }
-        else if !facts.available { false }
-        else if facts.visibility_mode == "always" { facts.available }
-        else if facts.visibility_mode == "possessed" { facts.control_owner == "local" }
-        else { false };
+    let visible = runtime_ui_should_be_visible(facts);
     if facts.surface_id == "camera-status" {
         return #{ visible: visible, properties: camera_ui_properties(facts) };
     }

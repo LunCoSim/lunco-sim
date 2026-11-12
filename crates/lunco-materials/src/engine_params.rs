@@ -131,6 +131,20 @@ impl EngineParams {
                     doc: "Active measured crop half extent in metres.",
                 },
                 EngineParam {
+                    name: "regional_uv_scale",
+                    ty: ParamType::F32,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "Scale from local-crop UV offsets to registered regional UV offsets.",
+                },
+                EngineParam {
+                    name: "regional_albedo_on",
+                    ty: ParamType::F32,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "Whether an authored regional reflectance raster is bound.",
+                },
+                EngineParam {
                     name: "site_blend_widths_m",
                     ty: ParamType::Vec4,
                     source: Runtime,
@@ -171,6 +185,13 @@ impl EngineParams {
                     source: Runtime,
                     prop_fillable: false,
                     doc: "Site ambient-occlusion map weight in the exterior material.",
+                },
+                EngineParam {
+                    name: "site_authored_surface_on",
+                    ty: ParamType::F32,
+                    source: Runtime,
+                    prop_fillable: false,
+                    doc: "Whether the continuation surface map is authored rather than derived.",
                 },
                 EngineParam {
                     name: "sun_dir",

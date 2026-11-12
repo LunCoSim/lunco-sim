@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**320 commands** across **61** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**315 commands** across **59** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -61,10 +61,6 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-doc-bevy`](#lunco-doc-bevy) (11 commands)
 
-**Networking**
-
-- [`lunco-networking`](#lunco-networking) (2 commands)
-
 **Time & clock**
 
 - [`lunco-time`](#lunco-time) (6 commands)
@@ -104,12 +100,10 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-luncosim-runtime`](#lunco-luncosim-runtime) (1 command)
 - [`lunco-luncosim-services`](#lunco-luncosim-services) (2 commands)
 - [`lunco-luncosim-ui`](#lunco-luncosim-ui) (6 commands)
-- [`lunco-modelica-api`](#lunco-modelica-api) (10 commands)
+- [`lunco-modelica-api`](#lunco-modelica-api) (11 commands)
 - [`lunco-modelica-runtime`](#lunco-modelica-runtime) (1 command)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
-- [`lunco-networking-core`](#lunco-networking-core) (1 command)
-- [`lunco-networking-sync`](#lunco-networking-sync) (9 commands)
 - [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
@@ -121,7 +115,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-sysml`](#lunco-sysml) (3 commands)
 - [`lunco-telemetry`](#lunco-telemetry) (1 command)
 - [`lunco-usd-bevy-camera`](#lunco-usd-bevy-camera) (5 commands)
-- [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (5 commands)
+- [`lunco-usd-bevy-runtime-core`](#lunco-usd-bevy-runtime-core) (6 commands)
 - [`lunco-usd-core`](#lunco-usd-core) (10 commands)
 - [`lunco-usd-viewport-core`](#lunco-usd-viewport-core) (18 commands)
 - [`lunco-viz`](#lunco-viz) (7 commands)
@@ -130,8 +124,9 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
+- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (4 commands)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
-- [`lunco-workspace`](#lunco-workspace) (10 commands)
+- [`lunco-workspace`](#lunco-workspace) (11 commands)
 
 ---
 
@@ -1546,31 +1541,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `doc_id` | `DocumentId` |  The document whose most recent history group should be undone. |
 
-## Networking
-
-### `lunco-networking` <a id="lunco-networking"></a>
-
-#### `JoinServer`
-
- Join a networked session at `address` (`host:port` — a hostname like
- `lunica.lunco.space:5888` or an `ip:port`). The same typed command the
- in-sim *Connect* button, the HTTP API, MCP, and the CLI all dispatch — the
- networking internals establish the connection. Replaces any current one.
-
-- *defined in:* `crates/lunco-networking/src/client.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `address` | `String` |   |
-| `digest` | `String` |  Optional self-signed cert SHA-256 digest to pin (hex; colons/whitespace  tolerated). Empty ⇒ fall back to the ambient digest source  ([`client_cert_digest`]: `LUNCO_CERT_DIGEST` on native, the URL `#hash` on  wasm). A browser joining a self-signed LAN host by IP must supply this. |
-
-#### `LeaveServer`
-
- Leave the current session and return to single-player (local sandbox).
-
-- *defined in:* `crates/lunco-networking/src/client.rs`
-- *fields:* none — call with `LeaveServer` (no params)
-
 ## Time & clock
 
 ### `lunco-time` <a id="lunco-time"></a>
@@ -2789,6 +2759,19 @@ actually call, with the fields the deserializer actually accepts. See the
 | `tolerance` | `Option < f64 >` |   |
 | `label` | `String` |   |
 
+#### `SaveScratchModelicaDocument`
+
+ Persist an API-owned scratch document as a Modelica file inside the active
+ Twin. This keeps document persistence available to native HTML/Rhai tools
+ in headless hosts that do not install the Modelica editor UI plugin.
+
+- *defined in:* `crates/lunco-modelica-api/src/edit/doc.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `DocumentId` |   |
+| `path` | `String` |   |
+
 #### `SetDocumentSource`
 
  Replace an open document's entire source text.
@@ -2829,8 +2812,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the Twin that declared the source root. |
-| `name` | `String` |  Exact `twin://` authority returned by the asset owner. |
-| `id` | `String` |  Twin-scoped source-root key, beginning with `twin:<id>:`. |
+| `source_index` | `u32` |  Index in the selected Twin's ordered Modelica root list. |
 | `path` | `String` |  Twin-relative directory or an explicitly declared absolute external path. |
 
 ### `lunco-modelica-ui-core` <a id="lunco-modelica-ui-core"></a>
@@ -2863,122 +2845,6 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `qualified` | `String` |  Fully-qualified class path, for example  `Library.Examples.Sample`. |
 | `action` | `ClassAction` |  Whether to view or duplicate the class. |
-
-### `lunco-networking-core` <a id="lunco-networking-core"></a>
-
-#### `SetVisualLead`
-
- Live-tune [`VisualLeadSettings`] (all fields optional → set only what you pass):
- `SetVisualLead {enabled?, yaw_rate?, speed?, lead_secs?}`. Lets you A/B the
- render-lead strength while driving, no rebuild.
-
-- *defined in:* `crates/lunco-networking-core/src/prediction.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `Option < bool >` |   |
-| `yaw_rate` | `Option < f32 >` |   |
-| `speed` | `Option < f32 >` |   |
-| `lead_secs` | `Option < f32 >` |   |
-
-### `lunco-networking-sync` <a id="lunco-networking-sync"></a>
-
-#### `MountCachedScenarioTwin`
-
- Mount one exact cached scenario revision for a Rhai-authored scene action.
-
-- *defined in:* `crates/lunco-networking-sync/src/scenario_sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `scenario_id` | `String` |  Stable scenario UUID from the cache catalog. |
-| `revision` | `String` |  Exact lowercase SHA-256 revision selected by the authored action. |
-| `name` | `String` |  Logical name for the mounted Twin root. |
-| `scene` | `String` |  Manifest-relative scene path admitted from this cached revision. |
-
-#### `PromoteScenario`
-
- Command: materialize the currently-loaded downloaded scenario into an
- **editable** on-disk Twin at `folder`, add it to the workspace, and swap the
- running scene to it. The counterpart to the default read-only consume — "keep
- & edit this scenario". Empty `folder` = a GUI should present a folder picker
- first. Native-only in effect: web has no ambient folder filesystem (File
- System Access is a TODO); the wasm path logs and no-ops.
-
- Local action (not networked) — it promotes *this* peer's local download.
-
-- *defined in:* `crates/lunco-networking-sync/src/scenario_sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `folder` | `String` |  Target folder that becomes the new Twin's root. |
-
-#### `SetAllowFreeMovement`
-
- Set Allow Free Movement command.
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetFollowMode`
-
- Set Follow Mode command.
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetFollowOptIn`
-
- Set Follow Opt-In command: local consent to be locked by a broadcasting tutor.
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetObserveMode`
-
- Set Observe Mode command.
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SetTargetClient`
-
- Set Target Client command.
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Option < u64 >` |   |
-
-#### `SetTeachMode`
-
- Set Teach Mode command.
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | `bool` |   |
-
-#### `SharePerspective`
-
- Share Perspective command (Look-At).
-
-- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
-- *fields:* none — call with `SharePerspective` (no params)
 
 ### `lunco-notifications-core` <a id="lunco-notifications-core"></a>
 
@@ -3281,7 +3147,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the active Twin. |
-| `name` | `String` |  Exact `twin://` authority returned by the asset owner. |
 | `timeline_name` | `String` |  Timeline name exposed through `ListTimelines`. |
 | `relative_path` | `String` |  Indexed JSON file relative to the Twin root. |
 
@@ -3473,7 +3338,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the active Twin. |
-| `name` | `String` |  Exact `twin://` authority returned by the asset owner. |
 | `library_name` | `String` |  Library name assigned by policy. |
 | `relative_path` | `String` |  Indexed Rhai source path relative to the Twin root. |
 
@@ -3501,8 +3365,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `twin_id` | `u64` |  Workspace identity of the Twin whose source authority was mounted. |
-| `name` | `String` |  Exact `twin://` authority returned by the asset owner. |
+| `twin_id` | `u64` |  Workspace identity of the Twin that owns the source. |
 | `relative_path` | `String` |  Indexed `.sysml` or `.kerml` path relative to the Twin root. |
 
 #### `PrepareTwinSysmlAnalysis`
@@ -3514,7 +3377,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `twin_id` | `u64` |  Workspace identity of the mounted Twin. |
-| `name` | `String` |  Exact `twin://` authority assigned to the Twin. |
 | `relative_paths` | `Vec < String >` |  Complete ordered source selection from the Twin loading policy. |
 
 ### `lunco-telemetry` <a id="lunco-telemetry"></a>
@@ -3681,7 +3543,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Root-qualified USD address (`lunco://…` or `twin://…`). Filesystem paths  are opened through `OpenFile`, not this scene-mount command. |
+| `path` | `String` |  Root-qualified USD address (`lunco://…` or stable  `twin://<source-identity>/…`). Internal mount authorities are rejected;  filesystem paths are opened through `OpenFile`. |
 | `root_prim` | `String` |  Optional override for the prim to spawn. Empty (default) reads  `defaultPrim` from the stage's metadata header. A missing `defaultPrim`  is a visible scene-load error; the runtime never mounts `/`. |
 
 #### `OpenTwinScene`
@@ -3692,25 +3554,25 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `twin_id` | `u64` |  Workspace identity of the Twin whose source authority was mounted. |
-| `name` | `String` |  Exact `twin://` authority returned by the asset owner. |
+| `twin_id` | `u64` |  Workspace identity of the Twin whose source owns the scene. |
 | `relative_path` | `String` |  Indexed path relative to the Twin root. |
+
+#### `ResetSceneRuntime`
+
+ Reset scene-owned runtime state while keeping the mounted source and Twin open.
+
+- *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
+- *fields:* none — call with `ResetSceneRuntime` (no params)
 
 #### `RestartScene`
 
- Reload the CURRENTLY-ACTIVE scene from disk — the "restart" verb.
+ Reload the active scene from its authoritative source.
 
- [`LoadScene`] deliberately no-ops when asked to load the scene that is already
- active (same path + root), so it cannot pick up on-disk edits to the LIVE
- scene. `RestartScene` always clears the current scene's entities, force-reloads
- its stage asset from disk (busting the asset cache), and respawns a single
- fresh root — so editing a `.usda` then `restart_scene()` shows the change with
- no duplicate instances. `reset_document` is interpreted by the document layer:
- it is false for the normal preserve-edits restart and true only after the UI
- has confirmed a full reset. The lifecycle mechanic still targets whichever
- scene is loaded.
- Paired with `pause()` this is the "reload-then-freeze" one-liner the workflow
- wanted (`restart_scene(); pause();`).
+ This operation keeps the active Twin and mount authority. A file-backed Twin
+ document is read and parsed before teardown; a rejected source refresh leaves
+ the current scene mounted. On success, the stage asset is force-reloaded and
+ the same root prim is projected again. Use [`ResetSceneRuntime`] to restart
+ scene-owned runtime state from the already mounted stage without reading disk.
 
 - *defined in:* `crates/lunco-usd-bevy-runtime-core/src/scene.rs`
 
@@ -4100,7 +3962,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `ConfigureSignalGrid`
 
- Compose 1–64 measured scalar channels as independent native line plots.
+ Compose 1–64 active scalar channels as independent native line plots.
+ An admitted channel with no samples yet renders its native waiting state.
  Prepare first, inspect the returned plot identities with InspectSignalGrid,
  then use ConfigureLinePlot for each plot's existing appearance settings.
 
@@ -4595,6 +4458,55 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `enabled` | `bool` |  `true` enables the HUD; `false` hides it. |
 
+### `lunco-workbench-runtime-ui` <a id="lunco-workbench-runtime-ui"></a>
+
+#### `InspectRuntimeUiForm`
+
+ Read Twin-scoped form values for runtime integration tests and diagnostics.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `form_id` | `String` |   |
+
+#### `SetRuntimeUiCollectionData`
+
+ Replace one authored keyed collection with rows from the active Twin's
+ presentation policy. The destination must be declared by the active
+ runtime UI manifest; the command cannot publish arbitrary exposures.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `namespace` | `String` |   |
+| `source` | `String` |   |
+| `items` | `Vec < BTreeMap < String, String > >` |   |
+
+#### `SetRuntimeUiFormStatus`
+
+ Set the inline status text for a Twin-authored HTML form.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `form_id` | `String` |   |
+| `status` | `String` |   |
+
+#### `SetRuntimeUiFormValues`
+
+ Set or patch a Twin-authored HTML form's current values. Values are strings
+ at the form boundary; Twin policy owns domain parsing and validation.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `form_id` | `String` |   |
+| `values` | `BTreeMap < String, String >` |   |
+
 ### `lunco-workbench-window` <a id="lunco-workbench-window"></a>
 
 #### `CloseWindow`
@@ -4743,6 +4655,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `twin` | `u64` |  Twin whose project settings are being edited. |
 | `value` | `Option < bool >` |  Explicit override or inheritance. |
 
+#### `SetProjectViewStateRestoration`
+
+ Request a local project override for restoring camera and graph views.
+
+- *defined in:* `crates/lunco-workspace/src/scene_settings.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `twin` | `u64` |  Twin whose project settings are being edited. |
+| `value` | `Option < bool >` |  Explicit override or the default-enabled behavior. |
+
 #### `SetTwinSetting`
 
  Persist one generic project-owned setting on the active Twin.
@@ -4756,7 +4679,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 320 commands from the runtime schema; scanned 1090 .rs files for docs (0 parse failure(s) skipped).
+<!-- 315 commands from the runtime schema; scanned 1098 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

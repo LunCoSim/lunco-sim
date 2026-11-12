@@ -124,8 +124,8 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
   -d '{"type":"ExecuteCommand","command":"ValidateTwin","params":{"path":"/work/rover-twin","policy":"error"}}'
 ```
 
-`path` is required: use the current `twin://<assigned-authority>` for a
-mounted Twin on either platform; native callers may also supply a directory or
+`path` is required: use the stable `twin://<source-identity>` for a mounted
+Twin on either platform; native callers may also supply a directory or
 standard file URI. Browser native-directory inspection is not available.
 Poll its returned operation ID using the same protocol as `ValidateAsset`.
 `policy` is optional: `warn` (the default) makes namespace collisions warnings;

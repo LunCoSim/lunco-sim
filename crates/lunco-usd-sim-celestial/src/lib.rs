@@ -88,7 +88,6 @@ impl Plugin for CelestialProjectionPlugin {
 
 fn scene_time_facts(
     event: &str,
-    scene_path: Option<&str>,
     root_prim: Option<&str>,
     reader: Option<&ComposedReader<'_>>,
     root_path: Option<&SdfPath>,
@@ -116,7 +115,6 @@ fn scene_time_facts(
     };
     H::map([
         ("event", H::str(event)),
-        ("scene_path", scene_path.map_or(H::Unit, H::str)),
         ("root_prim", root_prim.map_or(H::Unit, H::str)),
         ("epoch_api", H::Bool(epoch_api)),
         ("epoch_status", H::str(epoch_status)),
@@ -125,6 +123,11 @@ fn scene_time_facts(
         ("computer_time_tdb_jd", computer_time_tdb_jd),
         ("computer_time_error", computer_time_error),
     ])
+}
+
+fn public_scene_path(reference: &str, roots: Option<&lunco_assets_core::TwinRoots>) -> String {
+    lunco_assets_core::asset_path::source_uri_for_address(reference, roots)
+        .unwrap_or_else(|_| lunco_assets_core::redact_opaque_twin_authorities(reference))
 }
 
 fn select_scene_time_on_transition_completed(
@@ -139,6 +142,7 @@ fn select_scene_time_on_transition_completed(
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
     mut transport: ResMut<lunco_time::TimeTransport>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
+    twin_roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     let transition_id = trigger.event().id;
     if scene_time.phase != lunco_time::SceneTimePhase::Loading
@@ -149,8 +153,12 @@ fn select_scene_time_on_transition_completed(
     let (scene_path, transition_kind) = match &trigger.event().transition {
         lunco_core::SceneTransition::Load { path, .. } => (path.as_str(), "scene_load"),
         lunco_core::SceneTransition::Restart { path, .. } => (path.as_str(), "scene_restart"),
+        lunco_core::SceneTransition::RuntimeReset { path, .. } => {
+            (path.as_str(), "scene_runtime_reset")
+        }
         lunco_core::SceneTransition::Clear => return,
     };
+    let scene_path = public_scene_path(scene_path, twin_roots.as_deref());
     let mut scene_roots = roots.iter().filter(|(_, is_root)| *is_root);
     let Some((scene_root, _)) = scene_roots.next() else {
         let error = format!("settled scene `{scene_path}` has no USD scene root");
@@ -218,7 +226,6 @@ fn select_scene_time_on_transition_completed(
     let has_celestial_source = composed_stage_has_celestial_source(&reader);
     let facts = scene_time_facts(
         transition_kind,
-        Some(scene_path),
         Some(&root_path),
         Some(&reader),
         Some(&root_path_sdf),

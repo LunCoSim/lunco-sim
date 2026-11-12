@@ -920,7 +920,7 @@ pub(crate) fn sync_globe_handoffs(
     let terrain_source = selected_dem.map(|(entity, _, _)| entity);
     let half_extent = selected_dem.map_or_else(
         || flat_surface.map_or(0.0, |surface| surface.half_extent_x_m),
-        |(_, dem, _)| dem.0.half_extent() as f64,
+        |(_, dem, _)| dem.0.domain_half_extent() as f64,
     );
     let oracle = selected_dem.map(|(_, dem, _)| dem.0.clone());
     let matching_anchors: Vec<_> = site_anchors

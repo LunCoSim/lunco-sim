@@ -867,11 +867,11 @@ pub(crate) fn validate_sysml_reference(
         let Some((name, relative)) = lunco_assets_core::parse_twin_uri(reference) else {
             return validate_asset_with_policy(reference, apply_structural_policy, None);
         };
-        let Some(roots) = world.get_resource::<lunco_assets_core::TwinRoots>() else {
-            return ValidationReport::new(reference, "sysml")
-                .error("SysML twin:// source query requires the TwinRoots asset registry");
+        let (_, _, roots, authority) = match mounted_sysml_twin(world, name, reference) {
+            Ok(twin) => twin,
+            Err(report) => return report,
         };
-        let path = match roots.resolve_file(name, Path::new(relative)) {
+        let path = match roots.resolve_file(&authority, Path::new(relative)) {
             Ok(Some(path)) => path,
             Ok(None) => {
                 return ValidationReport::new(reference, "sysml")
@@ -910,7 +910,8 @@ pub(crate) fn validate_sysml_reference(
     )
 }
 
-/// Resolve a `twin://<name>` SysML reference to its mounted Workspace Twin.
+/// Resolve a stable `twin://<source-identity>` SysML reference to its current
+/// mounted Workspace Twin and keep the load lease inside this owner.
 fn mounted_sysml_twin<'w>(
     world: &'w World,
     name: &str,
@@ -920,6 +921,7 @@ fn mounted_sysml_twin<'w>(
         lunco_workspace::TwinId,
         &'w lunco_twin::Twin,
         &'w lunco_assets_core::TwinRoots,
+        String,
     ),
     ValidationReport,
 > {
@@ -932,26 +934,24 @@ fn mounted_sysml_twin<'w>(
         return Err(ValidationReport::new(reference, "sysml")
             .error("SysML twin:// source query requires the TwinRoots asset registry"));
     };
-    let root = match roots.root_of(name) {
-        Ok(Some(root)) => root,
-        Ok(None) => {
-            return Err(ValidationReport::new(reference, "sysml")
-                .error(format!("Twin `{name}` is not mounted")));
-        }
-        Err(error) => {
-            return Err(ValidationReport::new(reference, "sysml")
-                .error(format!("cannot resolve {reference}: {error}")));
-        }
-    };
     let Some((twin_id, twin)) = workspace
         .twins()
-        .find(|(_, twin)| lunco_doc::same_file(&twin.root, &root))
+        .find(|(_, twin)| lunco_assets_core::logical_twin_source_identity(twin) == name)
     else {
-        return Err(ValidationReport::new(reference, "sysml").error(format!(
-            "Twin `{name}` is mounted in TwinRoots but has no matching Workspace entry; reopen it through the Workspace",
-        )));
+        return Err(ValidationReport::new(reference, "sysml")
+            .error(format!("Twin source `{name}` is not open in the Workspace")));
     };
-    Ok((twin_id, twin, roots))
+    let authority = roots
+        .authority_for_root(&twin.root)
+        .map_err(|_| {
+            ValidationReport::new(reference, "sysml")
+                .error(format!("Twin source `{name}` is unavailable"))
+        })?
+        .ok_or_else(|| {
+            ValidationReport::new(reference, "sysml")
+                .error(format!("Twin source `{name}` is not mounted"))
+        })?;
+    Ok((twin_id, twin, roots, authority))
 }
 
 /// The prepared, revision-pinned analysis of a mounted Twin's SysML source set.
@@ -962,8 +962,9 @@ fn prepared_twin_sysml_analysis(
     reference: &str,
     twin_id: lunco_workspace::TwinId,
     twin: &lunco_twin::Twin,
+    authority: &str,
 ) -> Result<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>, ValidationReport> {
-    match analyses.state_for(name, twin_id, &twin.root) {
+    match analyses.state_for(authority, twin_id, &twin.root) {
         Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => Ok(analysis),
         Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => {
             Err(ValidationReport::new(reference, "sysml").error(format!(
@@ -993,10 +994,11 @@ pub fn sysml_model_analysis(
     if let Some(name) = lunco_assets_core::parse_twin_root_uri(reference)
         && let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>()
     {
-        let (twin_id, twin, _) =
+        let (twin_id, twin, _, authority) =
             mounted_sysml_twin(world, name, reference).map_err(|report| report.errors)?;
-        let analysis = prepared_twin_sysml_analysis(analyses, name, reference, twin_id, twin)
-            .map_err(|report| report.errors)?;
+        let analysis =
+            prepared_twin_sysml_analysis(analyses, name, reference, twin_id, twin, &authority)
+                .map_err(|report| report.errors)?;
         let diagnostics = sysml_diagnostic_messages(&analysis);
         return if diagnostics.is_empty() {
             Ok(analysis)
@@ -1021,7 +1023,7 @@ fn validate_sysml_twin(
 ) -> ValidationReport {
     #[cfg(all(target_arch = "wasm32", not(feature = "sysml-runtime")))]
     let _ = apply_structural_policy;
-    let (_twin_id, _twin, roots) = match mounted_sysml_twin(world, name, reference) {
+    let (_twin_id, _twin, roots, authority) = match mounted_sysml_twin(world, name, reference) {
         Ok(twin) => twin,
         Err(report) => return report,
     };
@@ -1030,7 +1032,9 @@ fn validate_sysml_twin(
 
     #[cfg(feature = "sysml-runtime")]
     if let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>() {
-        return match prepared_twin_sysml_analysis(analyses, name, reference, _twin_id, _twin) {
+        return match prepared_twin_sysml_analysis(
+            analyses, name, reference, _twin_id, _twin, &authority,
+        ) {
             Ok(analysis) if apply_structural_policy => {
                 let policy_source = analysis
                     .files()
@@ -1064,7 +1068,7 @@ fn validate_sysml_twin(
         let mut policy_source = String::new();
         let mut revision_input = Vec::new();
         for relative in relative_sources {
-            let text = match roots.overlay_bytes(name, &relative) {
+            let text = match roots.overlay_bytes(&authority, &relative) {
                 Ok(Some(bytes)) => match String::from_utf8((*bytes).clone()) {
                     Ok(text) => text,
                     Err(error) => {
@@ -1075,7 +1079,7 @@ fn validate_sysml_twin(
                     }
                 },
                 Ok(None) => {
-                    let path = match roots.resolve_file(name, &relative) {
+                    let path = match roots.resolve_file(&authority, &relative) {
                         Ok(Some(path)) => path,
                         Ok(None) => {
                             return ValidationReport::new(reference, "sysml").error(format!(

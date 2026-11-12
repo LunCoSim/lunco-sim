@@ -58,13 +58,65 @@ render log. Do not relaunch the app just to pick up a shader edit.
 
 ## Tutorial and Rhai iteration
 
+For stable scene-URI regressions, run
+`python3 scripts/api/test_twin_source_uri.py --port <free-port>` with this
+checkout's production `LUNCOSIM_BIN`. The windowed driver opens one Twin, then
+requests its stable scene URI while the default document source is still being
+prepared, and repeats `LoadScene`, `ResetSceneRuntime`, `RestartScene`, and the
+authored scenario-menu loader for three cycles. It also replaces that Twin three
+times, requires a fresh internal mount lease each time, and reloads with the
+same stable public URI after every remount. The early request must wait for the
+document's stage-input lease; readiness must finish without an authority-change
+load failure.
+The `assets/scenarios/tests/twin_source_uri.rhai` verdicts require the unchanged display
+name, a stable public scene URI, and a retained Twin/mount during scene
+operations. Each load uses the displayed URI; an unmounted identity, a live
+mount URI, and a retired mount URI must be rejected without changing the
+current scene.
+The authored verdict also checks that readiness progress reasons stay generic
+and each pending `scene_load` label equals the stable URI. The driver captures
+the in-progress loading notice for visual review,
+checks the mounted projection after reloads and resets, captures the final
+window, and verifies API Exit and port release. It also runs
+`twin_identity_boundary.rhai` under the Twin execution route; this authored
+verdict checks that Twin execution context, lifecycle status, contract queries,
+and command/query discovery, including `ScriptComplete`, contain no workspace
+Twin selectors. Twin scripts that query `ScriptingCatalog` must select the
+needed `sections` so the typed result stays inside the shared Rhai value limit.
+
+To include a composed asset dependency authored with a stable Twin source URI,
+run the same driver against the maintained SysML fixture scene:
+
+```bash
+LUNCOSIM_BIN=target/debug/luncosim python3 scripts/api/test_twin_source_uri.py \
+  --port <free-port> \
+  --twin assets/scenes/tests/sysml_async_analysis \
+  --scene power_budget.usda \
+  --root-prim /World
+```
+
+That scene's `info:sourceAsset` is authored as
+`twin://sysml_async_analysis/verify_power_budget.rhai`; readiness must resolve
+the stable source identity to the current mount, and the same scene URI must
+remain reusable through reset, restart and remount.
+
 For Twin lifecycle regressions, open an editor document in Twin A, replace it
 with Twin B, and inspect `ListOpenDocuments` plus USD preview state. No old
 document ID or preview may survive; repeat `OpenTwin` on B to verify fresh
 admission. A rejected Twin path must preserve the current documents. Twin
-replacement closes loose/library editor documents as well as Twin-owned files;
-`RestartScene` preserves editable documents and tests a different lifecycle.
-On restart, require fresh stage readiness before inspecting terrain or Modelica
+replacement closes loose/library editor documents as well as Twin-owned files.
+`ResetSceneRuntime` tears down scene-owned simulation state while retaining the
+current Twin and stable stage source URI. Twin-scoped scripts and status facts
+must not expose the workspace Twin ID or private mount lease. Check typed
+query, command, hook, and policy-status result data too: workspace selector
+fields must be absent recursively in Twin scope, while app-level APIs retain
+workspace selectors. Exercise reflected `get()` and `get_setting()` with both a
+whole compound value and a direct selector-field path. Verify script values and
+diagnostics expose stable source URIs without the private mount lease. Verify
+Twin-scoped `ScriptingCatalog` and `ScriptComplete` omit workspace selectors
+from command and query discovery.
+`RestartScene` is the source reload and preserves editable documents. On reload,
+require fresh stage readiness before inspecting terrain or Modelica
 participants: the reused root waits for the prepared reload, and the document's
 serialized generation joins that loaded revision before later edits project.
 Pending editor and workspace-restore work must not recreate old tabs after
@@ -138,9 +190,10 @@ driver). The scene-only LoadScene and RestartScene checks preserve the open
 Twin and require the replacement/restarted projection before their verdicts.
 AddTwin and AddFolderToWorkspace preserve the existing documents and active
 Twin; subsequent replacement must retire all added source catalogs too.
-Each replacement also requires `TWIN_SCRIPT_SOURCE_SCOPE`: `twin_name()` must
-resolve the replacement SysML source set while the outgoing authority remains
-rejected. A scene can finish loading even when its mission script failed;
+Each replacement also requires `TWIN_SCRIPT_SOURCE_SCOPE`: the stable
+`twin_source_identity()` must resolve the replacement SysML source set. A Twin
+reopen preserves that source identity while the Rust asset owner retires and
+replaces its internal mount lease. A scene can finish loading even when its mission script failed;
 inspect `ScriptStatus` and actual propulsion when verifying ignition.
 
 Tutorial behavior is authored in `assets/tutorials/**/*.rhai` and should be
@@ -424,6 +477,9 @@ Successful constructors alone do not prove the connected initial coordinate was
 certified. The initialization-only worker preparation has no live actor or
 telemetry publisher. See [run-modelica](../run-modelica/SKILL.md#omitted-library-inputs)
 for checked-interface admission, state constraints and native port ownership.
+When checking a Twin transition, inspect `/api/ready.pending` entries with
+`kind == "scene_load"`: their `label` must be the stable
+`twin://<source-identity>/<relative-path>` URI, never the internal mount lease.
 For scene replacements that change `ActivePhysicsFrame`, also query each new
 dynamic body with `QueryPhysicsState` and require `physics_pose_seeded == true`
 before declaring admission complete; this catches a physics clock blocked
@@ -467,17 +523,18 @@ Choose the command that owns the address type and check its result:
 | command | takes | notes |
 |---|---|---|
 | `OpenTwin` | a **folder** containing `twin.toml` | loads `[usd] default_scene` when the effective scene-loading setting enables it |
-| `LoadScene` | a root-qualified `twin://` or `lunco://` address | mounts a scene address; it is not a filesystem opener |
+| `LoadScene` | `lunco://` or stable `twin://<source-identity>/…` | mounts a scene address; internal mount authorities are rejected |
 | `OpenFile` | a filesystem path or supported URI | extension-routes the document to its owning domain; USD paths resolve their Twin root |
 
 Passing the `.usda` *file* to `OpenTwin` fails the `twin.toml` check and is
 refused with a `warn!`.
 
-`LoadScene` is not a general file opener. Bare and absolute filesystem paths
-are refused with
+`LoadScene` accepts `lunco://…` or a stable logical-source address in the form
+`twin://<source-identity>/…`. Internal mount authorities are rejected even
+while live. Bare and absolute filesystem paths are refused with
 
 ```
-[scene] `…` is not a root-qualified scene address — LoadScene takes `lunco://…` or `twin://…`
+[scene] `…` is not a root-qualified scene address — LoadScene takes `lunco://…` or a stable `twin://<source-identity>/…`
 ```
 
 The command returns a terminal rejection before admission; the currently mounted
@@ -525,8 +582,8 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 
 Poll the returned `operation_id`; `ready.report` contains indexed entries,
 resolver scopes, collisions, source-read errors, and namespace findings. For a
-mounted browser Twin pass its current `twin://<assigned-authority>` instead of
-a native folder. For the active Twin after `OpenFolder`/`OpenTwin`, use
+mounted browser Twin pass its stable `twin://<source-identity>` address instead
+of a native folder. For the active Twin after `OpenFolder`/`OpenTwin`, use
 `cmd("RunLint", #{scope: "twin", policy: "warn"})` and read
 `query("GetDiagnostics", #{scope: "twin"})` for the returned lint revision.
 The queued Ack is admission information; the scope's pending/ready/failed state

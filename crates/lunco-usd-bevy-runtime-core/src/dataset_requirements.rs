@@ -18,6 +18,19 @@ struct Inputs {
 }
 impl SceneResource for Inputs {}
 
+fn live_twin_mount(
+    roots: &lunco_assets_core::TwinRoots,
+    address: &str,
+) -> Result<Option<(String, std::path::PathBuf)>, lunco_assets_core::TwinRootsError> {
+    if let Some(root) = roots.root_for(address)? {
+        return Ok(Some((address.to_owned(), root)));
+    }
+    let Some(authority) = roots.mounted_authority_for_logical(address)? else {
+        return Ok(None);
+    };
+    Ok(roots.root_for(&authority)?.map(|root| (authority, root)))
+}
+
 fn update(
     mount: Res<lunco_core::SceneMountState>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
@@ -77,23 +90,72 @@ fn update(
         {
             let addressed = if let Some(relative) = lunco_assets_core::parse_lunco_uri(identifier) {
                 Some((DatasetScope::Engine, relative))
-            } else if let Some((name, relative)) = lunco_assets_core::parse_twin_uri(identifier) {
-                match roots
-                    .as_ref()
-                    .and_then(|roots| roots.root_of(name).ok().flatten())
-                {
-                    Some(root) => Some((
-                        DatasetScope::Twin {
-                            name: name.to_owned(),
+            } else if let Some((authority, relative)) =
+                lunco_assets_core::parse_twin_uri(identifier)
+            {
+                let Some(roots) = roots.as_deref() else {
+                    faults.raise(
+                        "required-asset-invalid",
+                        root,
+                        "Runtime asset dependency",
+                        "The Twin source registry is unavailable for a scene asset.",
+                    );
+                    continue;
+                };
+                let (authority, root_path) = match live_twin_mount(roots, authority) {
+                    Ok(Some(mount)) => mount,
+                    Ok(None) => {
+                        faults.raise(
+                            "required-asset-invalid",
                             root,
-                        },
-                        relative,
-                    )),
-                    None => {
-                        next.pending_scopes.insert(format!("twin:{name}"));
-                        None
+                            "Runtime asset dependency",
+                            "A referenced Twin source is not mounted.",
+                        );
+                        continue;
                     }
-                }
+                    Err(_) => {
+                        faults.raise(
+                            "required-asset-invalid",
+                            root,
+                            "Runtime asset dependency",
+                            "The Twin source registry could not resolve a scene asset.",
+                        );
+                        continue;
+                    }
+                };
+                let source_identity = match roots.logical_identity_for_authority(&authority) {
+                    Ok(identity) => identity,
+                    Err(_) => {
+                        faults.raise(
+                            "required-asset-invalid",
+                            root,
+                            "Runtime asset dependency",
+                            "The mounted Twin source identity is unavailable.",
+                        );
+                        continue;
+                    }
+                };
+                let display_name = match roots.display_name_for_authority(&authority) {
+                    Ok(display_name) => display_name,
+                    Err(_) => {
+                        faults.raise(
+                            "required-asset-invalid",
+                            root,
+                            "Runtime asset dependency",
+                            "The mounted Twin display name is unavailable.",
+                        );
+                        continue;
+                    }
+                };
+                Some((
+                    DatasetScope::Twin {
+                        source_identity,
+                        authority: Some(authority),
+                        display_name,
+                        root: root_path,
+                    },
+                    relative,
+                ))
             } else {
                 None
             };
@@ -292,4 +354,48 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(lunco_core::SceneTeardown, |mut progress: ResMut<SimulationProgress>| {
             progress.release(SimulationProgressKey::scene_datasets());
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::live_twin_mount;
+
+    #[test]
+    fn authored_twin_source_resolves_to_current_mount_without_reviving_retired_leases() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let roots = lunco_assets_core::TwinRoots::default();
+        let first = roots
+            .register_authority_with_display_name("stable-source", "Twin", root.path())
+            .expect("first mount");
+
+        assert_eq!(
+            live_twin_mount(&roots, "stable-source").expect("logical source"),
+            Some((first.clone(), root.path().to_owned()))
+        );
+        assert_eq!(
+            live_twin_mount(&roots, &first).expect("live lease"),
+            Some((first.clone(), root.path().to_owned()))
+        );
+
+        roots
+            .unregister_authority(&first)
+            .expect("retire first mount");
+        assert_eq!(
+            live_twin_mount(&roots, "stable-source").expect("unmounted source"),
+            None
+        );
+        assert_eq!(
+            live_twin_mount(&roots, &first).expect("retired lease"),
+            None
+        );
+
+        let second = roots
+            .register_authority_with_display_name("stable-source", "Twin", root.path())
+            .expect("remount");
+        assert_ne!(first, second);
+        assert_eq!(
+            live_twin_mount(&roots, "stable-source").expect("remounted source"),
+            Some((second, root.path().to_owned()))
+        );
+    }
 }

@@ -262,11 +262,10 @@ fn acquire_scene_progress_hold(
 ) {
     let event = trigger.event();
     let reason = match &event.transition {
-        lunco_core::SceneTransition::Load { path, .. } => format!("Loading scene: {path}"),
-        lunco_core::SceneTransition::Clear => "Clearing scene".to_owned(),
-        lunco_core::SceneTransition::Restart { path, .. } => {
-            format!("Restarting scene: {path}")
-        }
+        lunco_core::SceneTransition::Load { .. } => "Loading scene",
+        lunco_core::SceneTransition::Clear => "Clearing scene",
+        lunco_core::SceneTransition::Restart { .. } => "Restarting scene",
+        lunco_core::SceneTransition::RuntimeReset { .. } => "Resetting scene runtime",
     };
     let key = SimulationProgressKey::scene_transition(event.id);
     if !progress.acquire(key, reason) {

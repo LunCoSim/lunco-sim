@@ -449,31 +449,13 @@ checks are in [large typed maps](rhai-large-map-conversion-2026-11-06.md).
 Neither change establishes a stable end-to-end FPS gain, and the 150 FPS
 objective remains open.
 
-## Directional receiver clear — 2026-11-06
+## Directional receiver clearing
 
-`lunco-render-bevy` clears the admitted directional receiver rectangle with a
-depth-only draw before the native shadow pass. The native full clear remains
-in use for unbounded views and while the clear pipeline is unavailable; its
-ready pipeline is pinned through the pass. Point and spot shadows remain native.
-See [render-decoupling](../architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds)
-for admission and lifetime details.
-
-An alternating Tracy test with the same cropped raster and a temporary clear-only
-control measured 6.2532 / 4.1870 / 6.2510 / 4.2083 / 6.2678 ms for native /
-bounded / native / bounded / native clears. All five paused 2560×1360 scene
-viewports were byte-identical. The control is removed. The final pinned-pipeline
-build measured 4.2078 ms paused and 4.1982 ms running; the isolated before/after
-capture predates the pipeline pin. At that stage opaque GPU work was about 9.6 ms.
-
-The final uninstrumented 2K Griffin run alternated full and bounded raster plus
-clear, obtaining 52.7085 and 58.3826 FPS pooled. This compares both the existing
-raster crop and the new clear against full native work, not the clear alone.
-Paused full/bounded images match exactly; the scene advances 614–619 ticks per
-window with eight substeps, ready physics, clear runtime diagnostics and all
-548 model source hashes unchanged. The moving-camera and empty-caster
-directional fixture and shared point/spot fixture pass. The 100 FPS milestone and 150 FPS objective
-remain open. Evidence is under `target/perf/fps-20261106/bounded-clear-*`;
-all owned sessions and ports are closed.
+Native shadow attachments clear the full map before receiver-bounded draws.
+The moving-camera, empty-caster and point/spot tests cover clearing and raster
+admission. Current production performance needs a fresh measurement; the
+100 FPS milestone and 150 FPS objective remain open. See
+[render-decoupling](../architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds).
 
 ## Directional receiver raster — 2026-11-06
 

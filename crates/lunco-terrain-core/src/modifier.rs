@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use crate::source::HeightSource;
+use crate::source::{HeightEnclosure, HeightSource, bounds_add};
 
 /// A layer that transforms the terrain height at a point. `apply` receives the height
 /// produced by the base plus every lower modifier and returns the modified height, so
@@ -36,6 +36,19 @@ pub trait HeightModifier: Send + Sync {
     /// must expose unavailable data rather than assuming clear terrain.
     fn height_bounds(&self, _rect: [f64; 4], _input: [f64; 2]) -> Option<[f64; 2]> {
         None
+    }
+
+    /// Fold one certified height model. Generic replacing/scaling modifiers
+    /// consume the scalar interval; additive owners can preserve or update the
+    /// affine plane without discarding the independent scalar certificate.
+    fn height_enclosure(&self, rect: [f64; 4], input: HeightEnclosure) -> Option<HeightEnclosure> {
+        let height = self.height_bounds(rect, input.height)?;
+        let p = input.plane.height_bounds(rect);
+        Some(HeightEnclosure {
+            height,
+            plane: input.plane,
+            residual: bounds_add(height, [-p[1], -p[0]]),
+        })
     }
 
     /// For **detail-synthesising** modifiers (procedural over-zoom): a variant of
@@ -171,6 +184,9 @@ impl BrushModifier {
 }
 
 impl HeightModifier for BrushModifier {
+    fn height_enclosure(&self, rect: [f64; 4], input: HeightEnclosure) -> Option<HeightEnclosure> {
+        Some(input.add_delta(self.height_bounds(rect, [0.0; 2])?))
+    }
     fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
         let near = [
             self.center[0].clamp(rect[0], rect[2]),
@@ -311,6 +327,9 @@ impl BodyCurvature {
 }
 
 impl HeightModifier for BodyCurvature {
+    fn height_enclosure(&self, rect: [f64; 4], input: HeightEnclosure) -> Option<HeightEnclosure> {
+        Some(input.add_delta(self.height_bounds(rect, [0.0; 2])?))
+    }
     fn height_bounds(&self, rect: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
         let near = [
             0.0_f64.clamp(rect[0], rect[2]),
@@ -356,12 +375,76 @@ fn smoothstep(t: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::crater::{Crater, CraterField, Craters};
+    use crate::source::{HeightPlane, bounds_add};
 
     /// Constant base so modifier contributions read directly.
     struct Flat(f64);
     impl HeightSource for Flat {
         fn height_at(&self, _x: f64, _z: f64) -> f64 {
             self.0
+        }
+    }
+
+    #[test]
+    fn affine_enclosures_compose_additive_scaling_and_replacing_modifiers() {
+        struct Scale(f64);
+        impl HeightModifier for Scale {
+            fn apply(&self, _: f64, _: f64, input: f64) -> f64 {
+                self.0 * input
+            }
+            fn height_bounds(&self, _: [f64; 4], input: [f64; 2]) -> Option<[f64; 2]> {
+                let a = input[0] * self.0;
+                let b = input[1] * self.0;
+                Some([a.min(b), a.max(b)])
+            }
+        }
+        struct Replace;
+        impl HeightModifier for Replace {
+            fn apply(&self, _: f64, _: f64, _: f64) -> f64 {
+                3.0
+            }
+            fn height_bounds(&self, _: [f64; 4], _: [f64; 2]) -> Option<[f64; 2]> {
+                Some([3.0; 2])
+            }
+        }
+        let plane = HeightPlane {
+            origin: [0.0; 2],
+            height: 4.0,
+            gradient: [0.4, -0.2],
+        };
+        let modifiers: Vec<Box<dyn HeightModifier>> = vec![
+            Box::new(BrushModifier::new([0.0; 2], 2.0, -0.3)),
+            Box::new(Scale(-1.5)),
+            Box::new(Replace),
+            Box::new(FlattenModifier::new([0.0; 2], 2.0, 7.0)),
+        ];
+        let rect = [-1.0, -0.75, 0.8, 0.9];
+        let mut model = HeightEnclosure {
+            height: bounds_add(plane.height_bounds(rect), [-0.01, 0.02]),
+            plane,
+            residual: [-0.01, 0.02],
+        };
+        for (index, modifier) in modifiers.iter().enumerate() {
+            model = modifier.height_enclosure(rect, model).unwrap();
+            assert!(model.is_valid(rect));
+            for z in 0..=8 {
+                for x in 0..=8 {
+                    for residual in [-0.01, 0.02] {
+                        let wx = rect[0] + (rect[2] - rect[0]) * x as f64 / 8.0;
+                        let wz = rect[1] + (rect[3] - rect[1]) * z as f64 / 8.0;
+                        let reference = plane.height_at(wx, wz);
+                        let height = modifiers[..=index]
+                            .iter()
+                            .fold(reference + residual, |h, m| m.apply(wx, wz, h));
+                        let value = height - model.plane.height_at(wx, wz);
+                        assert!(height >= model.height[0] && height <= model.height[1]);
+                        assert!(
+                            value >= model.residual[0] && value <= model.residual[1],
+                            "{value} outside {model:?}"
+                        );
+                    }
+                }
+            }
         }
     }
 

@@ -56,7 +56,8 @@ resume integration when a sleeping constrained assembly is detached.
 ## One transition boundary
 
 `lunco-core::SceneTransitionIntent` is the typed in-process request boundary.
-Higher-level domains such as tutorials emit `Load`, `Clear`, or `Restart`
+Higher-level domains such as tutorials emit `Load`, `Clear`, `Restart`, or
+`RuntimeReset`
 intents; `lunco-usd-commands` is the only owner that translates them into the concrete
 USD commands and resolves scene identity. No subsystem sends a command name or
 JSON payload to another subsystem.
@@ -66,9 +67,34 @@ The owner publishes `SceneTransitionStarted` before teardown and publishes
 transaction. Each edge carries the coordinator's monotonic
 `SceneTransitionId`; the asset outcome, coordinator close, and simulation
 progress hold all use that same id. A repeated path is a new transaction, and
-a late terminal edge cannot finish or unpause its successor. All three scene commands—`LoadScene`, `ClearScene`, and
-`RestartScene`—use this boundary, so tutorial/runtime owners cannot miss a
-transition merely because it entered through a different command.
+a late terminal edge cannot finish or unpause its successor. `LoadScene`,
+`ClearScene`, `RestartScene`, and `ResetSceneRuntime` use this boundary, so
+tutorial/runtime owners cannot miss a transition merely because it entered
+through a different command.
+
+`ResetSceneRuntime` tears down scene-owned state and projects the currently
+mounted `UsdStageAsset` handle again. It does not reread source bytes or replace
+the workspace Twin, so runtime-only retry controls keep the same mount authority
+and document leases. It requires a committed active scene; an empty viewport is
+reported as a command fault.
+
+`RestartScene` is the explicit source reload. It keeps the Twin and mount and
+leaves the committed scene running while preparation reads a clean file-backed
+document, builds a candidate document and refreshed USD dependency closure, and
+serializes the active and open dependent document inputs on the worker. Current
+open-document root bytes override the registered reader while the closure is
+built, so a dependent document's pending overlay cannot be replaced by its
+older on-disk version. Before commit, the owner validates the mounted scene,
+mount revision, document generations, and every captured document projection
+lease. Dirty documents stay authoritative on a normal restart;
+`reset_document` explicitly replaces the active open Twin-backed file document
+from disk and is rejected when that document or authoritative owner is absent.
+A failed read, parse, closure preparation, or stale lease stops before document
+commit and scene teardown. The accepted candidate and its prepared overlays are
+then committed before teardown and reload of the same typed asset address and
+root prim. `RestartScene` requires a reloadable asset address; use
+`ResetSceneRuntime` for an in-memory stage. A stage asset load failure after
+teardown follows the ordinary terminal scene-load failure boundary.
 
 Failed loads leave the viewport in its normal empty-scene presentation. The
 typed transition failure and runtime diagnostics retain the cause; the failure
@@ -418,10 +444,10 @@ the `First` lifecycle phase; private lifecycle observers execute that admitted
 request, followed by an explicit deferred-command flush before normal projection
 schedules run. Public command handlers therefore have one role—submission—and
 contain no execution-mode marker, retry branch, or mid-frame mutation path.
-Invalid `LoadScene` addresses and a missing asset pipeline return terminal
-command rejections with a warning before admission; they never acknowledge a
-load that cannot run. Native filesystem paths and file URIs enter through
-`OpenFile`.
+Invalid `LoadScene` addresses, including internal Twin mount authorities, and
+a missing asset pipeline return terminal command rejections with a warning
+before admission; they never acknowledge a load that cannot run. Native
+filesystem paths and file URIs enter through `OpenFile`.
 
 Loading closes from the authoritative asset/structural-projection outcome in
 `Last`, after normal projection schedules have finished. Async CPU mesh builds
@@ -506,6 +532,9 @@ continuations, so the authoritative stage outcome is retained until the
 projection queues are empty. The workbench reports the
 indeterminate loading/projecting phase, and a clear transaction reports
 unloading, rather than presenting a partially projected scene as ready.
+Changes to graphics quality do not release a prim awaiting its stage. A prim
+already queued for projection remains queued while invalid quality settings are
+corrected.
 
 Authored control and program projection use the same composed reader contract:
 the prepared projection plan supplies facts before the live canonical stage is
@@ -521,6 +550,10 @@ overlay and submit `LoadScene`. Referenced stage assets use the same event
 boundary before their reference is authored onto a live stage. This keeps source
 bytes in the asset pipeline and removes frame-count timeouts, per-frame load-state
 polls, and main-thread filesystem reads from scene admission.
+On a Twin restart, the refreshed document source is published before the
+outgoing canonical stage is retired. The replacement mount reads the refreshed
+asset and opens a new canonical stage, so disposable view edits from the old
+scene cannot enter the replacement hierarchy.
 
 After admission, document edits wake the single `twin_projection` owner through
 `DocumentChanged`; stage lifecycle events wake it when an edit is waiting for a

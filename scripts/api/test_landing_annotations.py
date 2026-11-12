@@ -23,15 +23,18 @@ def execute(session, command, **params):
 def gate(session, root, **params):
     headless = params.get("headless", False)
     offset = session.log_path.stat().st_size
+    source_identity = execute(session, "RunRhai", code="print(twin_source_identity());").get("stdout", "").strip()
+    if not source_identity:
+        raise RuntimeError("active Twin has no stable source identity")
     execute(session, "RunScenarioAsset", target=root,
-            source_asset="twin://astrobotic-griffin-1/scenarios/tests/griffin_landing_annotations.rhai",
+            source_asset=f"twin://{source_identity}/scenarios/tests/griffin_landing_annotations.rhai",
             params=params)
     if not headless:
         execute(session, "StepSimulation", steps=120)
     wait_for_authored_verdict(
         session, offset=offset,
         title="GRIFFIN HEADLESS ANNOTATIONS" if headless else "GRIFFIN LANDING ANNOTATIONS",
-        check_count=3 if headless else 12 if params.get("landed") else 11,
+        check_count=3 if headless else 13 if params.get("landed") else 11,
     )
 
 
@@ -49,8 +52,9 @@ def wait_mounted(session):
     deadline = time.monotonic() + 120
     code = ('let r=find_path("/Griffin1SurfaceOps"); '
             'let m=find_path("/Griffin1SurfaceOps/Scenario"); '
-            'if r<0 || m<0 {-1} else {let s=query("ScriptInspect",#{target:m}); '
-            'if s.started==true {r} else {-1}}')
+            'if r<0 || m<0 {-1} else {let s=query("ScriptStatus",#{target:m}); '
+            'let q=query("GetReadiness"); '
+            'if s.ok==true && s.state=="ready" && q.ready==true && q.world_hold==false {r} else {-1}}')
     while time.monotonic() < deadline:
         root = int(execute(session, "RunRhai", code=code)["stdout"])
         if root >= 0:
@@ -59,18 +63,38 @@ def wait_mounted(session):
     raise RuntimeError("Griffin mission did not mount and start")
 
 
+def wait_descent_route(session):
+    # The route preview is a transient USD transaction. Mission readiness and
+    # footprint publication can precede its projection into the live entities.
+    code = '''
+        let ready=true;
+        for name in ["RoverRampApproach", "RoverRampExit", "RoverTarget1", "RoverTarget2", "BaseSite"] {
+            let path="/Griffin1SurfaceOps/"+name;
+            let id=find_path(path);
+            if id<0 {ready=false;continue;}
+            let p=world_pos3(id);let h=terrain_height(p.x,p.z);
+            let prim=query("QueryUsdPrim",#{path:path,attrs:["lunco:billboard:fadeEnd"]});
+            if h==() || p.y-h<0.049 || prim==()
+                || prim.attrs["lunco:billboard:fadeEnd"]!=griffin_spec::_sysml_attribute("surfaceRouteMarkerFadeEndM") {
+                ready=false;
+            }
+        }
+        ready
+    '''
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        execute(session, "StepSimulation", steps=1)
+        if execute(session, "RunRhai", code=code).get("stdout", "").strip() == "true":
+            return
+        time.sleep(0.1)
+    raise RuntimeError("descent route markers did not project onto the terrain")
+
+
 def headless(port, out, common):
     with ProductionSession(port, log_path=out / "headless.log", extra_args=common) as session:
         root = wait_mounted(session)
         execute(session, "SetTimeTransport", playing=True)
         wait_landed(session)
-        target = int(execute(session, "RunRhai", code='find_path("/Griffin1SurfaceOps/LandingTarget")')["stdout"])
-        # Read the driver directly through the API, outside any Rhai execution.
-        health = execute(session, "ScriptInspect", target=target)
-        if not (health.get("scripted") and health.get("status", {}).get("ok")
-                and health.get("state", {}).get("rendered") is False):
-            raise RuntimeError(f"headless presentation owner is unhealthy: {health}")
-        (out / "headless-owner.json").write_text(json.dumps(health, indent=2))
         gate(session, root, headless=True)
 
 
@@ -99,7 +123,9 @@ def main():
         root = wait_mounted(session)
         execute(session, "StepSimulation", hold=True)
         camera = int(execute(session, "RunRhai", code='find_path("/Griffin1SurfaceOps/Avatar")')["stdout"])
+        wait_descent_route(session)
         gate(session, root)
+        execute(session, "SetUserCamera", name="/Griffin1SurfaceOps/Avatar")
         execute(session, "SetCameraLookAt", camera=camera, eye=[25, 32, -40], target=[3, 15, 0])
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:

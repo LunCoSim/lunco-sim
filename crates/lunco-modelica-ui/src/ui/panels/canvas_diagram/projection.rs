@@ -13,6 +13,7 @@ use lunco_canvas::{
     Edge as CanvasEdge, Node as CanvasNode, NodeId as CanvasNodeId, Port as CanvasPort,
     PortId as CanvasPortId, PortRef, Pos as CanvasPos, Rect as CanvasRect, Scene,
 };
+use lunco_status_core::status_bus::BusyHandle;
 
 use lunco_modelica_index::visual_diagram::{DiagramNodeId, VisualDiagram};
 
@@ -37,6 +38,51 @@ pub(super) fn target_unit_instance(
 pub struct ProjectedScene {
     pub scene: Scene,
     pub target_unit_instance: Option<String>,
+}
+
+/// Outcome of projection preparation after resolving the current source graph.
+pub enum ProjectionOutcome {
+    /// The immutable canvas scene is ready to commit.
+    Ready(ProjectedScene),
+    /// Projection awaits these source roots; their owner will notify the panel
+    /// when their state changes so it can retry or display a terminal failure.
+    WaitingForSourceRoots(Vec<String>),
+}
+
+/// Keeps a document visibly loading while source roots needed by projection
+/// finish through their owner lifecycle.
+pub struct ProjectionDependencyWait {
+    pub doc: lunco_doc::DocumentId,
+    pub generation: u64,
+    pub target: Option<String>,
+    pub source_hash: u64,
+    pub roots: Vec<String>,
+    pub started_at: web_time::Instant,
+    pub deadline: std::time::Duration,
+    _busy: BusyHandle,
+}
+
+impl ProjectionDependencyWait {
+    pub(super) fn new(
+        doc: lunco_doc::DocumentId,
+        generation: u64,
+        target: Option<String>,
+        source_hash: u64,
+        roots: Vec<String>,
+        deadline: std::time::Duration,
+        busy: BusyHandle,
+    ) -> Self {
+        Self {
+            doc,
+            generation,
+            target,
+            source_hash,
+            roots,
+            started_at: web_time::Instant::now(),
+            deadline,
+            _busy: busy,
+        }
+    }
 }
 
 pub(super) fn project_scene(
@@ -534,7 +580,7 @@ pub struct ProjectionTask {
     /// [`lunco_status_core::tracked_task::spawn_tracked_cancellable`], so a
     /// `StatusBus` `BusyHandle` lives inside the future and clears the
     /// bus entry on completion, panic, supersede, or drop.
-    pub task: lunco_status_core::tracked_task::TrackedTask<Result<ProjectedScene, String>>,
+    pub task: lunco_status_core::tracked_task::TrackedTask<Result<ProjectionOutcome, String>>,
     /// Projection-relevant source hash captured at spawn time.
     /// Stashed onto `CanvasDocState::last_seen_source_hash` when the
     /// task completes — used by the next gen-bump check to skip
