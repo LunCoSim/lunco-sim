@@ -41,7 +41,6 @@ model RCSJet
   parameter Real mixture_ratio = 2.6 "Assumed feed O/F ratio; actual split is owned by the bank";
   parameter Real stoichiometric_mixture_ratio = 2.6 "Estimated chemistry reference O/F";
   output Real envelope_radius_m;
-  output Real core_envelope_radius_m;
   output Real envelope_length_m;
   output Real envelope_center_y_m;
   output Real color_r;
@@ -109,7 +108,6 @@ equation
   activity = max(0.0, min(1.0, thrust_n / max(minimum_isp_g0, f_nom_n)));
   exhaust_velocity_mps = max(0.0, isp_sec) * max(0.0, g0);
   {envelope_radius_m,
-    core_envelope_radius_m,
     envelope_length_m,
     envelope_center_y_m,
     color_r,

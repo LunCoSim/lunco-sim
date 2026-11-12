@@ -141,7 +141,7 @@ has one visual nozzle per engine, set
 thrust and flow aggregate; supply each nozzle's own exit radius and area. The
 photometry model divides the extensive cluster values before deriving the
 per-nozzle momentum flux, exit pressure, and light output. Connect the same
-per-nozzle results to one fixed flame pair and one light at each nozzle. Source
+per-nozzle results to one volume and one light at each nozzle. Source
 the count from the Twin's typed engine-instance configuration and verify the
 authored model parameter against it. Do not send the undivided cluster light to
 every nozzle or calculate per-engine plume state in Rhai.
@@ -206,8 +206,10 @@ deferral with a known migration path, not the absence of a standard.
 
 - **A custom additive shader must return integrated emission.** Bevy's Add
   material shares `BLEND_PREMULTIPLIED_ALPHA` with premultiplied blending.
-  For both optically thin plume layers, return integrated RGB and zero alpha.
-  Their energy fractions must sum to one.
+  For an optically thin plume, return integrated RGB and zero alpha.
+  The normalized broad/core profiles partition one radiative estimate through
+  `core_fraction`. Keep `seed` stable in authored USD and `steps` as a total ray
+  budget. The stock passive model lives at `/DescentLander/PlumePhotometry`.
   Dividing the additive RGB by coverage leaves a bright hard edge as density
   approaches zero. Check both material modes in a windowed burn and shutdown,
   including an oblique view and a small RCS nozzle.
@@ -298,3 +300,22 @@ deferral with a known migration path, not the absence of a standard.
 - ❌ Reading a SENSOR to drive a physical part's visual. A strut's glow follows
   its own reaction force, not an altimeter that sits 3.3 m away; see
   [`compose-multidomain-twin`](../compose-multidomain-twin/SKILL.md).
+
+For hot metal, interpolate physical temperature before calling the shared
+`blackbody_radiance` mapping. Regenerate/check its coefficients with
+`scripts/render/generate_blackbody_radiance.py`; the physical CIE reference stays
+at that owner. Run `scripts/api/test_plume_field_contract.py --output <dir>` for
+GPU radiance, radial/support/phase and ray-budget checks with a red control, then
+the depth fixture and production wall warm-up/shutdown/cooling gates. Never gate
+stored thermal emission on current throttle.
+
+For constant optical parameters, author the bound `Shader.inputs:*` owner.
+Unconnected scalar inputs on a Gprim are not material overrides. Connected
+Gprim shader ports are for live producers. Check the published runtime material
+port against USD when accepting a per-emitter constant such as `seed`.
+
+For a volume on an MSAA camera, avoid a `sample_index` input that duplicates the
+whole integration. `plume.wesl` shares its centre ray, reads covered depth exits,
+and averages segment visibility. Validate partial opaque coverage and inside
+cameras; do not replace the depth texture with a nearest-only resolve. The
+wrapped cubic noise lattice avoids evaluating two complete fields per octave.

@@ -7,7 +7,7 @@ fn simulation_dependencies(me, ctx) {
         modelica_entities: [
             find_path("/LanderPlumeActivity/Lander"),
             find_path("/LanderPlumeActivity/Lander/MainPropulsion"),
-            find_path("/LanderPlumeActivity/Lander/FlameCore/Photometry"),
+            find_path("/LanderPlumeActivity/Lander/PlumePhotometry"),
             find_path("/LanderPlumeActivity/Lander/AttitudePropulsion"),
         ],
         entity_reads: [find_path("/LanderPlumeActivity/Lander/Flame")],
@@ -74,7 +74,7 @@ fn print_metrics(s) {
 fn on_start(me, ctx) {
     this.lander = find_path("/LanderPlumeActivity/Lander");
     this.main = find_path("/LanderPlumeActivity/Lander/MainPropulsion");
-    this.photometry = find_path("/LanderPlumeActivity/Lander/FlameCore/Photometry");
+    this.photometry = find_path("/LanderPlumeActivity/Lander/PlumePhotometry");
     this.rcs = find_path("/LanderPlumeActivity/Lander/AttitudePropulsion");
     this.flame = find_path("/LanderPlumeActivity/Lander/Flame");
     this.done = false;

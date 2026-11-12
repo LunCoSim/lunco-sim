@@ -453,3 +453,15 @@ preview fill/key ratio. The focused production gate is
 `lunco://scenarios/tests/native_light_schema_defaults.rhai`, attached through
 `RunScenarioAsset` to the settled replacement fixture; its negative input must
 produce a terminal command rejection without changing the document.
+
+## Engine volumes and thermal metal
+
+Read `docs/architecture/propulsion-plume.md`. The plume has one bound and one
+additive material per emitter; `steps` limits the entire ray. Preserve both
+normalized radial components, simulation-clock phase, stable authored seeds and
+opaque-depth clipping. Native GPU field coverage is in
+`scripts/api/test_plume_field_contract.py`; use its red control as well as green.
+Hot nozzle metal uses the shared generated Planck/CIE approximation after
+interpolating temperature. Check its generator and the production thermal gate;
+wall cooling continues after delivered thrust reaches zero. Measure actual
+engine close-ups separately from whole-scene FPS.

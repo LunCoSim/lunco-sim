@@ -15,15 +15,22 @@ import bevy_pbr::render::utils::rand_u;
 
 
 
-fn hash13(p: vec3<f32>) -> f32 {
-    // Callers supply floor(p) plus integer corner offsets. Hash the integer
-    // identity so neighbouring cells obtain exactly the same shared corner,
-    // independent of floating-point contraction/reassociation. A float fract-dot
-    // hash magnifies rounding at kilometre-scale grain coordinates into seams.
-    let cell = bitcast<vec3<u32>>(vec3<i32>(p));
-    var state = (cell.x * 1597334677u) ^ (cell.y * 3812015801u) ^ (cell.z * 2798796415u);
+// Split the corner identity from the PCG step so a lattice caller can reuse
+// the six axis identities across its eight corners without changing any bits.
+fn hash_axes(p: vec3<f32>) -> vec3<u32> {
+    return bitcast<vec3<u32>>(vec3<i32>(p))*vec3<u32>(1597334677u,3812015801u,2798796415u);
+}
+
+fn hash_mixed(mixed: u32) -> f32 {
+    var state=mixed;
     // The upper 24 bits convert exactly to f32 and keep the value below one.
     return f32(rand_u(&state) >> 8u) * (1.0 / 16777216.0);
+}
+
+fn hash13(p: vec3<f32>) -> f32 {
+    // Integer lattice identities remain independent of float contraction.
+    let axes=hash_axes(p);
+    return hash_mixed(axes.x^axes.y^axes.z);
 }
 
 fn vnoise(p: vec3<f32>) -> f32 {

@@ -6,16 +6,11 @@ fn wires() {
     let result = [
         #{child:"Flame", input:"throttle", output:"render_throttle"},
         #{child:"Flame", input:"plume_length_fraction", output:"visual_length_fraction"},
-        #{child:"FlameCore", input:"throttle", output:"render_throttle"},
-        #{child:"FlameCore", input:"plume_length_fraction", output:"visual_length_fraction"},
         #{child:"PlumeLight", input:"light_intensity", output:"intensity"},
         #{child:"PlumeLight", input:"light_radius", output:"radius"}
         ,#{child:"Flame", input:"fuel_color_r", output:"color_r"}
         ,#{child:"Flame", input:"fuel_color_g", output:"color_g"}
         ,#{child:"Flame", input:"fuel_color_b", output:"color_b"}
-        ,#{child:"FlameCore", input:"fuel_color_r", output:"color_r"}
-        ,#{child:"FlameCore", input:"fuel_color_g", output:"color_g"}
-        ,#{child:"FlameCore", input:"fuel_color_b", output:"color_b"}
         ,#{child:"PlumeLight", input:"light_color_r", output:"color_r"}
         ,#{child:"PlumeLight", input:"light_color_g", output:"color_g"}
         ,#{child:"PlumeLight", input:"light_color_b", output:"color_b"}
@@ -23,15 +18,9 @@ fn wires() {
         ,#{child:"Flame", input:"scale_z", output:"envelope_radius_m"}
         ,#{child:"Flame", input:"scale_y", output:"envelope_length_m"}
         ,#{child:"Flame", input:"translation_y", output:"envelope_center_y_m"}
-        ,#{child:"FlameCore", input:"scale_x", output:"core_envelope_radius_m"}
-        ,#{child:"FlameCore", input:"scale_z", output:"core_envelope_radius_m"}
-        ,#{child:"FlameCore", input:"scale_y", output:"envelope_length_m"}
-        ,#{child:"FlameCore", input:"translation_y", output:"envelope_center_y_m"}
     ];
     for input in profile_inputs() {
-        for child in ["Flame","FlameCore"] {
-            result.push(#{child:child,input:input.input,output:input.output});
-        }
+        result.push(#{child:"Flame",input:input.input,output:input.output});
     }
     result
 
@@ -42,7 +31,6 @@ fn connection_ops(edit_target, engine_path, photometry_path, output_names) {
     for spec in [
         #{parent:engine_path,name:"Exhaust"},
         #{parent:engine_path+"/Exhaust",name:"Flame"},
-        #{parent:engine_path+"/Exhaust",name:"FlameCore"},
         #{parent:engine_path+"/Exhaust",name:"PlumeLight"}
     ] {
         ops.push(#{AddPrim:#{edit_target:edit_target,parent_path:spec.parent,
