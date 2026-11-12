@@ -25,6 +25,7 @@ use bevy::prelude::*;
 use bevy::render::material_bind_groups::{MaterialBindGroupAllocators, RenderMaterialBindings};
 use bevy::render::{
     GpuResourceAppExt, Render, RenderApp, RenderStartup, RenderSystems,
+    diagnostic::{DiagnosticsRecorder, RecordDiagnostics},
     erased_render_asset::ErasedRenderAssets,
     mesh::allocator::MeshSlabs,
     render_phase::{
@@ -370,6 +371,7 @@ impl<P: PhaseItem> RenderCommand<P> for DrawProceduralSkybox {
         SRes<ErasedRenderAssets<PreparedMaterial>>,
         SRes<RenderMaterialBindings>,
         SRes<MaterialBindGroupAllocators>,
+        Option<SRes<DiagnosticsRecorder>>,
     );
     type ViewQuery = (
         &'static ProceduralSkyboxViewBindGroup,
@@ -381,7 +383,7 @@ impl<P: PhaseItem> RenderCommand<P> for DrawProceduralSkybox {
         _: &P,
         (view_bind_group, view_uniform_offset): ROQueryItem<'w, '_, Self::ViewQuery>,
         maybe_skybox: Option<ROQueryItem<'w, '_, Self::ItemQuery>>,
-        (prepared_materials, material_bindings, material_allocators): SystemParamItem<
+        (prepared_materials, material_bindings, material_allocators, diagnostics): SystemParamItem<
             'w,
             '_,
             Self::Param,
@@ -419,7 +421,15 @@ impl<P: PhaseItem> RenderCommand<P> for DrawProceduralSkybox {
 
         pass.set_bind_group(0, &view_bind_group.0, &[view_uniform_offset.offset]);
         pass.set_bind_group(1, material_bind_group, &[]);
+        let span = diagnostics.map(|diagnostics| {
+            diagnostics
+                .into_inner()
+                .time_span(pass, "procedural_skybox")
+        });
         pass.draw(0..3, 0..1);
+        if let Some(span) = span {
+            span.end(pass);
+        }
         RenderCommandResult::Success
     }
 }

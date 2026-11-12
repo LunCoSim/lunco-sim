@@ -184,7 +184,7 @@ impl EngineParams {
                     ty: ParamType::Vec3,
                     source: Runtime,
                     prop_fillable: false,
-                    doc: "To-sun direction in world space for scene lighting and terrain shaders.",
+                    doc: "Unit to-sun direction in world space for scene lighting and terrain shaders.",
                 },
                 EngineParam {
                     name: "blueprint_origin",

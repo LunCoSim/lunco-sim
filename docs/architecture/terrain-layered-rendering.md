@@ -133,10 +133,9 @@ nonuniformly scaled mesh.
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
 `hf_size` describes the independent shadow heightfield and must not choose
-material scale. The High profile's Gaussian shadow filter uses normal bias
-4.0, scaled by each cascade's shadow texel size, to keep grazing-angle terrain
-from sampling its own surface inside the filter footprint. Depth bias remains
-0.03 metres.
+material scale. The High profile uses Hardware 2×2 shadow filtering with a
+2.0-texel normal bias and 0.005 m depth bias. The normal offset must cover the
+filter footprint so grazing-angle terrain does not sample its own surface.
 
 ### USD-authored DEM-to-globe continuation
 

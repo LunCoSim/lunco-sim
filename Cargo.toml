@@ -705,11 +705,11 @@ strip = "none"
 openusd = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797eadfdb5e8759cb060b7733b7fc962747e" }
 openusd-schemas = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797eadfdb5e8759cb060b7733b7fc962747e" }
 openusd-build = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797eadfdb5e8759cb060b7733b7fc962747e" }
-# Native WESL, render, light and PBR owners share this published Bevy revision.
-bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "65dd8f4e86383c19128a33618a6a8bfc3427fd3a" }
-bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "65dd8f4e86383c19128a33618a6a8bfc3427fd3a" }
-bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "65dd8f4e86383c19128a33618a6a8bfc3427fd3a" }
-bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "65dd8f4e86383c19128a33618a6a8bfc3427fd3a" }
+# Native WESL, render, light and PBR owners share the LunCoSim receiver-culling revision.
+bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f074587862e03bcd3e0b79ecc6" }
+bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f074587862e03bcd3e0b79ecc6" }
+bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f074587862e03bcd3e0b79ecc6" }
+bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f074587862e03bcd3e0b79ecc6" }
 # Pinned upstream source with the approved public path-tracing ordering hook.
 # See third_party/bevy_solari/VENDOR.md for identity and the exact patch.
 bevy_solari = { path = "third_party/bevy_solari" }
