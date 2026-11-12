@@ -103,7 +103,7 @@ fn unregister_twin_root(
 ///
 /// | Scheme | Resolves to | Notes |
 /// |---|---|---|
-/// | `lunco://` | the runtime `assets/` root, its packed cache, then the shared cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
+/// | `lunco://` | the runtime `assets/` root, then the shared `.lunco/cache` | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
 /// | `twin://<name>/…` | open Twin roots | Twin scenes AND downloaded scenarios — native fs + web OPFS, via `lunco_storage` |
 ///
 /// `lunco://` is path-derived and stateless; `twin://` is separate only because

@@ -76,7 +76,7 @@ facts.datasets[0].inputs_ready=true;
 facts.datasets[0].inputs[0].state="ready";
 facts.datasets[0].state = #{kind: "missing", detail: ()};
 let pending=provisioned_view(facts).rows[0];
-checks.push(t_true(pending.status.contains("Downloaded") && pending.action=="process" && pending.action_label=="Prepare", "downloaded sources offer preparation without another transfer"));
+checks.push(t_true(pending.status.contains("Downloaded") && pending.action=="process" && pending.action_label=="Prepare" && pending.rebuild_action=="", "stale or missing output offers preparation without a duplicate rebuild action"));
 checks.push(t_eq(pending.source_url,"https://example.invalid/terrain.tif","the source link preserves the authored address"));
 facts.datasets[0].state = #{kind: "installed", detail: ()};
 let complete = provisioned_view(facts);
@@ -84,6 +84,7 @@ checks.push(t_true(complete.visible && complete.rows.len() == 1
     && complete.title == "Data ready" && complete.actions[0].action == "dismiss",
     "completed downloads retain an explicit completion view"));
 checks.push(t_true(complete.rows[0].stages_display=="none" && complete.rows[0].min_height=="80px","ready rows use compact summaries"));
+checks.push(t_eq(complete.rows[0].rebuild_action,"rebuild","only an installed processed artifact offers forced rebuild"));
 facts.simulation=#{pending:[],world_hold:false,blockers:[],playing:false,fault:()};
 let paused=provisioned_view(facts);
 checks.push(t_true(paused.simulation_status=="Simulation paused" && paused.actions[0].action=="dismiss","completion preserves intentional pause and never starts transport"));

@@ -55,7 +55,7 @@ schedule ordering encodes a data dependency. Those look cacheable and are not
 
 | Primitive | Where | What it gives us |
 |---|---|---|
-| Per-platform cache root | `lunco-assets-core/src/lib.rs` `cache_dir()` | `~/.cache/lunco` (Linux) / `~/Library/Caches/lunco` (mac) / `%LOCALAPPDATA%\lunco` (win), `LUNCOSIM_CACHE` override. wasm returns nominal (no FS). |
+| Shared asset cache root | `lunco-assets-core/src/lib.rs` `cache_dir()` | `~/.lunco/cache`, `LUNCOSIM_CACHE` override. wasm returns a nominal path (no filesystem). Twin-owned datasets use `<twin>/.cache`. |
 | Named cache subdirs | `lunco-assets-core` `cache_subdir`, `textures_dir`, `source_library_root_path`, … | An established taxonomy under the root. |
 | **Content-addressed disk bake (reference impl)** | `lunco-terrain-surface/src/derived_layers.rs:110` `bake_or_load` | FNV-1a over params + **every height sample** → `<cache_dir>/terrain/derived/<key>/`, load-if-present else bake+write, `CACHE_FORMAT_VERSION` invalidation. **This is the pattern to replicate everywhere.** |
 | In-memory async dedup | **The ECS idiom** — a `Task` *Component* + `Without<BakeTask>` in the spawning query (`lunco-environment/src/horizon.rs:274`, `terrain-surface/src/derived_layers.rs:96`, …) | Entity-keyed load with in-flight dedup **for free** — the query filter *is* the pending set. |

@@ -183,8 +183,7 @@ contract; no tutorial script installs the handoff.
 
 ## Where files live (cache resolution)
 
-- **Shared cache** — the OS-global cache (`~/.cache/lunco` on Linux,
-  `~/Library/Caches/lunco` on macOS, `%LOCALAPPDATA%\\lunco` on Windows).
+- **Shared cache** — `~/.lunco/cache` by default on native platforms.
   `LUNCOSIM_CACHE` remains an explicit CI/custom-install override. Every
   worktree and Twin therefore shares one pool of regenerable data (source libraries,
   textures, ephemeris, downloaded sources).

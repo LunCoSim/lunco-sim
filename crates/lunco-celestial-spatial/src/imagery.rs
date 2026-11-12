@@ -20,9 +20,9 @@
 //!
 //! - downloaded now — the registry flips to `Installed` and the next frame binds
 //! - cached from an earlier run — installed at startup, bound on the first frame
-//! - shipped inside a package (`assets/.cache/textures/earth.png`) — likewise
-//!   installed, because the registry probes every read root, not just the one it
-//!   would have downloaded into
+//! - shipped inside a package (`assets/textures/earth.png`) — likewise
+//!   installed, because the registry probes the authored/package root as well
+//!   as the global cache
 //!
 //! Without an installed or authored raster, a body renders its authored base
 //! colour (ocean blue, regolith grey). That is the complete fallback appearance;
@@ -473,9 +473,9 @@ pub(crate) fn bind_dataset_body_imagery(
             continue;
         }
 
-        // The URI, not the path: `lunco://` searches the packed cache and the
-        // shared pool in turn, so this one string resolves the same whether the
-        // file shipped with the build or was downloaded a moment ago.
+        // The URI, not the path: `lunco://` searches packaged assets and the
+        // shared pool, so this one string resolves whether the file shipped
+        // with the build or was downloaded a moment ago.
         let path = match lunco_assets_core::asset_path::load_asset_path(
             &entry.artifact_uri(),
             None,

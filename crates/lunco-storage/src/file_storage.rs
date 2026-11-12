@@ -141,6 +141,29 @@ impl FileStorage {
         Self::default()
     }
 
+    /// Merge a native directory tree into a destination without replacing
+    /// existing entries or removing the source tree.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn copy_directory_tree_missing_sync(
+        &self,
+        source: &std::path::Path,
+        destination: &std::path::Path,
+    ) -> StorageResult<()> {
+        let source = std::fs::canonicalize(source)?;
+        if !std::fs::metadata(&source)?.is_dir() {
+            return Err(StorageError::Unsupported(format!(
+                "directory-tree source is not a directory: {}",
+                source.display()
+            )));
+        }
+        self.ensure_directory_sync(&StorageHandle::File(destination.to_path_buf()))?;
+        let destination = std::fs::canonicalize(destination)?;
+        if source == destination {
+            return Ok(());
+        }
+        copy_directory_tree_missing(self, &source, &destination)
+    }
+
     /// Serialize cooperating native cache writers across threads and processes.
     /// Call only on a worker thread, after heavy encoding/preparation completes.
     /// Publication, bounded enumeration and deletion use the existing Storage API.
@@ -634,6 +657,99 @@ impl Storage for FileStorage {
             StorageHandle::Memory(_) => true,
             _ => false,
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn copy_directory_tree_missing(
+    storage: &FileStorage,
+    source: &std::path::Path,
+    destination: &std::path::Path,
+) -> StorageResult<()> {
+    match native_entry_kind(source, false)? {
+        StorageEntryKind::Directory => {
+            match native_entry_kind(destination, false) {
+                Ok(StorageEntryKind::Directory) => {}
+                Ok(_) => return Ok(()),
+                Err(StorageError::NotFound) => {
+                    storage
+                        .ensure_directory_sync(&StorageHandle::File(destination.to_path_buf()))?;
+                }
+                Err(error) => return Err(error),
+            }
+            let mut entries = std::fs::read_dir(source)?.collect::<Result<Vec<_>, _>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                copy_directory_tree_missing(
+                    storage,
+                    &entry.path(),
+                    &destination.join(entry.file_name()),
+                )?;
+            }
+            Ok(())
+        }
+        StorageEntryKind::Symlink => {
+            if path_present(destination)? {
+                return Ok(());
+            }
+            if let Some(parent) = destination.parent() {
+                storage.ensure_directory_sync(&StorageHandle::File(parent.to_path_buf()))?;
+            }
+            let target = std::fs::read_link(source)?;
+            #[cfg(unix)]
+            let result = std::os::unix::fs::symlink(target, destination);
+            #[cfg(windows)]
+            let result = if std::fs::metadata(source).is_ok_and(|metadata| metadata.is_dir()) {
+                std::os::windows::fs::symlink_dir(target, destination)
+            } else {
+                std::os::windows::fs::symlink_file(target, destination)
+            };
+            #[cfg(not(any(unix, windows)))]
+            let result = Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "directory-tree symlinks are unsupported on this platform",
+            ));
+            match result {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+                Err(error) => Err(StorageError::Io(error)),
+            }
+        }
+        StorageEntryKind::File => {
+            if path_present(destination)? {
+                return Ok(());
+            }
+            if let Some(parent) = destination.parent() {
+                storage.ensure_directory_sync(&StorageHandle::File(parent.to_path_buf()))?;
+            }
+            match std::fs::hard_link(source, destination) {
+                Ok(()) => Ok(()),
+                Err(link_error) => {
+                    if path_present(destination)? {
+                        return Ok(());
+                    }
+                    std::fs::copy(source, destination)
+                        .map(|_| ())
+                        .map_err(|copy_error| {
+                            StorageError::Io(std::io::Error::new(
+                                copy_error.kind(),
+                                format!(
+                                    "hard-link failed ({link_error}); directory-tree copy failed ({copy_error})"
+                                ),
+                            ))
+                        })
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn path_present(path: &std::path::Path) -> StorageResult<bool> {
+    match native_entry_kind(path, false) {
+        Ok(_) => Ok(true),
+        Err(StorageError::NotFound) => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -1239,5 +1355,42 @@ mod tests {
             s.write(&file, b"#usda 1.0\n").await.unwrap();
             assert_eq!(s.entry_kind(&file).await.unwrap(), StorageEntryKind::File);
         });
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn directory_tree_import_merges_missing_entries_and_preserves_the_source() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root.path().join("legacy");
+        let current = root.path().join("current");
+        std::fs::create_dir_all(legacy.join("textures")).unwrap();
+        std::fs::write(legacy.join("textures/moon.png"), b"legacy moon").unwrap();
+        std::fs::write(legacy.join("textures/earth.png"), b"legacy earth").unwrap();
+        std::fs::create_dir_all(current.join("textures")).unwrap();
+        std::fs::write(current.join("textures/moon.png"), b"current moon").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("moon.png", legacy.join("textures/moon-link.png")).unwrap();
+
+        FileStorage::new()
+            .copy_directory_tree_missing_sync(&legacy, &current)
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(current.join("textures/moon.png")).unwrap(),
+            b"current moon"
+        );
+        assert_eq!(
+            std::fs::read(current.join("textures/earth.png")).unwrap(),
+            b"legacy earth"
+        );
+        assert_eq!(
+            std::fs::read(legacy.join("textures/moon.png")).unwrap(),
+            b"legacy moon"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::read_link(current.join("textures/moon-link.png")).unwrap(),
+            std::path::PathBuf::from("moon.png")
+        );
     }
 }

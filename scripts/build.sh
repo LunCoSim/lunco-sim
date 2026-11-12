@@ -107,12 +107,12 @@ case "$TARGET" in
         # target/ binary keeps its symbols for local debugging.
         if command -v strip >/dev/null 2>&1; then strip "$DIST/luncosim" 2>/dev/null || true; fi
         cp -a "$PROJECT_DIR/assets" "$DIST/assets"          # ~330 KB, trivial copy
-        # `cp` cannot exclude, so prune afterwards: `.lunco/` (runtime overlay)
-        # and `history/` (edit journal) are per-session state a dev run writes
-        # into `assets/`, which is itself an open twin. Shipping them layers
-        # someone's recorded session over the authored scene on every install.
-        # The rule is `lunco_twin::is_runtime_state`.
-        find "$DIST/assets" -type d \( -name '.lunco' -o -name 'history' \) -prune -exec rm -rf {} + 2>/dev/null || true
+        # `cp` cannot exclude, so prune runtime state and Twin-local caches.
+        # Source `assets/` can be an open Twin, and its `.cache/` must never
+        # become part of the shipped engine asset library.
+        find "$DIST/assets" -type d \
+            \( -name '.lunco' -o -name 'history' -o -name '.cache' \) -prune \
+            -exec rm -rf {} +
         cp -f "$SCRIPT_DIR/deploy/"* "$DIST/deploy/"
         cp -f "$PROJECT_DIR/crates/lunco-networking/DEPLOY.md" "$DIST/DEPLOY.md"
         success "server bundle: $DIST ($(du -sh "$DIST/luncosim" | cut -f1) binary + assets + deploy kit)"

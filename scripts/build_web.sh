@@ -555,18 +555,6 @@ generate_bindings() {
         info "Copied browser Rhai tools → $dist_dir/tools/"
     fi
 
-    # Bundle-declared runtime artifacts are staged by lunco-assets. The
-    # manifest owns the delivered path and target, so a new required asset
-    # cannot be silently omitted by a second hardcoded shell list.
-    local web_cache
-    web_cache="$(resolve_cache_dir)"
-    mkdir -p "$web_cache"
-    LUNCOSIM_CACHE="$web_cache" cargo run -q -p lunco-assets -- download --bundle "${binary}-web"
-    cargo run -q -p lunco-assets -- stage \
-        --binary "${binary}-web" \
-        --cache "$web_cache" \
-        --destination "$dist_dir"
-
     # Both applications load authored scenes, Modelica sources, and catalogs
     # via the Bevy AssetServer over HTTP. Copy the workspace `assets/` tree
     # next to the wasm so every runtime asset is same-origin.
@@ -576,8 +564,23 @@ generate_bindings() {
         # state that a dev run writes into `assets/`, which is itself an open twin.
         # Excluded so a bundle never ships someone's recorded session on top of the
         # authored scene — the rule is `lunco_twin::is_runtime_state`.
-        rsync -a --delete --exclude='.lunco/' --exclude='history/' \
+        rsync -a --delete --exclude='.lunco/' --exclude='history/' --exclude='.cache/' \
             "$PROJECT_DIR/assets/" "$dist_dir/assets/"
+        find "$dist_dir/assets" -type d \
+            \( -name '.lunco' -o -name 'history' -o -name '.cache' \) -prune \
+            -exec rm -rf {} +
+
+        # Bundle-declared files are ordinary engine assets. Stage them after
+        # copying authored assets so the final tree contains one copy at its
+        # logical `lunco://` path.
+        local web_cache
+        web_cache="$(resolve_cache_dir)"
+        mkdir -p "$web_cache" "$dist_dir/assets"
+        LUNCOSIM_CACHE="$web_cache" cargo run -q -p lunco-assets -- download --bundle "${binary}-web"
+        cargo run -q -p lunco-assets -- stage \
+            --binary "${binary}-web" \
+            --cache "$web_cache" \
+            --destination "$dist_dir/assets"
 
         # The browser discovers source assets from the staged bundle manifest.
         # Its generator uses lunco_assets_runtime::discovery::scan_library,

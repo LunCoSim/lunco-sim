@@ -119,14 +119,17 @@ are downloaded and staged by the native and web packaging scripts.
 
 ## Cache Directory
 
-All worktrees and Twins share the OS-global cache returned by `cache_dir()`:
+All worktrees and Twins share the global cache returned by `cache_dir()`:
 
 ```
-~/.cache/lunco/            # Linux; OS equivalent on macOS/Windows
+~/.lunco/cache/
 ├── textures/               (downloaded and processed)
 ├── library/                (extracted source library)
 └── processed/              (reproducible generated outputs)
 ```
+
+Twin-owned downloads and derived products live under `<twin>/.cache`; engine
+datasets and explicit `shared = true` Twin datasets live in the shared cache.
 
 The user configuration path is owned by `lunco-settings`; it is not another
 asset-cache path. `settings.json` contains the shared `DownloadSettings`

@@ -107,6 +107,13 @@ the Rust owner still rejects attempts to reuse a missing or stale key. Explicit
 through the existing atomic transaction, keeping the last good artifact
 visible until a replacement succeeds.
 
+For a simple processed dataset with its declared source available, registry
+admission checks `.bakekey` against the current source bytes and process
+declaration. A mismatch reports the artifact as missing; with its inputs
+available, the ordinary **Prepare** action dispatches `ProcessDataset` and
+recomputes it. **Rebuild** remains the explicit forced action for an installed
+artifact.
+
 The same hook is used for the compiled Modelica artifact cache. A `.mo` edit or
 changed declared source dependency produces a new content key and recompiles;
 the Twin policy can also force regeneration of an exact compiled hit. Modelica

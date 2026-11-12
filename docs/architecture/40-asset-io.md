@@ -96,12 +96,11 @@ plaintext fixtures under both `assets/http-path-fixture/default` and
 | `payload%20one.txt` | `literal-percent20` |
 | `payload one.txt` | `literal-space` |
 
-Create only `assets/http-path-fixture/library/.cache/cache # % 月.txt` with
-payload `packed-cache`; leave `missing # % 月.txt` absent in every root. The
-async test exercises actual default/library reader builders, packed-cache
-fallback, distinct decoded filenames, typed missing-file errors and the worker
-fetch transport. These temporary transport fixtures are neither Twin assets
-nor authored USD; browser seam evidence is separate from full app acceptance.
+Leave `missing # % 月.txt` absent in both roots. The async test exercises the
+actual default/library reader builders, distinct decoded filenames, typed
+missing-file errors and the worker fetch transport. These temporary transport
+fixtures are neither Twin assets nor authored USD; browser seam evidence is
+separate from full app acceptance.
 
 USD composition classifies binary arcs by the full logical filename extension.
 Literal `#`, `?` and `%` remain filename data; only explicit HTTP URLs use their

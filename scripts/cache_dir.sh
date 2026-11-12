@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Shared cache-directory resolution for repository build and integration scripts.
 # Keep this in lockstep with lunco_assets::cache_dir(): explicit override first,
-# then the conventional machine-global cache. A worktree-local cache is never
-# an implicit source.
+# then the user's shared `.lunco/cache` directory. Twin-local `.cache`
+# directories are never implicit sources for build and integration scripts.
 
 resolve_cache_dir() {
     if [[ -n "${LUNCOSIM_CACHE:-}" ]]; then
@@ -10,11 +10,5 @@ resolve_cache_dir() {
         return
     fi
 
-    case "$(uname -s)" in
-        Darwin*) printf '%s\n' "${HOME:?}/Library/Caches/lunco" ;;
-        MINGW*|MSYS*|CYGWIN*)
-            printf '%s\n' "${LOCALAPPDATA:-${HOME:?}/AppData/Local}/lunco"
-            ;;
-        *) printf '%s\n' "${XDG_CACHE_HOME:-${HOME:?}/.cache}/lunco" ;;
-    esac
+    printf '%s\n' "${HOME:?}/.lunco/cache"
 }

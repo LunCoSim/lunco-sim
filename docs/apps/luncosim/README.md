@@ -268,7 +268,7 @@ preset:
 
 ```bash
 target/debug/luncosim --api 4107 --offscreen --render-quality high \
-  --record-offline ~/.cache/lunco/summer-space-school/high-quality \
+  --record-offline ~/.lunco/cache/summer-space-school/high-quality \
   --record-frames 3 --record-size 1280x720 \
   --scene /path/to/space-school-twin/sim/scenes/traverse.usda
 ```

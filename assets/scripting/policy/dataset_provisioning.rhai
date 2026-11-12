@@ -96,7 +96,7 @@ fn dataset_preparation_row(dataset,scope) {
         row.action_label=provision_choice(can_prepare,"Retry preparation","Retry download");
     }
     if state=="cancelled" {row.status="Cancelled";row.action_label=provision_choice(can_prepare,"Resume preparation","Resume download");}
-    if can_prepare && !["queued","downloading","processing","cancelling"].contains(state) {row.rebuild_action="rebuild";row.rebuild_label="Rebuild";}
+    if can_prepare && state=="installed" {row.rebuild_action="rebuild";row.rebuild_label="Rebuild";}
     if row.detail!="" {row.min_height="180px";}
     row
 }

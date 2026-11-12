@@ -113,7 +113,7 @@ impl DatasetScope {
     pub fn read_roots(&self) -> std::io::Result<Vec<PathBuf>> {
         Ok(match self {
             Self::Engine => {
-                lunco_assets_core::asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
+                lunco_assets_core::engine_asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
             }
             Self::Twin { root, .. } => lunco_assets_core::asset_read_roots(root),
         })
@@ -319,32 +319,42 @@ impl DatasetEntry {
             else {
                 return Ok(None);
             };
-            if !artifact_present(&self.spec, &path, None) {
-                return Ok(None);
-            }
-            if let Some(process) = &self.spec.process {
-                if process.pipeline.is_some() {
-                    let cache = self.scope.cache_root(self.spec.shared);
-                    let owner = match &self.scope {
-                        DatasetScope::Twin { root, .. } => Some(root.as_path()),
-                        DatasetScope::Engine => None,
-                    };
-                    let source = match crate::source_read_path(&self.spec, &cache, &self.read_roots)
-                    {
-                        Ok(source) => source,
+            let process = self.spec.process.as_ref();
+            let cache = process.map(|_| self.scope.cache_root(self.spec.shared));
+            let owner = match &self.scope {
+                DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                DatasetScope::Engine => None,
+            };
+            let source = match (process, cache.as_deref()) {
+                (Some(_), Some(cache)) => {
+                    match crate::source_read_path(&self.spec, cache, &self.read_roots) {
+                        Ok(source) => Some(source),
                         Err(error)
                             if matches!(
                                 error.kind(),
                                 std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
                             ) =>
                         {
-                            return Ok(None);
+                            None
                         }
                         Err(error) => return Err(error.to_string()),
-                    };
-                    if !crate::pipeline::inputs_current(&path, process, &source, &cache, owner) {
-                        return Ok(None);
                     }
+                }
+                _ => None,
+            };
+            if process.is_some_and(|process| process.pipeline.is_some()) && source.is_none() {
+                return Ok(None);
+            }
+            if !artifact_present(&self.spec, &path, source.as_deref()) {
+                return Ok(None);
+            }
+            if let (Some(process), Some(cache), Some(source)) =
+                (process, cache.as_deref(), source.as_deref())
+            {
+                if process.pipeline.is_some()
+                    && !crate::pipeline::inputs_current(&path, process, source, cache, owner)
+                {
+                    return Ok(None);
                 }
             }
             Ok(Some(path))

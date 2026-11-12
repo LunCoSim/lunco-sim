@@ -67,13 +67,17 @@ if ! id lunco &>/dev/null; then
     info "creating service user 'lunco'"
     useradd --system --home "$PREFIX" --shell /usr/sbin/nologin lunco
 fi
-install -d -o lunco -g lunco -m 0755 "$PREFIX" "$PREFIX/.cache" "$PREFIX/deploy"
+install -d -o lunco -g lunco -m 0755 "$PREFIX" "$PREFIX/.lunco/cache" "$PREFIX/deploy"
 install -d -o lunco -g lunco -m 0750 "$PREFIX/certs"
 
 # ── 3. Binary + assets + deploy kit ──────────────────────────────────────
 info "installing binary + assets → $PREFIX"
 install -o lunco -g lunco -m 0755 "$SRC/luncosim" "$PREFIX/luncosim-server"
-rsync -a --delete "$SRC/assets/" "$PREFIX/assets/"
+rsync -a --delete --exclude='.lunco/' --exclude='history/' --exclude='.cache/' \
+    "$SRC/assets/" "$PREFIX/assets/"
+find "$PREFIX/assets" -type d \
+    \( -name '.lunco' -o -name 'history' -o -name '.cache' \) -prune \
+    -exec rm -rf {} +
 cp -f "$SRC/deploy/"* "$PREFIX/deploy/" 2>/dev/null || true
 [ -f "$SRC/DEPLOY.md" ] && cp -f "$SRC/DEPLOY.md" "$PREFIX/deploy/DEPLOY.md"
 chown -R lunco:lunco "$PREFIX/assets" "$PREFIX/deploy"

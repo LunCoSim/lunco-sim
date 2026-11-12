@@ -294,7 +294,11 @@ fn process_filtered(
             let source = lunco_assets_datasets::source_read_path(
                 entry,
                 &entry_cache_root(entry, twin_root),
-                &lunco_assets_core::asset_read_roots(&owner),
+                &if twin_root.is_some() {
+                    lunco_assets_core::asset_read_roots(&owner)
+                } else {
+                    lunco_assets_core::engine_asset_read_roots(&owner)
+                },
             );
             let source_path = match source {
                 Ok(path) => path,

@@ -268,7 +268,11 @@ pub fn input_paths(
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(lunco_assets_core::assets_dir_abs)?;
-    let roots = lunco_assets_core::asset_read_roots(&root);
+    let roots = if owner.is_some() {
+        lunco_assets_core::asset_read_roots(&root)
+    } else {
+        lunco_assets_core::engine_asset_read_roots(&root)
+    };
     for (id, input) in &config.sources {
         let path = crate::source_read_path(input, cache, &roots)?;
         if !path.is_file() {
@@ -283,7 +287,7 @@ pub fn input_paths(
             let engine_relative = lunco_assets_core::parse_lunco_uri(relative);
             let code_roots = match engine_relative {
                 Some(_) => {
-                    lunco_assets_core::asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
+                    lunco_assets_core::engine_asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
                 }
                 None => roots.clone(),
             };
