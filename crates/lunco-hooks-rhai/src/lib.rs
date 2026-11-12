@@ -300,27 +300,13 @@ pub fn hook_to_dynamic(v: &HookValue) -> Dynamic {
             Dynamic::from_array(arr)
         }
         HookValue::Map(m) => {
-            // Large maps benefit from the standard library's bulk B-tree
-            // construction. Keep the last value for duplicate keys explicitly,
-            // independent of the collection's duplicate-key policy.
-            const BULK_MAP_MIN_ENTRIES: usize = 64;
-            if m.len() >= BULK_MAP_MIN_ENTRIES {
-                let mut entries: Vec<_> = m
+            // Collect large maps directly into Rhai's BTreeMap, preserving the
+            // last value for duplicate keys without a separate entry buffer.
+            const LARGE_MAP_MIN_ENTRIES: usize = 64;
+            if m.len() >= LARGE_MAP_MIN_ENTRIES {
+                let map: rhai::Map = m
                     .iter()
-                    .map(|(key, value)| (key.as_str(), hook_to_dynamic(value)))
-                    .collect();
-                entries.sort_by(|a, b| a.0.cmp(b.0));
-                entries.dedup_by(|later, earlier| {
-                    if later.0 == earlier.0 {
-                        std::mem::swap(&mut later.1, &mut earlier.1);
-                        true
-                    } else {
-                        false
-                    }
-                });
-                let map: rhai::Map = entries
-                    .into_iter()
-                    .map(|(key, value)| (key.into(), value))
+                    .map(|(key, value)| (key.as_str().into(), hook_to_dynamic(value)))
                     .collect();
                 Dynamic::from_map(map)
             } else {

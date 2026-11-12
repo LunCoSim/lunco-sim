@@ -53,8 +53,9 @@ In the opposite direction, `hook_to_dynamic` constructs Rhai's native
 `ImmutableString` directly from borrowed text. Short strings use its inline
 storage without an intermediate owned `String`. Values remain owned by the
 invocation, and nested containers retain their scalar types and map semantics.
-Large maps are sorted and deduplicated before bulk construction of Rhai's map;
-duplicate keys retain the last supplied value. Small maps use direct insertion.
+Large maps collect directly into Rhai's native `BTreeMap`; duplicate keys
+retain the last supplied value without a separate entry buffer. Small maps use
+direct insertion.
 
 ## When behavior should be a hook
 

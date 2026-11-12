@@ -1,60 +1,44 @@
 # Large typed maps at the Rhai hook boundary
 
 Runtime exposure policies receive complete typed facts, including participant
-output maps. `lunco-hooks-rhai` remains the single adapter from `HookValue` to
-Rhai values. It now orders and deduplicates large maps before building the
-native B-tree; repeated keys retain the last value. Small maps retain direct
-insertion. No fact, hook, policy, clock or execution boundary is removed.
+output maps. `lunco-hooks-rhai` remains the single `HookValue`-to-Rhai adapter.
+Small maps use direct insertion. Large maps collect directly into Rhai's native
+`BTreeMap`. The conversion test covers the last-duplicate-wins
+contract, nested values, signed zero, unsigned values, Unicode and empty maps.
 
-Eight alternating baseline/candidate pairs of the existing complete nested-map
-conversion diagnostic give median elapsed times, in milliseconds per 262,144
-entries:
+## Paired Tracy comparison — 2026-11-08
 
-| Map entries | Key order | Baseline | Candidate |
-| ---: | --- | ---: | ---: |
-| 8 | sorted / reverse / permuted | 45.52 / 42.73 / 44.59 | 44.77 / 43.10 / 44.51 |
-| 128 | sorted / reverse / permuted | 69.82 / 51.47 / 62.05 | 50.77 / 53.49 / 59.02 |
-| 2,048 | sorted / reverse / permuted | 98.95 / 59.26 / 87.11 | 54.08 / 55.62 / 68.59 |
+The baseline and candidate ran the same production Griffin `OpenFile` workload:
+Twin `astrobotic-griffin-1`, `scenes/griffin_1_surface_ops.usda`, High quality,
+2560×1440, pointer passthrough, and authored `landing_handoff`. The baseline
+binary SHA256 was
+`8157789e817ca0294e726662747dd172197856f0135192d640c39c5477f657a5`; the
+candidate SHA256 was
+`0f1948c81ff0023aa42aef4ee9af7296d4d8ed453a13068508b0450bbcce4d37`. The
+matching Tracy 0.14.1 collector sampled at 1,000 Hz. The ABBA runs used API / Tracy
+ports 4257 / 8207, 4258 / 8208, 4259 / 8209 and 4260 / 8210, respectively.
 
-This diagnostic uses the test allocator and nested synthetic values. It does not
-establish a production-frame or simulation speedup. The raw paired data and
-executable fingerprints are `target/perf/fps-20261106/hook-map-paired.json`.
-The low-level conversion test passes nested values, signed zero, unsigned values,
-Unicode, empty maps and both small and large duplicate-key cases. Production
-Rhai and Griffin validation are separate from this result.
+The last ten seconds of each capture contained 398 complete
+`exposure_runtime_surface_projection` zones. Their mean and p95 durations were:
 
-The regular production executable `cc75e8c237adbb0104ab29e3311e485d46a584c84a6dad8126425cc8bbcdf946`
-passes the 47-check authored hook-policy gate, including wide-map value and
-negative-case checks, and the separate 13-check UI preparation plus 20-check
-scene gate. Owned API sessions 6266 and 6268 exited and released their ports.
-The build's three existing `lunco-spatial` dead-code warnings are unrelated to
-this adapter.
+| Run | Mean | p95 | Selected CPU samples |
+| --- | ---: | ---: | ---: |
+| Baseline A | 1.129 ms | 2.366 ms | 453 |
+| Direct-map A | 1.058 ms | 2.187 ms | 416 |
+| Direct-map B | 1.035 ms | 2.199 ms | 412 |
+| Baseline B | 1.242 ms | 2.529 ms | 490 |
 
-Uninstrumented High/2560×1440 Griffin cohorts `hook-map-normal-pairs/` and
-`hook-map-normal-confirm/` measure baseline / candidate / candidate / baseline
-/ baseline / candidate mean FPS of 36.16 / 56.37 / 57.58 / 48.72 / 56.96 /
-51.94, respectively. Their p95 frame times are 42.51 / 21.43 / 20.22 / 25.03 /
-20.62 / 23.61 ms. The first baseline overlaps another windowed simulator and
-is not comparable. GPU clocks vary across the remaining runs; the confirmation
-baseline matches earlier candidates, so these data do not establish a causal
-end-to-end FPS gain. Each session reports zero runtime diagnostics, preserves
-all 548 Twin source hashes, and exits through its own API. The 150 FPS goal
-remains unmet.
+Across both runs, the direct-map candidate reduced the mean and p95 projection
+time by about 12% and 10%, and selected CPU samples by about 12%. Native sample
+resolution against each run's exact ELF showed fewer adapter samples in
+`hook_to_dynamic`; `_mi_page_malloc_zero` samples also fell by about 7%. Map
+construction remained visible in both candidates.
 
-The live `hook-map-sizes/` read confirms that the landing scene uses large
-participant maps: MainPropulsion has 3,035 output values, AttitudePropulsion
-2,317, and several others hundreds. This is the same `SimComponent.outputs`
-map consumed by runtime UI facts, not an inference from model variable counts.
+All four runs passed the authored landing handoff, reported zero runtime
+diagnostics, retained the same Twin source snapshot, and exited with their API
+and Tracy ports released. The exact captures, filtered zone events, selected
+samples, native maps and receipts are under `target/perf/tracy-20261108/` in the
+`repeat-abba-*` directories.
 
-The matching Tracy baseline / candidate / baseline captures use the same fixed
-landing pose and playing phase. After excluding the first two and last half
-second of each phase, `exposure_runtime_surface_projection` averages 1.518 /
-1.329 / 2.185 ms per call (380 / 380 / 378 calls); p95 is 3.539 / 2.939 /
-4.524 ms. The paused phases have no calls after their unchanged inputs settle.
-A separate windowed simulator and a headless simulator were active throughout,
-and the baseline drift makes the size of a production improvement uncertain.
-These nested worker spans are not frame times, and Tracy FPS is not acceptance.
-All three captures retain the 60 Hz clock and eight substeps, preserve 548 Twin
-source hashes, report zero diagnostic findings and close their API and Tracy
-ports. Evidence is `hook-map-tracy-{baseline,candidate,baseline2}/` under
-`target/perf/fps-20261106/`; `hook-map-sizes/` records the values inspection.
+This is Tracy-only CPU-zone evidence. It does not establish an FPS result or the
+150 FPS objective, which remains open.
