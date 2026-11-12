@@ -53,6 +53,21 @@ fn verify_pipeline(scope, key, state, artifact_count, step_count) {
     ]);
 }
 
+fn verify_dataset_state(scope, key, state) {
+    let dataset = pipeline_dataset(scope, key);
+    t_report([
+        t_eq(dataset.state.kind, state, "processed asset freshness has the expected lifecycle state"),
+        t_true(dataset.processed, "freshness is checked for manifest-owned processing"),
+    ]);
+}
+
+fn verify_texture_dimensions(width, height, expected_width, expected_height) {
+    t_report([
+        t_eq(width, expected_width, "rebaked texture has the current recipe width"),
+        t_eq(height, expected_height, "rebaked texture has the current recipe height"),
+    ]);
+}
+
 fn verify_pipeline_failure(scope, key, text) {
     let dataset = pipeline_dataset(scope,key);
     t_report([

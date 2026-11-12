@@ -71,7 +71,7 @@ cargo build --bin luncosim --features networking -j"${SYNC_JOBS:-8}" || exit 2
 
 # Cold cache: force a full download so the HTTP bytes plane is exercised (a warm
 # cache fetches nothing). Point BOTH the harness and the launched apps at the SAME
-# cache root — both binaries use the OS-global default unless explicitly
+# cache root — both binaries use the shared `.lunco/cache` default unless explicitly
 # overridden. Wipe ONLY `scenarios/`: nuking the whole
 # root strips fonts/models the app needs (the "cold-cache isolation gotcha").
 CACHE_ROOT="$(resolve_cache_dir)"

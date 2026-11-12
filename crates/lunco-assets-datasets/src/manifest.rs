@@ -210,51 +210,38 @@ impl AssetManifest {
     }
 }
 
-/// Resolve the download destination under the declaration's owning cache.
+/// Select a manifest declaration's cache owner.
+///
+/// `local_cache_root` is the scope's base: the global cache for engine
+/// declarations and the Twin-local cache for Twin declarations. Shared
+/// declarations use the global cache in either scope.
+pub fn dataset_cache_root(local_cache_root: &Path, shared: bool) -> PathBuf {
+    if shared {
+        cache_dir()
+    } else {
+        local_cache_root.to_path_buf()
+    }
+}
+
+/// Resolve a download destination under its owning cache.
+///
+/// `dest_root` is the Twin-local cache root; `None` uses the global engine
+/// cache. A Twin entry marked `shared` also selects the global cache.
 pub fn entry_dest_path(
     entry: &AssetEntry,
     dest_root: Option<&Path>,
 ) -> Result<PathBuf, std::io::Error> {
-    if let Some(dest) = entry.dest.as_deref() {
-        if !lunco_assets_path::is_portable_relative_path(dest) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("asset destination {dest:?} must be a portable relative path"),
-            ));
-        }
-    }
-    let root = if entry.shared {
-        cache_dir()
-    } else {
-        dest_root.map(Path::to_path_buf).unwrap_or_else(cache_dir)
-    };
-    Ok(match entry.dest.as_deref() {
-        Some(destination) => root.join(destination),
-        None => source_pool_path(&root, &entry.url)?,
-    })
+    let local_cache_root = dest_root.map(Path::to_path_buf).unwrap_or_else(cache_dir);
+    let root = dataset_cache_root(&local_cache_root, entry.shared);
+    Ok(root.join(entry_relative_path(entry)?))
 }
 
 /// Select and verify the same raw input that the registered asset reader owns.
 /// Call on the existing preparation worker; checksum verification can read large files.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn source_read_path(
-    entry: &AssetEntry,
-    cache: &Path,
-    roots: &[PathBuf],
-) -> std::io::Result<PathBuf> {
-    let cache = if entry.shared {
-        cache_dir()
-    } else {
-        cache.to_path_buf()
-    };
-    let destination = entry_dest_path(entry, Some(&cache))?;
-    let relative = destination.strip_prefix(&cache).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "source destination is outside its owning cache",
-        )
-    })?;
-    let path = lunco_assets_core::resolve_native_asset(roots, relative, None)?
+pub fn source_read_path(entry: &AssetEntry, roots: &[PathBuf]) -> std::io::Result<PathBuf> {
+    let relative = entry_relative_path(entry)?;
+    let path = lunco_assets_core::resolve_native_asset(roots, &relative, None)?
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -329,6 +316,19 @@ pub fn archive_extension(url: &str) -> Option<&'static str> {
 #[cfg(not(target_arch = "wasm32"))]
 fn is_archive_url(url: &str) -> bool {
     archive_extension(url).is_some()
+}
+
+fn entry_relative_path(entry: &AssetEntry) -> std::io::Result<PathBuf> {
+    match entry.dest.as_deref() {
+        Some(destination) if lunco_assets_path::is_portable_relative_path(destination) => {
+            Ok(PathBuf::from(destination))
+        }
+        Some(destination) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("asset destination {destination:?} must be a portable relative path"),
+        )),
+        None => source_pool_path(Path::new(""), &entry.url),
+    }
 }
 
 /// Check a non-processed destination against its manifest integrity contract.
@@ -563,6 +563,15 @@ mod tests {
                 .parse::<AssetManifest>()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn dataset_cache_root_selects_the_single_shared_or_local_owner() {
+        let tree = tempfile::tempdir().unwrap();
+        let local = lunco_assets_core::twin_cache_dir(tree.path());
+
+        assert_eq!(dataset_cache_root(&local, false), local);
+        assert_eq!(dataset_cache_root(&local, true), cache_dir());
     }
 
     #[test]

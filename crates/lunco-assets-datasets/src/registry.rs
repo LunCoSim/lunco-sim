@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use lunco_core::Command;
 
-use crate::{AssetEntry, AssetManifest, entry_dest_path, process_output_path};
+use crate::{AssetEntry, AssetManifest, dataset_cache_root, entry_dest_path, process_output_path};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{installed_destination_present, processed_output_present};
 
@@ -98,28 +98,24 @@ impl DatasetScope {
         }
     }
 
-    /// Resolve the cache that owns a Twin's download.
-    pub fn twin_cache_root(root: &Path, shared: bool) -> PathBuf {
-        if shared {
-            lunco_assets_core::cache_dir()
-        } else {
-            lunco_assets_core::twin_cache_dir(root)
+    /// Local cache base for this scope before a declaration selects shared storage.
+    pub fn local_cache_root(&self) -> PathBuf {
+        match self {
+            Self::Engine => lunco_assets_core::cache_dir(),
+            Self::Twin { root, .. } => lunco_assets_core::twin_cache_dir(root),
         }
     }
 
     /// Cache that owns the downloaded and derived artifacts.
     pub fn cache_root(&self, shared: bool) -> PathBuf {
-        match self {
-            Self::Engine => lunco_assets_core::cache_dir(),
-            Self::Twin { root, .. } => Self::twin_cache_root(root, shared),
-        }
+        dataset_cache_root(&self.local_cache_root(), shared)
     }
 
     /// Roots searched for a delivered artifact, in precedence order.
     pub fn read_roots(&self) -> std::io::Result<Vec<PathBuf>> {
         Ok(match self {
             Self::Engine => {
-                lunco_assets_core::asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
+                lunco_assets_core::engine_asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
             }
             Self::Twin { root, .. } => lunco_assets_core::asset_read_roots(root),
         })
@@ -245,11 +241,7 @@ impl DatasetEntry {
             .into_iter()
             .map(|(id, spec)| {
                 #[cfg(not(target_arch = "wasm32"))]
-                let state = match crate::source_read_path(
-                    spec,
-                    &self.scope.cache_root(spec.shared),
-                    &self.read_roots,
-                ) {
+                let state = match crate::source_read_path(spec, &self.read_roots) {
                     Ok(_) => DatasetInputState::Ready,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         DatasetInputState::Missing
@@ -325,32 +317,37 @@ impl DatasetEntry {
             else {
                 return Ok(None);
             };
-            if !artifact_present(&self.spec, &path, None) {
+            let process = self.spec.process.as_ref();
+            let owner = match &self.scope {
+                DatasetScope::Twin { root, .. } => Some(root.as_path()),
+                DatasetScope::Engine => None,
+            };
+            let source = match process {
+                Some(_) => match crate::source_read_path(&self.spec, &self.read_roots) {
+                    Ok(source) => Some(source),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                        ) =>
+                    {
+                        None
+                    }
+                    Err(error) => return Err(error.to_string()),
+                },
+                None => None,
+            };
+            if process.is_some_and(|process| process.pipeline.is_some()) && source.is_none() {
                 return Ok(None);
             }
-            if let Some(process) = &self.spec.process {
-                if process.pipeline.is_some() {
-                    let cache = self.scope.cache_root(self.spec.shared);
-                    let owner = match &self.scope {
-                        DatasetScope::Twin { root, .. } => Some(root.as_path()),
-                        DatasetScope::Engine => None,
-                    };
-                    let source = match crate::source_read_path(&self.spec, &cache, &self.read_roots)
-                    {
-                        Ok(source) => source,
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
-                            ) =>
-                        {
-                            return Ok(None);
-                        }
-                        Err(error) => return Err(error.to_string()),
-                    };
-                    if !crate::pipeline::inputs_current(&path, process, &source, &cache, owner) {
-                        return Ok(None);
-                    }
+            if !artifact_present(&self.spec, &path, source.as_deref()) {
+                return Ok(None);
+            }
+            if let (Some(process), Some(source)) = (process, source.as_deref()) {
+                if process.pipeline.is_some()
+                    && !crate::pipeline::inputs_current(&path, process, source, owner)
+                {
+                    return Ok(None);
                 }
             }
             Ok(Some(path))
@@ -527,8 +524,9 @@ impl DatasetRegistry {
                 ));
                 continue;
             }
-            let destination_root = scope.cache_root(spec.shared);
-            let path = match entry_dest_path(&spec, Some(&destination_root)) {
+            let local_cache_root = scope.local_cache_root();
+            let owner_cache_root = scope.cache_root(spec.shared);
+            let path = match entry_dest_path(&spec, Some(&local_cache_root)) {
                 Ok(path) => path,
                 Err(error) => {
                     self.record_failure(format!(
@@ -555,7 +553,7 @@ impl DatasetRegistry {
                 };
                 let output_path = match process_output_path(
                     process,
-                    Some(&scope.cache_root(spec.shared)),
+                    Some(&owner_cache_root),
                     twin_root,
                 ) {
                     Ok(path) => path,
@@ -582,7 +580,7 @@ impl DatasetRegistry {
                     .and_then(|process| process.pipeline.as_ref())
                 {
                     for source in pipeline.sources.values() {
-                        let input = entry_dest_path(source, Some(&destination_root))
+                        let input = entry_dest_path(source, Some(&local_cache_root))
                             .map_err(lunco_storage::StorageError::Io)?;
                         sources.push((
                             input.clone(),

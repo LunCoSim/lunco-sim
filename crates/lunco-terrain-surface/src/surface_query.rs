@@ -484,13 +484,14 @@ impl GridSurfaceQuery<'_, '_> {
     /// terrain's colliders exist only in a streamed ring around dynamic bodies
     /// and are band-limited below the drawn micro-relief, so a collider cast over
     /// open ground either misses entirely or reports a surface above the drawn
-    /// one.
+    /// one. Returns an error when a present terrain has no complete pose in the
+    /// active frame or its surface cannot be certified.
     pub fn raycast(
         &self,
         origin: GridPos,
         direction: Dir3,
         max_distance: f64,
-    ) -> Option<SurfaceHit> {
+    ) -> Result<Option<SurfaceHit>, String> {
         self.raycast_with_clearance(origin, direction, max_distance, 0.0)
     }
 
@@ -502,23 +503,35 @@ impl GridSurfaceQuery<'_, '_> {
         direction: Dir3,
         max_distance: f64,
         clearance: f64,
-    ) -> Option<SurfaceHit> {
+    ) -> Result<Option<SurfaceHit>, String> {
         if !origin.0.is_finite() || !clearance.is_finite() || clearance < 0.0 {
-            return None;
+            return Err("invalid terrain surface ray origin or clearance".into());
         }
-        let (frame, _) = self.frame()?;
+        if !max_distance.is_finite() && max_distance != f64::INFINITY || max_distance <= 0.0 {
+            return Err(
+                "terrain surface ray distance must be positive and finite or unbounded".into(),
+            );
+        }
+        if !self.has_terrain() {
+            return Ok(None);
+        }
+        let (frame, _) = self
+            .frame()
+            .ok_or("terrain ray has no active physics frame")?;
         let frame_direction = direction.as_dvec3();
         let mut best: Option<SurfaceHit> = None;
+        let mut matched = 0usize;
         for (entity, hf, pose) in self.terrains.iter() {
             if pose.frame != frame {
                 continue;
             }
+            matched += 1;
             let (terrain_position, terrain_rotation) = (pose.position, pose.rotation);
             let inverse = terrain_rotation.inverse();
             let local_origin = inverse * (origin.0 - terrain_position) - DVec3::Y * clearance;
             let local_direction = inverse * frame_direction;
             let Some(local_point) =
-                crate::oracle::raycast_surface(&hf.0, local_origin, local_direction, max_distance)
+                crate::oracle::raycast_surface(&hf.0, local_origin, local_direction, max_distance)?
             else {
                 continue;
             };
@@ -533,7 +546,10 @@ impl GridSurfaceQuery<'_, '_> {
                 });
             }
         }
-        best
+        if self.all_terrains.iter().count() != matched {
+            return Err("terrain ray has an unresolved terrain in the active frame".into());
+        }
+        Ok(best)
     }
 
     /// Ray from a render-space origin (a camera/cursor ray) against the analytic
@@ -544,8 +560,21 @@ impl GridSurfaceQuery<'_, '_> {
         render_origin: RenderPos,
         direction: Dir3,
         max_distance: f64,
-    ) -> Option<SurfaceHit> {
-        let (origin, direction) = self.ray_to_grid(render_origin, direction)?;
+    ) -> Result<Option<SurfaceHit>, String> {
+        if !render_origin.0.is_finite() {
+            return Err("invalid terrain render-ray origin".into());
+        }
+        if !max_distance.is_finite() && max_distance != f64::INFINITY || max_distance <= 0.0 {
+            return Err(
+                "terrain surface ray distance must be positive and finite or unbounded".into(),
+            );
+        }
+        if !self.has_terrain() {
+            return Ok(None);
+        }
+        let (origin, direction) = self
+            .ray_to_grid(render_origin, direction)
+            .ok_or("terrain ray cannot resolve its active grid frame")?;
         self.raycast(origin, direction, max_distance)
     }
 
@@ -897,6 +926,7 @@ mod tests {
             .world_mut()
             .run_system(sys)
             .unwrap()
+            .unwrap()
             .expect("offset terrain hit");
         assert!((hit.distance - 9.5).abs() < 0.001);
         assert!((hit.point.0 - up * 0.5).length() < 0.001);
@@ -911,7 +941,12 @@ mod tests {
         let sys = app
             .world_mut()
             .register_system(move |q: GridSurfaceQuery| q.raycast(origin, Dir3::NEG_Y, 1000.0));
-        let hit = app.world_mut().run_system(sys).unwrap().expect("hit");
+        let hit = app
+            .world_mut()
+            .run_system(sys)
+            .unwrap()
+            .unwrap()
+            .expect("hit");
         assert!((hit.point.0.y - SITE_ELEVATION).abs() < 0.05, "{hit:?}");
         assert!((hit.distance - 100.0).abs() < 0.05, "{hit:?}");
     }
@@ -929,7 +964,7 @@ mod tests {
         let sys = app
             .world_mut()
             .register_system(move |q: GridSurfaceQuery| q.raycast(origin, dir, f64::INFINITY));
-        let hit = app.world_mut().run_system(sys).unwrap();
+        let hit = app.world_mut().run_system(sys).unwrap().unwrap();
         assert!(hit.is_some(), "shallow cursor ray found no ground");
         assert!((hit.unwrap().point.0.y - SITE_ELEVATION).abs() < 0.05);
     }
@@ -938,11 +973,39 @@ mod tests {
     fn no_terrain_is_distinguishable_from_no_hit() {
         let mut app = App::new();
         let sys = app.world_mut().register_system(|q: GridSurfaceQuery| {
-            (q.has_terrain(), q.height_at(GridPos(DVec3::ZERO)))
+            (
+                q.has_terrain(),
+                q.height_at(GridPos(DVec3::ZERO)),
+                q.raycast(GridPos(DVec3::ZERO), Dir3::NEG_Y, 10.0),
+                q.raycast_render(RenderPos(DVec3::ZERO), Dir3::NEG_Y, 10.0),
+            )
         });
-        let (has, height) = app.world_mut().run_system(sys).unwrap();
+        let (has, height, grid_ray, render_ray) = app.world_mut().run_system(sys).unwrap();
         assert!(!has);
         assert_eq!(height, None);
+        assert_eq!(grid_ray.unwrap(), None);
+        assert_eq!(render_ray.unwrap(), None);
+    }
+
+    #[test]
+    fn raycast_refuses_an_unresolved_terrain() {
+        let (mut app, _) = world_with_terrain(SITE_ELEVATION);
+        app.world_mut()
+            .spawn(DemHeightField(flat_dem_at(0.0, 10.0)));
+        let system = app.world_mut().register_system(|q: GridSurfaceQuery| {
+            q.raycast(
+                GridPos(DVec3::new(0.0, SITE_ELEVATION + 100.0, 0.0)),
+                Dir3::NEG_Y,
+                1000.0,
+            )
+        });
+
+        let error = app
+            .world_mut()
+            .run_system(system)
+            .unwrap()
+            .expect_err("an unprojected DEM must not become a terrain miss");
+        assert!(error.contains("unresolved terrain"), "{error}");
     }
 
     #[test]

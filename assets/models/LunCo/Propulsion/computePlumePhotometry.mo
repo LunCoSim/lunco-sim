@@ -21,10 +21,9 @@ function computePlumePhotometry
   input Real mixture_mode;
   input Real mixture_ratio;
   input Real stoichiometric_mixture_ratio;
-  output Real values[52];
+  output Real values[51];
 protected
   Real envelope_radius_m;
-  Real core_envelope_radius_m;
   Real envelope_length_m;
   Real envelope_center_y_m;
   Real color_r;
@@ -159,7 +158,6 @@ algorithm
   color_g := max(0.0, min(1.0, fuel_g + 0.15 * richness));
   color_b := max(0.0, min(1.0, fuel_b + 0.25 * richness));
   envelope_radius_m := profile_radius_m_4;
-  core_envelope_radius_m := envelope_radius_m;
   width := nozzle_exit_radius_m;
   length := if radiant_power_w > 0.0 then envelope_length_m else 0.0;
   full_throttle_length_m := envelope_length_m;
@@ -173,7 +171,6 @@ algorithm
   momentum_flux_n := delivered_flow*exit_speed_mps;
   exit_dynamic_pressure_pa := 0.5*momentum_flux_n/area_exit;
   values := {envelope_radius_m,
-    core_envelope_radius_m,
     envelope_length_m,
     envelope_center_y_m,
     color_r,

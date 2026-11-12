@@ -106,21 +106,26 @@ Catalog membership never restricts loading an explicitly addressed data asset.
 
 ## The `lunco://` scheme
 
-`lunco://<rel>` = the runtime `assets/<rel>`, with that root's packed cache and
-the shared cache after authored assets. The runtime root is selected by
+`lunco://<rel>` = the runtime `assets/<rel>` followed by the shared global
+cache. Packaged files are staged into `assets/`; no engine-local cache is
+searched. The runtime root is selected by
 the fallible `lunco_assets_core::assets_dir_abs()` from `LUNCO_ASSET_ROOT` when
 set, otherwise executable/package ancestry before current-directory ancestry.
 An invalid override or unresolved library stops admission with an error;
 callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
-The complete read order comes from `lunco_assets_core::asset_read_roots()` in
-`crates/lunco-assets-core/src/lib.rs`.
+Engine reads use `lunco_assets_core::engine_asset_read_roots()` and Twin reads
+use `lunco_assets_core::asset_read_roots()` in `crates/lunco-assets-core/src/lib.rs`.
 `twin://<source-identity>/<rel>` is the stable user-facing Twin scene URI.
 `LoadScene` resolves it to the current mount; only internal asset reads use the
-mount authority. The current mount resolves assets to the Twin's authored
-root, its `<twin>/.cache`, then the global cache. This lets Twins reuse a global
-downloaded product without putting a machine path or temporary cache address in
-USD or user-facing scene paths.
+mount authority. The current mount reads from the Twin's authored root, its
+`.cache`, then the global cache. This lets Twins reuse a global downloaded
+product without putting a machine path or temporary cache address in USD or
+user-facing scene paths.
+Runtime code gets the Twin cache path from `lunco-assets-core::twin_cache_dir`
+and manifest cache ownership from `lunco-assets-datasets`; do not join
+`.cache` or choose shared versus local storage at call sites. See the
+[cache ownership contract](../../docs/architecture/56-asset-resolution-and-cache.md#engine-and-twin-caches).
 Authored bytes always win over materialised ones. Schemes are registered in
 `crates/lunco-assets-runtime/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity

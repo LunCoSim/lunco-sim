@@ -32,6 +32,18 @@ impl FromWorld for SpawnProducerIdentity {
 #[derive(Component)]
 pub struct SpawnGhost;
 
+fn hide_spawn_ghost(commands: &mut Commands, ghosts: &Query<Entity, With<SpawnGhost>>) {
+    for ghost in ghosts.iter() {
+        commands.entity(ghost).try_insert(Visibility::Hidden);
+    }
+}
+
+fn despawn_spawn_ghost(commands: &mut Commands, ghosts: &Query<Entity, With<SpawnGhost>>) {
+    for ghost in ghosts.iter() {
+        commands.entity(ghost).try_despawn();
+    }
+}
+
 /// The sole camera-input bundle for spawn preview and commit. The viewport
 /// chooses the camera; the query only realizes and validates that choice.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -322,7 +334,7 @@ pub fn update_spawn_ghost(
     mut footprint_cache: ResMut<FootprintCache>,
     camera_frame: SpawnCameraFrame,
     pointer: PrimaryMousePointer,
-    q_ghost: Query<(Entity, &Transform), With<SpawnGhost>>,
+    q_ghost: Query<Entity, With<SpawnGhost>>,
     egui_focus: Res<lunco_control_core::EguiFocus>,
     // Diagnostics only: names the collider a placement ray actually landed on.
     q_names: Query<&Name>,
@@ -335,9 +347,7 @@ pub fn update_spawn_ghost(
     surface: lunco_terrain_surface::GridSurfaceQuery,
 ) {
     let SpawnState::Selecting { entry_id } = spawn_state.as_ref() else {
-        for (ghost, _) in q_ghost.iter() {
-            commands.entity(ghost).try_despawn();
-        }
+        despawn_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
     // The palette and other workbench panels own the pointer while the cursor is
@@ -346,9 +356,7 @@ pub fn update_spawn_ghost(
     // stick in a canyon or behind the palette.  The committed click path uses
     // the same scene gate via `scene_click_ray`.
     if egui_focus.wants_pointer {
-        for (ghost, _) in q_ghost.iter() {
-            commands.entity(ghost).try_despawn();
-        }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     }
     // Derive the footprint from the live composed USD geometry (cached). Until
@@ -362,9 +370,7 @@ pub fn update_spawn_ghost(
         &mut canonical,
         entry_id,
     ) else {
-        for (ghost, _) in q_ghost.iter() {
-            commands.entity(ghost).try_despawn();
-        }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
 
@@ -374,30 +380,35 @@ pub fn update_spawn_ghost(
         if diagnostics.enabled {
             info!("[spawn-trace] ghost rejected: no active window Camera3d");
         }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
     let Ok((camera, cam_tf, target)) = camera_frame.cameras.get(camera_entity) else {
         if diagnostics.enabled {
             info!("[spawn-trace] ghost rejected: viewport camera is not realized");
         }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
     if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
         if diagnostics.enabled {
             info!("[spawn-trace] ghost rejected: viewport camera is not an active window camera");
         }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     }
     let Some(cursor) = pointer.position() else {
         if diagnostics.enabled {
             info!("[spawn-trace] ghost rejected: primary mouse has no pointer location");
         }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
     let Some((origin, direction)) = cursor_ray(camera, cam_tf, cursor) else {
         if diagnostics.enabled {
             info!(cursor = ?cursor, "[spawn-trace] ghost rejected: viewport_to_world failed");
         }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
     let trace_cursor = diagnostics.enabled && diagnostics.cursor_moved(cursor);
@@ -410,10 +421,11 @@ pub fn update_spawn_ghost(
         if diagnostics.enabled {
             info!(cursor = ?cursor, "[spawn-trace] ghost rejected: active physics frame unavailable");
         }
+        hide_spawn_ghost(&mut commands, &q_ghost);
         return;
     };
 
-    let hit = cursor_surface_hit(
+    let hit = match cursor_surface_hit(
         &surface,
         &raycaster,
         origin_grid,
@@ -421,7 +433,14 @@ pub fn update_spawn_ghost(
         EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
         SurfacePickPolicy::Nearest,
         |_| true,
-    );
+    ) {
+        Ok(hit) => hit,
+        Err(error) => {
+            warn_once!("[spawn] terrain pick could not be certified: {error}");
+            hide_spawn_ghost(&mut commands, &q_ghost);
+            return;
+        }
+    };
     let terrain_trace = hit.and_then(|h| h.terrain);
     let phys = hit.and_then(|h| h.physics_distance);
     let phys_name = hit
@@ -450,9 +469,7 @@ pub fn update_spawn_ghost(
                     "[spawn-trace] ghost rejected: footprint corner has no surface sample"
                 );
             }
-            for (ghost, _) in q_ghost.iter() {
-                commands.entity(ghost).try_despawn();
-            }
+            hide_spawn_ghost(&mut commands, &q_ghost);
             return;
         };
         // The preview marks the exact asset-root pose that commit will use. A
@@ -468,6 +485,7 @@ pub fn update_spawn_ghost(
             if diagnostics.enabled {
                 info!(cursor = ?cursor, grid_hit = ?point, "[spawn-trace] ghost rejected: WorldGrid unavailable");
             }
+            hide_spawn_ghost(&mut commands, &q_ghost);
             return;
         };
         if trace_cursor {
@@ -489,7 +507,7 @@ pub fn update_spawn_ghost(
                 "[spawn-trace] cursor pipeline"
             );
         }
-        if let Some((ghost, _)) = q_ghost.iter().next() {
+        if let Some(ghost) = q_ghost.iter().next() {
             lunco_spatial::attach::migrate_to_grid(
                 &mut commands,
                 ghost,
@@ -501,6 +519,7 @@ pub fn update_spawn_ghost(
                     ..default()
                 },
             );
+            commands.entity(ghost).try_insert(Visibility::Visible);
         } else {
             commands.spawn((
                 Name::new("SpawnGhost"),
@@ -527,17 +546,20 @@ pub fn update_spawn_ghost(
                 ViewVisibility::default(),
             ));
         }
-    } else if trace_cursor {
-        info!(
-            cursor = ?cursor,
-            ray_origin_grid = ?origin_grid,
-            ray_direction = ?direction_grid,
-            terrain_hit = ?terrain_trace,
-            physics_distance = ?phys,
-            physics_hit_name = ?phys_name,
-            has_terrain = surface.has_terrain(),
-            "[spawn-trace] ghost has no surface hit"
-        );
+    } else {
+        if trace_cursor {
+            info!(
+                cursor = ?cursor,
+                ray_origin_grid = ?origin_grid,
+                ray_direction = ?direction_grid,
+                terrain_hit = ?terrain_trace,
+                physics_distance = ?phys,
+                physics_hit_name = ?phys_name,
+                has_terrain = surface.has_terrain(),
+                "[spawn-trace] ghost has no surface hit"
+            );
+        }
+        hide_spawn_ghost(&mut commands, &q_ghost);
     }
 }
 
@@ -570,11 +592,11 @@ pub fn spawn_tool_state_system(
 
 /// Places the selected asset where the user clicks, driven by **bevy_picking**.
 ///
-/// Registered as a global `On<PointerClick>` observer. The pick's
-/// `hit.position` is the world point on whatever mesh (terrain/prop) was under
-/// the cursor — no manual ray-cast needed. egui occlusion is handled by the
-/// framework; chrome clicks carry no `hit.position`, so they're rejected and
-/// never place. Triggers `SpawnEntity` so the path matches the CLI.
+/// Registered as a global `On<PointerClick>` observer. It resolves the active
+/// viewport camera ray through the same analytic terrain and physics query as
+/// the preview, so placement does not depend on a rendered LOD tile being
+/// pickable. egui occlusion and query failures reject the click and hide any
+/// stale preview. Triggers `SpawnEntity` so the path matches the CLI.
 pub fn on_scene_click_spawn(
     mut click: On<bevy::picking::events::PointerClick>,
     mut commands: Commands,
@@ -607,23 +629,24 @@ pub fn on_scene_click_spawn(
     click.propagate(false);
     let entry_id = entry_id.clone();
     // Shared egui-vs-scene guard + camera ray (same path as possession/selection),
-    // then resolve the world point: use bevy_picking's mesh hit when present, else
-    // cast the ray against colliders so placement works on streamed terrain even
-    // when no pickable tile is under the cursor (the old `hit.position` guard
-    // silently rejected those clicks — the "can't place on the ground" bug).
+    // then resolve the world point from the shared analytic terrain and physics
+    // queries. Placement remains independent of rendered tile residency.
     let Some(camera_entity) = camera_frame.viewport.active_camera else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: no active window Camera3d");
         }
         return;
     };
     let Ok((camera, cam_gtf, target)) = camera_frame.cameras.get(camera_entity) else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: viewport camera is not realized");
         }
         return;
     };
     if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: viewport camera is not an active window camera");
         }
@@ -635,6 +658,7 @@ pub fn on_scene_click_spawn(
         cam_gtf,
         click.pointer.position,
     ) else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!(
                 pointer = ?click.pointer.position,
@@ -650,12 +674,13 @@ pub fn on_scene_click_spawn(
     let Some((origin_grid, direction_grid)) =
         surface.ray_to_grid(lunco_spatial::coords::RenderPos(origin), ray.direction)
     else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: active physics frame unavailable");
         }
         return;
     };
-    let Some(hit) = cursor_surface_hit(
+    let hit = match cursor_surface_hit(
         &surface,
         &raycaster,
         origin_grid,
@@ -663,19 +688,32 @@ pub fn on_scene_click_spawn(
         EDITOR_PLACEMENT_RAY_MAX_DISTANCE,
         SurfacePickPolicy::Nearest,
         |_| true,
-    ) else {
-        if diagnostics.enabled {
-            info!(
-                pointer = ?click.pointer.position,
-                ray_origin_grid = ?origin_grid,
-                ray_direction = ?direction_grid,
-                has_terrain = surface.has_terrain(),
-                "[spawn-trace] click rejected: no terrain or physics hit"
-            );
+    ) {
+        Ok(Some(hit)) => hit,
+        Ok(None) => {
+            hide_spawn_ghost(&mut commands, &q_ghost);
+            if diagnostics.enabled {
+                info!(
+                    pointer = ?click.pointer.position,
+                    ray_origin_grid = ?origin_grid,
+                    ray_direction = ?direction_grid,
+                    has_terrain = surface.has_terrain(),
+                    "[spawn-trace] click rejected: no terrain or physics hit"
+                );
+            }
+            return;
         }
-        return;
+        Err(error) => {
+            hide_spawn_ghost(&mut commands, &q_ghost);
+            let message =
+                format!("Cannot place '{entry_id}': terrain pick could not be certified: {error}");
+            warn!("{message}");
+            lunco_core::trigger_runtime_error(&mut commands, "spawn-placement-failed", message);
+            return;
+        }
     };
     let Some((grid, _, _)) = surface.grid_local(hit.point) else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: canonical WorldGrid unavailable");
         }
@@ -692,6 +730,7 @@ pub fn on_scene_click_spawn(
     // Rotation is frame-free — big_space translates the render frame, never
     // rotates it — so the camera's render-frame forward is usable as-is.
     let Some(fp) = footprint_cache.resolve(&entry_id) else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!(
                 entry_id,
@@ -707,6 +746,7 @@ pub fn on_scene_click_spawn(
         fp.half_l,
         |corner| corner_height(&surface, &raycaster, hit.terrain_primary, corner),
     ) else {
+        hide_spawn_ghost(&mut commands, &q_ghost);
         warn!(
             entry_id,
             "[spawn] click rejected: footprint corner has no surface sample"

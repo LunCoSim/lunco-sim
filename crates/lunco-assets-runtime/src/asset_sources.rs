@@ -107,8 +107,9 @@ fn unregister_twin_root(
 ///
 /// | Scheme | Resolves to | Notes |
 /// |---|---|---|
-/// | `lunco://` | the runtime `assets/` root, its packed cache, then the shared cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
-/// | `twin://<authority>/…` | open Twin mounts | Twin scenes AND downloaded scenarios — native fs + web OPFS, via `lunco_storage` |
+/// | `lunco://` | the runtime `assets/` root, then the shared global cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
+/// | `twin://<source-identity>/…` | the currently mounted Twin source resolved at admission | stable user-facing scene and asset addresses |
+/// | `twin://<authority>/…` | one exact live mount | internal asset reads only |
 ///
 /// `lunco://` is path-derived and stateless; `twin://` is separate only because
 /// its reader is stateful (it shares [`TwinRoots`] with the resource).

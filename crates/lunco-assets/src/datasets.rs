@@ -343,7 +343,7 @@ fn spawn_download(
     let key = entry.key.clone();
     let spec = entry.spec.clone();
     let scope = entry.scope.clone();
-    let destination_root = scope.cache_root(spec.shared);
+    let destination_root = scope.local_cache_root();
     info!(
         "[datasets] downloading '{}' ({}) — user-requested",
         key, entry.name
@@ -504,11 +504,7 @@ fn spawn_processing(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn source_path(entry: &DatasetEntry) -> std::io::Result<std::path::PathBuf> {
-    lunco_assets_datasets::source_read_path(
-        &entry.spec,
-        &entry.scope.cache_root(entry.spec.shared),
-        entry.read_roots(),
-    )
+    lunco_assets_datasets::source_read_path(&entry.spec, entry.read_roots())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

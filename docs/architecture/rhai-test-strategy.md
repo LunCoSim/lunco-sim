@@ -277,8 +277,9 @@ recipes and their acceptance scenes stay in the owning Twin.
    the contributing layer, then the Twin root; explicit `./` paths stay bound
    to that layer. Test membership uses library-relative source identity,
    including nested fixture Twins, independently of cache storage locations.
-   Source bytes use the bounded shared asset reader, including the library's
-   authored, packed-cache and shared-cache order.
+   Source bytes use the bounded shared asset reader: engine assets resolve
+   from the authored library then the global cache; Twin assets resolve from
+   the Twin root, its `.cache`, then the global cache.
    The production discovery API lives in `lunco-scene-validation`, alongside
    the asset and stage validation it reuses; the scene mutation crate does not
    own test inventory.

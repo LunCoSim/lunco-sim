@@ -14,8 +14,8 @@ mod registry;
 
 pub use manifest::{
     AssetEntry, AssetManifest, PROCESS_PIPELINE_VERSION, ProcessConfig, archive_extension,
-    bake_stamp_path, default_dem_pixel_scale_m, entry_artifact_path, entry_dest_path,
-    install_marker_path, process_output_path, source_pool_path,
+    bake_stamp_path, dataset_cache_root, default_dem_pixel_scale_m, entry_artifact_path,
+    entry_dest_path, install_marker_path, process_output_path, source_pool_path,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use manifest::{

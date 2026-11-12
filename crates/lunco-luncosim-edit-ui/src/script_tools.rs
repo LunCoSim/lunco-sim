@@ -1798,11 +1798,18 @@ fn pointer_surface_render_position(
         camera_transform,
         click.pointer.position,
     )?;
-    let terrain_hit = surface.raycast_render(
+    let terrain_hit = match surface.raycast_render(
         RenderPos(ray.origin.as_dvec3()),
         ray.direction,
         f64::INFINITY,
-    )?;
+    ) {
+        Ok(Some(hit)) => hit,
+        Ok(None) => return None,
+        Err(error) => {
+            warn_once!("terrain-aware pointer click could not resolve its ray: {error}");
+            return None;
+        }
+    };
     let hit_is_terrain = std::iter::successors(Some(click.entity), |entity| {
         q_parents.get(*entity).ok().map(|parent| parent.0)
     })
@@ -2238,11 +2245,18 @@ fn scene_pointer_move_args(
             let ray =
                 lunco_viewport_core::scene_click_ray(false, camera, camera_transform, position)?;
             let _span = bevy::log::info_span!("scene_pointer_move_terrain_raycast").entered();
-            let hit = world.surface.raycast_render(
+            let hit = match world.surface.raycast_render(
                 RenderPos(ray.origin.as_dvec3()),
                 ray.direction,
                 f64::INFINITY,
-            )?;
+            ) {
+                Ok(Some(hit)) => hit,
+                Ok(None) => return None,
+                Err(error) => {
+                    warn_once!("terrain-aware pointer move could not resolve its ray: {error}");
+                    return None;
+                }
+            };
             world.surface.to_render(hit.point)
         });
     let is_surface_hit = surface_render_position.is_some();

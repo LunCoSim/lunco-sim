@@ -130,14 +130,20 @@ the native cadence, pair iteration, geometry precision and hook context.
 
 ### Terrain occlusion (rille radio-shadow)
 
-The kernel marches `lunco_terrain_core::los_hit` over each DEM's `SurfaceOracle`,
-read through a plain `Query<(&GlobalTransform, &DemHeightField)>` — a **read-only
-component access**, which is the whole point:
+The scheduled pair sweep uses `lunco_terrain_core::los_hit` over each DEM's
+`SurfaceOracle`. It takes a read-only terrain snapshot and resolves each DEM pose
+through the scene's grid hierarchy. Link work uses the generic sampled
+`HeightSource` query, bounded by its interval and finite-footprint limits.
 
 > The `TerrainRaycast` API provider has an immutable `&World` contract, and the
-> link kernel itself reads through a normal read-only component query. Neither
-> path requires an exclusive link system or an API-side command flush. **Do not
-> reintroduce an exclusive link system.**
+> link kernel reads a normal read-only scene snapshot. Neither path requires an
+> exclusive link system or an API-side command flush. **Do not reintroduce an
+> exclusive link system.**
+
+Viewport picking and camera clearance use `SurfaceOracle`'s conservative
+raster-cell ray query. That query certifies narrow relief and reports when a
+modifier cannot provide bounds; it also drives the `TerrainRaycast` API. The
+link sweep keeps its bounded sampled kernel for scheduled endpoint-pair work.
 
 Endpoints are marched in `SolarFramePose::local`, which *is* the terrain oracle frame
 (see `pose.rs`). The march is capped to the terrain footprint (`±half_extent`): terrain

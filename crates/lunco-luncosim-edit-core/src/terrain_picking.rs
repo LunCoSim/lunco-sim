@@ -44,12 +44,17 @@ pub fn emit_terrain_hits(
         if !camera.is_active || !matches!(target, bevy::camera::RenderTarget::Window(_)) {
             continue;
         }
-        let Some(hit) = surface.raycast_render(
+        let hit = match surface.raycast_render(
             lunco_spatial::coords::RenderPos(ray.origin.as_dvec3()),
             ray.direction,
             f64::INFINITY,
-        ) else {
-            continue;
+        ) {
+            Ok(Some(hit)) => hit,
+            Ok(None) => continue,
+            Err(error) => {
+                warn_once!("terrain picking could not certify cursor ray: {error}");
+                continue;
+            }
         };
         let Some(render_point) = surface.to_render(hit.point) else {
             continue;

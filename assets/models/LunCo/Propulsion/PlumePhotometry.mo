@@ -22,7 +22,6 @@ model PlumePhotometry
   input Real mixture_ratio = 2.0;
   input Real stoichiometric_mixture_ratio = 2.0;
   output Real envelope_radius_m;
-  output Real core_envelope_radius_m;
   output Real envelope_length_m;
   output Real envelope_center_y_m;
   output Real color_r;
@@ -80,7 +79,6 @@ model PlumePhotometry
 equation
   luminous_efficacy_out_lm_w = luminous_efficacy_lm_w;
   {envelope_radius_m,
-    core_envelope_radius_m,
     envelope_length_m,
     envelope_center_y_m,
     color_r,

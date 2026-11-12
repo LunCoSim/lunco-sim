@@ -1365,9 +1365,6 @@ impl UsdDocument {
         {
             return Ok(source.as_bytes().to_vec());
         }
-        if format.format_id() == "usda" {
-            author::ensure_usda_serializable(self.base.as_ref()).map_err(author_err)?;
-        }
         let written = format.write_bytes(self.base.as_ref()).map_err(author_err)?;
         Ok(written.bytes.as_ref().to_vec())
     }

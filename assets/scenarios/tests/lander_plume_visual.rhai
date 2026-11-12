@@ -8,7 +8,7 @@ fn simulation_dependencies(me, ctx) {
         modelica_entities: [
             find_path("/LanderPlumeVisual/Lander"),
             find_path("/LanderPlumeVisual/Lander/MainPropulsion"),
-            find_path("/LanderPlumeVisual/Lander/FlameCore/Photometry"),
+            find_path("/LanderPlumeVisual/Lander/PlumePhotometry"),
         ],
         entity_reads: [], entity_writes: [], query_reads: [], required_inputs: [],
     }
@@ -17,7 +17,7 @@ fn simulation_dependencies(me, ctx) {
 fn on_start(me, ctx) {
     this.lander = find_path("/LanderPlumeVisual/Lander");
     this.main = find_path("/LanderPlumeVisual/Lander/MainPropulsion");
-    this.photometry = find_path("/LanderPlumeVisual/Lander/FlameCore/Photometry");
+    this.photometry = find_path("/LanderPlumeVisual/Lander/PlumePhotometry");
     this.elapsed = 0.0;
     this.done = false;
     this.command_ok = false;

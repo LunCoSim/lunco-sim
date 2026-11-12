@@ -111,6 +111,8 @@ model Lander
     "Maximum horizontal speed for qualified pad-contact engine cutoff (m/s)";
   input Real engine_cutoff_descent_speed_mps = 0.20
     "Maximum descent speed for qualified pad-contact engine cutoff (m/s)";
+  input Real engine_cutoff_angular_speed_rad_s = 0.05
+    "Maximum body rate for low-energy pad-contact engine cutoff (rad/s)";
   input Real touchdown_min_upright_axis_y = 0.9
     "Minimum measured body-up projection for an upright touchdown";
 
@@ -189,6 +191,7 @@ model Lander
   Real angular_speed_gate;
   Real engine_cutoff_ground_speed_gate;
   Real engine_cutoff_descent_speed_gate;
+  Real engine_cutoff_angular_speed_gate;
   Real maximum_leg_speed;
   Real suspension_rate_gate;
   Real settled_touchdown_target;
@@ -368,6 +371,9 @@ equation
   engine_cutoff_descent_speed_gate = max(0.0, min(1.0,
     (max(0.0, engine_cutoff_descent_speed_mps) + predicate_band - descent_speed)
       / predicate_band));
+  engine_cutoff_angular_speed_gate = max(0.0, min(1.0,
+    (max(0.0, engine_cutoff_angular_speed_rad_s) + predicate_band - angular_speed)
+      / predicate_band));
   all_legs_contact = min(
     min(
       max(0.0, min(1.0, (leg_contact_px - 0.5 + predicate_band) / predicate_band)),
@@ -402,16 +408,18 @@ equation
     (upright_axis_y - max(-1.0, min(1.0, touchdown_min_upright_axis_y))
       + predicate_band) / predicate_band));
   // Main-engine cutoff and final flight handoff are different physical events.
-  // A qualified low-speed pad switch starts a rate-only contact phase. Once the
-  // measured body rate is quiet, cutoff closes propulsion and the landing gear
-  // takes the remaining touchdown energy. The event supervisor supplies the
-  // contiguous-time qualification; this model publishes only the measured
-  // predicate. Final handoff still requires all four pads, low body rates, and
+  // A qualified low-speed pad switch starts a rate-only contact phase. Cutoff
+  // accepts the bounded contact rate, so the gear can take the remaining
+  // touchdown energy. Requiring the final settled rate here leaves the engine
+  // supporting the vehicle while partially loaded pads tip it and guidance
+  // eventually commands a go-around. This model publishes the measured
+  // predicate; the event supervisor latches its target-qualified transition.
+  // Final handoff still requires all four pads, low body rates, and
   // quiet struts, so first contact is never mistaken for "settled".
   pad_contact_phase = any_leg_contact
     * upright_contact_gate
     * engine_cutoff_ground_speed_gate * engine_cutoff_descent_speed_gate;
-  engine_cutoff_contact = pad_contact_phase * angular_speed_gate;
+  engine_cutoff_contact = pad_contact_phase * engine_cutoff_angular_speed_gate;
   landing_contact = all_legs_contact
     * upright_contact_gate * ground_speed_gate * descent_speed_gate
     * angular_speed_gate * suspension_rate_gate;

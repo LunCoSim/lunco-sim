@@ -15,14 +15,14 @@
 //! redundant downloads and duplicate processed output. Resolution order:
 //!
 //! 1. `LUNCOSIM_CACHE` environment variable (explicit override for CI/custom installs)
-//! 2. OS-conventional cache directory
+//! 2. `<home>/.lunco/cache`
 //!
-//! If neither an explicit override nor an OS cache directory is available,
+//! If neither an explicit override nor a home directory is available,
 //! cache resolution fails visibly; it never silently creates a worktree-local
 //! cache.
 //!
 //! ```text
-//! ~/.cache/lunco/             # Shared across ALL worktrees and Twins
+//! ~/.lunco/cache/             # Shared across ALL worktrees and Twins
 //! ├── textures/               # Large binaries (earth.jpg, moon.png)
 //! ├── remote/                 # HTTP-downloaded assets
 //! └── processed/              # AssetProcessor output
@@ -33,7 +33,7 @@
 //! ```rust
 //! use lunco_assets_core::cache_dir;
 //!
-//! let dir = cache_dir();  // → ~/.cache/lunco/ on Linux
+//! let dir = cache_dir();  // → ~/.lunco/cache/
 //! ```
 
 // This crate owns the on-disk asset cache layout, so it legitimately
@@ -98,6 +98,7 @@ const ENGINE_MODELS_DIR: &str = "models";
 const ENGINE_SCENES_DIR: &str = "scenes";
 const ENGINE_SCENE_TESTS_DIR: &str = "scenes/tests";
 const ENGINE_SHADERS_DIR: &str = "shaders";
+const TWIN_CACHE_DIR_NAME: &str = ".cache";
 
 /// Filename of the runtime asset table of contents.
 pub const ASSET_MANIFEST_FILE_NAME: &str = "manifest.json";
@@ -125,17 +126,12 @@ pub fn asset_manifest_url() -> String {
 /// Resolution:
 ///
 /// 1. `LUNCOSIM_CACHE` env override (CI, moving GBs to another disk).
-/// 2. OS-conventional cache dir:
-///    Linux:   `~/.cache/lunco/`
-///    macOS:   `~/Library/Caches/lunco/`
-///    Windows: `%LOCALAPPDATA%\lunco\`
+/// 2. `<home>/.lunco/cache/` on every native platform.
 ///
-/// If no OS cache directory is resolvable, this function panics with an
-/// actionable message. There is deliberately NO per-worktree cache: an earlier
-/// dev-mode walk preferred a workspace-local `.cache/` when populated, which silently
-/// made each worktree an island re-downloading the same assets. One shared
-/// pool, keyed by content (sha256 in manifests, bake keys on outputs), is
-/// both cheaper and correct.
+/// If no home directory is resolvable, this function panics with an actionable
+/// message. A custom `LUNCOSIM_CACHE` remains the explicit override.
+/// Engine assets have no workspace-local cache. Twin-owned data uses
+/// [`twin_cache_dir`].
 ///
 /// This is the primary way to get the cache path — used by texture processors,
 /// ephemeris downloaders, modelica compilers, and any system that reads/writes
@@ -154,41 +150,22 @@ pub fn cache_dir() -> PathBuf {
     // get a clean Err instead of crashing the page.
     #[cfg(target_arch = "wasm32")]
     {
-        return PathBuf::from(".cache");
+        return PathBuf::from(TWIN_CACHE_DIR_NAME);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(val) = std::env::var_os("LUNCOSIM_CACHE") {
-            return PathBuf::from(val);
+        if let Some(path) = std::env::var_os("LUNCOSIM_CACHE") {
+            return PathBuf::from(path);
         }
-        dirs::cache_dir()
-            .map(|base| base.join("lunco"))
-            .unwrap_or_else(|| {
-                panic!("unable to resolve an OS cache directory; set LUNCOSIM_CACHE explicitly")
-            })
+        let home = dirs::home_dir().unwrap_or_else(|| {
+            panic!("unable to resolve the home directory; set LUNCOSIM_CACHE explicitly")
+        });
+        global_cache_dir(&home)
     }
 }
 
-/// The cache that travels WITH the shipped library: `<assets>/.cache`.
-///
-/// A packaged build is a folder — binary, `assets/`, and the large binaries it
-/// needs. Those binaries are cache artifacts (downloaded, processed,
-/// git-ignored), so they cannot live in `assets/` proper; but a distribution
-/// that only knew the machine-global [`cache_dir`] would arrive empty on a
-/// machine that had never run the downloader, and would depend on a launcher
-/// script exporting `LUNCOSIM_CACHE` to find its own payload.
-///
-/// So the library gets a cache of its own, right beside it, read BEFORE the
-/// global one. That is the same rule a Twin already follows
-/// ([`twin_cache_dir`]): the unit you ship may carry its default-owned data
-/// beside itself, while the global pool remains a reusable read source and the
-/// explicit owner for `shared = true` declarations.
-///
-/// Read-only in practice: downloads still land in [`cache_dir`], because a
-/// packaged `assets/` may sit on a read-only mount and because one machine
-/// should not re-fetch the same product per installed copy.
-pub fn packed_cache_dir() -> std::io::Result<PathBuf> {
-    Ok(assets_dir_abs()?.join(".cache"))
+fn global_cache_dir(home: &Path) -> PathBuf {
+    home.join(".lunco").join("cache")
 }
 
 /// The directory holding the engine's dataset manifests: `assets/manifests`.
@@ -241,26 +218,43 @@ pub fn engine_manifest_text(group: &str) -> std::io::Result<Option<String>> {
     }
 }
 
-/// Every cache root a library-relative reference is looked up in, in order:
-/// the packed cache beside `assets/`, then the shared machine-wide pool.
+/// Cache roots for engine-library references. Bundled files are staged into
+/// `assets/`; downloaded and processed artifacts use the shared global pool.
 ///
 /// The ONE place that order is decided. The `lunco://` asset source, the
 /// synchronous resolver ([`engine_asset_local_path`]) and any tool probing for
 /// bytes all ask here, so a file found by the loader is a file found by the
 /// validator.
 pub fn cache_roots() -> std::io::Result<Vec<PathBuf>> {
-    Ok(asset_read_roots(&assets_dir_abs()?)
+    Ok(engine_asset_read_roots(&assets_dir_abs()?)
         .into_iter()
         .skip(1)
         .collect())
 }
 
-/// The complete authored/local-cache/shared-cache order for an engine or Twin root.
-///
-/// The root is an argument because a packaged or externally composed document
-/// can name a different asset tree than the process working directory. Every
-/// reader uses this function so the authored tree, its packed cache, and the
-/// shared cache cannot drift into different path interpretations.
+/// Read roots for engine-owned assets: shipped/authored files, then the shared
+/// global cache. `assets/.cache` is not an engine cache root.
+pub fn engine_asset_read_roots(root: &Path) -> Vec<PathBuf> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        return vec![root.to_path_buf()];
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    engine_asset_read_roots_with_shared(root, &cache_dir())
+}
+
+fn engine_asset_read_roots_with_shared(root: &Path, shared: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::with_capacity(2);
+    for root in [root.to_path_buf(), shared.to_path_buf()] {
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    roots
+}
+
+/// Read roots for a Twin-owned library: authored files, its `.cache`, then the
+/// shared global cache.
 pub fn asset_read_roots(root: &Path) -> Vec<PathBuf> {
     asset_read_roots_with_shared(root, &cache_dir())
 }
@@ -290,7 +284,7 @@ pub(crate) fn asset_read_roots_with_shared(root: &Path, shared: &Path) -> Vec<Pa
 /// This is the ONE place the layout is decided; the downloader, the
 /// `twin://` reader and the dataset registry all ask here.
 pub fn twin_cache_dir(twin_root: &std::path::Path) -> PathBuf {
-    twin_root.join(".cache")
+    twin_root.join(TWIN_CACHE_DIR_NAME)
 }
 
 /// Cross-platform temp directory for short-lived scratch files (panic
@@ -332,7 +326,7 @@ pub fn temp_dir() -> PathBuf {
 /// - `textures` — Generated or downloaded textures (Earth, Moon, terrain maps)
 /// - `remote` — HTTP-downloaded assets with integrity hashes
 /// - `processed` — Preprocessed asset output (optimized USD, compressed textures)
-/// - `modelica` — Modelica compilation output (`.cache/modelica/`)
+/// - `modelica` — Modelica compilation output (`<cache>/modelica/`)
 /// Source libraries use their manifest-declared cache directory.
 pub fn cache_subdir(name: &str) -> PathBuf {
     let dir = cache_dir().join(name);
@@ -712,8 +706,8 @@ pub fn engine_asset_rel(reference: &str) -> &str {
 /// loader will — whether it was authored bare (`shaders/wheel.wesl`) or schemed
 /// (`lunco://shaders/wheel.wesl`).
 ///
-/// It probes the SAME chain the source reads — `assets/`, then the packed
-/// cache, then the shared pool ([`cache_roots`]) — and returns the first root
+/// It probes the SAME chain the source reads — `assets/`, then the shared pool
+/// ([`cache_roots`]) — and returns the first root
 /// that holds the entry. Absence returns `None`; a wrong entry kind or
 /// containment/storage failure is terminal.
 pub fn engine_asset_local_path(reference: &str) -> std::io::Result<Option<PathBuf>> {
@@ -729,7 +723,7 @@ pub fn engine_asset_local_path(reference: &str) -> std::io::Result<Option<PathBu
     })?;
     #[cfg(not(target_arch = "wasm32"))]
     return lunco_source::resolve_native_asset(
-        &asset_read_roots(&assets_dir_abs()?),
+        &engine_asset_read_roots(&assets_dir_abs()?),
         &relative,
         Some(lunco_storage::StorageEntryKind::File),
     )
@@ -776,7 +770,7 @@ pub fn resolve_asset_input(
                 )
             })?;
         resolve_native_asset(
-            &asset_read_roots(&assets_dir_abs()?),
+            &engine_asset_read_roots(&assets_dir_abs()?),
             &relative,
             Some(expected),
         )?
@@ -927,8 +921,9 @@ pub async fn resolve_asset_directory_on_worker(
             .ok_or_else(|| invalid(format!("unsafe engine directory `{reference}`")))?;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let roots =
-                asset_read_roots(&assets_dir_abs().map_err(|error| invalid(error.to_string()))?);
+            let roots = engine_asset_read_roots(
+                &assets_dir_abs().map_err(|error| invalid(error.to_string()))?,
+            );
             let path = lunco_source::resolve_native_asset(
                 &roots,
                 &relative,
@@ -990,11 +985,9 @@ pub fn fonts_dir() -> PathBuf {
 /// contiguously in one file. Matches the Godot/Blender choice.
 ///
 /// Resolved through the SAME canonical search as every other shipped asset —
-/// [`engine_asset_local_path`] / [`cache_roots`]: authored `assets/fonts/` →
-/// packed `assets/.cache/fonts/` → shared machine cache `<cache_dir>/fonts/`.
-/// There is no font-specific path logic: the font is just an engine asset named
-/// `fonts/DejaVuSans.ttf`, so it finds a PACKAGED build's bundled copy (which
-/// ships in `assets/.cache/`) as readily as a `download`-populated shared cache.
+/// [`engine_asset_local_path`] / [`cache_roots`]: packaged `assets/fonts/` →
+/// shared global cache `<cache_dir>/fonts/`. There is no font-specific path
+/// logic: the font is just an engine asset named `fonts/DejaVuSans.ttf`.
 ///
 /// CI populates the pinned package input from `assets/manifests/fonts.toml`
 /// with `lunco-assets download --bundle <target>`, then stages that target.
@@ -1055,11 +1048,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_dir_defaults_to_os_global_cache() {
-        // When LUNCOSIM_CACHE is not set, use the OS-global cache.
-        // (In CI this test may run with the env var set, so we only test the function exists)
-        let dir = cache_dir();
-        assert!(!dir.as_os_str().is_empty());
+    fn global_cache_uses_the_home_lunco_directory() {
+        let home = Path::new("/home/example");
+        assert_eq!(
+            global_cache_dir(home),
+            PathBuf::from("/home/example/.lunco/cache")
+        );
     }
 
     #[test]
@@ -1096,14 +1090,29 @@ mod tests {
     }
 
     #[test]
-    fn asset_read_roots_preserve_owner_precedence() {
+    fn engine_roots_exclude_the_assets_local_cache() {
         let package_assets = Path::new("/package/assets");
         assert_eq!(
-            asset_read_roots(package_assets),
+            engine_asset_read_roots_with_shared(
+                package_assets,
+                Path::new("/home/example/.lunco/cache")
+            ),
             vec![
                 PathBuf::from("/package/assets"),
-                PathBuf::from("/package/assets/.cache"),
-                cache_dir(),
+                PathBuf::from("/home/example/.lunco/cache"),
+            ]
+        );
+    }
+
+    #[test]
+    fn twin_roots_keep_the_twin_cache_before_global_cache() {
+        let twin = Path::new("/workspace/mission");
+        assert_eq!(
+            asset_read_roots_with_shared(twin, Path::new("/home/example/.lunco/cache")),
+            vec![
+                PathBuf::from("/workspace/mission"),
+                twin_cache_dir(twin),
+                PathBuf::from("/home/example/.lunco/cache"),
             ]
         );
     }

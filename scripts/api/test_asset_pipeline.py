@@ -115,6 +115,18 @@ tool_version={json.dumps(sys.version.split()[0])}
 args=["{{copier}}","{{input}}","{{output}}","{url}/processed"]
 timeout_s=10
 ''')
+    with (root / "Assets.toml").open("a") as manifest:
+        manifest.write(f'''
+[texture]
+name="Texture freshness probe"
+url="{url}/input.png"
+dest="sources/texture.png"
+sha256="{digest}"
+[texture.process]
+kind="texture"
+target_resolution=[2,2]
+output="products/texture.png"
+''')
 
 
 def main():
@@ -285,6 +297,31 @@ def main():
             verdict(f'verify_pipeline_failure("{scope}","product","intentional pipeline rejection");')
             capture_view(scope,"product","process","failed-processing","intentional pipeline rejection")
             verdict("verify_preserved_artifact(" + json.dumps(old) + "," + json.dumps((artifact / "image.png").read_bytes().hex()) + ");")
+
+            retire()
+            texture = open_twin(dynamic, "twin:ArtifactPipelineProbe", "texture")
+            scope = texture["scope"]
+            execute(session, "RequestDataset", id=texture["id"])
+            wait_for(lambda: terminal(scope, "texture", "installed"), "simple texture preparation")
+            verdict(f'verify_dataset_state("{scope}","texture","installed");')
+
+            manifest_path = dynamic / "Assets.toml"
+            manifest = manifest_path.read_text()
+            old_recipe = '[texture.process]\nkind="texture"\ntarget_resolution=[2,2]'
+            new_recipe = '[texture.process]\nkind="texture"\ntarget_resolution=[1,1]'
+            if manifest.count(old_recipe) != 1:
+                raise RuntimeError("could not isolate the texture recipe for the freshness check")
+            manifest_path.write_text(manifest.replace(old_recipe, new_recipe, 1))
+            retire()
+            texture = open_twin(dynamic, "twin:ArtifactPipelineProbe", "texture")
+            scope = texture["scope"]
+            verdict(f'verify_dataset_state("{scope}","texture","missing");')
+            execute(session, "ProcessDataset", id=texture["id"], force=False)
+            wait_for(lambda: terminal(scope, "texture", "installed"), "stale texture recipe rebuild")
+            verdict(f'verify_dataset_state("{scope}","texture","installed");')
+            with Image.open(dynamic / ".cache/products/texture.png") as baked:
+                width, height = baked.size
+            verdict(f'verify_texture_dimensions({width},{height},1,1);')
         if process.returncode!=0:raise RuntimeError(f"production session exited with {process.returncode}: {log}")
         assert_render_log_clean(log)
 

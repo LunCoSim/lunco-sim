@@ -91,7 +91,7 @@ cargo build --release --bin luncosim-server -p lunco-luncosim-server
 
 ```bash
 sudo useradd --system --home /opt/lunco --shell /usr/sbin/nologin lunco
-sudo install -d -o lunco -g lunco /opt/lunco /opt/lunco/certs /opt/lunco/.cache /opt/lunco/web
+sudo install -d -o lunco -g lunco /opt/lunco /opt/lunco/certs /opt/lunco/.lunco/cache /opt/lunco/web
 ```
 
 Target layout on the box:
@@ -101,7 +101,7 @@ Target layout on the box:
 ├── luncosim-server        # the release headless server binary
 ├── assets/                 # asset tree (scenes/, shaders/, models cache, …)
 ├── certs/                  # deploy-hook-copied fullchain.pem + privkey.pem
-├── .cache/                 # rumoca/source-library/model cache (service-writable)
+├── .lunco/cache/           # shared engine and Modelica asset cache (service-writable)
 ├── lunco-server.env        # config (TLS paths, RUST_LOG)
 └── web/luncosim/           # the wasm bundle nginx serves
 ```

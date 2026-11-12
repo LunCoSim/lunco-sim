@@ -178,9 +178,10 @@ runtime surface as typed `simulation_progress` data. Let the active Rhai policy
 turn those facts into user-facing labels such as `PHYSICS LOADING` or
 `WAITING FOR TERRAIN`; the engine does not hardcode HUD wording. Progress changes
 invalidate the existing surface projection, so a readiness label does not poll
-the simulation. During preparation the built-in Rhai visibility policy
-temporarily shows an authored surface before possession, then returns to its
-authored `possessed` or `always` mode when the holds clear.
+the simulation. Preparation updates status content without revealing an
+unpossessed scene surface. Visibility follows the authored mode throughout
+loading: `possessed` requires local control and `always` requires an available
+subject. This keeps unpossessed HUDs hidden on startup.
 
 Use the optional typed `pause` fact (`condition`, `detail`) for a coupled
 subject's retained stop condition. Keep the wording in Rhai and qualify the
@@ -222,6 +223,14 @@ production binary in both host modes:
 python3 scripts/api/test_runtime_ui_preparation.py --port 4374 --log target/ui-preparation-headless.log
 python3 scripts/api/test_runtime_ui_preparation.py --port 4375 --windowed --log target/ui-preparation-windowed.log
 python3 scripts/api/test_runtime_policy_transaction.py --port 4376 --log target/ui-policy-transaction.log
+```
+
+For the startup visibility rule, run the six authored policy checks in a
+production scene-test session. The `lander_controls` gate also checks the
+composed lander HUD is hidden before local possession and visible afterward:
+
+```bash
+SCENE_API_PORT_BASE=<free-port> ./scripts/run_scene_tests.sh --no-build --exact lander_controls -j 1
 ```
 
 `SetRhaiPolicy` creates a complete source policy through one compound document

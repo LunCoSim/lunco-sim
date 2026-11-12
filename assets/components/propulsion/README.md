@@ -22,8 +22,11 @@ accepts an explicit source-port map. For `RCSJet`, map `intensity` to
 `light_intensity` and `radius` to `light_radius`. Keep `render_throttle` as the
 plume's delivered-energy output. RCS physical geometry supplies throat, exit
 radius, bell length and contour; the same shared equations compute its field.
-The shader's two additive layers partition the radiative budget with energy
-fractions summing to one. Material detail only attenuates that budget.
+One additive volume evaluates both normalized optical components. `core_fraction`
+partitions their radiative budget; `core_width` sets the downstream core profile.
+Stable `Shader.inputs:seed` controls detail, and `steps` caps the entire ray. Axial
+displacement preserves cross-section area and stays inside the observation bound;
+noise and the tail fade only reduce the displayed estimate.
 
 Connect RCS fuel and oxidizer availability to the owning reservoir outputs.
 Feed availability multiplies valve demand before the thruster computes force

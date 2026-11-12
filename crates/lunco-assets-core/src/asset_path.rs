@@ -991,13 +991,9 @@ mod tests {
         ] {
             assert_eq!(web_url(&reference), encoded);
         }
-        // This is the same mapper supplied to both Bevy browser readers,
-        // after their configured root has been joined to the logical path.
+        // This is the same mapper supplied to the Bevy browser reader, after
+        // the engine asset root has been joined to the logical path.
         assert_eq!(http_asset_path(&format!("assets/{relative}")), encoded);
-        assert_eq!(
-            http_asset_path(&format!("assets/.cache/{relative}")),
-            encoded.replacen("assets/", "assets/.cache/", 1)
-        );
         assert_eq!(web_url("/part # %.tif"), "/part%20%23%20%25.tif");
         assert_ne!(web_url("part%20one.tif"), web_url("part one.tif"));
         assert_eq!(

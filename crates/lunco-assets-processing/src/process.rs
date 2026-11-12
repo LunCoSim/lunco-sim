@@ -252,7 +252,6 @@ pub fn process_asset_with_registry(
             source_path,
             process,
             &output_path,
-            cache_root,
             twin_root,
             control,
             registry,
