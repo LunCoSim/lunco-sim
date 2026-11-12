@@ -195,22 +195,28 @@ private dock layout.
    Timeline, etc. Collapsible to zero height.
 8. **Status bar (bottom strip)** — sim time, speed, selected entity,
    celestial body, FPS, and the latest status event. Warnings and errors
-   identify their level and source in the strip; the history popup keeps
-   discrete state transitions in one responsive level/source/message/action
-   row inside a compact popup sized to roughly half the parent
-   window (clamped to 420–960 logical px); the popup owns a fixed width while
-   its vertical history viewport fills that width, and each message column
-   uses the remaining inner width after action controls.
+   identify their level and source in the strip. The history popup presents
+   retained discrete events in a selectable plain-text log by default, ordered
+   newest first; one read-only multiline editor holds the complete text so
+   Shift-click and drag selection can span entries. Dragging against the top or
+   bottom edge scrolls the log while the selection continues through offscreen
+   events. `Copy all` beside the title copies the complete log, including
+   diagnostic detail. The
+   `Event controls` view retains the level/source/message/action rows inside a
+   compact popup sized to roughly half the parent window (clamped to 420–960
+   logical px); the popup owns a fixed width while its vertical history viewport
+   fills that width, and each message column uses the remaining inner width
+   after action controls.
    The popup opens automatically for a new terminal RuntimeFault. Its
    explanation includes the complete owner-issued fault diagnostic in the
-   shared history; selecting that row expands the complete message. Compile failures explain
-   why simulation did not start and list unmatched Modelica unknowns when
-   Rumoca can identify them. Step failures list Modelica values that were not
-   produced by the failed step, their last accepted values, and sample and
-   target times. Ordinary
+   shared history; selecting that row in `Event controls` expands the complete
+   message. Compile failures explain why simulation did not start and list
+   unmatched Modelica unknowns when Rumoca can identify them. Step failures
+   list Modelica values that were not produced by the failed step, their last
+   accepted values, and sample and target times. Ordinary
    warnings and non-terminal errors remain in history without opening the
-   popup. The history uses one uniquely identified scroll area.
-   Diagnostic rows
+   popup. The selectable log and event controls use separate uniquely
+   identified scroll areas. In the controls view, diagnostic rows
    expand or collapse their complete diagnostics when the row is clicked
    and expose that affordance
    through the row cursor and tooltip, while attention rows retain their typed

@@ -1841,29 +1841,69 @@ pub(crate) fn render_status_bar_inner(
                 ui.set_min_width(popup_width);
                 ui.set_max_width(popup_width);
                 ui.set_max_height(360.0);
-                ui.heading("Recent status events");
+                let history_text = status_history_copy_text(&history);
+                ui.horizontal(|ui| {
+                    ui.heading("Recent events");
+                    if ui
+                        .add_enabled(!history.is_empty(), egui::Button::new("Copy all"))
+                        .on_hover_text("Copy all retained events, including complete diagnostics")
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(history_text.clone());
+                    }
+                });
+                let history_view_id = ui.make_persistent_id("recent_status_history_view");
+                let mut show_event_controls = ui
+                    .ctx()
+                    .data(|data| data.get_temp::<bool>(history_view_id))
+                    .unwrap_or(false);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut show_event_controls, false, "Copyable log");
+                    ui.selectable_value(&mut show_event_controls, true, "Event controls");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(format!("{} events", history.len()))
+                    });
+                });
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(history_view_id, show_event_controls);
+                });
                 ui.separator();
                 let mut popup_attention_source = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("recent_status_history")
+                let history_scroll = egui::ScrollArea::vertical()
+                    .id_salt(("recent_status_history", show_event_controls))
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         if history.is_empty() {
                             ui.label(egui::RichText::new("(no events yet)").weak());
-                            return;
+                            return None;
                         }
-                        // History contains discrete snapshots only.
-                        for (key, ev) in history.iter().rev() {
-                            if render_status_event_row(
-                                ui,
-                                ev,
-                                theme,
-                                ui.make_persistent_id(("workbench_status_event", key)),
-                            ) {
-                                popup_attention_source = Some(ev.source);
+                        if show_event_controls {
+                            // History contains discrete snapshots only.
+                            for (key, ev) in history.iter().rev() {
+                                if render_status_event_row(
+                                    ui,
+                                    ev,
+                                    theme,
+                                    ui.make_persistent_id(("workbench_status_event", key)),
+                                ) {
+                                    popup_attention_source = Some(ev.source);
+                                }
                             }
+                            None
+                        } else {
+                            Some(render_status_history_log(ui, &history_text))
                         }
                     });
+                if let Some(log_response) = history_scroll.inner.as_ref() {
+                    autoscroll_status_history_selection(
+                        ui.ctx(),
+                        log_response.id,
+                        history_scroll.id,
+                        history_scroll.state,
+                        history_scroll.inner_rect,
+                        history_scroll.content_size,
+                    );
+                }
                 if let Some(source) = popup_attention_source {
                     status_action = Some(StatusBarAction { source });
                 }
@@ -2315,6 +2355,99 @@ fn status_history_snapshot(
             )
         })
         .collect()
+}
+
+/// Build the plain-text history shared by the selectable log and Copy all.
+fn status_history_copy_text(
+    history: &[(StatusEventKey, lunco_status_core::status_bus::StatusEvent)],
+) -> String {
+    let mut text = String::new();
+    for (_, event) in history.iter().rev() {
+        text.push('[');
+        text.push_str(status_level_label(event.level));
+        text.push_str("] ");
+        text.push_str(event.source);
+        text.push('\n');
+        text.push_str(&event.message);
+        if !event.message.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+    }
+    text
+}
+
+/// Show the whole retained log in one read-only editor so selection can span entries.
+fn render_status_history_log(ui: &mut egui::Ui, history_text: &str) -> egui::Response {
+    let mut text = history_text;
+    ui.add(
+        egui::TextEdit::multiline(&mut text)
+            .id_salt("recent_status_history_text")
+            .desired_width(ui.available_width())
+            .desired_rows(1)
+            .font(lunco_theme::TypographyRole::Body.text_style())
+            .frame(egui::Frame::NONE),
+    )
+    .on_hover_text(concat!(
+        "Shift-click or drag to extend a selection. Drag near the top or bottom ",
+        "edge to scroll through the retained events while selecting.",
+    ))
+}
+
+const STATUS_HISTORY_DRAG_EDGE_ZONE: f32 = 24.0;
+const STATUS_HISTORY_DRAG_MIN_SPEED: f32 = 90.0;
+const STATUS_HISTORY_DRAG_MAX_SPEED: f32 = 810.0;
+const STATUS_HISTORY_DRAG_MAX_FRAME_DT: f32 = 0.1;
+
+fn status_history_drag_scroll_delta(pointer_y: f32, viewport: egui::Rect, stable_dt: f32) -> f32 {
+    let edge_zone = (viewport.height() * 0.5).min(STATUS_HISTORY_DRAG_EDGE_ZONE);
+    if edge_zone <= 0.0 {
+        return 0.0;
+    }
+
+    let (direction, distance) = if pointer_y < viewport.top() + edge_zone {
+        (-1.0, viewport.top() + edge_zone - pointer_y)
+    } else if pointer_y > viewport.bottom() - edge_zone {
+        (1.0, pointer_y - (viewport.bottom() - edge_zone))
+    } else {
+        return 0.0;
+    };
+
+    let edge_pressure = (distance / edge_zone).clamp(0.0, 1.0);
+    let speed = STATUS_HISTORY_DRAG_MIN_SPEED
+        + (STATUS_HISTORY_DRAG_MAX_SPEED - STATUS_HISTORY_DRAG_MIN_SPEED)
+            * edge_pressure
+            * edge_pressure;
+    direction * speed * stable_dt.clamp(0.0, STATUS_HISTORY_DRAG_MAX_FRAME_DT)
+}
+
+fn autoscroll_status_history_selection(
+    ctx: &egui::Context,
+    log_widget_id: egui::Id,
+    scroll_id: egui::Id,
+    mut scroll_state: egui::scroll_area::State,
+    viewport: egui::Rect,
+    content_size: egui::Vec2,
+) {
+    if !ctx.is_being_dragged(log_widget_id) || !ctx.input(|input| input.pointer.primary_down()) {
+        return;
+    }
+    let Some(pointer_pos) = ctx.input(|input| input.pointer.interact_pos()) else {
+        return;
+    };
+
+    let delta = status_history_drag_scroll_delta(
+        pointer_pos.y,
+        viewport,
+        ctx.input(|input| input.stable_dt),
+    );
+    let max_offset = (content_size.y - viewport.height()).max(0.0);
+    let next_offset = (scroll_state.offset.y + delta).clamp(0.0, max_offset);
+    if next_offset != scroll_state.offset.y {
+        scroll_state.offset.y = next_offset;
+        scroll_state.store(ctx, scroll_id);
+        ctx.request_repaint();
+    }
 }
 
 fn status_popup_width(content_width: f32) -> f32 {
@@ -3608,6 +3741,332 @@ mod tests {
         let retained_after_eviction = discrete_status_event_key(201, 200, 0);
         let retained_after_another_eviction = discrete_status_event_key(202, 200, 0);
         assert_ne!(retained_after_eviction, retained_after_another_eviction);
+    }
+
+    #[test]
+    fn recent_history_copy_text_contains_all_details_newest_first() {
+        let mut bus = lunco_status_core::status_bus::StatusBus::default();
+        bus.push(
+            "terrain",
+            lunco_status_core::status_bus::StatusLevel::Warn,
+            "missing prim /World/Terrain\ncaused by: /twins/apollo15/terrain",
+        );
+        bus.push(
+            "physics",
+            lunco_status_core::status_bus::StatusLevel::Error,
+            "step failed",
+        );
+
+        assert_eq!(
+            status_history_copy_text(&status_history_snapshot(&bus)),
+            "[ERROR] physics\nstep failed\n\n[WARN] terrain\nmissing prim /World/Terrain\ncaused by: /twins/apollo15/terrain\n\n"
+        );
+    }
+
+    #[test]
+    fn recent_history_log_extends_and_copies_offscreen_text_read_only() {
+        let history_text = (0..40)
+            .rev()
+            .map(|event| format!("[INFO] runtime\nevent-{event:02}\n\n"))
+            .collect::<String>();
+        let context = egui::Context::default();
+        let frame = |events: Vec<egui::Event>| {
+            let mut response = None;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    response = Some(
+                        egui::ScrollArea::vertical()
+                            .id_salt("recent_history_log_test")
+                            .max_height(80.0)
+                            .show(ui, |ui| render_status_history_log(ui, &history_text))
+                            .inner,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            (output, response.expect("history log was rendered"))
+        };
+
+        let (_, response) = frame(Vec::new());
+        response.request_focus();
+        assert!(context.memory(|memory| memory.has_focus(response.id)));
+        let select_all = egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: Some(egui::Key::A),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        let _ = frame(vec![select_all]);
+        let copied_all = frame(vec![egui::Event::Copy]).0;
+
+        assert!(
+            copied_all
+                .platform_output
+                .commands
+                .contains(&egui::OutputCommand::CopyText(history_text.clone())),
+            "clipboard commands: {:?}",
+            copied_all.platform_output.commands
+        );
+
+        let _ = frame(vec![egui::Event::Key {
+            key: egui::Key::ArrowLeft,
+            physical_key: Some(egui::Key::ArrowLeft),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        for _ in 0..50 {
+            let _ = frame(vec![egui::Event::Key {
+                key: egui::Key::ArrowDown,
+                physical_key: Some(egui::Key::ArrowDown),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            }]);
+        }
+        let shifted_selection = frame(vec![egui::Event::Copy]).0;
+        let copied_selection = shifted_selection
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text),
+                _ => None,
+            })
+            .expect("Shift+ArrowDown leaves a copyable text selection");
+        assert!(copied_selection.starts_with("[INFO] runtime\nevent-39\n\n"));
+        assert!(copied_selection.contains("event-30"));
+        assert!(!copied_selection.contains("event-00"));
+        assert!(copied_selection.len() < history_text.len());
+    }
+
+    #[test]
+    fn recent_history_log_shift_click_extends_the_existing_selection() {
+        let history_text = (0..40)
+            .rev()
+            .map(|event| format!("[INFO] runtime\nevent-{event:02}\n\n"))
+            .collect::<String>();
+        let context = egui::Context::default();
+        let mut time = 0.0_f64;
+        let mut frame = |events: Vec<egui::Event>| {
+            time += 1.0 / 60.0;
+            let mut viewport = None;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let scroll = egui::ScrollArea::vertical()
+                        .id_salt("recent_history_shift_click_test")
+                        .max_height(80.0)
+                        .show(ui, |ui| Some(render_status_history_log(ui, &history_text)));
+                    viewport = Some(scroll.inner_rect);
+                },
+            );
+            output.textures_delta.clear();
+            viewport.expect("history log was rendered")
+        };
+
+        let viewport = frame(Vec::new());
+        let anchor = egui::pos2(viewport.left() + 4.0, viewport.top() + 2.0);
+        let extend_to = egui::pos2(viewport.left() + 200.0, viewport.top() + 70.0);
+        frame(vec![
+            egui::Event::PointerMoved(anchor),
+            egui::Event::PointerButton {
+                pos: anchor,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        frame(vec![egui::Event::PointerButton {
+            pos: anchor,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        frame(vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::SHIFT),
+            egui::Event::PointerMoved(extend_to),
+            egui::Event::PointerButton {
+                pos: extend_to,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::SHIFT,
+            },
+        ]);
+        frame(vec![egui::Event::PointerButton {
+            pos: extend_to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::SHIFT,
+        }]);
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 120.0),
+                )),
+                time: Some(time + 1.0 / 60.0),
+                events: vec![
+                    egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                    egui::Event::Copy,
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("recent_history_shift_click_test")
+                    .max_height(80.0)
+                    .show(ui, |ui| render_status_history_log(ui, &history_text));
+            },
+        );
+        output.textures_delta.clear();
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text),
+                _ => None,
+            });
+        assert!(copied.is_some(), "Shift-click leaves a copyable selection");
+        let copied = copied.expect("Shift-click leaves a copyable selection");
+        assert!(copied.contains("INFO] runtime\nevent-39\n\n"));
+        assert!(copied.contains("event-38"));
+        assert!(!copied.contains("event-37"));
+    }
+
+    #[test]
+    fn recent_history_log_drag_autoscrolls_and_extends_selection_offscreen() {
+        let history_text = (0..40)
+            .rev()
+            .map(|event| format!("[INFO] runtime\nevent-{event:02}\n\n"))
+            .collect::<String>();
+        let context = egui::Context::default();
+        let mut time = 0.0_f64;
+        let mut frame = |events: Vec<egui::Event>| {
+            time += 1.0 / 60.0;
+            let mut snapshot = None;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 120.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let scroll = egui::ScrollArea::vertical()
+                        .id_salt("recent_history_autoscroll_test")
+                        .max_height(80.0)
+                        .show(ui, |ui| Some(render_status_history_log(ui, &history_text)));
+                    snapshot = Some((
+                        scroll.inner_rect,
+                        scroll.inner.as_ref().unwrap().id,
+                        scroll.id,
+                        scroll.state,
+                        scroll.content_size,
+                        scroll.state.offset.y,
+                    ));
+                    let (viewport, log_widget_id, scroll_id, state, content_size, _) =
+                        snapshot.expect("history log was rendered");
+                    autoscroll_status_history_selection(
+                        ui.ctx(),
+                        log_widget_id,
+                        scroll_id,
+                        state,
+                        viewport,
+                        content_size,
+                    );
+                },
+            );
+            output.textures_delta.clear();
+            snapshot.expect("history log was rendered")
+        };
+
+        let initial = frame(Vec::new());
+        let viewport = initial.0;
+        let anchor = egui::pos2(viewport.left() + 4.0, viewport.top() + 2.0);
+        let edge = egui::pos2(viewport.left() + 4.0, viewport.bottom() - 1.0);
+        frame(vec![
+            egui::Event::PointerMoved(anchor),
+            egui::Event::PointerButton {
+                pos: anchor,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let mut offset_while_selecting = 0.0;
+        for _ in 0..240 {
+            let state = frame(vec![egui::Event::PointerMoved(edge)]);
+            offset_while_selecting = state.5;
+        }
+        frame(vec![egui::Event::PointerButton {
+            pos: edge,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 120.0),
+                )),
+                time: Some(time + 1.0 / 60.0),
+                events: vec![egui::Event::Copy],
+                ..Default::default()
+            },
+            |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("recent_history_autoscroll_test")
+                    .max_height(80.0)
+                    .show(ui, |ui| render_status_history_log(ui, &history_text));
+            },
+        );
+        output.textures_delta.clear();
+        let copied = output
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text),
+                _ => None,
+            })
+            .expect("drag leaves a copyable selection");
+        assert!(offset_while_selecting > 500.0);
+        assert!(copied.contains("INFO] runtime\nevent-39\n\n"));
+        assert!(copied.contains("event-00"));
+    }
+
+    #[test]
+    fn recent_history_drag_scroll_responds_to_both_viewport_edges() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+        assert!(status_history_drag_scroll_delta(1.0, viewport, 1.0 / 60.0) < 0.0);
+        assert_eq!(
+            status_history_drag_scroll_delta(50.0, viewport, 1.0 / 60.0),
+            0.0
+        );
+        assert!(status_history_drag_scroll_delta(99.0, viewport, 1.0 / 60.0) > 0.0);
     }
 
     #[test]
