@@ -67,6 +67,13 @@ class DevReleaseContractTests(unittest.TestCase):
         self.assertIn("Release versions are allocated automatically", workflow)
         self.assertIn("LunCoSim/lunco-sim-updates", workflow)
         self.assertIn("if: needs.meta.outputs.signing_mode == 'release' && inputs.make_release", workflow)
+        self.assertIn("build_matrix: ${{ steps.metadata.outputs.build_matrix }}", workflow)
+        self.assertIn("matrix: ${{ fromJSON(needs.meta.outputs.build_matrix) }}", workflow)
+        self.assertIn('if $signing_mode == "release" then . else map(select(.platform == "windows")) end', workflow)
+        self.assertNotIn(
+            "if: needs.meta.outputs.signing_mode == 'release' || matrix.platform == 'windows'",
+            workflow,
+        )
         self.assertIn("contents: read", workflow)
         self.assertIn("contents: write", workflow)
         self.assertIn("Test/off signing modes only create Actions artifacts", workflow)

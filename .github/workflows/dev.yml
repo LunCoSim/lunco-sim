@@ -65,6 +65,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       msi_version: ${{ steps.version.outputs.msi_version }}
       signing_mode: ${{ steps.metadata.outputs.signing_mode }}
+      build_matrix: ${{ steps.metadata.outputs.build_matrix }}
     steps:
       - uses: actions/checkout@v4
       - name: Verify dev release and signing contracts
@@ -94,10 +95,42 @@ jobs:
             exit 1
           fi
 
+          # Test/off runs build only Windows; release runs build every desktop target.
+          build_matrix=$(jq -cn --arg signing_mode "$signing_mode" '
+            [
+              {
+                label: "Linux x86_64",
+                os: "ubuntu-22.04",
+                platform: "linux",
+                arch: "x86_64",
+                apt_pkgs: "libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libx11-dev xorg-dev",
+                cross_target: ""
+              },
+              {
+                label: "macOS ARM64",
+                os: "macos-15",
+                platform: "macos",
+                arch: "aarch64",
+                apt_pkgs: "",
+                cross_target: "x86_64-apple-darwin"
+              },
+              {
+                label: "Windows x86_64",
+                os: "windows-latest",
+                platform: "windows",
+                arch: "x86_64",
+                apt_pkgs: "",
+                cross_target: ""
+              }
+            ]
+            | {include: (if $signing_mode == "release" then . else map(select(.platform == "windows")) end)}
+          ')
+
           {
             echo "date=$date"
             echo "timestamp=$timestamp"
             echo "signing_mode=$signing_mode"
+            echo "build_matrix=$build_matrix"
           } >> "$GITHUB_OUTPUT"
           echo "Preparing $signing_mode build ($timestamp)"
       - id: version
@@ -142,44 +175,10 @@ jobs:
   # ── Build LunCoSim per OS ────────────────────────────────────────────────
   build:
     needs: meta
-    if: needs.meta.outputs.signing_mode == 'release' || matrix.platform == 'windows'
     name: ${{ matrix.label }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - label: Linux x86_64
-            os: ubuntu-22.04
-            platform: linux
-            arch: x86_64
-            # Bevy's Linux windowing stack (winit/wayland/x11) needs these
-            # dev headers at build time. alsa = libasound2 (bevy_audio is
-            # off, but alsa-sys may still be a transitive); udev = libudev
-            # (winit); wayland + xkbcommon + x11 = the display backends.
-            apt_pkgs: >-
-              libasound2-dev libudev-dev
-              libwayland-dev libxkbcommon-dev
-              libx11-dev xorg-dev
-            cross_target: ''    # no cross-compile on Linux
-
-          - label: macOS ARM64
-            os: macos-15
-            platform: macos
-            arch: aarch64
-            apt_pkgs: ''
-            # Cross-compile x86_64 on the SAME Apple Silicon runner (avoids
-            # the chronically-unavailable macos-13 Intel runner). Adds the
-            # x86_64-apple-darwin rustup target, then runs build_native.sh
-            # twice more with --target. The cross builds use a separate
-            # target/<triple>/ subdir so they don't overwrite the native ones.
-            cross_target: x86_64-apple-darwin
-
-          - label: Windows x86_64
-            os: windows-latest
-            platform: windows
-            arch: x86_64
-            apt_pkgs: ''
-            cross_target: ''    # no cross-compile on Windows
+      matrix: ${{ fromJSON(needs.meta.outputs.build_matrix) }}
 
     runs-on: ${{ matrix.os }}
     # Force bash on all platforms — our build scripts are bash. On Windows
