@@ -22,6 +22,8 @@
 #     --release          Optimized release build (default: dev)
 #     --package          Create a .tar.gz (unix) or .zip (windows) archive
 #     --velopack         Create a Velopack release from the staged directory
+#     --pack-only        Repack an existing staged directory without rebuilding
+#     --without-msi       Omit MSI generation from a Windows Velopack pass
 #     --version <semver>  SemVer2 version used by Velopack (or env override)
 #     --msi-version <version>  Ordered Windows Installer version (or LUNCO_MSI_VERSION)
 #     --target <triple>  Cross-compile target (default: host triple)
@@ -175,7 +177,7 @@ velopack_runtime() {
 # (live spawns + moved transforms) and `history/` (the edit journal) inside the
 # very tree we package. A `.gitignore` entry stops those reaching git; it does
 # NOT stop them reaching a bundle, because packaging copies the WORKING TREE —
-# so a nightly cut on a machine that had ever driven a rover shipped that
+# so a release cut on a machine that had ever driven a rover shipped that
 # session, layered over the authored scene on every install. The rule is
 # `lunco_twin::is_runtime_state`; keep the two in step.
 sync_dir() {
@@ -445,8 +447,8 @@ create_archive() {
     parent="$(dirname "$dir")"
     # UTC makes archive names unambiguous and consistent between local and
     # GitHub Actions builds. CI supplies one timestamp to all matrix jobs so
-    # the archive names match the nightly release tag exactly. Seconds prevent
-    # repeat package runs overwriting one another while preserving the stable
+    # the archive names match the release tag exactly. Seconds prevent repeat
+    # package runs overwriting one another while preserving the stable
     # platform/architecture prefix.
     local timestamp
     timestamp="${LUNCO_BUILD_TIMESTAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
@@ -486,6 +488,8 @@ shift
 RELEASE=0
 PACKAGE=0
 VELOPACK=0
+PACK_ONLY=0
+WITH_MSI=1
 RELEASE_VERSION="${LUNCO_RELEASE_VERSION:-}"
 MSI_VERSION="${LUNCO_MSI_VERSION:-}"
 TARGET=""
@@ -501,6 +505,8 @@ while [ $# -gt 0 ]; do
         --release)       RELEASE=1; shift ;;
         --package)       PACKAGE=1; shift ;;
         --velopack)      VELOPACK=1; shift ;;
+        --pack-only)     PACK_ONLY=1; VELOPACK=1; shift ;;
+        --without-msi)   WITH_MSI=0; shift ;;
         --version)       RELEASE_VERSION="$2"; shift 2 ;;
         --version=*)     RELEASE_VERSION="${1#--version=}"; shift ;;
         --msi-version)   MSI_VERSION="$2"; shift 2 ;;
@@ -526,6 +532,11 @@ if [ "$PACKAGE" -eq 1 ] && [ "$VELOPACK" -eq 1 ]; then
     exit 2
 fi
 
+if [ "$PACK_ONLY" -eq 1 ] && [ "$WITH_MSI" -eq 1 ]; then
+    error "--pack-only requires --without-msi"
+    exit 2
+fi
+
 # Validate binary
 case "$BINARY" in
     lunica|luncosim) ;;
@@ -538,7 +549,7 @@ TRIPLE="${TARGET:-$HOST_TRIPLE}"
 PLATFORM="$(platform_short "$TRIPLE")"
 ARCH="$(arch_short "$TRIPLE")"
 
-if [ "$VELOPACK" -eq 1 ] && [ "$PLATFORM" = "windows" ]; then
+if [ "$VELOPACK" -eq 1 ] && [ "$WITH_MSI" -eq 1 ] && [ "$PLATFORM" = "windows" ]; then
     if [[ ! "$MSI_VERSION" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,5})$ ]] ||
         (( 10#${BASH_REMATCH[1]} > 255 || 10#${BASH_REMATCH[2]} > 255 || 10#${BASH_REMATCH[3]} > 65535 )); then
         error "Windows MSI packaging requires a valid ordered --msi-version (major.minor.build) or LUNCO_MSI_VERSION"
@@ -592,6 +603,10 @@ fi
 if [ -z "$OUT_DIR" ]; then
     OUT_DIR="$PROJECT_DIR/dist/${BINARY}-${PLATFORM}-${ARCH}"
 fi
+if [ "$PACK_ONLY" -eq 1 ] && [ ! -d "$OUT_DIR" ]; then
+    error "--pack-only requires an existing staged package directory: $OUT_DIR"
+    exit 2
+fi
 # This is a repository-local build output, not a managed temporary directory.
 # Keeping it outside dist/ lets the package staging directory be recreated
 # after Cargo has emitted the icons into it.
@@ -608,47 +623,56 @@ if is_windows "$TRIPLE"; then
     BIN_PATH="${BIN_PATH}.exe"
 fi
 
-info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
-cd "$PROJECT_DIR"
+BIN_NAME="$(basename "$BIN_PATH")"
+if [ "$PACK_ONLY" -eq 0 ]; then
+    info "Building $BINARY ($CRATE) — $PROFILE_LABEL, target: $TRIPLE"
+    cd "$PROJECT_DIR"
 
-PACKAGE_FEATURE_ARGS=()
-if [ "$BINARY" = "luncosim" ]; then
-    PACKAGE_FEATURE_ARGS+=(--features package-icons,updates)
-fi
+    PACKAGE_FEATURE_ARGS=()
+    if [ "$BINARY" = "luncosim" ]; then
+        PACKAGE_FEATURE_ARGS+=(--features package-icons,updates)
+    fi
 
     LUNCOSIM_ICON_OUTPUT_DIR="$ICON_OUTPUT_DIR" \
-    LUNCOSIM_ICON_OUTPUT_STAMP="$ICON_OUTPUT_STAMP" \
-    cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 4 \
-    --bin "$BINARY" -p "$CRATE" \
-    "${PACKAGE_FEATURE_ARGS[@]+"${PACKAGE_FEATURE_ARGS[@]}"}" \
-    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+        LUNCOSIM_ICON_OUTPUT_STAMP="$ICON_OUTPUT_STAMP" \
+        cargo build "${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"}" "${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}" -j 4 \
+        --bin "$BINARY" -p "$CRATE" \
+        "${PACKAGE_FEATURE_ARGS[@]+"${PACKAGE_FEATURE_ARGS[@]}"}" \
+        "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 
-if [ ! -f "$PROJECT_DIR/$BIN_PATH" ]; then
-    error "Build succeeded but binary not found at $BIN_PATH"
-    exit 1
+    if [ ! -f "$PROJECT_DIR/$BIN_PATH" ]; then
+        error "Build succeeded but binary not found at $BIN_PATH"
+        exit 1
+    fi
+    success "Binary built: $BIN_PATH ($(du -h "$PROJECT_DIR/$BIN_PATH" | cut -f1))"
+
+    prepare_package_icon
+else
+    if [ ! -f "$OUT_DIR/$BIN_NAME" ]; then
+        error "--pack-only requires the staged executable: $OUT_DIR/$BIN_NAME"
+        exit 2
+    fi
+    prepare_package_icon
 fi
-success "Binary built: $BIN_PATH ($(du -h "$PROJECT_DIR/$BIN_PATH" | cut -f1))"
-
-prepare_package_icon
 
 # ── Download cache assets before staging ──────────────────────────────────
 # Runs `cargo run -p lunco-assets -- download` for the crates this binary
 # needs (packaged UI fonts). Skipped with --skip-download or --no-cache.
 # Idempotent — re-runs verify sha256 and skip already-present files.
-if [ "$NO_CACHE" -eq 0 ] && [ "$SKIP_DOWNLOAD" -eq 0 ]; then
+if [ "$PACK_ONLY" -eq 0 ] && [ "$NO_CACHE" -eq 0 ] && [ "$SKIP_DOWNLOAD" -eq 0 ]; then
     download_cache_for "$BINARY"
-elif [ "$SKIP_DOWNLOAD" -eq 1 ]; then
+elif [ "$PACK_ONLY" -eq 0 ] && [ "$SKIP_DOWNLOAD" -eq 1 ]; then
     info "Skipping cache download (--skip-download)"
 fi
 
 # ── Stage the package ─────────────────────────────────────────────────────
+if [ "$PACK_ONLY" -eq 0 ]; then
 info "Staging package → $OUT_DIR"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # Copy the binary
 cp -f "$PROJECT_DIR/$BIN_PATH" "$OUT_DIR/"
-BIN_NAME="$(basename "$BIN_PATH")"
 
 # Strip the shipped copy (release profile already strips, but dev builds
 # carry ~3+ GB of debug info). The original target/ binary keeps symbols
@@ -735,6 +759,10 @@ TOTAL_SIZE=$(du -sh "$OUT_DIR" | cut -f1)
 success "Package assembled: $OUT_DIR ($TOTAL_SIZE)"
 info "Contents:"
 ( cd "$OUT_DIR" && ls -la ) | while read -r line; do info "  $line"; done
+else
+    info "Repacking staged package without rebuilding: $OUT_DIR"
+    BIN_NAME="$(basename "$BIN_PATH")"
+fi
 
 if [ "$RELEASE" -eq 0 ]; then
     warn "Dev build (opt-level 1). For distribution use --release."
@@ -775,7 +803,7 @@ if [ "$VELOPACK" -eq 1 ]; then
         --packDir "$OUT_DIR" \
         --mainExe "$BIN_NAME" \
         --outputDir "$VELOPACK_OUT")
-    if [ "$PLATFORM" = "windows" ]; then
+    if [ "$PLATFORM" = "windows" ] && [ "$WITH_MSI" -eq 1 ]; then
         VPK_ARGS+=(--msi --instLocation Either --msiVersion "$MSI_VERSION")
     fi
     if [ -n "$PACKAGE_ICON" ]; then
@@ -784,7 +812,7 @@ if [ "$VELOPACK" -eq 1 ]; then
     info "Creating Velopack release: version $RELEASE_VERSION, runtime $VPK_RUNTIME, channel $VPK_CHANNEL"
     vpk "${VPK_ARGS[@]}"
     if [ "$PLATFORM" = "windows" ] && [ "$BINARY" = "luncosim" ]; then
-        python3 "$SCRIPT_DIR/verify_windows_icons.py" "$PROJECT_DIR/$BIN_PATH" "$PACKAGE_ICON" \
+        python3 "$SCRIPT_DIR/verify_windows_icons.py" "$OUT_DIR/$BIN_NAME" "$PACKAGE_ICON" \
             "$VELOPACK_OUT/${VPK_PACK_ID}-${VPK_RUNTIME}-Portable.zip"
     fi
     if ! find "$VELOPACK_OUT" -maxdepth 1 -type f -name "releases.$VPK_CHANNEL.json" -print -quit | grep -q .; then

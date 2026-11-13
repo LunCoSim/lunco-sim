@@ -24,15 +24,35 @@ source archives, Actions artifacts, raw archives, or a debug binary as a
 packaged-release claim.
 
 Windows MSI packaging requires an ordered three-part `--msi-version` (or
-`LUNCO_MSI_VERSION`) in addition to the app's SemVer `--version`. Nightly CI
-derives that MSI version from the workflow run and attempt with
-`scripts/msi_version.py` and rejects publication if either the MSI sequence or
-the app version would move backward relative to published Windows packages.
-Local test builds must use an isolated identity or a version allocated from the
-same release sequence; do not invent a production sequence.
+`LUNCO_MSI_VERSION`) in addition to the app's SemVer `--version`. The manual
+Dev Builds workflow maps versions such as `0.6.0-dev.1` to MSI version `1.6.1`
+and stable `0.6.0` to `1.6.999`. `scripts/msi_version.py` allocates the next
+`dev.N`, rejects non-increasing versions within the Dev SemVer train, and keeps
+the MSI version ahead of all published Windows packages.
+The first `0.6.0-dev.1` release sorts below existing `0.6.0-nightly.*` builds
+in SemVer, so users must install its MSI once before automatic Dev updates.
+
+The workflow submits one ZIP containing the Windows executable and MSI to
+SignPath. Its artifact configuration signs the executable, the executable
+embedded in the MSI, and the MSI. It then repacks the Velopack update from the
+signed executable so the full update package contains the signed binary.
+`signing_mode=test` uses a test signing policy and produces Actions artifacts
+only; that certificate must be trusted on the isolated test machine.
+`signing_mode=off` produces unsigned sample artifacts for initial configuration.
+Only `signing_mode=release` can publish the human installers and updater feed.
+Production release signing runs from `main` and waits up to two hours for the
+SignPath approval before downloading and verifying the signed files.
+
+Configure these repository settings before dispatching a signed build:
+
+- Secret: `SIGNPATH_API_TOKEN`
+- Variables: `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`,
+  `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG`, `SIGNPATH_TEST_POLICY_SLUG`, and
+  `SIGNPATH_RELEASE_POLICY_SLUG`
+- Existing updater publication secret: `LUNCOSIM_UPDATES_TOKEN`
 
 Windows packaging uses the LunCoSim Velopack fork at the revision pinned in
-`.github/workflows/nightly.yml`. Build its native Windows helpers in release
+`.github/workflows/dev.yml`. Build its native Windows helpers in release
 mode, place them in the fork's `target/debug` helper lookup directory, and
 build the fork's `Velopack.Vpk` project for `net8.0` in Debug mode. Put its
 `build/Debug/net8.0` directory on `PATH` before invoking the native builder.

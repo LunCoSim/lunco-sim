@@ -176,12 +176,19 @@ build, or an ordinary archive; those development/portable forms are not
 update-managed.
 
 The application reads the machine-only `LunCoSim/lunco-sim-updates` GitHub feed;
-human-facing installers remain in the dated LunCoSim release.
+human-facing installers remain in the dated LunCoSim release. See the
+[code-signing policy](../../code-signing-policy.md) for Windows release signing.
 
 The Windows installer has an internal, ordered MSI version distinct from the
-displayed application version. Nightly releases derive it from the build run
-and attempt; publication rejects older application or MSI sequences. Windows
-Installer compares only the three MSI version fields.
+displayed application version. Development SemVer versions such as
+`0.6.0-dev.1` map to `1.6.1`; a stable `0.6.0` maps to `1.6.999`. Publication
+rejects non-increasing versions within the development SemVer train and keeps
+the MSI number ahead of every published Windows package. Windows Installer
+compares only the three MSI version fields.
+
+The first `0.6.0-dev.1` release sorts before existing `0.6.0-nightly.*` builds
+under SemVer. Install its MSI manually to move an existing nightly installation
+to the Dev update sequence; later Dev builds can update through Velopack.
 
 The native package build enables the updater explicitly. Ordinary source and
 headless builds omit the updater closure and are not update-managed.

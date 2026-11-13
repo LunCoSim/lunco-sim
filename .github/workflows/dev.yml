@@ -1,16 +1,16 @@
 # ============================================================================
-# LunCoSim — nightly desktop builds
+# LunCoSim — manual development builds
 # ============================================================================
 # Builds LunCoSim as a native desktop binary for
 # Linux (x86_64), macOS (arm64 + x86_64 cross-compiled on Apple Silicon),
 # and Windows (x86_64), packages each with assets + docs + skills + cache,
-# and uploads Velopack packages as GitHub Actions artifacts. A dated GitHub
+# and uploads Velopack packages as GitHub Actions artifacts. A versioned GitHub
 # Release exposes only four clearly named installers. Machine-only Velopack
 # feeds and packages are published under the same immutable version tag in
 # `LunCoSim/lunco-sim-updates`.
 #
-# Trigger: every night at 22:00 UTC, or manually from the Actions tab.
-#   https://github.com/LunCoSim/lunco-sim/actions/workflows/nightly.yml
+# Trigger: manually from the Actions tab.
+#   https://github.com/LunCoSim/lunco-sim/actions/workflows/dev.yml
 #
 # Each OS job downloads the cache assets LunCoSim needs, builds it, and
 # packages it via scripts/build_native.sh.
@@ -18,19 +18,25 @@
 # the future standalone Lunica repository.
 # ============================================================================
 
-name: Nightly Builds
+name: Dev Builds
 
 on:
-  schedule:
-    - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       make_release:
-        description: 'Create a GitHub release with the artifacts'
+        description: 'Create versioned GitHub releases with the artifacts'
         type: boolean
         default: true
-      release_tag:
-        description: 'Release tag (default: nightly-YYYYMMDDTHHMMSSZ). Use a custom tag like "nightly-20260802T-test" to avoid overwriting.'
+      signing_mode:
+        description: 'Release signs with the production policy; test signs an Actions-only artifact; off creates a sample bundle for SignPath setup.'
+        type: choice
+        options:
+          - release
+          - test
+          - off
+        default: release
+      release_version:
+        description: 'SemVer2 version for test/off runs (for example 0.6.0-dev.1); release mode allocates the next version automatically.'
         type: string
         required: false
 
@@ -39,74 +45,104 @@ env:
   VELOPACK_CLI_VERSION: '1.2.110-ge826545'
 
 permissions:
-  contents: write   # needed for gh-release upload
+  contents: read
+  actions: read     # needed by the SignPath GitHub connector
 
-# Serialize the two-repository publication so two manual/scheduled runs cannot
-# interleave releases for different source revisions.
+# Serialize the two-repository publication so manual runs cannot interleave
+# releases for different source revisions.
 concurrency:
-  group: nightly-desktop-publication
+  group: desktop-dev-publication
   cancel-in-progress: false
 
 jobs:
-  # ── Determine the timestamp/tag once ────────────────────────────────────
-  # The same UTC timestamp is used in the default release tag, making every
-  # nightly artifact traceable to one build instant.
-  # Override the tag with `release_tag` when a custom label is needed.
+  # ── Determine the release version and signing mode once ─────────────────
   meta:
     runs-on: ubuntu-latest
     outputs:
       date: ${{ steps.metadata.outputs.date }}
       timestamp: ${{ steps.metadata.outputs.timestamp }}
-      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
       version: ${{ steps.version.outputs.version }}
       msi_version: ${{ steps.version.outputs.msi_version }}
+      signing_mode: ${{ steps.metadata.outputs.signing_mode }}
     steps:
       - uses: actions/checkout@v4
-      - name: Verify nightly version generation
-        run: python3 -m unittest scripts.tests.test_nightly_release_contract.NightlyReleaseContractTests.test_version_generation_rejects_failed_or_missing_metadata
+      - name: Verify dev release and signing contracts
+        run: python3 -m unittest scripts.tests.test_msi_version scripts.tests.test_dev_release_contract scripts.tests.test_stage_dev_release scripts.tests.test_generate_dev_release_notes
       - name: Verify runtime font bundle targets
         run: python3 -m unittest scripts.tests.test_asset_bundle_contract
       - id: metadata
         env:
-          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          SIGNING_MODE_INPUT: ${{ inputs.signing_mode }}
+          MAKE_RELEASE_INPUT: ${{ inputs.make_release }}
+          REF_NAME: ${{ github.ref }}
         run: |
           date=$(date -u +'%Y-%m-%d %H:%M UTC')
           timestamp=$(date -u +'%Y%m%dT%H%M%SZ')
-          if [ -n "$RELEASE_TAG_INPUT" ]; then
-            release_tag="$RELEASE_TAG_INPUT"
-          else
-            release_tag="nightly-$timestamp"
-          fi
+          signing_mode="${SIGNING_MODE_INPUT:-release}"
 
-          if [[ ! "$release_tag" =~ ^nightly-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-            echo "Invalid nightly release tag: '$release_tag'" >&2
+          case "$signing_mode" in
+            release|test|off) ;;
+            *) echo "Invalid signing mode: '$signing_mode'" >&2; exit 1 ;;
+          esac
+          if [[ "$signing_mode" != release && "$MAKE_RELEASE_INPUT" != false ]]; then
+            echo "Test/off signing modes only create Actions artifacts; set make_release=false." >&2
+            exit 1
+          fi
+          if [[ "$signing_mode" == release && "$MAKE_RELEASE_INPUT" == true && "$REF_NAME" != refs/heads/main ]]; then
+            echo "Published releases must be dispatched from the main branch." >&2
             exit 1
           fi
 
           {
             echo "date=$date"
             echo "timestamp=$timestamp"
-            echo "release_tag=$release_tag"
+            echo "signing_mode=$signing_mode"
           } >> "$GITHUB_OUTPUT"
-          echo "Preparing nightly release: $release_tag ($timestamp)"
+          echo "Preparing $signing_mode build ($timestamp)"
       - id: version
         env:
-          RUN_NUMBER: ${{ github.run_number }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
+          SIGNING_MODE: ${{ steps.metadata.outputs.signing_mode }}
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+          UPDATES_GH_TOKEN: ${{ secrets.LUNCOSIM_UPDATES_TOKEN }}
         run: |
           # The app crate owns the product base version. Strip only its
           # development marker; do not rewrite Cargo.toml in CI.
           metadata=$(cargo metadata --locked --no-deps --format-version 1)
           base_version=$(jq -er '.packages[] | select(.name == "lunco-luncosim") | .version' <<< "$metadata")
           base_version="${base_version%-dev}"
-          version="${base_version}-nightly.${RUN_NUMBER}.${RUN_ATTEMPT}"
-          msi_version=$(python3 scripts/msi_version.py "$RUN_NUMBER" "$RUN_ATTEMPT")
+
+          if [[ "$SIGNING_MODE" == release ]]; then
+            if [ -n "$RELEASE_VERSION_INPUT" ]; then
+              echo "Release versions are allocated automatically; leave release_version empty." >&2
+              exit 1
+            fi
+            if [ -z "$UPDATES_GH_TOKEN" ]; then
+              echo "Repository secret LUNCOSIM_UPDATES_TOKEN is required to allocate release versions." >&2
+              exit 1
+            fi
+            published_assets=$(GH_TOKEN="$UPDATES_GH_TOKEN" gh api --paginate \
+              "repos/LunCoSim/lunco-sim-updates/releases?per_page=100" \
+              --jq '.[] | select(.draft == false) | .assets[].name')
+            version=$(python3 scripts/msi_version.py --next-version "$base_version" <<< "$published_assets")
+            python3 scripts/msi_version.py --check-published "$version" <<< "$published_assets"
+          else
+            if [ -z "$RELEASE_VERSION_INPUT" ]; then
+              echo "Test/off runs require an explicit release_version, for example 0.6.0-dev.1." >&2
+              exit 1
+            fi
+            version="$RELEASE_VERSION_INPUT"
+          fi
+
+          msi_version=$(python3 scripts/msi_version.py --version "$version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$version" >> "$GITHUB_OUTPUT"
           echo "msi_version=$msi_version" >> "$GITHUB_OUTPUT"
 
   # ── Build LunCoSim per OS ────────────────────────────────────────────────
   build:
     needs: meta
+    if: needs.meta.outputs.signing_mode == 'release' || matrix.platform == 'windows'
     name: ${{ matrix.label }}
     strategy:
       fail-fast: false
@@ -165,10 +201,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Verify macOS packaging arguments
-        if: matrix.platform == 'macos'
-        run: python3 -m unittest scripts.tests.test_nightly_release_contract.NightlyReleaseContractTests.test_velopack_arguments_support_empty_options_under_nounset
 
       - name: Setup .NET for Velopack CLI
         uses: actions/setup-dotnet@v4
@@ -244,7 +276,7 @@ jobs:
           key: ${{ matrix.platform }}-${{ matrix.arch }}
 
       # Keep the downloaded and processed runtime payload across successful
-      # nightly runs. The manifest hash invalidates this cache when a source,
+      # dev runs. The manifest hash invalidates this cache when a source,
       # version, or integrity pin changes; the downloader still verifies every
       # restored file before packaging it.
       - name: Cache native runtime assets
@@ -394,6 +426,142 @@ jobs:
             shared::tests::key_parser_rejects_zero_and_wrong_length \
             shared::tests::key_parser_accepts_32_bytes_of_hex
 
+      # Submit to SignPath only after the Windows release checks pass, so a
+      # failed build does not leave a production approval request pending.
+      - name: Prepare SignPath input bundle
+        if: matrix.platform == 'windows'
+        id: signpath-input
+        run: |
+          input_dir="dist/signpath-input"
+          package_dir="dist/luncosim-windows-x86_64"
+          vpk_dir="dist/velopack-windows-x86_64"
+          mapfile -t msi_files < <(find "$vpk_dir" -maxdepth 1 -type f -iname '*.msi' -print)
+          if [ "${#msi_files[@]}" -ne 1 ]; then
+            echo "Expected one candidate MSI in $vpk_dir; found ${#msi_files[@]}." >&2
+            exit 1
+          fi
+          if [ ! -f "$package_dir/luncosim.exe" ]; then
+            echo "Staged LunCoSim executable is missing." >&2
+            exit 1
+          fi
+          rm -rf "$input_dir"
+          mkdir -p "$input_dir"
+          cp "$package_dir/luncosim.exe" "$input_dir/luncosim.exe"
+          cp "${msi_files[0]}" "$input_dir/LunCoSim-Windows-x86_64.msi"
+          echo "msi_name=$(basename "${msi_files[0]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SignPath input bundle
+        if: matrix.platform == 'windows'
+        id: upload-signpath-input
+        uses: actions/upload-artifact@v4
+        with:
+          name: luncosim-signpath-input-${{ needs.meta.outputs.version }}
+          path: dist/signpath-input/*
+          if-no-files-found: error
+          retention-days: 2
+
+      - name: Verify SignPath configuration
+        if: matrix.platform == 'windows' && needs.meta.outputs.signing_mode != 'off'
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          SIGNPATH_TEST_POLICY_SLUG: ${{ vars.SIGNPATH_TEST_POLICY_SLUG }}
+          SIGNPATH_RELEASE_POLICY_SLUG: ${{ vars.SIGNPATH_RELEASE_POLICY_SLUG }}
+          SIGNING_MODE: ${{ needs.meta.outputs.signing_mode }}
+        run: |
+          for setting in SIGNPATH_API_TOKEN SIGNPATH_ORGANIZATION_ID SIGNPATH_PROJECT_SLUG SIGNPATH_ARTIFACT_CONFIGURATION_SLUG; do
+            if [ -z "${!setting}" ]; then
+              echo "GitHub secret/variable $setting is required for SignPath signing." >&2
+              exit 1
+            fi
+          done
+          if [ "$SIGNING_MODE" = test ] && [ -z "$SIGNPATH_TEST_POLICY_SLUG" ]; then
+            echo "GitHub variable SIGNPATH_TEST_POLICY_SLUG is required for test signing." >&2
+            exit 1
+          fi
+          if [ "$SIGNING_MODE" = release ] && [ -z "$SIGNPATH_RELEASE_POLICY_SLUG" ]; then
+            echo "GitHub variable SIGNPATH_RELEASE_POLICY_SLUG is required for release signing." >&2
+            exit 1
+          fi
+
+      - name: Sign Windows executable and MSI with SignPath
+        if: matrix.platform == 'windows' && needs.meta.outputs.signing_mode != 'off'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ needs.meta.outputs.signing_mode == 'test' && vars.SIGNPATH_TEST_POLICY_SLUG || vars.SIGNPATH_RELEASE_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload-signpath-input.outputs.artifact-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-for-completion: true
+          # SignPath Foundation release requests require manual approval.
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: dist/signpath-signed
+          parameters: |
+            version: ${{ toJSON(needs.meta.outputs.version) }}
+
+      - name: Repack updates from the signed executable
+        if: matrix.platform == 'windows' && needs.meta.outputs.signing_mode != 'off'
+        env:
+          MSI_NAME: ${{ steps.signpath-input.outputs.msi_name }}
+          RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          signed_dir="dist/signpath-signed"
+          package_dir="dist/luncosim-windows-x86_64"
+          vpk_dir="dist/velopack-windows-x86_64"
+          signed_exe="$signed_dir/luncosim.exe"
+          signed_msi="$signed_dir/LunCoSim-Windows-x86_64.msi"
+          if [ ! -f "$signed_exe" ] || [ ! -f "$signed_msi" ]; then
+            echo "SignPath output must contain luncosim.exe and LunCoSim-Windows-x86_64.msi." >&2
+            exit 1
+          fi
+          cp "$signed_exe" "$package_dir/luncosim.exe"
+          ./scripts/build_native.sh luncosim --release --velopack --pack-only --without-msi \
+            --version "$RELEASE_VERSION" \
+            --out "$package_dir" \
+            --velopack-out "$vpk_dir"
+          cp "$signed_msi" "$vpk_dir/$MSI_NAME"
+
+      - name: Verify Windows signatures and signed update payload
+        if: matrix.platform == 'windows' && needs.meta.outputs.signing_mode != 'off'
+        shell: pwsh
+        env:
+          SIGNING_MODE: ${{ needs.meta.outputs.signing_mode }}
+        run: |
+          function Assert-AuthenticodeSignature([string]$Path) {
+            $signature = Get-AuthenticodeSignature -FilePath $Path
+            if ($null -eq $signature.SignerCertificate -or $signature.Status -in @('NotSigned', 'HashMismatch')) {
+              throw "Missing or invalid Authenticode signature: $Path ($($signature.Status))"
+            }
+            if ($env:SIGNING_MODE -eq 'release' -and $signature.Status -ne 'Valid') {
+              throw "Release signature is not trusted by the runner: $Path ($($signature.Status))"
+            }
+          }
+
+          Assert-AuthenticodeSignature "dist/luncosim-windows-x86_64/luncosim.exe"
+          $msis = @(Get-ChildItem "dist/velopack-windows-x86_64" -Filter '*.msi' -File)
+          if ($msis.Count -ne 1) { throw "Expected one MSI in the final Windows package." }
+          $msi = $msis[0]
+          Assert-AuthenticodeSignature $msi.FullName
+
+          $packages = @(Get-ChildItem "dist/velopack-windows-x86_64" -Filter '*win-x64-full.nupkg' -File)
+          if ($packages.Count -ne 1) { throw "Expected one full Velopack package." }
+          $package = $packages[0]
+          $extract = Join-Path $env:RUNNER_TEMP 'luncosim-signed-update-check'
+          $zip = Join-Path $env:RUNNER_TEMP 'luncosim-signed-update-check.zip'
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -LiteralPath $package.FullName -Destination $zip -Force
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract
+          $packagedExe = Get-ChildItem $extract -Recurse -Filter 'luncosim.exe' -File | Select-Object -First 1
+          if ($null -eq $packagedExe) {
+            throw "Full Velopack package does not contain luncosim.exe: $($package.FullName)"
+          }
+          Assert-AuthenticodeSignature $packagedExe.FullName
+
       # ── Cross-compile (macOS x86_64 on Apple Silicon) ───────────────────
       # Only runs when the matrix entry sets `cross_target`. Adds the
       # rustup target, then runs build_native.sh again with --target so the
@@ -431,12 +599,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── Optional: create a GitHub Release with all artifacts ────────────────
+  # ── Optional: publish a signed development release ─────────────────────
   release:
     needs: [meta, build]
     runs-on: ubuntu-latest
-    # Only create a release if the user opted in (default true for
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.make_release)
+    if: needs.meta.outputs.signing_mode == 'release' && inputs.make_release
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -450,16 +620,16 @@ jobs:
       # Portable archives and legacy RELEASES indexes are intentionally omitted.
       - name: Stage public installers and updater assets
         run: |
-          python3 scripts/stage_nightly_release.py \
+          python3 scripts/stage_dev_release.py \
             --input artifacts/raw \
             --public release/public \
             --updates release/updates
-          echo "## Human downloads (dated nightly release)" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Human downloads (development release)" >> "$GITHUB_STEP_SUMMARY"
           ls -lh release/public/ | tee -a "$GITHUB_STEP_SUMMARY"
           echo "## Machine updater assets (lunco-sim-updates release)" >> "$GITHUB_STEP_SUMMARY"
           ls -lh release/updates/ | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Create nightly release
+      - name: Create development release
         env:
           RELEASE_DATE: ${{ needs.meta.outputs.date }}
           RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
@@ -477,12 +647,12 @@ jobs:
             echo "The meta job did not provide a release tag; refusing to create an untagged release." >&2
             exit 1
           fi
-          if [[ "$RELEASE_TAG" == untagged-* ]]; then
-            echo "Invalid release tag '$RELEASE_TAG'; refusing to publish an untagged release." >&2
+          if [[ "$RELEASE_TAG" != "$RELEASE_VERSION" ]]; then
+            echo "Release tag '$RELEASE_TAG' must match the package version '$RELEASE_VERSION'." >&2
             exit 1
           fi
-          # Run numbers can be retried after later releases. Never publish a
-          # feed whose app or MSI sequence would move backward.
+          # Keep both app SemVer and the mapped three-part MSI version ahead
+          # of published Windows packages.
           GH_TOKEN="$UPDATES_GH_TOKEN" gh api --paginate \
             "repos/$UPDATES_REPOSITORY/releases?per_page=100" \
             --jq '.[] | select(.draft == false) | .assets[] | .name' |
@@ -491,11 +661,10 @@ jobs:
           # turn an existing-tag check into an unverified release creation.
           git fetch origin "+refs/tags/*:refs/tags/*"
 
-          python3 skills/nightly-changelog/scripts/generate_changelog.py \
+          python3 scripts/generate_dev_release_notes.py \
             --from-ref latest \
             --to-ref "${{ github.sha }}" \
             --release-date "$RELEASE_DATE" \
-            --format release-notes \
             --repo-url "$REPO_URL" \
             --output release_notes.md
 
@@ -516,7 +685,7 @@ jobs:
           mapfile -d '' update_feeds < <(find release/updates -maxdepth 1 -type f \
             -name 'releases.*.json' -print0 | sort -z)
           if [ "${#release_assets[@]}" -ne 4 ]; then
-            echo "The dated nightly release must contain exactly four installers." >&2
+            echo "The development release must contain exactly four installers." >&2
             exit 1
           fi
           if [ "${#update_packages[@]}" -eq 0 ] || [ "${#update_feeds[@]}" -ne 4 ]; then
@@ -546,7 +715,7 @@ jobs:
             --draft
 
           GH_TOKEN="$MAIN_GH_TOKEN" gh release create "$RELEASE_TAG" \
-            --title "Nightly ${{ needs.meta.outputs.date }}" \
+            --title "LunCoSim $RELEASE_VERSION" \
             --notes-file release_notes.md \
             --target "${{ github.sha }}" \
             --draft
@@ -562,11 +731,8 @@ jobs:
           GH_TOKEN="$MAIN_GH_TOKEN" gh release upload "$RELEASE_TAG" \
             "${release_assets[@]}"
 
-          # Publish the complete updater release first. The public release is
-          # the final success marker testers see. GitHub cannot mark a
-          # prerelease as Latest, so the human-facing nightly is published as
-          # the explicitly selected Latest release; its Nightly title/tag
-          # still identifies the build channel.
+          # Publish the complete updater release first. The human-facing
+          # development release is the final success marker testers see.
           GH_TOKEN="$UPDATES_GH_TOKEN" gh release edit "$RELEASE_TAG" \
             --repo "$UPDATES_REPOSITORY" \
             --draft=false \

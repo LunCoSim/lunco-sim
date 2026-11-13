@@ -136,12 +136,6 @@ parse check into runtime evidence.
 | [**deep-audit**](deep-audit/SKILL.md) | Audit the workspace across domains with parallel reviewers, then execute the fixes as a no-shim migration plan |
 | [**subagent-batches**](subagent-batches/SKILL.md) | Run a multi-finding fix sweep with parallel agents on disjoint file lots — agents never build; the coordinator verifies once |
 
-## Release & handoff
-
-| Skill | Use it when you want to… |
-|---|---|
-| [**nightly-changelog**](nightly-changelog/SKILL.md) | Prepare a traceable nightly changelist and GitHub release notes from the latest timestamped nightly tag. |
-
 ## Cross-cutting conventions (baked into every skill)
 
 - **Use the production binary**: resolve `LUNCOSIM_BIN` to the installed

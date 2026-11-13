@@ -19,6 +19,7 @@ can inspect, parameters you can change, and telemetry you can follow.
 
 [**Download LunCoSim**](https://github.com/LunCoSim/lunco-sim/releases)
 · [**Documentation**](https://luncosim.github.io/luncosim-docs/)
+· [Code-signing policy](docs/code-signing-policy.md)
 · [**Current status**](https://luncosim.github.io/luncosim-docs/#current-status)
 · [Tutorials](docs/tutorials/README.md)
 · [Watch demos](https://www.youtube.com/@LunCoSim)

@@ -10,10 +10,7 @@ uncommitted work is deliberately excluded.
 - [Nightly 2026-08-08](nightly-20260808.md) — `nightly-20260806T102113Z..76df48a5b4d3ff7ec2808f4b6f450641beaf81c4`
 - Previous: [Nightly 2026-08-02](nightly-20260802.md) — `nightly-20260731T115555Z..4b46c0877224960e60652023f26005c72436c2d0`
 
-Future snapshots are generated with
-`skills/nightly-changelog/scripts/generate_changelog.py`. Each generated note
-keeps the GitHub Release body short: download/install guidance, an AI-agent
-mission prompt, and a link to the separate changelog. The changelog file lists
-all changes since the previous nightly. The nightly workflow uses the
-`release-notes` format, so this change list is not embedded in the GitHub
-Release page.
+These are archived nightly changelist snapshots. The manual Dev Builds
+workflow generates its short GitHub release notes with
+`scripts/generate_dev_release_notes.py` and links to the exact comparison from
+the previous release tag.

@@ -115,7 +115,7 @@ snapshots for the scene lifetime. Its bounded native preparation entries reuse
 settled facts only while the source revision, stage identity and live mount
 match; scene teardown releases those retained inputs.
 
-The Windows job in `.github/workflows/nightly.yml` runs exact native-path and storage
+The Windows job in `.github/workflows/dev.yml` runs exact native-path and storage
 regressions after the desktop release build, using that release profile and
 target cache. They cover standard drive/UNC file URIs, encoded filenames,
 canonical Twin roots, display-name component encoding, provider manifest

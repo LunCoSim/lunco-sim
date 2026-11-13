@@ -266,13 +266,6 @@ defer_to = ["capability-discovery"]
 evidence = "skills/update-documents/SKILL.md"
 
 [[skills]]
-name = "nightly-changelog"
-category = "release"
-primary_for = ["nightly release notes"]
-defer_to = ["packaged-builds"]
-evidence = "skills/nightly-changelog/SKILL.md"
-
-[[skills]]
 name = "performance-profiling"
 category = "performance"
 primary_for = ["FPS", "Tracy", "periodic stalls"]

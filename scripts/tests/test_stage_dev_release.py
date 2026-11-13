@@ -9,15 +9,15 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[1] / "stage_nightly_release.py"
-SPEC = importlib.util.spec_from_file_location("stage_nightly_release", SCRIPT)
+SCRIPT = Path(__file__).parents[1] / "stage_dev_release.py"
+SPEC = importlib.util.spec_from_file_location("stage_dev_release", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
-stage_nightly_release = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = stage_nightly_release
-SPEC.loader.exec_module(stage_nightly_release)
+stage_dev_release = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = stage_dev_release
+SPEC.loader.exec_module(stage_dev_release)
 
 
-class StageNightlyReleaseTests(unittest.TestCase):
+class StageDevReleaseTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -25,7 +25,7 @@ class StageNightlyReleaseTests(unittest.TestCase):
         self.public = self.root / "public"
         self.updates = self.root / "updates"
         self.raw.mkdir()
-        for runtime in stage_nightly_release.RUNTIMES:
+        for runtime in stage_dev_release.RUNTIMES:
             output = self.raw / runtime.channel
             output.mkdir()
             package_name = f"LunCoSim-{runtime.channel}-1.2.3-full.nupkg"
@@ -60,12 +60,12 @@ class StageNightlyReleaseTests(unittest.TestCase):
         self.temp.cleanup()
 
     def test_stages_four_human_downloads_and_runtime_update_feeds(self) -> None:
-        stage_nightly_release.stage_release(self.raw, self.public, self.updates)
+        stage_dev_release.stage_release(self.raw, self.public, self.updates)
 
         self.assertTrue((self.public / "LunCoSim-Windows-x86_64.msi").is_file())
         self.assertEqual(
             {path.name for path in self.public.iterdir()},
-            {runtime.public_name for runtime in stage_nightly_release.RUNTIMES},
+            {runtime.public_name for runtime in stage_dev_release.RUNTIMES},
         )
         self.assertEqual(len(list(self.updates.glob("releases.*.json"))), 4)
         self.assertEqual(len(list(self.updates.glob("*-full.nupkg"))), 4)
@@ -80,14 +80,14 @@ class StageNightlyReleaseTests(unittest.TestCase):
         document["Assets"][0]["FileName"] = "../wrong-package.nupkg"
         feed.write_text(json.dumps(document), encoding="utf-8")
 
-        with self.assertRaisesRegex(stage_nightly_release.StagingError, "unsafe asset"):
-            stage_nightly_release.stage_release(self.raw, self.public, self.updates)
+        with self.assertRaisesRegex(stage_dev_release.StagingError, "unsafe asset"):
+            stage_dev_release.stage_release(self.raw, self.public, self.updates)
 
     def test_rejects_missing_platform_installer(self) -> None:
         (self.raw / "win-x64" / "generated.msi").unlink()
 
-        with self.assertRaisesRegex(stage_nightly_release.StagingError, "win-x64 installer"):
-            stage_nightly_release.stage_release(self.raw, self.public, self.updates)
+        with self.assertRaisesRegex(stage_dev_release.StagingError, "win-x64 installer"):
+            stage_dev_release.stage_release(self.raw, self.public, self.updates)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file
+      path="luncosim.exe"
+      product-name="LunCoSim"
+      product-version="${version}"
+      file-version="${version}"
+      company-name="LunCoSim"
+      original-filename="luncosim.exe">
+      <authenticode-sign />
+    </pe-file>
+    <msi-file path="LunCoSim-Windows-x86_64.msi">
+      <pe-file
+        path="luncosim.exe"
+        product-name="LunCoSim"
+        product-version="${version}"
+        file-version="${version}"
+        company-name="LunCoSim"
+        original-filename="luncosim.exe">
+        <authenticode-sign />
+      </pe-file>
+      <authenticode-sign />
+    </msi-file>
+  </zip-file>
+</artifact-configuration>
