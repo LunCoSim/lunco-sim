@@ -175,8 +175,10 @@ than the installer, a copied `.app` binary, `target/debug/luncosim`, a source
 build, or an ordinary archive; those development/portable forms are not
 update-managed.
 
-The application reads the machine-only `LunCoSim/lunco-sim-updates` GitHub feed;
-human-facing installers remain in the dated LunCoSim release. See the
+The application reads update feeds and downloads update packages from
+`LunCoSim/lunco-sim-updates`. Unsigned nightly installers are published in that
+repository's nightly releases. Signed Dev and stable installers are published
+in the `LunCoSim/lunco-sim` releases. See the
 [code-signing policy](../../code-signing-policy.md) for Windows release signing.
 
 The Windows installer has an internal, ordered MSI version distinct from the

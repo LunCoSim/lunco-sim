@@ -18,6 +18,7 @@ traverse. LunCoSim brings those interactions into one scene, with models you
 can inspect, parameters you can change, and telemetry you can follow.
 
 [**Download LunCoSim**](https://github.com/LunCoSim/lunco-sim/releases)
+· [**Nightly builds**](https://github.com/LunCoSim/lunco-sim-updates/releases)
 · [**Documentation**](https://luncosim.github.io/luncosim-docs/)
 · [Code-signing policy](docs/code-signing-policy.md)
 · [**Current status**](https://luncosim.github.io/luncosim-docs/#current-status)
@@ -57,7 +58,7 @@ you can move from interactive exploration to automated studies.
 
 ## Try it
 
-1. Download the installer for your platform from [GitHub Releases](https://github.com/LunCoSim/lunco-sim/releases).
+1. Download the stable installer for your platform from [GitHub Releases](https://github.com/LunCoSim/lunco-sim/releases).
    See the [installation guide](docs/apps/luncosim/README.md#desktop-updates) for package details.
 2. Open the app's Tutorials menu. Start with **Choose a Perspective**
    to find your way around, then **First Drive** to try a rover.
