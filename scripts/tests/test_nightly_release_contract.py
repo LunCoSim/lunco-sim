@@ -11,6 +11,18 @@ import unittest
 ROOT = Path(__file__).parents[2]
 
 
+def read_nightly_workflow() -> str:
+    workflow_path = Path(
+        os.environ.get(
+            "LUNCO_NIGHTLY_WORKFLOW_PATH",
+            str(ROOT / ".github/workflows/nightly.yml"),
+        )
+    )
+    if not workflow_path.is_file():
+        raise unittest.SkipTest("nightly workflow is maintained in its own repository")
+    return workflow_path.read_text(encoding="utf-8")
+
+
 class NightlyReleaseContractTests(unittest.TestCase):
     def test_velopack_arguments_support_empty_options_under_nounset(self) -> None:
         builder = (ROOT / "scripts/build_native.sh").read_text(encoding="utf-8")
@@ -47,7 +59,7 @@ class NightlyReleaseContractTests(unittest.TestCase):
                     self.assertEqual(args[args.index("--icon") + 1], icon)
 
     def test_version_generation_rejects_failed_or_missing_metadata(self) -> None:
-        workflow = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+        workflow = read_nightly_workflow()
         step = workflow.split("      - id: version\n", 1)[1]
         script = textwrap.dedent(
             step.split("        run: |\n", 1)[1].split("\n  #", 1)[0]
@@ -83,63 +95,46 @@ class NightlyReleaseContractTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode == 0, succeeds, result.stderr)
                     if succeeds:
-                        self.assertEqual(output.read_text(), "version=0.1.0-nightly.139.1\nmsi_version=1.0.13901\n")
+                        self.assertEqual(
+                            output.read_text(),
+                            "version=0.1.0-nightly.139.1\nmsi_version=1.0.13901\nrun_number=139\n",
+                        )
                     else:
                         self.assertFalse(output.exists())
 
-    def test_human_release_keeps_updater_details_out_of_release_notes(self) -> None:
-        workflow = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+    def test_nightly_workflow_publishes_only_in_updates_repo_from_pinned_source(self) -> None:
+        workflow = read_nightly_workflow()
 
-        self.assertIn("- cron: '0 22 * * *'", workflow)
-        self.assertNotIn("- cron: '0 2 * * *'", workflow)
-        self.assertIn("LunCoSim/lunco-sim-updates", workflow)
-        self.assertIn("secrets.LUNCOSIM_UPDATES_TOKEN", workflow)
-        self.assertIn("--draft", workflow)
-        self.assertIn("--draft=false", workflow)
-        self.assertNotIn('git push origin "${{ needs.meta.outputs.release_tag }}"', workflow)
-        self.assertNotIn("--verify-tag", workflow)
-        self.assertIn('--target "${{ github.sha }}"', workflow)
-        main_release_edit = workflow.index(
-            'GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG"'
+        self.assertIn("repository: LunCoSim/lunco-sim", workflow)
+        self.assertIn("ref: main", workflow)
+        self.assertIn("source_sha: ${{ steps.source.outputs.sha }}", workflow)
+        self.assertGreaterEqual(
+            workflow.count("ref: ${{ needs.meta.outputs.source_sha }}"), 2
         )
-        main_release_block = workflow[main_release_edit : main_release_edit + 220]
-        self.assertIn("--latest=true", main_release_block)
-        self.assertNotIn("--prerelease", main_release_block)
-        updates_release_edit = workflow.index(
-            'GH_TOKEN="$UPDATES_GH_TOKEN" gh release edit "$RELEASE_TAG"'
+        self.assertIn(
+            "LUNCO_REPOSITORY_URL: https://github.com/LunCoSim/lunco-sim", workflow
         )
-        updates_release_block = workflow[
-            updates_release_edit : updates_release_edit + 260
-        ]
-        self.assertIn("--latest=false", updates_release_block)
-        release_notes_start = workflow.index(
-            "python3 skills/nightly-changelog/scripts/generate_changelog.py"
+        self.assertIn('UPDATES_REPOSITORY: LunCoSim/lunco-sim-updates', workflow)
+        self.assertIn(
+            'if [[ "$GITHUB_REPOSITORY" != "$UPDATES_REPOSITORY" ]]; then', workflow
         )
-        release_notes_end = workflow.index(
-            "# Check for an existing immutable traceability tag", release_notes_start
-        )
-        release_notes_block = workflow[release_notes_start:release_notes_end]
-        self.assertNotIn("Download update", release_notes_block)
-        self.assertNotIn("Install and restart", release_notes_block)
-        self.assertNotIn("Settings → Updates", release_notes_block)
-        self.assertNotIn("Velopack update", release_notes_block)
-        self.assertNotIn("cat >> release_notes.md", release_notes_block)
-        self.assertIn("--format release-notes", release_notes_block)
-        self.assertNotIn("Changes since previous nightly", release_notes_block)
-        self.assertIn("--output release_notes.md", release_notes_block)
-        self.assertNotIn("nightly-updates", workflow)
-        self.assertNotIn("--clobber", workflow)
+        self.assertEqual(workflow.count('gh release create "$RELEASE_TAG"'), 1)
+        self.assertIn('--repo "$UPDATES_REPOSITORY"', workflow)
+        self.assertIn('--prerelease', workflow)
+        self.assertIn('--latest=false', workflow)
+        self.assertNotIn("MAIN_GH_TOKEN", workflow)
+        self.assertIn("--format release-notes", workflow)
+        self.assertIn("Source commit:", workflow)
 
     def test_release_identity_is_explicit_and_fail_closed(self) -> None:
-        workflow = (ROOT / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+        workflow = read_nightly_workflow()
 
         self.assertIn("release_tag: ${{ steps.metadata.outputs.release_tag }}", workflow)
         self.assertIn("RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}", workflow)
-        self.assertNotIn("steps.tag.outputs.tag", workflow)
-        self.assertNotIn("needs.meta.outputs.tag", workflow)
         self.assertIn("Invalid nightly release tag", workflow)
         self.assertIn('if [ -z "$RELEASE_TAG" ]; then', workflow)
-        self.assertIn('[[ "$RELEASE_TAG" == untagged-* ]]', workflow)
+        self.assertIn("refusing to replace it", workflow)
+        self.assertIn("--target main", workflow)
 
         guard = workflow.index('if [ -z "$RELEASE_TAG" ]; then')
         first_release_create = workflow.index('gh release create "$RELEASE_TAG"')

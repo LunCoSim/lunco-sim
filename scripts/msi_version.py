@@ -47,14 +47,37 @@ def check_published_versions(candidate: str, asset_names: list[str]) -> None:
             raise ValueError(f"application version is not newer than published package {name}")
 
 
+def next_nightly_run_number(asset_names: list[str]) -> int:
+    """Continue the existing version sequence after moving the workflow repo."""
+    suffix = "-win-x64-full.nupkg"
+    latest_run_number = 0
+    for name in asset_names:
+        if not name.startswith("luncosim-") or not name.endswith(suffix):
+            continue
+        version = name[len("luncosim-") : -len(suffix)]
+        if "-nightly." not in version:
+            continue
+        latest_run_number = max(latest_run_number, nightly_identity(version)[3])
+    return latest_run_number + 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_number", type=int, nargs="?")
     parser.add_argument("attempt", type=int, nargs="?")
     parser.add_argument("--check-published", metavar="VERSION")
+    parser.add_argument("--next-run", action="store_true")
     args = parser.parse_args()
     try:
-        if args.check_published is not None:
+        if args.next_run:
+            if (
+                args.check_published is not None
+                or args.run_number is not None
+                or args.attempt is not None
+            ):
+                parser.error("--next-run cannot be combined with other arguments")
+            print(next_nightly_run_number(sys.stdin.read().splitlines()))
+        elif args.check_published is not None:
             if args.run_number is not None or args.attempt is not None:
                 parser.error("--check-published cannot be combined with run numbers")
             check_published_versions(args.check_published, sys.stdin.read().splitlines())

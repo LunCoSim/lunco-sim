@@ -71,7 +71,8 @@ jobs:
 
       # Bevy's Linux windowing stack (winit/wayland/x11) needs these dev headers
       # at build time even for the headless `--no-ui` sandbox binary (the deps are
-      # compiled in; only the runtime window is skipped). Mirrors nightly.yml.
+      # compiled in; only the runtime window is skipped). Mirrors the nightly
+      # workflow in LunCoSim/lunco-sim-updates.
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update -qq

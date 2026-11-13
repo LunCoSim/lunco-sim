@@ -1,6 +1,10 @@
 import unittest
 
-from scripts.msi_version import check_published_versions, nightly_msi_version
+from scripts.msi_version import (
+    check_published_versions,
+    nightly_msi_version,
+    next_nightly_run_number,
+)
 
 
 class MsiVersionTests(unittest.TestCase):
@@ -32,3 +36,12 @@ class MsiVersionTests(unittest.TestCase):
                     check_published_versions(candidate, assets)
         with self.assertRaises(ValueError):
             check_published_versions("0.6.0-nightly.136.1", ["luncosim-0.6.0-win-x64-full.nupkg"])
+
+    def test_next_run_continues_the_existing_nightly_sequence(self):
+        assets = [
+            "luncosim-0.6.0-nightly.135.2-win-x64-full.nupkg",
+            "luncosim-0.6.0-nightly.151.1-win-x64-full.nupkg",
+            "luncosim-0.6.0-win-x64-full.nupkg",
+        ]
+        self.assertEqual(next_nightly_run_number(assets), 152)
+        self.assertEqual(next_nightly_run_number([]), 1)

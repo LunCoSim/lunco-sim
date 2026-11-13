@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 TIMESTAMPED_NIGHTLY = re.compile(r"nightly-(\d{8}T\d{6}Z)$")
+COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def git(*args: str) -> str:
@@ -85,10 +86,15 @@ def render_changelog(
     repo: str,
     commits: list[dict[str, str]],
 ) -> str:
+    previous_url = (
+        f"{repo}/commit/{from_ref}"
+        if COMMIT_SHA.fullmatch(from_ref)
+        else f"{repo}/releases/tag/{from_ref}"
+    )
     lines = [
         f"# LunCoSim nightly changelog — {release_date}",
         "",
-        f"- Previous nightly: [`{from_ref}`]({repo}/releases/tag/{from_ref})",
+        f"- Previous nightly: [`{from_ref}`]({previous_url})",
         f"- Source range: [{from_ref}…{to_ref}]({repo}/compare/{from_ref}...{to_ref})",
         f"- Included commits: **{len(commits)} non-merge commits**",
         "",

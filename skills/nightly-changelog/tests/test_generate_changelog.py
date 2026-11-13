@@ -79,6 +79,24 @@ class GenerateChangelogTests(unittest.TestCase):
             changelog,
         )
 
+    def test_changelog_links_a_commit_baseline_to_the_commit(self) -> None:
+        baseline = "a" * 40
+        changelog = generate_changelog.render_changelog(
+            from_ref=baseline,
+            to_ref="b" * 40,
+            release_date="2026-11-13 22:00 UTC",
+            repo="https://github.com/LunCoSim/lunco-sim",
+            commits=[],
+        )
+
+        self.assertIn(
+            f"https://github.com/LunCoSim/lunco-sim/commit/{baseline}", changelog
+        )
+        self.assertIn(
+            f"https://github.com/LunCoSim/lunco-sim/compare/{baseline}...{'b' * 40}",
+            changelog,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

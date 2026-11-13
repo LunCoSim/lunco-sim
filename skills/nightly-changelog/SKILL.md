@@ -1,6 +1,6 @@
 ---
 name: nightly-changelog
-description: Generate concise LunCoSim nightly GitHub release notes with platform downloads, installation guidance, an AI-agent mission prompt, and a changelog link. Use when preparing a nightly build, updating docs/releases Markdown, or wiring release notes into .github/workflows/nightly.yml. Preserve dirty worktrees and do not edit Rust source.
+description: Generate concise LunCoSim nightly GitHub release notes with platform downloads, installation guidance, an AI-agent mission prompt, and a changelog link. Use when preparing a nightly build, updating docs/releases Markdown, or wiring release notes into LunCoSim/lunco-sim-updates/.github/workflows/nightly.yml. Preserve dirty worktrees and do not edit Rust source.
 ---
 
 # Nightly Changelog
@@ -35,7 +35,7 @@ Create short, human-facing notes for the exact commit being built. Keep the comm
 
 4. Review the standalone changelog for the complete previous-nightly change range. Review release notes separately for correct installer names, a prominent Windows unsigned-build warning with the **More info → Run anyway** SmartScreen steps, concise wording, the brief autoupdater note, and a working changelog link. Do not add updater mechanics or claim runtime validation to the GitHub release body.
 
-5. Add or update the release workflow only in `.github/workflows/nightly.yml`. The release job must fetch timestamped tags, generate the GitHub body with `--format release-notes` from the exact `github.sha`, and publish those notes with the artifacts. Keep the detailed changelog output in its separate `docs/releases/` snapshot; never pass that output as the GitHub release body. A local Markdown file is GitHub-visible only after the containing commit is pushed; a release body is the immediate GitHub-facing copy.
+5. Maintain the release workflow in `LunCoSim/lunco-sim-updates/.github/workflows/nightly.yml`. It must resolve `LunCoSim/lunco-sim` `main` once, pin every build job to the resolved source SHA, and generate release notes for that exact source commit. Keep the detailed changelog output in its separate `docs/releases/` snapshot; never pass that output as the GitHub release body. A local Markdown file is GitHub-visible only after the containing commit is pushed; a release body is the immediate GitHub-facing copy.
 
    The metadata job must produce one validated `release_tag` together with the
    shared UTC timestamp, and the release job must propagate that output
