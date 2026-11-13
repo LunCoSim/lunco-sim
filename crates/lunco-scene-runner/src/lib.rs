@@ -266,8 +266,6 @@ struct Cli {
     verification: Option<String>,
     /// Source revision supplied by the requirements UI for this run.
     expected_source_revision: Option<u64>,
-    /// Manifest name owning the selected verification.
-    verification_twin_name: Option<String>,
     /// Twin root owning the selected verification.
     verification_twin_root: Option<std::path::PathBuf>,
     /// Compute-pool threads. `1` pins one thread, `0` uses Bevy's default
@@ -969,7 +967,6 @@ fn parse_args() -> Result<Cli, String> {
         verdict_channel,
         verification,
         expected_source_revision,
-        verification_twin_name: None,
         verification_twin_root: None,
         threads,
         jitter,
@@ -1182,14 +1179,6 @@ fn apply_verification_selection(cli: &mut Cli) -> Result<(), String> {
                     cli.verdict_channel = Some(expected.to_owned());
                 }
             }
-            let twin_name = twin
-                .manifest
-                .as_ref()
-                .map(|manifest| manifest.name.clone())
-                .ok_or_else(|| {
-                    format!("Twin at {} has no manifest name", canonical_root.display())
-                })?;
-            cli.verification_twin_name = Some(twin_name);
             cli.verification_twin_root = Some(canonical_root);
             return Ok(());
         }
@@ -1569,9 +1558,6 @@ fn finish_scene_test(
 
 #[cfg(feature = "sysml")]
 fn verification_source_revision(world: &World, cli: &Cli) -> Result<Option<u64>, String> {
-    let Some(name) = cli.verification_twin_name.as_deref() else {
-        return Err("the verification Twin name was not resolved".to_owned());
-    };
     let Some(root) = cli.verification_twin_root.as_deref() else {
         return Err("the verification Twin root was not resolved".to_owned());
     };
@@ -1587,7 +1573,8 @@ fn verification_source_revision(world: &World, cli: &Cli) -> Result<Option<u64>,
     let analyses = world
         .get_resource::<lunco_sysml::TwinSysmlAnalyses>()
         .ok_or_else(|| "SysML analysis is not installed in the scene-test process".to_owned())?;
-    match analyses.state_for(name, twin_id, &twin.root) {
+    let source_identity = lunco_assets_core::logical_twin_source_identity(twin);
+    match analyses.state_for_source_identity(&source_identity, twin_id, &twin.root) {
         Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => {
             Ok(Some(analysis.source_revision()))
         }

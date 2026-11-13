@@ -106,6 +106,11 @@
 //                   substep_dt }
 //       the authoritative fixed-step contract used by the physics owner.
 //
+//   facts.site_gravity_anchors[] #{ path, body_id, body_valid }
+//       explicit root site anchors; an omitted body ID uses the runtime Moon
+//       default. facts.celestial_bodies[] #{ path, body_id, body_id_valid }
+//       composed prims applying LunCoCelestialBodyAPI.
+//
 //   facts.drives[]  #{ path, joint_type, body0, body1, valid, realization,
 //                      stiffness, damping, max_force }
 //       semantic drive facts produced by the same typed USD→Avian reader as
@@ -384,6 +389,7 @@ fn lint_usd(facts) {
     for f in control_binding_contract(facts) { out.push(f); }
     for f in stage_meters_per_unit_missing(facts) { out.push(f); }
     for f in epoch_api_requires_authored_time(facts) { out.push(f); }
+    for f in site_anchor_gravity_source(facts) { out.push(f); }
     for f in direction_source_contract(facts) { out.push(f); }
     for f in connection_contract(facts) { out.push(f); }
     for f in runtime_connection_contract(facts) { out.push(f); }
@@ -901,6 +907,48 @@ fn epoch_api_requires_authored_time(facts) {
             root_path,
             "The composed stage contains LunCoCelestialBodyAPI but has no valid authored scene epoch. Runtime uses current computer UTC converted to TDB; author LunCoEpochAPI and a non-zero lunco:time:epochJd for repeatability.",
         ));
+    }
+    out
+}
+
+/// A SiteAnchor selects body-surface gravity. Its body ID must resolve to a
+/// composed celestial declaration; the anchor does not compose that provider.
+fn site_anchor_gravity_source(facts) {
+    let out = [];
+    let needs_surface_gravity = false;
+    for body in facts.bodies {
+        if body.simulated && !body.kinematic {
+            needs_surface_gravity = true;
+            break;
+        }
+    }
+    if !needs_surface_gravity { return out; }
+
+    for anchor in facts.site_gravity_anchors {
+        if !anchor.body_valid {
+            out.push(finding(
+                "site-anchor-body-invalid",
+                "error",
+                anchor.path,
+                "SiteAnchor needs a valid non-zero integer `lunco:anchor:body`. Author a supported body identity; a missing body field defaults to Moon (301).",
+            ));
+            continue;
+        }
+        let resolved = false;
+        for body in facts.celestial_bodies {
+            if body.body_id_valid && body.body_id == anchor.body_id {
+                resolved = true;
+                break;
+            }
+        }
+        if !resolved {
+            out.push(finding(
+                "site-anchor-celestial-body-missing",
+                "error",
+                anchor.path,
+                "SiteAnchor body ID " + anchor.body_id.to_string() + " has no matching composed `LunCoCelestialBodyAPI` declaration. `SiteAnchor` selects body-surface gravity but does not load its body/provider; compose a celestial system containing this ID, or remove the anchor and use flat `UsdPhysicsScene` gravity.",
+            ));
+        }
     }
     out
 }

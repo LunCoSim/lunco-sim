@@ -102,6 +102,8 @@ facts.gear_drives[] #{ path, valid, realization, ratio, rest_offset,
 facts.prims[]   #{ path, type, parent, schemas[], attributes[],
                     connected_attributes[], connections[], direction_target_id,
                     celestial_direction_id }  ← the GENERIC projection
+facts.site_gravity_anchors[] #{ path, body_id, body_valid }
+facts.celestial_bodies[] #{ path, body_id, body_id_valid }
 facts.prims[].connections[] #{ name, target_type, sources[] }
 facts.prims[].connections[].sources[] #{ path, path_valid, prim_exists,
                                          property_exists, runtime_provider,
@@ -402,6 +404,8 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | Rule | Severity | Says |
 |---|---|---|
 | `nested-body-no-joint` | error | a body inside a body that no joint names — it will fall out of the vehicle. **The motor bug.** Exempt: disabled bodies, and `PhysxVehicleWheelAPI` wheels, which the drivetrain realizes (jointed in `physical`, raycast-driven in `raycast`) |
+| `site-anchor-celestial-body-missing` | error | a scene with a simulated dynamic body has a site anchor whose ID matches no composed `LunCoCelestialBodyAPI`; compose the matching celestial system or use a non-anchored flat-gravity scene |
+| `site-anchor-body-invalid` | error | a scene with a simulated dynamic body has a site anchor with a zero, malformed, or non-integer body ID, so its celestial gravity source cannot be resolved |
 | `joint-target-not-a-body` | error | `physics:body0/1` names a prim that resolves to **no body at all** — the joint is dropped at load and the mechanism is silently rigid. Naming a non-body that sits *under* a body is fine and is how every mounted mechanism attaches (below) |
 | `joint-same-body` | error | Both endpoints resolve to one rigid body, including aliases under that body; native admission is refused |
 | `collision-enabled-without-api` | error | ordinary non-terrain, non-wheel geometry authors `physics:collisionEnabled=true` without `PhysicsCollisionAPI`, so the USD-to-Avian reader ignores the intended solid shape |

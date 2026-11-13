@@ -76,9 +76,12 @@ site-anchored scene, celestial placement mounts only the authored site root.
 The root becomes the nested site `Grid` and `ActivePhysicsFrame` as soon as its
 `SiteAnchor` is projected, then is atomically migrated beneath the matching
 body-fixed surface Grid when that hierarchy is ready without changing the
-active frame. Terrain and rover/lander roots are sibling top-level children of
-that scene Grid; a rover is never parented to terrain. Each such top-level prim
-carries its own `CellCoord`, while visual and collision descendants remain
+active frame. The anchor establishes frame intent only: `GeodeticAnchor.body`
+must match a composed `CelestialBody.ephemeris_id` before placement and
+body-derived gravity can bind. It does not load a body or its gravity provider.
+Terrain and rover/lander roots are sibling top-level children of that scene
+Grid; a rover is never parented to terrain. Each such top-level prim carries
+its own `CellCoord`, while visual and collision descendants remain
 ordinary children rooted in `LowPrecisionRoot`. Celestial placement does not
 query or migrate an avatar/camera. If the site Grid is reparented, the physics
 bridge reseeds bodies from the new site-local hierarchy. An unstepped body
