@@ -18,7 +18,9 @@
 //! `tag:ui_tab_index`; the runtime adds them to the surface's keyboard tab order.
 //! Use `tag:class` for Flair CSS classes; the runtime maps it to Flair's
 //! `ClassList` component. A draggable window moves only when a pointer drag
-//! starts on a descendant tagged `tag:ui_drag_handle="true"`.
+//! starts on a descendant tagged `tag:ui_drag_handle="true"`. A resizable
+//! window changes size only from a descendant tagged
+//! `tag:ui_resize_handle="true"`.
 use bevy::ecs::entity::EntityHashSet;
 use bevy::picking::Pickable;
 use bevy::picking::events::{PointerClick, PointerDrag};
@@ -86,7 +88,7 @@ pub struct RuntimeUiAction {
 pub struct RuntimeUiForms {
     owner_twin_id: Option<u64>,
     forms: BTreeMap<String, RuntimeUiFormState>,
-    published_collections: HashSet<(String, String)>,
+    published_collections: HashMap<(String, String), Vec<ExposureValue>>,
 }
 
 #[derive(Default)]
@@ -221,6 +223,12 @@ struct RuntimeUiSurfaceReset {
     entity: Entity,
 }
 
+#[derive(Message, Clone, Copy, Debug)]
+struct RuntimeUiSurfaceResized {
+    entity: Entity,
+    delta: Vec2,
+}
+
 fn emit_runtime_ui_surface_drag(
     mut trigger: On<PointerDrag>,
     mut drags: MessageWriter<RuntimeUiSurfaceDragged>,
@@ -248,12 +256,46 @@ fn emit_runtime_ui_surface_drag(
     trigger.propagate(false);
 }
 
+fn emit_runtime_ui_surface_resize(
+    mut trigger: On<PointerDrag>,
+    mut resizes: MessageWriter<RuntimeUiSurfaceResized>,
+    roots: Query<(Entity, &RuntimeUiSurface)>,
+    parents: Query<&ChildOf>,
+    tags: Query<&Tags>,
+) {
+    if trigger.button != PointerButton::Primary {
+        return;
+    }
+    let root = trigger.entity;
+    let hit = trigger.trigger().original_event_target;
+    if !roots.get(root).is_ok_and(|(_, surface)| surface.resizable)
+        || !is_runtime_ui_handle(hit, root, "ui_resize_handle", &parents, &tags)
+    {
+        return;
+    }
+    resizes.write(RuntimeUiSurfaceResized {
+        entity: root,
+        delta: trigger.delta,
+    });
+    trigger.propagate(false);
+}
+
 /// Only authored drag handles move a window surface. Without this boundary,
 /// pointer drags bubble from every HUI child and make ordinary form controls
 /// move the entire panel while the user tries to edit or activate them.
 fn is_runtime_ui_drag_handle(
     hit: Entity,
     root: Entity,
+    parents: &Query<&ChildOf>,
+    tags: &Query<&Tags>,
+) -> bool {
+    is_runtime_ui_handle(hit, root, "ui_drag_handle", parents, tags)
+}
+
+fn is_runtime_ui_handle(
+    hit: Entity,
+    root: Entity,
+    tag: &str,
     parents: &Query<&ChildOf>,
     tags: &Query<&Tags>,
 ) -> bool {
@@ -265,7 +307,7 @@ fn is_runtime_ui_drag_handle(
         if tags
             .get(current)
             .ok()
-            .and_then(|tags| tags.tags().get("ui_drag_handle"))
+            .and_then(|tags| tags.tags().get(tag))
             .is_some_and(|value| value == "true")
         {
             return true;
@@ -278,7 +320,7 @@ fn is_runtime_ui_drag_handle(
     false
 }
 
-/// Reset a draggable runtime surface from a primary-button double click.
+/// Reset a draggable or resizable runtime surface from a primary-button double click.
 ///
 /// This is global because the picked entity is usually a retained HUI child.
 /// Other global click observers may intentionally stop propagation at that leaf,
@@ -302,7 +344,10 @@ fn emit_runtime_ui_surface_reset(
     let Ok((_, surface)) = roots.get(entity) else {
         return;
     };
-    if !surface.draggable || !is_runtime_ui_drag_handle(hit, entity, &parents, &tags) {
+    let drag_handle = surface.draggable && is_runtime_ui_drag_handle(hit, entity, &parents, &tags);
+    let resize_handle =
+        surface.resizable && is_runtime_ui_handle(hit, entity, "ui_resize_handle", &parents, &tags);
+    if !drag_handle && !resize_handle {
         return;
     }
     resets.write(RuntimeUiSurfaceReset { entity });
@@ -490,6 +535,9 @@ fn on_set_runtime_ui_collection_data(
         ));
     };
     let rows = runtime_ui_collection_value(&collection_key, &event.items)?;
+    let ExposureValue::Array(rows) = rows else {
+        unreachable!("validated runtime UI collection data is always an array")
+    };
     let Some(mut exposures) = exposures else {
         return Err("EngineExposures is not available for runtime collection data".to_owned());
     };
@@ -500,10 +548,10 @@ fn on_set_runtime_ui_collection_data(
     }
     exposures
         .writer(&event.namespace)
-        .property(&event.source, rows);
+        .property(&event.source, ExposureValue::Array(rows.clone()));
     forms
         .published_collections
-        .insert((event.namespace.clone(), event.source.clone()));
+        .insert((event.namespace.clone(), event.source.clone()), rows);
     Ok(Ack::new(OpId::new()))
 }
 
@@ -570,7 +618,7 @@ fn clear_runtime_ui_collections(
         forms.published_collections.clear();
         return;
     };
-    for (namespace, source) in forms.published_collections.drain() {
+    for ((namespace, source), _) in forms.published_collections.drain() {
         if exposures.surfaces.contains_key(&namespace) {
             exposures.writer(&namespace).remove_property(&source);
         }
@@ -604,6 +652,8 @@ fn on_inspect_runtime_ui_form(
     trigger: On<InspectRuntimeUiForm>,
     workspace: Option<Res<WorkspaceResource>>,
     forms: Res<RuntimeUiForms>,
+    surfaces: Query<&RuntimeUiSurface>,
+    rows: Query<&RuntimeUiCollectionRow>,
 ) -> Result<Ack, String> {
     let owner = workspace
         .as_deref()
@@ -624,6 +674,29 @@ fn on_inspect_runtime_ui_form(
             ("field_count", HookValue::UInt(form.values.len() as u64)),
             ("status", HookValue::str(form.status.clone())),
             ("owner_twin_id", HookValue::UInt(owner)),
+            (
+                "collections",
+                HookValue::map(forms.published_collections.iter().map(
+                    |((namespace, source), rows)| {
+                        (
+                            format!("{namespace}/{source}"),
+                            HookValue::UInt(rows.len() as u64),
+                        )
+                    },
+                )),
+            ),
+            (
+                "surfaces",
+                HookValue::map(
+                    surfaces.iter().map(|surface| {
+                        (surface.layout_id.clone(), HookValue::Bool(surface.mounted))
+                    }),
+                ),
+            ),
+            (
+                "rendered_row_count",
+                HookValue::UInt(rows.iter().count() as u64),
+            ),
             (
                 "fields",
                 HookValue::map(
@@ -852,6 +925,59 @@ fn enable_runtime_ui_scroll_area_overflow(mut areas: Query<&mut Node, With<Runti
     }
 }
 
+/// Collection hosts may clip and scroll themselves when their authored CSS
+/// declares vertical overflow. A non-scrolling collection host must not claim
+/// wheel events; they need to reach an enclosing authored scroll area instead.
+fn sync_runtime_ui_collection_scroll_areas(
+    mut commands: Commands,
+    hosts: Query<(Entity, &Node, Has<bevy_ui_widgets::ScrollArea>), With<RuntimeUiCollectionHost>>,
+) {
+    for (entity, node, has_scroll_area) in &hosts {
+        let should_scroll = node.overflow.y == bevy::ui::OverflowAxis::Scroll;
+        match (should_scroll, has_scroll_area) {
+            (true, false) => {
+                commands
+                    .entity(entity)
+                    .try_insert(bevy_ui_widgets::ScrollArea);
+            }
+            (false, true) => {
+                commands
+                    .entity(entity)
+                    .try_remove::<bevy_ui_widgets::ScrollArea>();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Reveal the last row after HUI and Bevy have computed its layout. The
+/// ScrollIntoView widget event finds the nearest real scroll area, so a list
+/// host without its own overflow correctly scrolls its containing form.
+fn scroll_runtime_ui_new_collection_rows_into_view(
+    mut commands: Commands,
+    hosts: Query<(Entity, &RuntimeUiScrollIntoViewPending)>,
+    rows: Query<(&RuntimeUiCollectionRow, Option<&ComputedNode>)>,
+) {
+    for (host, pending) in &hosts {
+        match rows.get(pending.target) {
+            Ok((row, Some(computed))) if row.host == host && !computed.is_empty() => {
+                commands.trigger(bevy_ui_widgets::ScrollIntoView {
+                    entity: pending.target,
+                });
+                commands
+                    .entity(host)
+                    .try_remove::<RuntimeUiScrollIntoViewPending>();
+            }
+            Ok((row, _)) if row.host == host => {}
+            _ => {
+                commands
+                    .entity(host)
+                    .try_remove::<RuntimeUiScrollIntoViewPending>();
+            }
+        }
+    }
+}
+
 fn apply_runtime_ui_form_values(
     mut forms: ResMut<RuntimeUiForms>,
     mut inputs: Query<(&RuntimeUiTextInput, &mut EditableText)>,
@@ -1040,6 +1166,14 @@ pub struct RuntimeUiSurfaceDefinition {
     /// larger layout boundary and cannot be moved as a whole.
     #[serde(default)]
     pub draggable: bool,
+    /// Whether the surface root can be resized from an authored resize handle.
+    /// Only window surfaces may opt in.
+    #[serde(default)]
+    pub resizable: bool,
+    /// Optional minimum logical size for a resizable window. Defaults to
+    /// 320x200 logical pixels when omitted.
+    #[serde(default)]
+    pub resize_min_size: Option<[f32; 2]>,
     pub placement: RuntimeUiPlacementDefinition,
 }
 
@@ -1206,6 +1340,45 @@ impl RuntimeUiManifest {
                     surface.id
                 ));
             }
+            if surface.resizable
+                && !matches!(
+                    surface.placement,
+                    RuntimeUiPlacementDefinition::Window { .. }
+                )
+            {
+                return Err(format!(
+                    "resizable runtime UI surface `{}` must use window placement",
+                    surface.id
+                ));
+            }
+            if surface.resize_min_size.is_some() && !surface.resizable {
+                return Err(format!(
+                    "runtime UI surface `{}` declares resize_min_size without resizable",
+                    surface.id
+                ));
+            }
+            if surface.resizable {
+                let minimum = surface.resize_min_size.unwrap_or([320.0, 200.0]);
+                if minimum
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+                {
+                    return Err(format!(
+                        "runtime UI surface `{}` resize_min_size must be finite and positive",
+                        surface.id
+                    ));
+                }
+                if let RuntimeUiPlacementDefinition::Window { width, height, .. } =
+                    &surface.placement
+                {
+                    if minimum[0] > *width || minimum[1] > *height {
+                        return Err(format!(
+                            "runtime UI surface `{}` resize_min_size cannot exceed its authored size",
+                            surface.id
+                        ));
+                    }
+                }
+            }
             if surface.modal && !surface.interactive {
                 return Err(format!(
                     "modal runtime UI surface `{}` must be interactive",
@@ -1368,6 +1541,7 @@ impl Plugin for RuntimeUiManifestPlugin {
             app.add_plugins(lunco_assets_runtime::TextAssetPlugin);
         }
         app.add_message::<RuntimeUiSurfaceDragged>()
+            .add_message::<RuntimeUiSurfaceResized>()
             .add_message::<RuntimeUiSurfaceReset>()
             .add_observer(emit_runtime_ui_surface_reset);
     }
@@ -1522,8 +1696,14 @@ impl Plugin for RuntimeUiPlugin {
                         .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
                         .after(bevy::ui::UiSystems::Propagate)
                         .before(bevy::ui::UiSystems::Content),
+                    sync_runtime_ui_collection_scroll_areas
+                        .after(bevy_flair::style::StyleSystems::ApplyComputedProperties)
+                        .before(bevy::ui::UiSystems::Content),
                     update_runtime_ui_recording_contract
                         .after(apply_runtime_ui_placement_after_style),
+                    scroll_runtime_ui_new_collection_rows_into_view
+                        .after(bevy::ui::UiSystems::PostLayout)
+                        .after(sync_runtime_ui_collection_scroll_areas),
                     report_runtime_ui_readiness
                         .after(update_runtime_ui_recording_contract)
                         .after(apply_runtime_ui_placement_after_style)
@@ -1799,6 +1979,8 @@ pub struct RuntimeUiSurface {
     modal: bool,
     dismiss_action: Option<String>,
     draggable: bool,
+    resizable: bool,
+    resize_min_size: Vec2,
     mounted: bool,
     /// For a surface required by offline recording, set after the retained tree
     /// has a camera target, a computed non-zero render target, a computed
@@ -1880,6 +2062,11 @@ impl RuntimeUiSurface {
             modal: definition.modal,
             dismiss_action: definition.dismiss_action.clone(),
             draggable: definition.draggable,
+            resizable: definition.resizable,
+            resize_min_size: definition
+                .resize_min_size
+                .map(Vec2::from_array)
+                .unwrap_or(Vec2::new(320.0, 200.0)),
             mounted: false,
             presentation_ready: false,
             presentation_visible: false,
@@ -1929,6 +2116,17 @@ struct RuntimeUiCollectionRow {
 
 #[derive(Component)]
 struct RuntimeUiCollectionHost;
+
+/// The first published snapshot establishes the authored collection's initial
+/// contents. It may arrive after the HUI host mounts, so host mount alone is
+/// not enough to distinguish startup rows from a user-added row.
+#[derive(Component)]
+struct RuntimeUiCollectionInitialSnapshotApplied;
+
+#[derive(Component)]
+struct RuntimeUiScrollIntoViewPending {
+    target: Entity,
+}
 
 /// HUI's compiler requires its style context for dynamic attributes. Retain
 /// that context outside the active style system so Flair owns rendered styles.
@@ -2465,6 +2663,9 @@ fn spawn_runtime_ui_surface(
     let mut entity = commands.spawn((Node::default(), surface, Visibility::Hidden));
     if definition.draggable {
         entity.observe(emit_runtime_ui_surface_drag);
+    }
+    if definition.resizable {
+        entity.observe(emit_runtime_ui_surface_resize);
     }
 }
 
@@ -3103,23 +3304,32 @@ fn apply_runtime_ui_exposures(
     }
 }
 
-/// Reconcile every authored collection host against one typed exposure array.
-/// This is the only collection mechanic: it knows neither programs nor
-/// cameras, and it never serializes rows through JSON. Rhai supplies ordered
-/// records and semantic action strings; HUI supplies the row template.
+/// Reconcile every authored collection host against its Twin-scoped published
+/// snapshot, with typed exposures as the fallback for non-form producers. This
+/// is the only collection mechanic: it knows neither programs nor cameras,
+/// and it never serializes rows through JSON. Rhai supplies ordered records
+/// and semantic action strings; HUI supplies the row template.
 fn reconcile_runtime_ui_collections(
     mut commands: Commands,
     exposures: Res<EngineExposures>,
+    forms: Res<RuntimeUiForms>,
+    workspace: Option<Res<WorkspaceResource>>,
     roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
     ids: Query<(Entity, &UiId), With<Node>>,
     parents: Query<&ChildOf>,
     rows: Query<(Entity, &RuntimeUiCollectionRow)>,
     hosts: Query<(), With<RuntimeUiCollectionHost>>,
+    initial_snapshots: Query<(), With<RuntimeUiCollectionInitialSnapshotApplied>>,
     mut properties: Query<&mut TemplateProperties>,
     styles: Query<&InlineStyle>,
     scrollbars: Query<(), With<bevy_ui_widgets::Scrollbar>>,
     theme: Option<Res<lunco_theme::Theme>>,
 ) {
+    let collections_belong_to_active_twin = forms.owner_twin_id
+        == workspace
+            .as_deref()
+            .and_then(|workspace| workspace.active_twin)
+            .map(TwinId::raw);
     for (surface_entity, surface, visibility) in &roots {
         if !surface.mounted || !matches!(*visibility, Visibility::Visible) {
             continue;
@@ -3139,13 +3349,11 @@ fn reconcile_runtime_ui_collections(
             }) else {
                 continue;
             };
-            if hosts.get(host).is_err() {
-                commands.entity(host).insert((
-                    RuntimeUiCollectionHost,
-                    ScrollPosition::default(),
-                    bevy_ui_widgets::ScrollArea,
-                    Pickable::default(),
-                ));
+            let host_was_reconciled = hosts.get(host).is_ok();
+            if !host_was_reconciled {
+                commands
+                    .entity(host)
+                    .insert((RuntimeUiCollectionHost, Pickable::default()));
             }
 
             if let Some(track_id) = &collection.scrollbar {
@@ -3194,8 +3402,16 @@ fn reconcile_runtime_ui_collections(
                 }
             }
 
-            let values = match exposure.properties.get(&collection.source) {
-                Some(lunco_exposure_core::ExposureValue::Array(values)) => values.as_slice(),
+            let cached_values = collections_belong_to_active_twin
+                .then(|| {
+                    forms
+                        .published_collections
+                        .get(&(surface.namespace.clone(), collection.source.clone()))
+                        .map(Vec::as_slice)
+                })
+                .flatten();
+            let exposed_values = match exposure.properties.get(&collection.source) {
+                Some(lunco_exposure_core::ExposureValue::Array(values)) => Some(values.as_slice()),
                 Some(value) => {
                     warn!(
                         surface = surface.namespace,
@@ -3203,10 +3419,17 @@ fn reconcile_runtime_ui_collections(
                         value = ?value,
                         "[runtime-ui] collection source is not an array"
                     );
-                    &[]
+                    None
                 }
-                None => &[],
+                None => None,
             };
+            // Twin form policy can publish rows before the retained HUI surface
+            // mounts. Keep that Twin-owned collection snapshot authoritative
+            // across scene/exposure rebuilds so the first mount sees the same
+            // rows as a later edit action.
+            let has_snapshot = cached_values.is_some() || exposed_values.is_some();
+            let values = cached_values.or(exposed_values).unwrap_or(&[]);
+            let initial_snapshot_applied = initial_snapshots.get(host).is_ok();
 
             let mut existing = HashMap::new();
             for (entity, row) in &rows {
@@ -3217,6 +3440,7 @@ fn reconcile_runtime_ui_collections(
 
             let mut ordered = Vec::with_capacity(values.len());
             let mut seen = HashSet::new();
+            let mut added_row = false;
             for value in values {
                 let Some(fields) = collection_item_fields(value, &collection.key) else {
                     warn!(
@@ -3275,6 +3499,7 @@ fn reconcile_runtime_ui_collections(
                     });
                     entity
                 } else {
+                    added_row = true;
                     let mut state = TemplateProperties::default();
                     for (name, value) in &fields {
                         state.set(name, value);
@@ -3318,6 +3543,22 @@ fn reconcile_runtime_ui_collections(
                     commands.entity(entity).try_insert(style);
                 }
                 ordered.push(entity);
+            }
+
+            if has_snapshot && !initial_snapshot_applied {
+                commands
+                    .entity(host)
+                    .try_insert(RuntimeUiCollectionInitialSnapshotApplied);
+            }
+
+            if host_was_reconciled
+                && initial_snapshot_applied
+                && added_row
+                && let Some(target) = ordered.last().copied()
+            {
+                commands
+                    .entity(host)
+                    .try_insert(RuntimeUiScrollIntoViewPending { target });
             }
 
             for (_, entity) in existing {
@@ -3474,7 +3715,7 @@ fn apply_runtime_ui_property(
     }
 }
 
-/// Apply pointer-driven movement to authored draggable window surfaces.
+/// Apply pointer-driven movement and resizing to authored window surfaces.
 ///
 /// Picking events bubble from any HUI child to the surface root, so templates
 /// remain data-only. The persisted position is logical, clamped to the live
@@ -3483,6 +3724,7 @@ fn apply_runtime_ui_property(
 /// anchor/default.
 fn apply_runtime_ui_surface_interactions(
     mut drags: MessageReader<RuntimeUiSurfaceDragged>,
+    mut resizes: MessageReader<RuntimeUiSurfaceResized>,
     mut resets: MessageReader<RuntimeUiSurfaceReset>,
     mut layouts: ResMut<RuntimeSurfaceLayouts>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -3512,6 +3754,38 @@ fn apply_runtime_ui_surface_interactions(
             RuntimeSurfaceLayout {
                 left: rect.min.x,
                 top: rect.min.y,
+                size: surface.resizable.then_some([rect.width(), rect.height()]),
+            },
+        );
+        apply_placement(&mut node, rect);
+        surface.applied_placement = Some(ResolvedRuntimeUiPlacement { rect });
+    }
+
+    for resize in resizes.read() {
+        let Ok((mut surface, mut node, target)) = roots.get_mut(resize.entity) else {
+            continue;
+        };
+        if !surface.resizable {
+            continue;
+        }
+        let Some(current) = surface.applied_placement else {
+            continue;
+        };
+        let Some((_, target_size)) = logical_target_dimensions(target, window) else {
+            continue;
+        };
+        let rect = resolve_resized_surface_rect(
+            current.rect,
+            resize.delta,
+            surface.resize_min_size,
+            target_size,
+        );
+        layouts.set(
+            surface.layout_id.clone(),
+            RuntimeSurfaceLayout {
+                left: rect.min.x,
+                top: rect.min.y,
+                size: Some([rect.width(), rect.height()]),
             },
         );
         apply_placement(&mut node, rect);
@@ -3522,7 +3796,7 @@ fn apply_runtime_ui_surface_interactions(
         let Ok((mut surface, mut node, target)) = roots.get_mut(reset.entity) else {
             continue;
         };
-        if !surface.draggable {
+        if !surface.draggable && !surface.resizable {
             continue;
         }
         layouts.reset(&surface.layout_id);
@@ -3547,6 +3821,25 @@ fn resolve_dragged_surface_rect(current: egui::Rect, delta: Vec2, target_size: V
     let max_origin = (target_size - size).max(Vec2::ZERO);
     let current_origin = Vec2::new(current.min.x, current.min.y);
     let origin = (current_origin + delta).clamp(Vec2::ZERO, max_origin);
+    egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y))
+}
+
+/// Resize from the authored bottom-right grip while keeping the top-left
+/// corner stable. Both the minimum and live-target bounds are applied on every
+/// pointer delta, so an overshoot cannot strand part of the surface offscreen.
+fn resolve_resized_surface_rect(
+    current: egui::Rect,
+    delta: Vec2,
+    minimum_size: Vec2,
+    target_size: Vec2,
+) -> egui::Rect {
+    let target_size = target_size.max(Vec2::ZERO);
+    let minimum_size = minimum_size.max(Vec2::ONE).min(target_size);
+    let origin = Vec2::new(current.min.x, current.min.y)
+        .clamp(Vec2::ZERO, (target_size - minimum_size).max(Vec2::ZERO));
+    let maximum_size = (target_size - origin).max(Vec2::ZERO);
+    let current_size = Vec2::new(current.width(), current.height());
+    let size = (current_size + delta).max(minimum_size).min(maximum_size);
     egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y))
 }
 
@@ -3630,14 +3923,15 @@ fn register_runtime_ui_input_regions(
             (surface.interactive && matches!(*visibility, Visibility::Visible)).then_some(entity)
         })
         .collect();
-    let draggable_roots: HashSet<Entity> = roots
+    let surface_gesture_roots: HashSet<Entity> = roots
         .iter()
         .filter_map(|(entity, surface, visibility)| {
-            (surface.draggable && matches!(*visibility, Visibility::Visible)).then_some(entity)
+            ((surface.draggable || surface.resizable) && matches!(*visibility, Visibility::Visible))
+                .then_some(entity)
         })
         .collect();
 
-    if interactive_roots.is_empty() && draggable_roots.is_empty() {
+    if interactive_roots.is_empty() && surface_gesture_roots.is_empty() {
         return;
     }
 
@@ -3686,9 +3980,9 @@ fn register_runtime_ui_input_regions(
                 .try_insert(RuntimeUiPressCallbacks(press.0.clone()))
                 .try_remove::<OnUiPress>();
         }
-        let draggable_content =
-            is_descendant_of_runtime_surface(entity, &draggable_roots, &parents);
-        if (explicit_control || draggable_content) && pickable.is_none() {
+        let surface_gesture_content =
+            is_descendant_of_runtime_surface(entity, &surface_gesture_roots, &parents);
+        if (explicit_control || surface_gesture_content) && pickable.is_none() {
             // Scene teardown may retire the surface before this queue applies.
             commands.entity(entity).try_insert(Pickable::default());
         }
@@ -3796,11 +4090,22 @@ fn resolve_surface_placement(
     let Some(layout) = layouts.get(&surface.layout_id) else {
         return Some(placement);
     };
-    if !surface.draggable {
+    if !surface.draggable && !surface.resizable {
         return Some(placement);
     }
     let (_, target_size) = logical_target_dimensions(target, window)?;
-    let size = Vec2::new(placement.rect.width(), placement.rect.height()).min(target_size);
+    let authored_size = Vec2::new(placement.rect.width(), placement.rect.height());
+    let mut size = if surface.resizable {
+        layout
+            .size
+            .map(Vec2::from_array)
+            .unwrap_or(authored_size)
+            .min(target_size)
+            .max(surface.resize_min_size.min(target_size))
+    } else {
+        authored_size.min(target_size)
+    };
+    size = size.min(target_size);
     let max_origin = (target_size - size).max(Vec2::ZERO);
     let origin = Vec2::new(layout.left, layout.top).clamp(Vec2::ZERO, max_origin);
     Some(ResolvedRuntimeUiPlacement {
@@ -4027,6 +4332,15 @@ mod tests {
         };
         assert_eq!(rows.len(), 2);
         assert_eq!(
+            app.world()
+                .resource::<RuntimeUiForms>()
+                .published_collections
+                .get(&("factory-studio".to_owned(), "ingredient_rows".to_owned()))
+                .map(Vec::len),
+            Some(2),
+            "the runtime UI must retain Twin-owned collection data until its host mounts"
+        );
+        assert_eq!(
             collection_item_fields(&rows[1], "row_key").unwrap(),
             vec![
                 ("material_field".to_owned(), "ingredient_2".to_owned()),
@@ -4109,7 +4423,7 @@ mod tests {
     fn keyed_collection_reconciliation_reuses_rows_updates_fields_and_retires_removed_keys() {
         use super::*;
 
-        let mut exposures = EngineExposures::default();
+        let exposures = EngineExposures::default();
         let first_rows = runtime_ui_collection_value(
             "row_key",
             &[
@@ -4124,12 +4438,12 @@ mod tests {
             ],
         )
         .unwrap();
-        exposures
-            .writer("factory-studio")
-            .property("ingredient_rows", first_rows);
-
         let mut app = App::new();
-        app.insert_resource(exposures);
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(41));
+        app.insert_resource(exposures)
+            .insert_resource(workspace)
+            .insert_resource(RuntimeUiForms::default());
         let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
             r#"{
                 "id":"factory-studio",
@@ -4166,6 +4480,23 @@ mod tests {
             .id();
         app.add_systems(Update, reconcile_runtime_ui_collections);
         app.update();
+        assert!(
+            app.world()
+                .get::<RuntimeUiScrollIntoViewPending>(container)
+                .is_none(),
+            "an empty host may mount before its initial collection snapshot arrives"
+        );
+        app.world_mut()
+            .resource_mut::<EngineExposures>()
+            .writer("factory-studio")
+            .property("ingredient_rows", first_rows);
+        app.update();
+        assert!(
+            app.world()
+                .get::<RuntimeUiScrollIntoViewPending>(container)
+                .is_none(),
+            "the first published snapshot must not move the form away from its authored start"
+        );
 
         let mut query = app
             .world_mut()
@@ -4220,6 +4551,127 @@ mod tests {
             app.world().get::<Children>(container).map(Children::len),
             Some(2),
             "the retained host should contain exactly the current ordered rows"
+        );
+        let scroll_target = app
+            .world()
+            .get::<RuntimeUiScrollIntoViewPending>(container)
+            .expect("an added row should be revealed after the next layout")
+            .target;
+        assert_eq!(
+            app.world()
+                .get::<RuntimeUiCollectionRow>(scroll_target)
+                .map(|row| row.key.as_str()),
+            Some("ingredient-3")
+        );
+    }
+
+    #[test]
+    fn pre_mount_collection_snapshot_survives_exposure_rebuild_and_is_twin_scoped() {
+        use super::*;
+
+        let mut exposures = EngineExposures::default();
+        exposures
+            .writer("factory-studio")
+            .property("status", ExposureValue::Text("ready".to_owned()));
+        exposures
+            .writer("factory-studio")
+            .remove_property("ingredient_rows");
+
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+                "id":"factory-studio",
+                "namespace":"factory-studio",
+                "template":"ui/factory_studio.html",
+                "stylesheet":"ui/factory_studio.css",
+                "collections":[{
+                    "source":"ingredient_rows",
+                    "container":"ingredient-rows",
+                    "template":"ui/factory_ingredient_row.html",
+                    "key":"row_key"
+                }],
+                "placement":{"mode":"window","anchor":"top_left","offset":[0,0],"width":640,"height":900}
+            }"#,
+        )
+        .unwrap();
+        let mut surface = RuntimeUiSurface::from_definition(
+            &definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .unwrap();
+        surface.mounted = true;
+
+        let items = vec![
+            BTreeMap::from([
+                ("row_key".to_owned(), "ingredient-1".to_owned()),
+                ("material_value".to_owned(), "Sugar".to_owned()),
+            ]),
+            BTreeMap::from([
+                ("row_key".to_owned(), "ingredient-2".to_owned()),
+                ("material_value".to_owned(), "Vanilla".to_owned()),
+            ]),
+        ];
+        let ExposureValue::Array(rows) = runtime_ui_collection_value("row_key", &items).unwrap()
+        else {
+            unreachable!("validated collection snapshots are arrays")
+        };
+        let mut forms = RuntimeUiForms::default();
+        forms.owner_twin_id = Some(41);
+        forms.published_collections.insert(
+            ("factory-studio".to_owned(), "ingredient_rows".to_owned()),
+            rows,
+        );
+
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(41));
+        let mut app = App::new();
+        app.insert_resource(exposures)
+            .insert_resource(forms)
+            .insert_resource(workspace);
+        let root = app
+            .world_mut()
+            .spawn((Node::default(), surface, Visibility::Visible))
+            .id();
+        let mut container_id = UiId::default();
+        *container_id = "ingredient-rows".to_owned();
+        let container = app
+            .world_mut()
+            .spawn((Node::default(), container_id, ChildOf(root)))
+            .id();
+        app.add_systems(Update, reconcile_runtime_ui_collections);
+        app.update();
+
+        let mut query = app
+            .world_mut()
+            .query::<(Entity, &RuntimeUiCollectionRow, &TemplateProperties)>();
+        let mounted_rows = query.iter(app.world()).collect::<Vec<_>>();
+        assert_eq!(mounted_rows.len(), 2);
+        assert!(mounted_rows.iter().any(|(_, row, properties)| {
+            row.key == "ingredient-2"
+                && properties.get("material_value").map(String::as_str) == Some("Vanilla")
+        }));
+        assert_eq!(
+            app.world().get::<Children>(container).map(Children::len),
+            Some(2),
+            "cached rows must mount even after the exposure snapshot is rebuilt"
+        );
+        assert!(
+            app.world()
+                .get::<RuntimeUiScrollIntoViewPending>(container)
+                .is_none(),
+            "initial collection mounting should preserve the authored top-of-form view"
+        );
+
+        app.world_mut()
+            .resource_mut::<WorkspaceResource>()
+            .active_twin = Some(TwinId::new(42));
+        app.update();
+        assert!(query.iter(app.world()).next().is_none());
+        assert_eq!(
+            app.world().get::<Children>(container).map(Children::len),
+            None,
+            "cached collection rows must not leak into a different active Twin"
         );
     }
 
@@ -5057,6 +5509,8 @@ mod tests {
                         "setting": "ui.camera_status",
                         "interactive": true,
                         "draggable": true,
+                        "resizable": true,
+                        "resize_min_size": [180.0, 64.0],
                         "placement": {
                             "mode": "window",
                             "anchor": "bottom_right",
@@ -5078,6 +5532,8 @@ mod tests {
         ));
         assert!(manifest.surfaces[2].interactive);
         assert!(manifest.surfaces[2].draggable);
+        assert!(manifest.surfaces[2].resizable);
+        assert_eq!(manifest.surfaces[2].resize_min_size, Some([180.0, 64.0]));
         assert_eq!(
             manifest.surfaces[2].setting.as_deref(),
             Some("ui.camera_status")
@@ -5104,6 +5560,55 @@ mod tests {
             .validate()
             .expect_err("only window surfaces can be draggable");
         assert!(error.contains("must use window placement"));
+    }
+
+    #[test]
+    fn resizable_surfaces_require_window_placement_and_valid_minimum_size() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "full-screen",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "full-screen",
+                    "resizable": true,
+                    "placement": {"mode": "viewport"}
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        assert!(
+            manifest
+                .validate()
+                .expect_err("only window surfaces can be resizable")
+                .contains("must use window placement")
+        );
+
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "window",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "window",
+                    "resizable": true,
+                    "resize_min_size": [240.0, 121.0],
+                    "placement": {
+                        "mode": "window",
+                        "anchor": "top_left",
+                        "width": 240.0,
+                        "height": 120.0
+                    }
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        assert!(
+            manifest
+                .validate()
+                .expect_err("minimum size cannot exceed authored size")
+                .contains("cannot exceed its authored size")
+        );
     }
 
     #[test]
@@ -5185,6 +5690,7 @@ mod tests {
             RuntimeSurfaceLayout {
                 left: 10_000.0,
                 top: 10_000.0,
+                size: None,
             },
         );
         let window = Window::default();
@@ -5196,6 +5702,53 @@ mod tests {
         assert!(placement.rect.min.y >= 0.0);
         assert!(placement.rect.max.x <= window.width());
         assert!(placement.rect.max.y <= window.height());
+    }
+
+    #[test]
+    fn resizable_window_restores_saved_dimensions_and_clamps_to_target() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "window",
+                    "template": "ui/a.html",
+                    "stylesheet": "ui/a.css",
+                    "namespace": "window",
+                    "resizable": true,
+                    "resize_min_size": [120.0, 80.0],
+                    "placement": {
+                        "mode": "window",
+                        "anchor": "top_left",
+                        "width": 240.0,
+                        "height": 120.0
+                    }
+                }]
+            }"#,
+        )
+        .expect("JSON shape should parse");
+        manifest.validate().expect("window should validate");
+
+        let surface = RuntimeUiSurface::from_definition(
+            &manifest.surfaces[0],
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .unwrap();
+        let mut layouts = RuntimeSurfaceLayouts::default();
+        layouts.set(
+            "window",
+            RuntimeSurfaceLayout {
+                left: 30.0,
+                top: 40.0,
+                size: Some([360.0, 220.0]),
+            },
+        );
+        let window = Window::default();
+        let placement = resolve_surface_placement(&surface, &layouts, None, None, Some(&window))
+            .expect("window placement should resolve");
+
+        assert_eq!(placement.rect.min, egui::pos2(30.0, 40.0));
+        assert_eq!(placement.rect.size(), egui::vec2(360.0, 220.0));
     }
 
     #[test]
@@ -5212,9 +5765,41 @@ mod tests {
     }
 
     #[test]
+    fn resize_delta_respects_minimum_and_target_edges() {
+        let current = egui::Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(300.0, 200.0));
+        let enlarged = resolve_resized_surface_rect(
+            current,
+            Vec2::new(100.0, 100.0),
+            Vec2::new(180.0, 100.0),
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(enlarged.min, egui::pos2(40.0, 50.0));
+        assert_eq!(enlarged.size(), egui::vec2(400.0, 300.0));
+
+        let reduced = resolve_resized_surface_rect(
+            current,
+            Vec2::new(-500.0, -400.0),
+            Vec2::new(180.0, 100.0),
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(reduced.size(), egui::vec2(180.0, 100.0));
+
+        let at_edge = egui::Rect::from_min_size(egui::pos2(790.0, 590.0), egui::vec2(200.0, 100.0));
+        let bounded = resolve_resized_surface_rect(
+            at_edge,
+            Vec2::new(1000.0, 1000.0),
+            Vec2::new(120.0, 80.0),
+            Vec2::new(800.0, 600.0),
+        );
+        assert_eq!(bounded.min, egui::pos2(680.0, 520.0));
+        assert_eq!(bounded.max, egui::pos2(800.0, 600.0));
+    }
+
+    #[test]
     fn only_explicit_drag_handle_moves_its_draggable_surface_root() {
         let mut app = App::new();
         app.add_message::<RuntimeUiSurfaceDragged>()
+            .add_message::<RuntimeUiSurfaceResized>()
             .add_message::<RuntimeUiSurfaceReset>()
             .init_resource::<RuntimeSurfaceLayouts>()
             .add_systems(Update, apply_runtime_ui_surface_interactions);
@@ -5240,6 +5825,8 @@ mod tests {
                     modal: false,
                     dismiss_action: None,
                     draggable: true,
+                    resizable: false,
+                    resize_min_size: Vec2::new(320.0, 200.0),
                     mounted: true,
                     presentation_ready: false,
                     presentation_visible: false,
@@ -5305,7 +5892,201 @@ mod tests {
             Some(RuntimeSurfaceLayout {
                 left: 22.0,
                 top: 38.0,
+                size: None,
             })
+        );
+    }
+
+    #[test]
+    fn only_explicit_resize_handle_changes_resizable_surface_size() {
+        let mut app = App::new();
+        app.add_message::<RuntimeUiSurfaceDragged>()
+            .add_message::<RuntimeUiSurfaceResized>()
+            .add_message::<RuntimeUiSurfaceReset>()
+            .init_resource::<RuntimeSurfaceLayouts>()
+            .add_systems(Update, apply_runtime_ui_surface_interactions);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+
+        let root = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                RuntimeUiSurface {
+                    layout_id: "resizable-window".to_owned(),
+                    namespace: "resizable-window".to_owned(),
+                    template: Handle::default(),
+                    stylesheet: Handle::default(),
+                    bindings: HashMap::new(),
+                    collections: Vec::new(),
+                    visible_in_perspective: None,
+                    gate: None,
+                    setting: None,
+                    setting_default: false,
+                    interactive: true,
+                    modal: false,
+                    dismiss_action: None,
+                    draggable: false,
+                    resizable: true,
+                    resize_min_size: Vec2::new(120.0, 80.0),
+                    mounted: true,
+                    presentation_ready: false,
+                    presentation_visible: false,
+                    presentation_generation: 0,
+                    placement: RuntimeUiPlacement::Window {
+                        anchor: RuntimeUiWindowAnchor::TopLeft,
+                        offset: Vec2::ZERO,
+                        width: 200.0,
+                        height: 100.0,
+                    },
+                    has_projected_exposure: false,
+                    applied_revision: 0,
+                    applied_placement: Some(ResolvedRuntimeUiPlacement {
+                        rect: egui::Rect::from_min_size(
+                            egui::pos2(10.0, 20.0),
+                            egui::vec2(200.0, 100.0),
+                        ),
+                    }),
+                },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(root)
+            .observe(emit_runtime_ui_surface_resize);
+        let body = app.world_mut().spawn(ChildOf(root)).id();
+        let mut handle_tags = Tags::default();
+        handle_tags.insert("ui_resize_handle".to_owned(), "true".to_owned());
+        let handle = app.world_mut().spawn((handle_tags, ChildOf(root))).id();
+
+        let drag = |entity| PointerDrag {
+            entity,
+            pointer: Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::None {
+                        width: 0,
+                        height: 0,
+                    },
+                    position: Vec2::ZERO,
+                },
+            ),
+            button: PointerButton::Primary,
+            distance: Vec2::new(12.0, 18.0),
+            delta: Vec2::new(12.0, 18.0),
+        };
+        app.world_mut().trigger(drag(body));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<RuntimeSurfaceLayouts>()
+                .get("resizable-window"),
+            None,
+            "ordinary panel content must not resize the surface"
+        );
+
+        app.world_mut().trigger(drag(handle));
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<RuntimeSurfaceLayouts>()
+                .get("resizable-window"),
+            Some(RuntimeSurfaceLayout {
+                left: 10.0,
+                top: 20.0,
+                size: Some([212.0, 118.0]),
+            })
+        );
+    }
+
+    #[test]
+    fn new_collection_row_scrolls_its_outer_form_without_a_host_scroll_area() {
+        let mut app = App::new();
+        app.add_plugins(bevy_ui_widgets::ScrollAreaPlugin)
+            .add_systems(
+                Update,
+                (
+                    sync_runtime_ui_collection_scroll_areas,
+                    scroll_runtime_ui_new_collection_rows_into_view,
+                )
+                    .chain(),
+            );
+        let scroll_area = app
+            .world_mut()
+            .spawn((
+                Node {
+                    overflow: Overflow {
+                        y: bevy::ui::OverflowAxis::Scroll,
+                        ..default()
+                    },
+                    ..default()
+                },
+                ComputedNode {
+                    size: Vec2::new(200.0, 100.0),
+                    content_size: Vec2::new(200.0, 400.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(0.0, 0.0),
+                bevy_ui_widgets::ScrollArea,
+                ScrollPosition::default(),
+            ))
+            .id();
+        let host = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(200.0, 400.0),
+                    content_size: Vec2::new(200.0, 400.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(0.0, 150.0),
+                RuntimeUiCollectionHost,
+                ScrollPosition::default(),
+                bevy_ui_widgets::ScrollArea,
+                ChildOf(scroll_area),
+            ))
+            .id();
+        let row = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::new(200.0, 20.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(0.0, 180.0),
+                RuntimeUiCollectionRow {
+                    host,
+                    key: "last".to_owned(),
+                    property_names: Vec::new(),
+                },
+                ChildOf(host),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(host)
+            .insert(RuntimeUiScrollIntoViewPending { target: row });
+
+        app.update();
+
+        assert!(
+            app.world()
+                .get::<bevy_ui_widgets::ScrollArea>(host)
+                .is_none(),
+            "a visible-overflow collection host must let wheel and reveal events reach its parent"
+        );
+        assert_eq!(
+            app.world().get::<ScrollPosition>(scroll_area).unwrap().y,
+            140.0,
+            "the last row should be fully visible in the containing form"
+        );
+        assert!(
+            app.world()
+                .get::<RuntimeUiScrollIntoViewPending>(host)
+                .is_none()
         );
     }
 
@@ -5351,6 +6132,8 @@ mod tests {
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
+                    resizable: false,
+                    resize_min_size: Vec2::new(320.0, 200.0),
                     mounted: true,
                     presentation_ready: false,
                     presentation_visible: false,
@@ -5459,6 +6242,8 @@ mod tests {
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
+                    resizable: false,
+                    resize_min_size: Vec2::new(320.0, 200.0),
                     mounted: true,
                     // This surface is not part of the offline recording
                     // contract, so it must be visible before any render-world
@@ -5511,6 +6296,8 @@ mod tests {
             modal: false,
             dismiss_action: None,
             draggable: false,
+            resizable: false,
+            resize_min_size: Vec2::new(320.0, 200.0),
             mounted: true,
             presentation_ready: true,
             presentation_visible: false,
@@ -5578,6 +6365,8 @@ mod tests {
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
+                    resizable: false,
+                    resize_min_size: Vec2::new(320.0, 200.0),
                     mounted: true,
                     presentation_ready: false,
                     presentation_visible: false,
@@ -5645,6 +6434,8 @@ mod tests {
                     modal: false,
                     dismiss_action: None,
                     draggable: false,
+                    resizable: false,
+                    resize_min_size: Vec2::new(320.0, 200.0),
                     mounted: false,
                     presentation_ready: false,
                     presentation_visible: false,

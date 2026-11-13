@@ -285,11 +285,14 @@ The fields are:
 | `modal` | Requires an interactive viewport surface and makes its visible root claim the full-window scene-pick gate. This is the generic simple-modal primitive, not a rich dialog queue. |
 | `dismiss_action` | Optional authored semantic action emitted by Escape while the surface is visible. Rhai owns what dismissal means. |
 | `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in Settings ▸ HUD. |
+| `resizable` | Allows a `window` surface root to resize from a descendant tagged `tag:ui_resize_handle="true"`. The runtime clamps the minimum and live-target size and stores it with the Twin's existing layout override. |
+| `resize_min_size` | Optional `[width, height]` logical minimum for a resizable window; defaults to `[320, 200]` and cannot exceed the authored window size. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
 
 The manifest loader rejects unknown fields, duplicate surface IDs/namespaces or
 callbacks, unsafe relative paths, empty contract names, and non-finite or
-non-positive window geometry before any surface is mounted. A `modal` surface
+non-positive window geometry before any surface is mounted. Resize handles are
+admitted only for resizable window surfaces. A `modal` surface
 must be interactive and use viewport placement; its optional `dismiss_action`
 is an authored semantic action shared with non-modal surfaces. Authored semantic actions are intentionally
 open-ended; their meaning belongs to the active Twin Rhai program, not to the
@@ -299,8 +302,8 @@ The retained UI picker uses Bevy's marker filter because its camera renders
 after the scene camera and otherwise every visible UI node blocks the scene,
 including decorative or transparent layout nodes. The runtime marks only
 visible `on_press` controls on interactive surfaces and visible HUI nodes in
-draggable window surfaces, including their roots, as `Pickable`; those are the
-retained nodes that own pointer input. The active presentation camera is marked
+draggable or resizable window surfaces, including their roots, as `Pickable`;
+those are the retained nodes that own pointer input. The active presentation camera is marked
 for UI picking when a runtime surface is mounted. This keeps ordinary HUI
 controls and surface dragging on the native pointer path while allowing
 unmarked UI layout to pass scene hits through.
@@ -319,6 +322,23 @@ tree and the existing pointer propagation path; it does not add a parallel
 egui hit-test or per-frame correction loop. The shipped `celestial-view` surface
 uses a top-centre authored default; Settings ▸ HUD removes only its override,
 leaving the shared layout store and other draggable surfaces unchanged.
+
+Resizable windows use the same retained pointer path. A descendant tagged
+`tag:ui_resize_handle="true"` changes the outer width and height from its
+bottom-right corner; ordinary controls do not resize the surface. Position and
+size are saved together in the existing Twin-scoped `RuntimeSurfaceLayouts`
+workspace snapshot. Older position-only snapshots deserialize with no size
+override, and a surface without `resizable: true` continues to use its authored
+dimensions.
+
+Dynamic collection rows request `ScrollIntoView` after their new HUI template
+has a computed layout. The shared widget event scrolls the nearest authored
+scroll area, including an enclosing form when the collection host itself does
+not overflow. Each collection's first published snapshot establishes its
+initial contents without moving the form, even when the snapshot arrives after
+the panel mounts. Later row additions request scrolling. Collection hosts claim
+wheel events only when their authored style actually sets vertical overflow to
+scroll; visible-overflow hosts let wheel input reach the enclosing form.
 
 ### Twin settings and camera policy
 
@@ -551,9 +571,11 @@ mounted surface when no manifest state is available), rejects missing or
 duplicate keys, and bounds row/field/payload sizes. Validation uses the
 manifest declaration before waiting for HUI to mount its surface tree, so
 startup scripts can publish initial rows without racing presentation creation.
-Publications are removed when the owner Twin closes or another Twin takes
-ownership. This keeps application code, Rhai policy, and HTML templates on the
-same generic collection path without giving scripts direct resource access.
+The runtime retains the typed rows with their Twin owner and uses that snapshot
+when the keyed host mounts, including after an exposure rebuild. Publications
+are removed when the owner Twin closes or another Twin takes ownership. This
+keeps application code, Rhai policy, and HTML templates on the same generic
+collection path without giving scripts direct resource access.
 
 ### 3. Style the contents
 

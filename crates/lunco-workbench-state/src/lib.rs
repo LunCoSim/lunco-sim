@@ -459,30 +459,37 @@ pub struct PerspectiveDockSnapshot {
 
 /// Persisted logical position of one runtime-authored surface.
 ///
-/// The runtime UI owner supplies the surface's authored size and clamps this
-/// position to the current target. Workbench stores only the user override so
-/// an authored geometry change remains the default for surfaces that were not
-/// moved.
+/// The runtime UI owner supplies the surface's authored geometry and clamps
+/// these user overrides to the current target. The optional size keeps old
+/// workspace snapshots backward compatible and lets non-resizable windows
+/// retain position-only behavior.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub struct RuntimeSurfaceLayout {
     /// Logical x coordinate of the surface's top-left corner.
     pub left: f32,
     /// Logical y coordinate of the surface's top-left corner.
     pub top: f32,
+    /// Optional logical width and height override for resizable surfaces.
+    #[serde(default)]
+    pub size: Option<[f32; 2]>,
 }
 
 impl RuntimeSurfaceLayout {
-    /// Return whether this persisted position is safe to apply.
+    /// Return whether this persisted position and optional size are safe.
     pub fn is_finite(self) -> bool {
-        self.left.is_finite() && self.top.is_finite()
+        self.left.is_finite()
+            && self.top.is_finite()
+            && self.size.is_none_or(|[width, height]| {
+                width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0
+            })
     }
 }
 
-/// Per-Twin persisted positions for runtime-authored draggable surfaces.
+/// Per-Twin persisted geometry for runtime-authored draggable or resizable surfaces.
 ///
 /// This is the single layout store for HUI/Flair runtime surfaces. The
 /// surface manifest remains the default/visibility authority; this resource
-/// contains only validated user overrides and participates in the existing
+/// contains only validated position and optional size overrides and participates in the existing
 /// workspace-state snapshot gate.
 #[derive(Resource, Default, Clone, PartialEq, Debug)]
 pub struct RuntimeSurfaceLayouts {
@@ -518,7 +525,7 @@ impl RuntimeSurfaceLayouts {
         }
     }
 
-    /// Store a finite user position. Returns whether the snapshot changed.
+    /// Store finite user geometry. Returns whether the snapshot changed.
     pub fn set(&mut self, id: impl Into<String>, layout: RuntimeSurfaceLayout) -> bool {
         if !layout.is_finite() {
             return false;
@@ -1718,6 +1725,7 @@ mod tests {
             RuntimeSurfaceLayout {
                 left: f32::NAN,
                 top: 0.0,
+                size: None,
             },
         ));
         assert_eq!(layouts.revision(), initial_revision);
@@ -1725,16 +1733,38 @@ mod tests {
         let camera = RuntimeSurfaceLayout {
             left: 120.0,
             top: 48.0,
+            size: None,
         };
         assert!(layouts.set("camera-status", camera));
         assert!(!layouts.set("camera-status", camera));
         assert_eq!(layouts.get("camera-status"), Some(camera));
+
+        let resized = RuntimeSurfaceLayout {
+            left: 18.0,
+            top: 22.0,
+            size: Some([520.0, 340.0]),
+        };
+        assert!(layouts.set("factory-studio", resized));
+        assert_eq!(layouts.get("factory-studio"), Some(resized));
+        assert!(!layouts.set(
+            "invalid-size",
+            RuntimeSurfaceLayout {
+                left: 0.0,
+                top: 0.0,
+                size: Some([0.0, 100.0]),
+            },
+        ));
+
+        let legacy: RuntimeSurfaceLayout = serde_json::from_str(r#"{"left":10.0,"top":20.0}"#)
+            .expect("older position-only snapshots remain readable");
+        assert_eq!(legacy.size, None);
 
         assert!(layouts.set(
             "stale-surface",
             RuntimeSurfaceLayout {
                 left: 8.0,
                 top: 16.0,
+                size: None,
             },
         ));
         let live_ids: std::collections::HashSet<_> =
