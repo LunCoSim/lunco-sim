@@ -394,6 +394,9 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
     {
         return;
     }
+    let roots = world
+        .get_resource::<lunco_assets_core::TwinRoots>()
+        .cloned();
     let mut search = world.resource_mut::<NavigationSearch>();
     if !search.open {
         return;
@@ -437,6 +440,8 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
                 }
             });
             if let Some(error) = &search.error {
+                let error =
+                    lunco_assets_core::asset_path::display_source_text(error, roots.as_ref());
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
             if search.entries.is_empty() {
@@ -473,6 +478,14 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
             scroll.show_rows(ui, row_height, search.entries.len(), |ui, range| {
                 for index in range {
                     let entry = &search.entries[index];
+                    let label = lunco_assets_core::asset_path::display_source_text(
+                        &entry.label,
+                        roots.as_ref(),
+                    );
+                    let detail = lunco_assets_core::asset_path::display_source_text(
+                        &entry.detail,
+                        roots.as_ref(),
+                    );
                     let (rect, response) = ui.allocate_exact_size(
                         egui::vec2(ui.available_width(), row_height),
                         egui::Sense::click(),
@@ -495,14 +508,9 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
                             .layout(egui::Layout::top_down(egui::Align::Min)),
                     );
                     row.spacing_mut().item_spacing.y = 0.0;
-                    row.add(
-                        egui::Label::new(format!("{}  ·  {}", entry.label, entry.category))
-                            .truncate(),
-                    );
-                    row.add(
-                        egui::Label::new(egui::RichText::new(&entry.detail).small()).truncate(),
-                    );
-                    let response = response.on_hover_text(&entry.detail);
+                    row.add(egui::Label::new(format!("{label}  ·  {}", entry.category)).truncate());
+                    row.add(egui::Label::new(egui::RichText::new(&detail).small()).truncate());
+                    let response = response.on_hover_text(&detail);
                     if response.clicked() {
                         activate = Some(entry.id.clone());
                     }

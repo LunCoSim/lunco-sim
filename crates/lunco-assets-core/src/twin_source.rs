@@ -182,6 +182,36 @@ fn redact_opaque_twin_authorities_except(text: &str, known_sources: &HashSet<Str
     output
 }
 
+fn replace_twin_source_reference(text: &str, source: &str, display_name: &str) -> String {
+    let needle = format!("{TWIN_SCHEME}://{source}");
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(offset) = text[cursor..].find(&needle) {
+        let start = cursor + offset;
+        let end = start + needle.len();
+        let next = text[end..].chars().next();
+        if next.is_none_or(|character| character == '/' || is_source_text_boundary(character)) {
+            output.push_str(&text[cursor..start]);
+            output.push_str(display_name);
+            if next == Some('/') {
+                output.push_str(" / ");
+                cursor = end + 1;
+            } else {
+                cursor = end;
+            }
+        } else {
+            output.push_str(&text[cursor..end]);
+            cursor = end;
+        }
+    }
+    output.push_str(&text[cursor..]);
+    output
+}
+
+fn is_source_text_boundary(character: char) -> bool {
+    character.is_whitespace() || matches!(character, '`' | '\'' | '"' | ')' | ']' | '}' | ',' | ';')
+}
+
 /// Split a `twin://<authority>/<rel>` URI into its parts, or `None` when it carries a
 /// different scheme (or no scheme at all). The parsing inverse of [`twin_uri`].
 pub fn parse_twin_uri(uri: &str) -> Option<(&str, &str)> {
@@ -608,6 +638,90 @@ impl TwinRoots {
             .get(authority)
             .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
         Ok(mount.display_name.clone())
+    }
+
+    /// Human-readable source label for a stable identity or live mount authority.
+    pub fn display_name_for_source(&self, source: &str) -> Result<String, TwinRootsError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        if let Some(mount) = registry.roots.get(source) {
+            return Ok(mount.display_name.clone());
+        }
+        registry
+            .roots
+            .values()
+            .find(|mount| mount.source_identity == source)
+            .map(|mount| mount.display_name.clone())
+            .ok_or(TwinRootsError::SourceNotMounted)
+    }
+
+    /// Replace Twin addresses in user-facing text with their display names.
+    /// Retired sources use a generic label because their display metadata is
+    /// released with the mount.
+    pub fn display_source_text(&self, text: &str) -> Result<String, TwinRootsError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        let mut names = HashMap::<String, String>::new();
+        for (authority, mount) in &registry.roots {
+            names.insert(authority.clone(), mount.display_name.clone());
+            names.insert(mount.source_identity.clone(), mount.display_name.clone());
+        }
+        for (authority, identity) in &registry.logical_identities {
+            let display_name = names
+                .get(identity)
+                .cloned()
+                .unwrap_or_else(|| "Twin source".to_owned());
+            names
+                .entry(authority.clone())
+                .or_insert(display_name.clone());
+            names.entry(identity.clone()).or_insert(display_name);
+        }
+
+        let mut replacements = names.into_iter().collect::<Vec<_>>();
+        replacements.sort_by(|left, right| right.0.len().cmp(&left.0.len()));
+        Ok(replacements
+            .into_iter()
+            .fold(text.to_owned(), |text, (source, display_name)| {
+                replace_twin_source_reference(&text, &source, &display_name)
+            }))
+    }
+
+    /// Display a native source path relative to the open Twin that owns it.
+    pub fn display_path_for_native_path(
+        &self,
+        path: &Path,
+    ) -> Result<Option<String>, TwinRootsError> {
+        let registry = self
+            .registry
+            .read()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        let owners = registry
+            .roots
+            .values()
+            .filter_map(|mount| {
+                let relative = path.strip_prefix(&mount.root).ok()?;
+                Some((mount.root.components().count(), mount, relative))
+            })
+            .collect::<Vec<_>>();
+        let depth = owners.iter().map(|(depth, _, _)| *depth).max();
+        let mut owners = owners
+            .into_iter()
+            .filter(|(owner_depth, _, _)| Some(*owner_depth) == depth);
+        let Some((_, owner, relative)) = owners.next() else {
+            return Ok(None);
+        };
+        if owners.any(|(_, candidate, _)| candidate.display_name != owner.display_name) {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "{} / {}",
+            owner.display_name,
+            relative.display()
+        )))
     }
 
     /// Current load authority for an exact logical source identity, when mounted.

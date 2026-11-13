@@ -490,6 +490,11 @@ which stays open when work completes. The compact notice disappears on
 completion; do not stack it with the history view or auto-close a history view
 the user expanded.
 
+Human-facing source text uses the mounted Twin's display name and relative path.
+Keep canonical `twin://` addresses in `CurrentScenePath`, command payloads, and
+API readiness labels; use `asset_path::display_source_path` or
+`asset_path::display_source_text` at UI presentation boundaries.
+
 Use native egui buttons for the clickable status summary and its empty
 history-open state. The enclosing layout response anchors the popup; it does
 not own the click. Verify both opening the complete warning and closing history

@@ -88,6 +88,7 @@ fn draw(
     mut preview: ResMut<ResourcePreview>,
     server: Res<bevy::asset::AssetServer>,
     settings: Res<lunco_assets_runtime::ui_loader::AssetUiSettings>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut installed: Local<bool>,
     mut commands: Commands,
 ) {
@@ -134,6 +135,7 @@ fn draw(
     let Some(uri) = preview.uri.clone() else {
         return;
     };
+    let display_path = lunco_assets_core::asset_path::display_source_path(&uri, roots.as_deref());
     let reset_scroll = preview.is_changed();
     let mut open = true;
     egui::Window::new("Resource")
@@ -153,13 +155,13 @@ fn draw(
             }
             ui.add_sized(
                 egui::vec2(preview_available_size(ui).x, ui.spacing().interact_size.y),
-                egui::Label::new(&uri)
+                egui::Label::new(&display_path)
                     .truncate()
                     .selectable(true)
                     .halign(egui::Align::LEFT),
             )
             .context_menu(|ui| {
-                if ui.button("Copy URI").clicked() {
+                if ui.button("Copy source address").clicked() {
                     ui.ctx().copy_text(uri.clone());
                     ui.close();
                 }
@@ -168,7 +170,10 @@ fn draw(
                 commands.trigger(OpenAssetResource { uri: uri.clone() });
             }
             if let Some(error) = &preview.rejection {
-                ui.label(error);
+                ui.label(lunco_assets_core::asset_path::display_source_text(
+                    error,
+                    roots.as_deref(),
+                ));
                 return;
             }
             match ctx.try_load_bytes(&uri) {
@@ -207,6 +212,10 @@ fn draw(
                                 ui.spinner();
                             }
                             Err(error) => {
+                                let error = lunco_assets_core::asset_path::display_source_text(
+                                    &error.to_string(),
+                                    roots.as_deref(),
+                                );
                                 ui.label(format!(
                                     "{} bytes. Preview unavailable: {error}",
                                     bytes.len()
@@ -216,6 +225,10 @@ fn draw(
                     }
                 }
                 Err(error) => {
+                    let error = lunco_assets_core::asset_path::display_source_text(
+                        &error.to_string(),
+                        roots.as_deref(),
+                    );
                     ui.label(format!("Could not load resource: {error}"));
                 }
             }

@@ -1509,7 +1509,7 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
 |---|---|---|
 | (none) | Layer-relative refs **inside a Twin** (co-located terrain, textures) | the layer's own source |
 | `lunco://` | **Engine asset library** (rovers, parts, vessels, downloaded binaries) — location-independent ref usable from external Twins | `assets/...`, then `<cache>/...` |
-| `twin://<source-identity>/...` | Stable scene URI shown in the scene UI and accepted by `LoadScene`; never authored in USD. | the opened Twin folder or downloaded scenario |
+| `twin://<source-identity>/...` | Canonical stable source address accepted by `LoadScene`; the scene UI shows the Twin name and relative path. Never authored in USD. | the opened Twin folder or downloaded scenario |
 | `twin://<authority>/...` | **Internal asset address.** The authority assigned to one Twin mount lifetime. Never shown to users or authored in a file. | the registered Twin root through `lunco-storage` |
 
 The `lunco://` scheme is the engine library scheme. Collaboration protocols

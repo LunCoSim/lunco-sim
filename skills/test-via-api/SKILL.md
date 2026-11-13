@@ -70,12 +70,13 @@ document's stage-input lease; readiness must finish without an authority-change
 load failure.
 The `assets/scenarios/tests/twin_source_uri.rhai` verdicts require the unchanged display
 name, a stable public scene URI, and a retained Twin/mount during scene
-operations. Each load uses the displayed URI; an unmounted identity, a live
-mount URI, and a retired mount URI must be rejected without changing the
-current scene.
+operations. Each load uses the canonical URI derived from its source
+identity. An unmounted identity, a live mount URI, and a retired mount URI
+must be rejected without changing the current scene.
 The authored verdict also checks that readiness progress reasons stay generic
-and each pending `scene_load` label equals the stable URI. The driver captures
-the in-progress loading notice for visual review,
+and each pending API `scene_load` label equals the canonical source URI. The
+workbench loading notice displays the Twin name and relative scene path. The
+driver captures that notice for visual review,
 checks the mounted projection after reloads and resets, captures the final
 window, and verifies API Exit and port release. It also runs
 `twin_identity_boundary.rhai` under the Twin execution route; this authored

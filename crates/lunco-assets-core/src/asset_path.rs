@@ -1,6 +1,7 @@
 //! Bevy asset-source adapters over the platform-neutral asset path algebra.
 
 use bevy::asset::{AssetPath, io::AssetSourceId};
+use std::path::Path;
 
 pub(crate) use lunco_assets_path::{
     has_scheme, is_safe_relative_components, is_safe_relative_path, relative_path, slashed,
@@ -19,8 +20,9 @@ pub fn anchor_of(path: &AssetPath) -> String {
     }
 }
 
-/// Stable source URI for presentation and user commands. A Twin's asset-cache
-/// authority belongs to its load lease, never to its public source address.
+/// Canonical source URI for scene commands, persisted identity and API facts.
+/// UI labels should use [`display_source_path`] or [`display_source_text`]. A
+/// Twin's asset-cache authority belongs to its load lease, never to this URI.
 pub fn source_uri(
     path: &AssetPath<'_>,
     roots: Option<&crate::TwinRoots>,
@@ -36,7 +38,7 @@ pub fn source_uri(
 }
 
 /// Convert an internal Twin load address or an existing public URI into the
-/// stable URI used by presentation and user commands.
+/// canonical URI used by scene commands, persisted identity and API facts.
 pub fn source_uri_for_address(
     reference: &str,
     roots: Option<&crate::TwinRoots>,
@@ -66,6 +68,110 @@ pub fn source_uri_for_address(
         crate::TWIN_SCHEME,
         &format!("{logical_identity}/{relative}"),
     ))
+}
+
+/// Present a source address with Twin names and paths suitable for UI labels.
+/// Runtime commands and persisted scene identities continue to use the address.
+pub fn display_source_path(reference: &str, roots: Option<&crate::TwinRoots>) -> String {
+    if let Some((identity, relative)) = crate::parse_twin_uri(reference) {
+        let relative = readable_relative_path(relative);
+        let display_name = roots
+            .and_then(|roots| roots.display_name_for_source(identity).ok())
+            .unwrap_or_else(|| "Twin source".to_owned());
+        return format_source_path(&display_name, &relative);
+    }
+    if let Some(relative) = crate::parse_lunco_uri(reference) {
+        return format_source_path("LunCoSim Library", &readable_relative_path(relative));
+    }
+    if let Ok(Some(path)) = lunco_storage::file_uri_to_path(reference) {
+        return display_native_path(&path, roots);
+    }
+    let path = Path::new(reference);
+    if path.is_absolute() {
+        return display_native_path(path, roots);
+    }
+    display_source_text(reference, roots)
+}
+
+/// Present source references inside a UI message without exposing Twin UUIDs
+/// or temporary mount authorities.
+pub fn display_source_text(text: &str, roots: Option<&crate::TwinRoots>) -> String {
+    let mapped = roots
+        .and_then(|roots| roots.display_source_text(text).ok())
+        .unwrap_or_else(|| text.to_owned());
+    humanize_twin_references(&humanize_lunco_references(&mapped))
+}
+
+fn display_native_path(path: &Path, roots: Option<&crate::TwinRoots>) -> String {
+    roots
+        .and_then(|roots| roots.display_path_for_native_path(path).ok().flatten())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn format_source_path(source: &str, relative: &str) -> String {
+    if relative.is_empty() {
+        source.to_owned()
+    } else {
+        format!("{source} / {relative}")
+    }
+}
+
+fn readable_relative_path(path: &str) -> String {
+    percent_encoding::percent_decode_str(path)
+        .decode_utf8_lossy()
+        .replace('\\', "/")
+}
+
+fn humanize_twin_references(text: &str) -> String {
+    humanize_source_scheme(text, "twin://", "Twin source", true)
+}
+
+fn humanize_lunco_references(text: &str) -> String {
+    humanize_source_scheme(text, "lunco://", "LunCoSim Library", false)
+}
+
+fn humanize_source_scheme(text: &str, scheme: &str, label: &str, twin: bool) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(offset) = text[cursor..].find(scheme) {
+        let start = cursor + offset;
+        let value_start = start + scheme.len();
+        let value = &text[value_start..];
+        let boundary = value
+            .char_indices()
+            .find(|(_, character)| {
+                character.is_whitespace()
+                    || matches!(character, '`' | '\'' | '"' | ')' | ']' | '}' | ',' | ';')
+            })
+            .map(|(index, _)| value_start + index)
+            .unwrap_or(text.len());
+        let path = &text[value_start..boundary];
+        if path.is_empty() {
+            output.push_str(&text[cursor..boundary]);
+            cursor = boundary;
+            if cursor == text.len() {
+                break;
+            }
+            continue;
+        }
+
+        output.push_str(&text[cursor..start]);
+        if twin {
+            let relative = path.split_once('/').map_or("", |(_, relative)| relative);
+            output.push_str(label);
+            if !relative.is_empty() {
+                output.push_str(" / ");
+                output.push_str(relative);
+            }
+        } else {
+            output.push_str(label);
+            output.push_str(" / ");
+            output.push_str(path);
+        }
+        cursor = boundary;
+    }
+    output.push_str(&text[cursor..]);
+    output
 }
 
 /// Admit a user-facing source URI into the current asset-cache lease. Stable

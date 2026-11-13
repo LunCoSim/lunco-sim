@@ -129,12 +129,14 @@ workspace `TwinId`; the typed runtime keeps the owner privately and the Rust
 command bridge binds it to reflected identity fields. Application-level scene
 selection may use the workspace `TwinId` to address a Twin. Twin source queries use the stable
 `twin://<source-identity>/<relative-path>` address, and `twin_source_identity()`
-returns only its stable source component. A manifest UUID supplies that
-identity as `uuid-<simple-uuid>`; older manifests and plain folders without a
-UUID use the encoded display component. A remount receives a fresh internal
-mount authority so late Bevy asset reads cannot bind to another source, while
-the public URI remains stable. Two live roots cannot claim one source identity:
-the second admission fails with a typed duplicate-identity error. See
+returns only its source component. A manifest UUID supplies the durable form,
+`uuid-<simple-uuid>`; older manifests and plain folders without a UUID use the
+encoded display component. That fallback remains stable only while the display
+name stays the same. A remount receives a fresh internal mount authority so
+late Bevy asset reads cannot bind to another source; for an unchanged source
+identity, the canonical URI remains stable. Two live roots cannot claim one
+source identity: the second admission fails with a typed duplicate-identity
+error. See
 [source URI ownership](55-scene-addressing-and-roots.md#3-stable-source-uris-and-internal-mount-leases).
 Twin-scoped reflection reads, typed results, and diagnostics omit workspace
 Twin selectors and translate mount-local authorities to stable source

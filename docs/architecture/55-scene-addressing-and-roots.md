@@ -12,7 +12,7 @@ scene lifecycle starts:
 |---|---|---|
 | bare relative (`scenes/x.usda`) | *implicitly* `assets/` | authoring/CLI input only; never a `LoadScene` address |
 | `lunco://<rel>` | the engine asset library | shipped/portable refs |
-| `twin://<source-identity>/<rel>` | a stable Twin source | scene UI and user commands |
+| `twin://<source-identity>/<rel>` | a canonical Twin source address | scene commands and persisted source identity |
 | `twin://<authority>/<rel>` | a registered Twin mount | internal asset loading |
 | absolute fs path | nothing | **every user-facing picker** |
 
@@ -44,10 +44,13 @@ differs (startup configuration versus the typed `OpenFile` command).
 > There is exactly one question: **given a path a user chose, what is its root,
 > and what is the path relative to that root?** Everything else is a consequence.
 
+Twin scene labels show the display name and relative path. They resolve the
+canonical address through the currently mounted Twin metadata.
+
 Two corollaries, both non-negotiable:
 
 **Every scene address is scheme-qualified.** Bare relative paths do not survive
-past the boundary. User-facing scene commands accept stable source URIs:
+past the boundary. Scene commands accept canonical stable source URIs:
 
 | Scheme | Root | Use |
 |---|---|---|
@@ -55,9 +58,9 @@ past the boundary. User-facing scene commands accept stable source URIs:
 | `twin://<source-identity>/…` | a registered Twin source | anything the user opened |
 
 The asset reader uses `twin://<authority>/…` internally for each admitted
-mount. The user-facing source URI resolves to that address at scene-command
+mount. The canonical source URI resolves to that address at scene-command
 admission. The authority stays out of status text, scene menus, and
-`CurrentScenePath`.
+`CurrentScenePath`; human-facing labels show the Twin name and relative path.
 
 **`assets/` is addressed via `lunco://`, never as the implicit default.** It is
 one root among several with no special powers. Its content is reached by
@@ -102,14 +105,23 @@ resolver; neither performs its own ancestor walk.
 
 ### 3. Stable source URIs and internal mount leases
 
-The user-facing scene URI is stable across reloads and Twin reopenings:
-`twin://<source-identity>/<relative-path>`. The loading notice, scenario-menu
-entries and `CurrentScenePath` publish this address, never the asset-cache
-authority. Generic simulation hold reasons stay pathless; detailed
-`/api/ready` scene-load labels publish the stable source URI. The readiness
-owner converts its internal load lease with `source_uri_for_address` before
-creating the ticket and uses a generic `Twin scene` label if that conversion is
-unavailable. The same displayed URI is accepted by `LoadScene` after reopening.
+The canonical scene source address uses a logical Twin identity and relative
+path: `twin://<source-identity>/<relative-path>`. For an unchanged identity,
+it remains stable across reloads and Twin reopenings. `CurrentScenePath`,
+persisted scene state, `LoadScene` commands and detailed `/api/ready`
+scene-load labels retain this address; the mount authority remains private. UI
+labels resolve the active source to its Twin display name and relative path through
+`display_source_path` and `display_source_text`. Scenario menus already show
+Twin and scene names while their actions retain the stable URI. Generic
+simulation hold reasons stay pathless. The readiness owner converts its
+internal load lease with `source_uri_for_address` before creating the ticket
+and uses a generic `Twin scene` label if that conversion is unavailable. The
+canonical address remains accepted by `LoadScene` after reopening.
+When a Twin has an authored manifest UUID, that identity stays the same through
+a rename or move and lets peers and scenario synchronization name the same Twin
+across sessions. Each open mount separately gets a short-lived authority for
+resolving reads against that root. The authority is a private lease; the UUID
+is durable identity, and neither is a UI label.
 `lunco_assets_core::asset_path::source_uri` owns conversion from a load address;
 `load_source_uri` resolves a user command against the currently mounted source
 before scene-transition admission. The command rejects internal mount authorities,
@@ -193,9 +205,13 @@ accepted internally; a retired authority is never reinterpreted as a source
 identity. If neither address names a current mount, the scene reports a generic
 missing-source fault without exposing the mount lease.
 
-A Twin without an authored UUID derives its source identity from its encoded
-display name. Two same-named legacy roots therefore cannot be mounted at once;
-author distinct UUIDs when both must be open simultaneously.
+A legacy manifest without a UUID and a plain folder derive their source
+identity from the encoded display name. That preserves local loading, but the
+address changes if the display name changes, and two same-named roots cannot
+be mounted at once. `TwinManifest::new` supplies a UUID for new manifests, and
+promoting a folder to a Twin mints and persists one. Network scenario capture
+requires a manifest UUID; UUID-less folders cannot be published for scenario
+synchronization until they have one.
 
 ### Document source admission and lifetime
 

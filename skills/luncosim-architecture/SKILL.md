@@ -250,9 +250,11 @@ revision. See
 Present scene paths through `asset_path::source_uri` or
 `source_uri_for_address`, and admit user scene addresses through
 `asset_path::load_source_uri`. `LoadScene` rejects internal mount authorities,
-even while live; loading notices, scenario menus and persisted current-scene
-paths use the stable source URI. Verify repeat load/reset/restart and direct
-lease rejection with `scripts/api/test_twin_source_uri.py`.
+even while live; commands and persisted current-scene paths use the stable
+source URI. UI labels show the mounted Twin display name and relative path,
+while scenario-menu actions retain the stable URI. Verify repeat
+load/reset/restart and direct lease rejection with
+`scripts/api/test_twin_source_uri.py`.
 
 Register scene-derived state with `AppSceneExt::init_scene_resource::<R>()` and
 implement `SceneResource` at its owner. The default reset drops owned caches and
@@ -316,8 +318,9 @@ available during loading. Callback commands also pin the exact
 owner. `RuntimeExecutionContext.target_twin_id` retains the target separately
 from execution scope and clock, including nested commands.
 Scene loading keeps asset-cache leases internal: `SimulationProgress` reasons
-stay generic, and `/api/ready` `scene_load` labels convert through
-`source_uri_for_address` before they reach status surfaces.
+stay generic, `/api/ready` `scene_load` labels use stable source URIs, and the
+workbench resolves those identities to Twin display names and relative paths
+before showing source text.
 Queue admission publishes `CommandOutcome::Pending`; only execution or owner
 retirement may publish the terminal result.
 Parameter drafts pin their preview and document; document closure and preview

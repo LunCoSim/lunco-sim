@@ -49,7 +49,7 @@ fn on_start(me, params) {
             t_true(params.uri.starts_with("twin://" + params.identity + "/"),
                 "the source URI is rooted in the stable Twin identity"),
             t_true(navigation.scene_path == params.uri,
-                "the visible scene URI remains stable"),
+                "navigation retains the canonical scene address"),
         ], "Twin source URI", "TWIN_SOURCE_URI");
         return;
     }

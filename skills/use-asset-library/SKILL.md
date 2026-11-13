@@ -116,7 +116,11 @@ callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
 Engine reads use `lunco_assets_core::engine_asset_read_roots()` and Twin reads
 use `lunco_assets_core::asset_read_roots()` in `crates/lunco-assets-core/src/lib.rs`.
-`twin://<source-identity>/<rel>` is the stable user-facing Twin scene URI.
+`twin://<source-identity>/<rel>` is the canonical Twin source address used by
+scene commands and persisted source identity. UI labels resolve it to the
+mounted Twin's display name and relative path. For legacy sources without a
+UUID, the source identity is the encoded display name and changes if that name
+changes.
 `LoadScene` resolves it to the current mount; only internal asset reads use the
 mount authority. The current mount reads from the Twin's authored root, its
 `.cache`, then the global cache. This lets Twins reuse a global downloaded

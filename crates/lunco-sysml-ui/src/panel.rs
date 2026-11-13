@@ -2174,8 +2174,14 @@ impl SysmlRequirementsPanel {
                             ui.colored_label(color, label);
                         }),
                         RequirementSortColumn::Source => row.col(|ui| {
-                            let source = requirement_source_location(requirement);
-                            let source_label = requirement_source_cell_label(requirement);
+                            let source = requirement_source_location(
+                                requirement,
+                                view_model.twin_name.as_deref(),
+                            );
+                            let source_label = requirement_source_cell_label(
+                                requirement,
+                                view_model.twin_name.as_deref(),
+                            );
                             ui.add(egui::Label::new(source_label).truncate())
                                 .on_hover_text(source);
                         }),
@@ -2304,7 +2310,14 @@ impl SysmlRequirementsPanel {
                         RequirementRole::Definition => "Definition source",
                         RequirementRole::Usage => "Usage source",
                     });
-                    muted(ui, theme, &requirement_source_location(requirement));
+                    muted(
+                        ui,
+                        theme,
+                        &requirement_source_location(
+                            requirement,
+                            view_model.twin_name.as_deref(),
+                        ),
+                    );
                     if let Some(source_file) = source.as_ref() {
                         let blocked = draft_source.is_some_and(|draft| {
                             Some(draft.twin_id) != view_model.twin_id
@@ -2334,7 +2347,14 @@ impl SysmlRequirementsPanel {
                         ui.strong("Definition");
                         ui.label(&definition.display_name)
                             .on_hover_text(&definition.qualified_name);
-                        muted(ui, theme, &requirement_source_location(definition));
+                        muted(
+                            ui,
+                            theme,
+                            &requirement_source_location(
+                                definition,
+                                view_model.twin_name.as_deref(),
+                            ),
+                        );
                         if let Some(source_file) = definition_source.as_ref() {
                             let blocked = draft_source.is_some_and(|draft| {
                                 Some(draft.twin_id) != view_model.twin_id
@@ -2836,7 +2856,11 @@ impl SysmlRequirementsPanel {
             if let Some(line) = editor.focus_line {
                 muted(ui, theme, &format!("Line {line}"));
             }
-            muted(ui, theme, &editor.logical_uri);
+            muted(
+                ui,
+                theme,
+                &source_display_path(view_model, &editor.logical_uri),
+            );
             if editor.twin_id != view_model.twin_id {
                 ui.colored_label(theme.tokens.warning, "from another open Twin");
             }
@@ -3015,10 +3039,18 @@ impl SysmlRequirementsPanel {
                         .iter()
                         .find(|source| source.logical_uri == diagnostic.logical_uri)
                         .map(|source| {
-                            format!("{}:{}", source.relative_path.display(), diagnostic.line)
+                            format!(
+                                "{}:{}",
+                                source_display_path(view_model, &source.logical_uri),
+                                diagnostic.line
+                            )
                         })
                         .unwrap_or_else(|| {
-                            format!("{}:{}", diagnostic.logical_uri, diagnostic.line)
+                            format!(
+                                "{}:{}",
+                                view_model.twin_name.as_deref().unwrap_or("Twin source"),
+                                diagnostic.line
+                            )
                         });
                     if ui
                         .selectable_label(
@@ -3840,15 +3872,43 @@ fn status_counts(ui: &mut egui::Ui, category: &str, counts: &[(&str, usize, egui
     }
 }
 
-fn requirement_source_location(requirement: &RequirementView) -> String {
+fn source_display_path(view_model: &SysmlRequirementsViewModel, logical_uri: &str) -> String {
+    view_model
+        .source_files
+        .iter()
+        .find(|source| source.logical_uri == logical_uri)
+        .map(|source| {
+            format!(
+                "{} / {}",
+                view_model.twin_name.as_deref().unwrap_or("Twin source"),
+                source.relative_path.display()
+            )
+        })
+        .unwrap_or_else(|| {
+            view_model
+                .twin_name
+                .as_deref()
+                .unwrap_or("Twin source")
+                .to_owned()
+        })
+}
+
+fn requirement_source_location(requirement: &RequirementView, twin_name: Option<&str>) -> String {
     requirement
         .relative_path
         .as_ref()
-        .map(|path| format!("{}:{}", path.display(), requirement.line.unwrap_or(1)))
-        .unwrap_or_else(|| requirement.logical_uri.clone())
+        .map(|path| {
+            format!(
+                "{} / {}:{}",
+                twin_name.unwrap_or("Twin source"),
+                path.display(),
+                requirement.line.unwrap_or(1)
+            )
+        })
+        .unwrap_or_else(|| twin_name.unwrap_or("Twin source").to_owned())
 }
 
-fn requirement_source_cell_label(requirement: &RequirementView) -> String {
+fn requirement_source_cell_label(requirement: &RequirementView, twin_name: Option<&str>) -> String {
     requirement
         .relative_path
         .as_ref()
@@ -3860,7 +3920,7 @@ fn requirement_source_cell_label(requirement: &RequirementView) -> String {
                 requirement.line.unwrap_or(1)
             )
         })
-        .unwrap_or_else(|| requirement_source_location(requirement))
+        .unwrap_or_else(|| requirement_source_location(requirement, twin_name))
 }
 
 fn requirement_column_label(column: RequirementSortColumn) -> &'static str {
@@ -3977,7 +4037,9 @@ fn compare_requirements(
             requirement_role_rank(left.role).cmp(&requirement_role_rank(right.role))
         }
         RequirementSortColumn::Source => {
-            requirement_source_location(left).cmp(&requirement_source_location(right))
+            requirement_source_location(left, view_model.twin_name.as_deref()).cmp(
+                &requirement_source_location(right, view_model.twin_name.as_deref()),
+            )
         }
         RequirementSortColumn::Evidence => evidence_sort_rank(left, view_model, runs)
             .cmp(&evidence_sort_rank(right, view_model, runs)),

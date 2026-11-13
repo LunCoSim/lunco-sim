@@ -13,7 +13,10 @@ the scene URI.
 mount leases. Composed USD dependencies may retain stable source identities;
 scene dataset admission resolves them to the current mount and never rebinds a
 retired lease. Scene progress reasons remain generic, while `/api/ready`
-`scene_load` labels and the loading notice publish the stable URI.
+`scene_load` labels retain the stable URI. Workbench status and Modelica
+console messages, scene-source navigation, resource-preview, Connections and
+SysML source labels resolve mounted Twin sources to the display name and
+relative path.
 
 Twin-scoped Rhai facts, execution context and lifecycle status omit the
 workspace `TwinId` and private mount lease. Typed Rust command dispatch binds
@@ -37,10 +40,9 @@ projected through the stable URI owner for diagnostics.
   stable readiness labels, filtered Twin command discovery, and rejection of a
   caller-supplied `OpenTwinScene.twin_id` from Twin scope.
 - The owned runtime log contained no 32-character opaque `twin://` authority.
-  The captured loading card displayed the same stable URI through restart.
 - The exact Griffin Twin published
   `twin://astrobotic-griffin-1/scenes/griffin_1_surface_ops.usda` in its
-  `/api/ready` scene-load label and loading card. The full scene did not reach
+  `/api/ready` scene-load label. The full scene did not reach
   readiness because the LROC Nobile 03 terrain dataset is unavailable in this
   environment.
 - The regression session exited through the API and released its port.

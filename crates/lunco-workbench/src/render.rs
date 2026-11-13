@@ -555,9 +555,13 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 .get(&kind)
                 .and_then(|panel| panel.navigation_source(self.world, instance))
             {
+                let display_path = lunco_assets_core::asset_path::display_source_path(
+                    &source.uri,
+                    self.world.get_resource::<lunco_assets_core::TwinRoots>(),
+                );
                 response
                     .clone()
-                    .on_hover_text(format!("{}\n{}", source.mode, source.uri));
+                    .on_hover_text(format!("{}\n{}", source.mode, display_path));
             }
         }
     }
@@ -574,7 +578,11 @@ impl<'a> TabViewer for PanelTabViewer<'a> {
                 .and_then(|panel| panel.navigation_source(self.world, instance))
             {
                 ui.label(&source.mode);
-                ui.label(&source.uri);
+                let display_path = lunco_assets_core::asset_path::display_source_path(
+                    &source.uri,
+                    self.world.get_resource::<lunco_assets_core::TwinRoots>(),
+                );
+                ui.label(display_path);
                 if ui.button("Reveal in Twin").clicked() {
                     trigger_or_defer(
                         self.world,
@@ -1423,7 +1431,7 @@ pub(crate) fn render_status_bar_inner(
 
     // Snapshot the compact status strip before painting. The event history is
     // collected only after the popup is known to be open below.
-    let (notification, primary_progress) = {
+    let (mut notification, primary_progress) = {
         let bus = world.resource::<StatusBus>();
         let notification =
             status_bar_notification_snapshot(bus, history_surface_open, scene_transition_active);
@@ -1436,6 +1444,12 @@ pub(crate) fn render_status_bar_inner(
             .cloned();
         (notification, primary_progress)
     };
+    if let StatusBarNotificationSnapshot::Event(event) = &mut notification {
+        event.message = display_status_message(world, &event.message);
+    }
+    let primary_progress_message = primary_progress
+        .as_ref()
+        .map(|event| display_status_message(world, &event.message));
     let mut history = Vec::new();
     #[cfg(feature = "api")]
     if let Some(mut presentation) =
@@ -1514,6 +1528,10 @@ pub(crate) fn render_status_bar_inner(
         .map(|s| s.0.clone())
         .unwrap_or_default();
     let scene_label = loaded_scene_display_name(world, &scene_name, &scene_path);
+    let scene_source_label = lunco_assets_core::asset_path::display_source_path(
+        &scene_path,
+        world.get_resource::<lunco_assets_core::TwinRoots>(),
+    );
     let scene_visible = !scene_label.is_empty();
     let scene_popup_id = ui.make_persistent_id("lunco_workbench_loaded_scene_popup");
     let recent_events_width = status_popup_width(ui.ctx().content_rect().width());
@@ -1737,6 +1755,9 @@ pub(crate) fn render_status_bar_inner(
 
         if !history_loaded && egui::Popup::is_id_open(ui.ctx(), popup_id) {
             history = status_history_snapshot(world.resource::<StatusBus>());
+            for (_, event) in &mut history {
+                event.message = display_status_message(world, &event.message);
+            }
             history_loaded = true;
         }
 
@@ -1751,10 +1772,11 @@ pub(crate) fn render_status_bar_inner(
                     .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
                     .show(|ui| {
                         ui.set_min_width(520.0);
-                        ui.heading("Loaded USD file");
+                        ui.heading("Loaded scene source");
                         ui.separator();
                         ui.add(
-                            egui::Label::new(egui::RichText::new(&scene_path).monospace()).wrap(),
+                            egui::Label::new(egui::RichText::new(&scene_source_label).monospace())
+                                .wrap(),
                         );
                     });
             }
@@ -1931,6 +1953,9 @@ pub(crate) fn render_status_bar_inner(
                             expand_status_history = render_status_progress_notice(
                                 ui,
                                 progress,
+                                primary_progress_message
+                                    .as_deref()
+                                    .unwrap_or(&progress.message),
                                 theme,
                                 scene_transition_is_clearing,
                             );
@@ -1950,6 +1975,7 @@ pub(crate) fn render_status_bar_inner(
 fn render_status_progress_notice(
     ui: &mut egui::Ui,
     event: &lunco_status_core::status_bus::StatusEvent,
+    display_message: &str,
     theme: &lunco_theme::Theme,
     scene_transition_is_clearing: bool,
 ) -> bool {
@@ -1964,11 +1990,18 @@ fn render_status_progress_notice(
                 ))
                 .strong(),
             );
-            ui.add(egui::Label::new(&event.message).wrap())
-                .on_hover_text(&event.message);
+            ui.add(egui::Label::new(display_message).wrap())
+                .on_hover_text(display_message);
         });
     });
     ui.link("Recent status details").clicked()
+}
+
+fn display_status_message(world: &World, message: &str) -> String {
+    lunco_assets_core::asset_path::display_source_text(
+        message,
+        world.get_resource::<lunco_assets_core::TwinRoots>(),
+    )
 }
 
 fn status_progress_source_label(

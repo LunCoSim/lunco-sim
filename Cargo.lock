@@ -8993,6 +8993,7 @@ dependencies = [
  "big_space",
  "lunco-api",
  "lunco-api-core",
+ "lunco-assets-core",
  "lunco-camera-core",
  "lunco-canvas",
  "lunco-celestial-spatial-core",

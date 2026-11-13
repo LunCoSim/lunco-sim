@@ -1273,6 +1273,7 @@ fn install_image_loaders_once(
 /// freezing the console audit trail (CQ-523).
 fn fan_status_bus_to_console(
     bus: bevy::prelude::Res<lunco_status_core::status_bus::StatusBus>,
+    roots: Option<bevy::prelude::Res<lunco_assets_core::TwinRoots>>,
     mut console: bevy::prelude::ResMut<LogBuffer>,
     mut last_total: bevy::prelude::Local<u64>,
 ) {
@@ -1303,7 +1304,9 @@ fn fan_status_bus_to_console(
             // active_progress), but if one ever sneaks in, surface as Info.
             lunco_status_core::status_bus::StatusLevel::Progress => LogLevel::Info,
         };
-        console.push(level, format!("[{}] {}", ev.source, ev.message));
+        let message =
+            lunco_assets_core::asset_path::display_source_text(&ev.message, roots.as_deref());
+        console.push(level, format!("[{}] {}", ev.source, message));
     }
     *last_total = total;
 }

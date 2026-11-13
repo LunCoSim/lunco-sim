@@ -64,7 +64,7 @@ scheme: naming the mistake legibly would make it permanent.
 | Scheme | Resolves to | For |
 |---|---|---|
 | `lunco://` | `assets/`, then the shared global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
-| `twin://<source-identity>/…` | the current mount resolved from that stable source identity | authored content and user-facing scene addresses |
+| `twin://<source-identity>/…` | the current mount resolved from that stable source identity | authored content and canonical scene-command addresses |
 | `twin://<authority>/…` | the exact live mount's authored root, then its `.cache`, then the global cache | internal reads that carry a mount lease |
 | (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
 

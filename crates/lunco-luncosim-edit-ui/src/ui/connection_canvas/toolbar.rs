@@ -222,6 +222,16 @@ pub(super) fn render(
                         .and_then(|registry| registry.host(id))
                 })
                 .map(|host| host.document().is_dirty());
+            let source = state
+                .source_uri
+                .as_deref()
+                .map(|uri| {
+                    lunco_assets_core::asset_path::display_source_path(
+                        uri,
+                        ctx.resource::<lunco_assets_core::TwinRoots>(),
+                    )
+                })
+                .unwrap_or_default();
             ui.label(if dirty == Some(true) {
                 "USD modified"
             } else {
@@ -229,8 +239,7 @@ pub(super) fn render(
             })
             .on_hover_text(format!(
                 "Source: {}\nEdit target: {:?}",
-                state.source_uri.as_deref().unwrap_or(""),
-                state.edit_target
+                source, state.edit_target
             ));
         }
         ui.toggle_value(&mut state.details_open, "Inspector");
@@ -396,7 +405,17 @@ pub(super) fn render(
             egui::RichText::new("Details")
         };
         ui.menu_button(details, |ui| {
-            ui.label(state.source_uri.as_deref().unwrap_or("USD topology"));
+            let source = state
+                .source_uri
+                .as_deref()
+                .map(|uri| {
+                    lunco_assets_core::asset_path::display_source_path(
+                        uri,
+                        ctx.resource::<lunco_assets_core::TwinRoots>(),
+                    )
+                })
+                .unwrap_or_else(|| "USD topology".to_owned());
+            ui.label(source);
             ui.label(format!(
                 "{} prims · {} connections",
                 state.canvas.scene.node_count(),

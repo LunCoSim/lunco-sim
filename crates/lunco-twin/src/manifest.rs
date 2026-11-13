@@ -87,9 +87,10 @@ pub struct TwinManifest {
     /// the scenario-manifest builder; the uuid says "this scenario",
     /// the digest says "this version of it".
     ///
-    /// Optional for a plain local folder that has not been promoted to a
-    /// networkable Twin. A networking host requires this field; it never
-    /// derives an identity from a path.
+    /// Optional for a plain local folder or a legacy manifest without a
+    /// network scenario identity. Building a network scenario manifest
+    /// requires this field; the scenario identity is never derived from a
+    /// filesystem path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uuid: Option<Uuid>,
 
