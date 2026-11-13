@@ -33,9 +33,12 @@ The runtime maps standard authored `<input type="text">` and
 pointer focus, caret/selection editing, character limits, numeric character
 filtering, and authored tab order. Put `tag:ui_form` and `tag:ui_field` on the
 element; values are strings until the Twin's Rhai policy validates them. This
-is a deliberately small native form contract: browser placeholder behavior,
-sliders, selects, automatic validation messages, and form submission are not
-provided. Simple authored viewport modals use the generic
+also works in keyed collection templates: `{property}` values in dynamic
+`tag:*` attributes are resolved against the owning row before the field is
+attached. This completes HUI 0.8's custom-element attribute path for standard
+`<input>` without requiring a browser DOM. The form contract remains small:
+browser placeholder behavior, sliders, selects, automatic validation messages,
+and form submission are not provided. Simple authored viewport modals use the generic
 `modal`/`dismiss_action` surface fields; rich source editing and dialogs remain
 owned by the existing egui workbench.
 
