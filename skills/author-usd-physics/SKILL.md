@@ -631,6 +631,12 @@ cannot resolve the body, hold the world with one diagnostic naming the anchor
 ID. Do not report the scene ready with gravity silently absent, or switch back
 to stage-frame gravity while retaining the anchored coordinate frame. Verify
 the composed body identity and provider before tuning vehicle forces.
+`ValidateAsset` and loaded-stage `RunLint` report
+`site-anchor-celestial-body-missing` when a scene has a simulated dynamic body
+and the explicit root anchor has no matching composed celestial body
+declaration. They report `site-anchor-body-invalid` for a malformed or zero
+anchor ID. A matching declaration is a necessary authoring check; runtime must
+still resolve its surface-gravity provider and bind physical consumers to it.
 
 Edits to an admitted PhysicsScene refresh through the same composed gravity
 owner as initial admission. Magnitude/direction changes take effect without

@@ -42,6 +42,8 @@
 //!                                direct_surface, source_valid } ],
 //!   prims: [ #{ path, type, parent, schemas[], attributes[],
 //!                connected_attributes[], connections[], epoch_jd } ],
+//!   site_gravity_anchors: [ #{ path, body_id, body_valid } ],
+//!   celestial_bodies: [ #{ path, body_id, body_id_valid } ],
 //! }
 //! ```
 //!
@@ -546,6 +548,55 @@ fn drive_facts(reader: &StageView<'_>, joint_paths: &[SdfPath]) -> Vec<H> {
     drives
 }
 
+/// The site anchor selects body-surface gravity, so lint needs to compare its
+/// body identity with the composed celestial declarations. Keep value
+/// extraction beside the other composed-stage facts; the Rhai policy owns the
+/// diagnostic and repair guidance.
+fn site_gravity_facts(reader: &StageView<'_>, paths: &[SdfPath]) -> (Vec<H>, Vec<H>) {
+    let anchors = reader
+        .default_prim()
+        .and_then(|name| SdfPath::new(&format!("/{name}")).ok())
+        .filter(|root| {
+            ["lat", "lon", "height", "body"]
+                .iter()
+                .any(|field| reader.has_authored_attribute(root, &format!("lunco:anchor:{field}")))
+        })
+        .map(|root| {
+            let body_authored = reader.has_authored_attribute(&root, "lunco:anchor:body");
+            let body_id = if body_authored {
+                reader.value::<i32>(&root, "lunco:anchor:body")
+            } else {
+                Some(lunco_celestial::ephemeris_id::MOON)
+            };
+            vec![H::map([
+                ("path", H::str(root.to_string())),
+                (
+                    "body_id",
+                    body_id.map(|id| H::Int(i64::from(id))).unwrap_or(H::Unit),
+                ),
+                ("body_valid", H::Bool(body_id.is_some_and(|id| id != 0))),
+            ])]
+        })
+        .unwrap_or_default();
+
+    let bodies = paths
+        .iter()
+        .filter(|path| reader.has_api_schema(path, "LunCoCelestialBodyAPI"))
+        .map(|path| {
+            let body_id = reader.value::<i32>(path, "lunco:body");
+            H::map([
+                ("path", H::str(path.to_string())),
+                (
+                    "body_id",
+                    body_id.map(|id| H::Int(i64::from(id))).unwrap_or(H::Unit),
+                ),
+                ("body_id_valid", H::Bool(body_id.is_some_and(|id| id != 0))),
+            ])
+        })
+        .collect();
+    (anchors, bodies)
+}
+
 /// Everything policy needs to judge a stage's physics authoring.
 ///
 /// Pure — no ECS, no side effects — so it can be built from a live scene, from
@@ -808,6 +859,7 @@ pub fn physics_facts(reader: &StageView<'_>) -> Result<H, String> {
         &proxy_bodies,
         &physical_wheels,
     )?;
+    let (site_gravity_anchors, celestial_bodies) = site_gravity_facts(reader, &paths);
 
     let mut body_facts: Vec<H> = Vec::new();
     let mut unsupported_program_prims: Vec<H> = Vec::new();
@@ -1308,6 +1360,8 @@ pub fn physics_facts(reader: &StageView<'_>) -> Result<H, String> {
         ("collections", H::Array(collections)),
         ("network_roots", H::Array(network_roots)),
         ("prims", H::Array(prims)),
+        ("site_gravity_anchors", H::Array(site_gravity_anchors)),
+        ("celestial_bodies", H::Array(celestial_bodies)),
         ("vehicle_parts", H::Array(vehicle_parts)),
         (
             "collision_enabled_without_api",
