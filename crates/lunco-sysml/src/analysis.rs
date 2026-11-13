@@ -133,6 +133,28 @@ impl TwinSysmlAnalyses {
         self.states.get(authority).cloned()
     }
 
+    /// Read the analysis prepared for a stable Twin source identity.
+    ///
+    /// The registry keeps mount authorities private. Consumers identify the
+    /// Twin through its stable `twin://` source identity and the owning Twin
+    /// lifetime; this method resolves that link to the private registry entry.
+    pub fn state_for_source_identity(
+        &self,
+        source_identity: &str,
+        twin_id: lunco_workspace::TwinId,
+        root: &Path,
+    ) -> Option<TwinSysmlAnalysisState> {
+        let authority = self.owners.iter().find_map(
+            |(authority, (owner_id, owner_root, owner_source_identity))| {
+                (*owner_id == twin_id.raw()
+                    && owner_root.as_path() == root
+                    && owner_source_identity == source_identity)
+                    .then_some(authority.as_str())
+            },
+        )?;
+        self.state(authority)
+    }
+
     /// Read a snapshot only when its mount still names the same Twin and root.
     pub fn state_for(
         &self,
