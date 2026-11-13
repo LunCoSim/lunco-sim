@@ -22,6 +22,7 @@ contract for admission, validation and teardown.
 Runtime templates currently rely on:
 
 - HUI `<template>`, `<property>`, `<node>`, `<text>`, and `<button>` elements;
+- standard text and number `<input>` elements with Twin-scoped form fields;
 - stable `id` values and `{property}` interpolation;
 - `on_press="callback_name"` for semantic actions;
 - Flair `#id` selectors, flex/limited grid layout, absolute positioning,
@@ -35,8 +36,12 @@ name to retained selector metadata.
 
 HUI and Flair support additional features, but a feature outside this contract
 needs a real surface test before it becomes a shared interface convention.
-Forms, text inputs, DOM querying, JavaScript, accessibility semantics, and
-browser-style event propagation are not supplied by this layer. The separate
+LunCoSim supplies a narrow native form contract for text and number inputs,
+including pointer focus, caret editing, character limits, numeric filtering,
+tab order, and Twin-scoped values. Keyed row templates can interpolate
+properties into input tags as well. This layer still has no DOM querying,
+JavaScript, accessibility semantics, browser-style event propagation, slider
+or select controls, automatic validation, or rich dialogs. The separate
 `bevy_hui_widgets 0.6.0` crate has primitive text-input, slider, and select
 components, but it does not supply the complete editor, focus, clipboard,
 validation, accessibility, or rich-dialog contract required by LunCoSim. It is

@@ -31,8 +31,8 @@ use bevy::window::PrimaryWindow;
 use bevy_egui::{PrimaryEguiContext, egui};
 use bevy_flair::prelude::{ClassList, InlineStyle, StyleSheet, Styled};
 use bevy_hui::prelude::{
-    CompileContextEvent, FunctionBindings, HtmlFunctions, HtmlNode, HtmlStyle, HtmlTemplate,
-    OnUiPress, Tags, TemplateProperties, UiId,
+    CompileContextEvent, CompileNodeEvent, FunctionBindings, HtmlFunctions, HtmlNode, HtmlStyle,
+    HtmlTemplate, OnUiPress, Tags, TemplateProperties, UiId,
 };
 use lunco_assets_runtime::{JsonAssetContent, JsonAssetScopeChanged};
 use lunco_command_contracts::{Ack, OpId};
@@ -102,6 +102,12 @@ struct RuntimeUiTextInput {
     form_id: String,
     field_id: String,
 }
+
+#[derive(Component)]
+struct RuntimeUiHtmlInput;
+
+#[derive(Component)]
+struct RuntimeUiHtmlInputAttributesCompiled;
 
 #[derive(Component)]
 struct RuntimeUiScrollArea;
@@ -644,7 +650,7 @@ fn on_runtime_ui_form_owner_closed(
 fn attach_runtime_ui_text_inputs(
     mut commands: Commands,
     candidates: Query<
-        (Entity, &Tags, &Text, Option<&TemplateProperties>),
+        (Entity, &Tags, Option<&Text>, Option<&TemplateProperties>),
         Without<RuntimeUiTextInput>,
     >,
     roots: Query<(Entity, &RuntimeUiSurface)>,
@@ -690,7 +696,8 @@ fn attach_runtime_ui_text_inputs(
             .get(field_id)
             .cloned()
             .or_else(|| properties.and_then(|properties| properties.get("value").cloned()))
-            .unwrap_or_else(|| text.0.clone());
+            .or_else(|| text.map(|text| text.0.clone()))
+            .unwrap_or_default();
         let mut editable = EditableText::new(initial);
         editable.max_characters = tags
             .get("ui_max_chars")
@@ -701,6 +708,12 @@ fn attach_runtime_ui_text_inputs(
                 _ => None,
             });
         let mut entity_commands = commands.entity(entity);
+        // Older Twin templates used a Bevy `<text>` node as an editable input.
+        // Remove its static text marker and renderer flags before attaching the
+        // editable renderer; `TextLayout` still supplies the shared layout data.
+        entity_commands
+            .remove::<Text>()
+            .remove::<bevy::ui::TextNodeFlags>();
         entity_commands.insert((
             RuntimeUiTextInput {
                 owner_twin_id: owner,
@@ -733,6 +746,76 @@ fn attach_runtime_ui_text_inputs(
                 .entity(surface_root)
                 .insert(bevy::input_focus::tab_navigation::TabGroup::default());
         }
+    }
+}
+
+/// HUI 0.8 compiles template properties on custom nodes but leaves dynamic
+/// `tag:*` attributes unresolved. Standard HTML `<input>` is a custom node in
+/// HUI, so collection-backed field names and tab indices would otherwise stay
+/// literal and never become editable form controls. Re-run HUI's normal node
+/// compiler when an input mounts or its owning collection row changes.
+fn resolve_runtime_ui_html_input_attributes(
+    mut commands: Commands,
+    inputs: Query<Entity, With<RuntimeUiHtmlInput>>,
+    uncompiled_inputs: Query<
+        Entity,
+        (
+            With<RuntimeUiHtmlInput>,
+            Without<RuntimeUiHtmlInputAttributesCompiled>,
+        ),
+    >,
+    changed_rows: Query<
+        Entity,
+        (
+            With<RuntimeUiCollectionRow>,
+            Or<(Added<TemplateProperties>, Changed<TemplateProperties>)>,
+        ),
+    >,
+    row_entities: Query<Entity, With<RuntimeUiCollectionRow>>,
+    parents: Query<&ChildOf>,
+) {
+    let changed_rows = changed_rows.iter().collect::<HashSet<_>>();
+    let mut targets = uncompiled_inputs.iter().collect::<HashSet<_>>();
+    if !changed_rows.is_empty() {
+        for input in &inputs {
+            let mut current = input;
+            while let Ok(parent) = parents.get(current) {
+                current = parent.parent();
+                if row_entities.get(current).is_ok() {
+                    if changed_rows.contains(&current) {
+                        targets.insert(input);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    for entity in targets {
+        commands.queue(move |world: &mut World| {
+            if let Some(style) = world
+                .get::<RuntimeUiTemplateStyle>(entity)
+                .map(|style| style.0.clone())
+            {
+                world
+                    .entity_mut(entity)
+                    .insert(style)
+                    .remove::<RuntimeUiTemplateStyle>();
+            }
+            // HUI gives each custom `<input>` an isolated property map that
+            // contains its own static attributes (such as `type`). Dynamic
+            // field tags belong to the collection row's context, so compile
+            // them against that scope and then restore the input's attributes.
+            let own_properties = world.get::<TemplateProperties>(entity).cloned();
+            world.entity_mut(entity).remove::<TemplateProperties>();
+            world.trigger(CompileNodeEvent { entity });
+            if let Some(own_properties) = own_properties {
+                world.entity_mut(entity).insert(own_properties);
+            }
+            world
+                .entity_mut(entity)
+                .insert(RuntimeUiHtmlInputAttributesCompiled);
+        });
     }
 }
 
@@ -1332,13 +1415,24 @@ impl Plugin for RuntimeUiPlugin {
             bevy_flair::FlairPlugin,
             RuntimeUiManifestPlugin,
         ));
-        // HUI treats unsupported HTML tags as custom elements. Bind the
-        // standard `<input>` tag to Bevy UI text nodes so its `type`, `value`,
-        // `id`, and runtime form tags can use the same retained HTML pipeline.
+        // HUI treats unsupported HTML tags as custom elements. Bind HTML
+        // `<input>` to a UI node; attach `EditableText` separately once the
+        // authored form is mounted. Do not add `Text` here: Bevy's static text
+        // layout system would compete with the editable text layout and erase
+        // the value glyphs from the shared `TextLayoutInfo` during rendering.
         app.world_mut()
             .resource_mut::<bevy_hui::prelude::ComponentBindings>()
             .register("input", |mut entity| {
-                entity.insert((Node::default(), Text::default()));
+                entity.insert((
+                    Node::default(),
+                    // HUI 0.8 stores `<input>` template attributes on the
+                    // custom component and does not compile templated tags
+                    // there. Keep a style context so the runtime can invoke
+                    // HUI's normal dynamic-attribute compiler after the
+                    // collection row properties have resolved.
+                    HtmlStyle::default(),
+                    RuntimeUiHtmlInput,
+                ));
             });
         app.add_observer(dispatch_runtime_ui_press)
             .init_resource::<RuntimeSurfaceLayouts>()
@@ -1367,7 +1461,8 @@ impl Plugin for RuntimeUiPlugin {
                 (
                     attach_runtime_ui_text_inputs
                         .after(bevy_hui::HuiSystems::Build)
-                        .after(apply_runtime_ui_exposures),
+                        .after(apply_runtime_ui_exposures)
+                        .after(resolve_runtime_ui_html_input_attributes),
                     attach_runtime_ui_scroll_areas
                         .after(bevy_hui::HuiSystems::Build)
                         .after(apply_runtime_ui_exposures),
@@ -1404,6 +1499,12 @@ impl Plugin for RuntimeUiPlugin {
                     reconcile_runtime_ui_collections
                         .after(apply_runtime_ui_exposures)
                         .after(bevy_hui::HuiSystems::Build)
+                        .before(bevy_hui::HuiSystems::Style),
+                    resolve_runtime_ui_html_input_attributes
+                        .after(apply_runtime_ui_exposures)
+                        .after(reconcile_runtime_ui_collections)
+                        .after(bevy_hui::HuiSystems::Build)
+                        .before(hand_runtime_ui_styling_to_flair)
                         .before(bevy_hui::HuiSystems::Style),
                     register_runtime_ui_input_regions.after(apply_runtime_ui_exposures),
                     sync_runtime_ui_scrollbar_theme,
@@ -4312,7 +4413,10 @@ mod tests {
         forms.forms.insert(
             "factory_recipe".to_owned(),
             RuntimeUiFormState {
-                values: BTreeMap::from([("ingredient_count".to_owned(), "2".to_owned())]),
+                values: BTreeMap::from([
+                    ("ingredient_count".to_owned(), "2".to_owned()),
+                    ("legacy_field".to_owned(), "Authored value".to_owned()),
+                ]),
                 ..default()
             },
         );
@@ -4345,13 +4449,20 @@ mod tests {
         let field = app
             .world_mut()
             .spawn((
-                Text::default(),
                 tags,
                 TemplateProperties::default()
                     .with("type", "number")
                     .with("value", "2"),
                 ChildOf(root),
             ))
+            .id();
+        let mut legacy_tags = Tags::default();
+        legacy_tags.insert("ui_form".to_owned(), "factory_recipe".to_owned());
+        legacy_tags.insert("ui_field".to_owned(), "legacy_field".to_owned());
+        legacy_tags.insert("ui_input".to_owned(), "text".to_owned());
+        let legacy_field = app
+            .world_mut()
+            .spawn((Text::new("Fallback"), legacy_tags, ChildOf(root)))
             .id();
         app.add_systems(Update, attach_runtime_ui_text_inputs);
 
@@ -4363,6 +4474,25 @@ mod tests {
                 .is_some()
         );
         assert!(app.world().get::<Pickable>(field).is_some());
+        assert!(
+            app.world().get::<Text>(field).is_none(),
+            "editable inputs must not enter Bevy's competing static text layout pipeline"
+        );
+        assert!(app.world().get::<TextFont>(field).is_some());
+        assert!(app.world().get::<TextColor>(field).is_some());
+        assert_eq!(
+            app.world()
+                .get::<EditableText>(legacy_field)
+                .unwrap()
+                .value(),
+            "Authored value"
+        );
+        assert!(app.world().get::<Text>(legacy_field).is_none());
+        assert!(
+            app.world()
+                .get::<bevy::ui::TextNodeFlags>(legacy_field)
+                .is_none()
+        );
         assert_eq!(
             app.world()
                 .get::<bevy::text::TextCursorStyle>(field)
@@ -4376,6 +4506,130 @@ mod tests {
             app.world()
                 .get::<bevy::input_focus::tab_navigation::TabIndex>(field),
             Some(&bevy::input_focus::tab_navigation::TabIndex(3))
+        );
+    }
+
+    #[test]
+    fn collection_template_inputs_resolve_dynamic_tags_and_form_values() {
+        use super::*;
+
+        struct TestAssetLoader;
+        impl bevy_hui::prelude::AssetLoadAdaptor for TestAssetLoader {
+            fn load<'a, A: Asset>(
+                &mut self,
+                _path: impl Into<bevy::asset::AssetPath<'a>>,
+            ) -> Handle<A> {
+                Handle::default()
+            }
+        }
+
+        let (_, template) = bevy_hui::prelude::parse_template::<
+            bevy_hui::prelude::VerboseHtmlError<'_>,
+        >(
+            br#"<template><node><input tag:ui_form="factory_recipe" tag:ui_field="{field}" tag:ui_tab_index="{tab}" type="text" /></node></template>"#,
+            &mut TestAssetLoader,
+        )
+        .expect("collection input fixture should parse");
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), bevy_hui::HuiPlugin));
+        app.init_asset::<TextureAtlasLayout>();
+        app.world_mut()
+            .resource_mut::<bevy_hui::prelude::ComponentBindings>()
+            .register("input", |mut entity| {
+                entity.insert((Node::default(), HtmlStyle::default(), RuntimeUiHtmlInput));
+            });
+        app.add_systems(
+            Update,
+            resolve_runtime_ui_html_input_attributes.after(bevy_hui::HuiSystems::Build),
+        );
+        app.add_systems(
+            Update,
+            attach_runtime_ui_text_inputs.after(resolve_runtime_ui_html_input_attributes),
+        );
+
+        let mut workspace = WorkspaceResource::new();
+        workspace.active_twin = Some(TwinId::new(71));
+        app.insert_resource(workspace);
+        let mut forms = RuntimeUiForms {
+            owner_twin_id: Some(71),
+            ..default()
+        };
+        forms.forms.insert(
+            "factory_recipe".to_owned(),
+            RuntimeUiFormState {
+                values: BTreeMap::from([("ingredient_1".to_owned(), "Sugar".to_owned())]),
+                ..default()
+            },
+        );
+        app.insert_resource(forms);
+
+        let template_handle = app
+            .world_mut()
+            .resource_mut::<Assets<HtmlTemplate>>()
+            .add(template);
+        let definition: RuntimeUiSurfaceDefinition = serde_json::from_str(
+            r#"{
+                "id":"factory-studio",
+                "namespace":"factory-studio",
+                "template":"ui/factory_studio.html",
+                "stylesheet":"ui/factory_studio.css",
+                "interactive":true,
+                "placement":{"mode":"window","anchor":"top_left","offset":[0,0],"width":560,"height":640}
+            }"#,
+        )
+        .unwrap();
+        let mut surface = RuntimeUiSurface::from_definition(
+            &definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .unwrap();
+        surface.mounted = true;
+        let surface_root = app.world_mut().spawn((Node::default(), surface)).id();
+        app.world_mut().spawn((
+            Node::default(),
+            HtmlNode(template_handle),
+            TemplateProperties::default()
+                .with("field", "ingredient_1")
+                .with("tab", "3"),
+            RuntimeUiCollectionRow {
+                host: surface_root,
+                key: "ingredient-1".to_owned(),
+                property_names: vec!["field".to_owned(), "tab".to_owned()],
+            },
+            ChildOf(surface_root),
+        ));
+
+        app.update();
+
+        let inputs = {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<Entity, With<RuntimeUiHtmlInput>>();
+            query.iter(app.world()).collect::<Vec<_>>()
+        };
+        assert_eq!(inputs.len(), 1, "HUI should mount one authored input");
+        let input = inputs[0];
+        let tags = app.world().get::<Tags>(input).unwrap();
+        assert_eq!(
+            tags.tags().get("ui_field").map(String::as_str),
+            Some("ingredient_1")
+        );
+        assert_eq!(
+            app.world()
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(input),
+            Some(&bevy::input_focus::tab_navigation::TabIndex(3))
+        );
+        assert_eq!(
+            app.world().get::<EditableText>(input).unwrap().value(),
+            "Sugar"
+        );
+        assert!(
+            app.world()
+                .get::<bevy_ui_widgets::TextInput>(input)
+                .is_some()
         );
     }
 

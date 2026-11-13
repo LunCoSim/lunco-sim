@@ -1866,55 +1866,34 @@ pub(crate) fn render_status_bar_inner(
                 let history_text = status_history_copy_text(&history);
                 ui.horizontal(|ui| {
                     ui.heading("Recent events");
-                    if ui
-                        .add_enabled(!history.is_empty(), egui::Button::new("Copy all"))
-                        .on_hover_text("Copy all retained events, including complete diagnostics")
-                        .clicked()
-                    {
-                        ui.ctx().copy_text(history_text.clone());
-                    }
-                });
-                let history_view_id = ui.make_persistent_id("recent_status_history_view");
-                let mut show_event_controls = ui
-                    .ctx()
-                    .data(|data| data.get_temp::<bool>(history_view_id))
-                    .unwrap_or(false);
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut show_event_controls, false, "Copyable log");
-                    ui.selectable_value(&mut show_event_controls, true, "Event controls");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(format!("{} events", history.len()))
+                        if ui
+                            .add_enabled(!history.is_empty(), egui::Button::new("Copy all"))
+                            .on_hover_text(
+                                "Copy all retained events, including complete diagnostics",
+                            )
+                            .clicked()
+                        {
+                            ui.ctx().copy_text(history_text.clone());
+                        }
+                        ui.label(format!("{} events", history.len()));
                     });
                 });
-                ui.ctx().data_mut(|data| {
-                    data.insert_temp(history_view_id, show_event_controls);
-                });
                 ui.separator();
-                let mut popup_attention_source = None;
                 let history_scroll = egui::ScrollArea::vertical()
-                    .id_salt(("recent_status_history", show_event_controls))
+                    .id_salt("recent_status_history")
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         if history.is_empty() {
                             ui.label(egui::RichText::new("(no events yet)").weak());
                             return None;
                         }
-                        if show_event_controls {
-                            // History contains discrete snapshots only.
-                            for (key, ev) in history.iter().rev() {
-                                if render_status_event_row(
-                                    ui,
-                                    ev,
-                                    theme,
-                                    ui.make_persistent_id(("workbench_status_event", key)),
-                                ) {
-                                    popup_attention_source = Some(ev.source);
-                                }
-                            }
-                            None
-                        } else {
-                            Some(render_status_history_log(ui, &history_text))
-                        }
+                        Some(render_status_history_log(
+                            ui,
+                            &history_text,
+                            &history,
+                            theme,
+                        ))
                     });
                 if let Some(log_response) = history_scroll.inner.as_ref() {
                     autoscroll_status_history_selection(
@@ -1925,9 +1904,6 @@ pub(crate) fn render_status_bar_inner(
                         history_scroll.inner_rect,
                         history_scroll.content_size,
                     );
-                }
-                if let Some(source) = popup_attention_source {
-                    status_action = Some(StatusBarAction { source });
                 }
             });
         if let Some(progress) = primary_progress.as_ref()
@@ -2019,176 +1995,6 @@ fn status_progress_source_label(
     }
 }
 
-const STATUS_EVENT_LEVEL_WIDTH: f32 = 56.0;
-const STATUS_EVENT_SOURCE_WIDTH: f32 = 84.0;
-const STATUS_EVENT_ATTENTION_WIDTH: f32 = 80.0;
-
-/// Render each discrete history item through shared level/source/message
-/// columns. Warn/Error rows expand their complete diagnostic when clicked,
-/// while Attention adds the owning status action.
-fn render_status_event_row(
-    ui: &mut egui::Ui,
-    event: &lunco_status_core::status_bus::StatusEvent,
-    theme: &lunco_theme::Theme,
-    details_id: egui::Id,
-) -> bool {
-    let has_details = matches!(
-        event.level,
-        lunco_status_core::status_bus::StatusLevel::Warn
-            | lunco_status_core::status_bus::StatusLevel::Error
-    );
-    let mut details = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        details_id,
-        false,
-    );
-    let row_width = ui.available_width();
-    let compact = row_width < 420.0;
-    let level_width = if compact {
-        48.0
-    } else {
-        STATUS_EVENT_LEVEL_WIDTH
-    };
-    let source_width = if compact {
-        68.0
-    } else {
-        STATUS_EVENT_SOURCE_WIDTH
-    };
-    let action_width = status_event_action_width(event.level, compact);
-    let column_gap = if compact {
-        4.0
-    } else {
-        ui.spacing().item_spacing.x
-    };
-    let column_count = 3 + usize::from(action_width > 0.0);
-    let column_gaps = column_count.saturating_sub(1) as f32;
-    let message_width =
-        (row_width - level_width - source_width - action_width - column_gap * column_gaps).max(1.0);
-    let display_message = if has_details {
-        status_message_summary(&event.message)
-    } else {
-        event.message.as_str()
-    };
-    let mut attention_clicked = false;
-
-    let row_response = ui.horizontal_top(|ui| {
-        ui.set_width(row_width);
-        ui.spacing_mut().item_spacing.x = column_gap;
-
-        // Keep the level column width identical for every row so that
-        // diagnostic rows do not shift the source or message columns.
-        add_status_text(
-            ui,
-            level_width,
-            egui::Label::new(
-                status_event_rich_text(status_level_label(event.level))
-                    .strong()
-                    .color(status_level_color(event.level, theme)),
-            ),
-        );
-        add_status_text(
-            ui,
-            source_width,
-            egui::Label::new(status_event_rich_text(event.source).strong()).truncate(),
-        )
-        .on_hover_text(event.source);
-        add_status_text(
-            ui,
-            message_width,
-            egui::Label::new(status_event_rich_text(display_message))
-                .wrap()
-                .halign(egui::Align::LEFT),
-        )
-        .on_hover_text(&event.message);
-
-        if event.level == lunco_status_core::status_bus::StatusLevel::Attention {
-            attention_clicked = ui
-                .add_sized(
-                    [action_width, 0.0],
-                    egui::Button::new(if compact { "Act" } else { "Continue" }),
-                )
-                .on_hover_text("Continue")
-                .clicked();
-        }
-    });
-
-    if has_details {
-        let row_interaction = ui
-            .interact(
-                row_response.response.rect,
-                details_id.with("toggle"),
-                egui::Sense::click(),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text(if details.is_open() {
-                "Click to hide diagnostics"
-            } else {
-                "Click to show diagnostics"
-            });
-        if row_interaction.clicked() {
-            details.toggle(ui);
-        }
-    }
-
-    if has_details {
-        details.show_body_unindented(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    status_event_rich_text("Diagnostics")
-                        .strong()
-                        .color(status_level_color(event.level, theme)),
-                );
-                if ui.small_button("Copy diagnostics").clicked() {
-                    ui.ctx().copy_text(event.message.clone());
-                }
-            });
-            ui.add(egui::Label::new(status_event_rich_text(event.message.as_str())).wrap());
-        });
-    }
-
-    attention_clicked
-}
-
-/// Add fixed-width status text without egui's justified child layout.
-///
-/// `Ui::add_sized` creates a justified child UI. A wrapped label in that
-/// layout stretches inter-word gaps to fill its column, which makes long
-/// status messages appear as character-spaced text. A normal horizontal child
-/// keeps the column width while leaving the label's galley proportional.
-fn add_status_text(ui: &mut egui::Ui, width: f32, label: egui::Label) -> egui::Response {
-    add_status_text_with_layout(
-        ui,
-        width,
-        egui::Layout::left_to_right(egui::Align::Center),
-        label,
-    )
-}
-
-fn add_status_text_with_layout(
-    ui: &mut egui::Ui,
-    width: f32,
-    layout: egui::Layout,
-    label: egui::Label,
-) -> egui::Response {
-    ui.allocate_ui_with_layout(egui::vec2(width, 0.0), layout, |ui| ui.add(label))
-        .inner
-}
-
-fn status_event_action_width(
-    level: lunco_status_core::status_bus::StatusLevel,
-    compact: bool,
-) -> f32 {
-    if level == lunco_status_core::status_bus::StatusLevel::Attention {
-        if compact {
-            56.0
-        } else {
-            STATUS_EVENT_ATTENTION_WIDTH
-        }
-    } else {
-        0.0
-    }
-}
-
 const STATUS_BAR_PROGRESS_WIDTH: f32 = 120.0;
 
 fn status_bar_message_width(available_width: f32, has_progress: bool, item_spacing: f32) -> f32 {
@@ -2198,10 +2004,6 @@ fn status_bar_message_width(available_width: f32, has_progress: bool, item_spaci
         0.0
     };
     (available_width - progress_reserve).max(1.0)
-}
-
-fn status_event_rich_text(text: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(text).family(egui::FontFamily::Proportional)
 }
 
 fn status_notification_layout_job(
@@ -2263,7 +2065,7 @@ fn status_level_color(
         | lunco_status_core::status_bus::StatusLevel::Attention => theme.tokens.error,
         lunco_status_core::status_bus::StatusLevel::Warn => theme.tokens.warning,
         lunco_status_core::status_bus::StatusLevel::Info
-        | lunco_status_core::status_bus::StatusLevel::Progress => theme.tokens.text_subdued,
+        | lunco_status_core::status_bus::StatusLevel::Progress => theme.tokens.success,
     }
 }
 
@@ -2410,15 +2212,62 @@ fn status_history_copy_text(
     text
 }
 
+/// Lay out the full retained log with semantic colors on each event level.
+fn status_history_layout_job(
+    history: &[(StatusEventKey, lunco_status_core::status_bus::StatusEvent)],
+    style: &egui::Style,
+    theme: &lunco_theme::Theme,
+) -> egui::text::LayoutJob {
+    let font_id = lunco_theme::TypographyRole::Body.font_id(style);
+    let normal = egui::TextFormat {
+        font_id: font_id.clone(),
+        color: style.visuals.text_color(),
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    for (_, event) in history.iter().rev() {
+        job.append("[", 0.0, normal.clone());
+        job.append(
+            status_level_label(event.level),
+            0.0,
+            egui::TextFormat {
+                font_id: font_id.clone(),
+                color: status_level_color(event.level, theme),
+                ..Default::default()
+            },
+        );
+        job.append("] ", 0.0, normal.clone());
+        job.append(&event.source, 0.0, normal.clone());
+        job.append("\n", 0.0, normal.clone());
+        job.append(&event.message, 0.0, normal.clone());
+        if !event.message.ends_with('\n') {
+            job.append("\n", 0.0, normal.clone());
+        }
+        job.append("\n", 0.0, normal.clone());
+    }
+    job
+}
+
 /// Show the whole retained log in one read-only editor so selection can span entries.
-fn render_status_history_log(ui: &mut egui::Ui, history_text: &str) -> egui::Response {
+fn render_status_history_log(
+    ui: &mut egui::Ui,
+    history_text: &str,
+    history: &[(StatusEventKey, lunco_status_core::status_bus::StatusEvent)],
+    theme: &lunco_theme::Theme,
+) -> egui::Response {
     let mut text = history_text;
+    let mut layouter = |ui: &egui::Ui, _buffer: &dyn egui::TextBuffer, wrap_width: f32| {
+        let mut job = status_history_layout_job(history, ui.style(), theme);
+        job.wrap.max_width = wrap_width;
+        ui.fonts_mut(|fonts| fonts.layout_job(job))
+    };
     ui.add(
         egui::TextEdit::multiline(&mut text)
             .id_salt("recent_status_history_text")
             .desired_width(ui.available_width())
             .desired_rows(1)
             .font(lunco_theme::TypographyRole::Body.text_style())
+            .layouter(&mut layouter)
             .frame(egui::Frame::NONE),
     )
     .on_hover_text(concat!(
@@ -4138,26 +3987,6 @@ mod tests {
             "missing prim /World/Terrain"
         );
         assert!(message.contains("caused by: /twins/apollo15/terrain"));
-    }
-
-    #[test]
-    fn status_event_rows_reserve_width_only_for_attention_action() {
-        assert_eq!(
-            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Info, false),
-            0.0
-        );
-        assert_eq!(
-            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Warn, false),
-            0.0
-        );
-        assert_eq!(
-            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Error, true),
-            0.0
-        );
-        assert_eq!(
-            status_event_action_width(lunco_status_core::status_bus::StatusLevel::Attention, false),
-            STATUS_EVENT_ATTENTION_WIDTH
-        );
     }
 
     #[test]
