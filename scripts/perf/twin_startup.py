@@ -51,8 +51,9 @@ def capture_symbol_state(pid, output, phase):
         "maps_sha256": hashlib.sha256(maps_data).hexdigest(),
         "maps_bytes": len(maps_data),
     }
-    perf_map_directory = Path(os.environ.get("PERF_BUILDID_DIR", "/tmp"))
-    perf_map_source = perf_map_directory / f"perf-{pid}.map"
+    # Cranelift 0.125.4 uses PERF_BUILDID_DIR as an enable switch but always
+    # writes its JIT map to /tmp, regardless of the variable's value.
+    perf_map_source = Path("/tmp") / f"perf-{pid}.map"
     if perf_map_source.is_file():
         perf_map_data = perf_map_source.read_bytes()
         perf_map_path = output / f"perf-{pid}-{phase}.map"

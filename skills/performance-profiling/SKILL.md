@@ -95,7 +95,9 @@ to improve a timing.
   With `--symbols`, `twin_startup.py` records process-map and Cranelift perf-map
   snapshots at qualification and before exit; receipt paths, sizes and hashes
   identify each snapshot. The driver defaults `PERF_BUILDID_DIR` to `/tmp` and
-  respects an explicit directory. Resolve samples against the matching window.
+  leaves explicit values intact. Cranelift 0.125.4 uses the variable to enable
+  its JIT map but always writes `/tmp/perf-<PID>.map`; resolve samples against
+  the matching window.
   Check the profiler listener and connection against the owned PID with
   `ss -ltnp`/`ss -tnp`. A concurrent Tracy client can occupy 8086 and move the
   owned app to the next port; pass that port with `tracy-capture -p`. A capture

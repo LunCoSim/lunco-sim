@@ -76,9 +76,11 @@ collector first, set `TRACY_PORT` and `TRACY_SAMPLING_HZ=1000`, then add
 its owned PID and saves native maps/ELF/symbols for subsequent sample resolution.
 With `--symbols`, it records `/proc/<pid>/maps` and the Cranelift perf map at
 qualification and before exit. The receipt's `symbol_snapshots` records each
-file path, size and SHA-256. `PERF_BUILDID_DIR` selects the perf-map directory;
-when unset, the driver sets it to `/tmp` for the owned process. Validate each
-saved map against its measurement interval before resolving samples.
+file path, size and SHA-256. The driver sets `PERF_BUILDID_DIR` to `/tmp` when
+unset and leaves explicit values intact. Cranelift 0.125.4 uses this variable
+to enable its JIT map, but always writes that map to `/tmp/perf-<PID>.map`.
+Validate each saved map against its measurement interval before resolving
+samples.
 For optimized CPU attribution, retain symbols in the exact diagnostic ELF:
 `cargo rustc --release -p lunco-luncosim --bin luncosim --features tracy -j 4
 -- -C strip=none`. This preserves release optimization and thin LTO while
@@ -197,9 +199,10 @@ load bias; another build's symbol offsets are not interchangeable. Anonymous
 JIT frames can lack both an image and a recoverable caller. Such incomplete
 stacks cannot establish inclusive caller coverage.
 The maintained Cranelift JIT records function ranges in
-`$PERF_BUILDID_DIR/perf-<PID>.map`. For a separate owned diagnostic, preserve
-that exact process's map after preparation, together with its current memory
-mappings. Do not assign stale, overlapping or unmapped
+`/tmp/perf-<PID>.map` when `PERF_BUILDID_DIR` is set; the variable enables
+recording but does not change the map path. For a separate owned diagnostic,
+preserve that exact process's map after preparation, together with its current
+memory mappings. Do not assign stale, overlapping or unmapped
 ranges to samples by guessing; admission and code-arena retirement can change
 which ranges are live. The flag records JIT names and does not restore stripped
 static ELF symbols. Its preparation-time file writes exclude it from a clean
