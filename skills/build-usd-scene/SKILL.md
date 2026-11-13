@@ -74,9 +74,20 @@ the short version is below.
 | Scene contract | Author | Use it when |
 |---|---|---|
 | Fixed instructional world | A real `DistantLight` reference such as `lunco://lighting/sun.usda`, with an authored rotation; omit the celestial payload. | Teaching UI, spawning, or basic controls where changing sunlight is not the subject. |
-| Ephemeris world | Reference `lunco://celestial/solar_system.usda` under `SolarSystem`; author the site anchor on the scene root when needed. Add `LunCoEpochAPI` and a non-zero `double lunco:time:epochJd` on the scene root when a repeatable date is required. | Teaching a real lunar day, antenna pointing to a body-relative station, orbital motion, or another feature whose result depends on celestial time. |
+| Ephemeris world | Reference `lunco://celestial/solar_system.usda` under `SolarSystem`; when authoring a site anchor, ensure its body ID resolves to a body in the composed celestial content. Add `LunCoEpochAPI` and a non-zero `double lunco:time:epochJd` on the scene root when a repeatable date is required. | Teaching a real lunar day, antenna pointing to a body-relative station, orbital motion, or another feature whose result depends on celestial time. |
 | Existing world | Reference or payload the authoritative scene that already owns gravity, lighting, time, and celestial content. | Adding a lesson or assembly whose subject is behaviour, not scenery. |
 | UI-only lesson | Omit the payload; the tutorial launcher clears an outgoing lesson scene before showing the UI-only lesson. | Teaching menus, commands, or workbench concepts. |
+
+`SiteAnchor` is a coordinate-frame declaration, not a request to load its
+celestial body and not a gravity source. Its `GeodeticAnchor.body` ID must
+match a composed `CelestialBody.ephemeris_id` (normally supplied by
+`SolarSystem`); that body also needs a `GravityProvider`, and physical
+consumers need the corresponding body association. A local, bounded test pad
+with authored constant gravity has a different contract:
+omit `SiteAnchor` and author one `UsdPhysicsScene`. Do not combine a site anchor
+with a flat `PhysicsScene` expecting the flat vector to remain active after
+body-frame alignment. See [gravity authoring](../author-usd-physics/SKILL.md#3-gravity-is-authored-per-scene)
+and [simulation inspection](../inspect-simulation/SKILL.md#site-anchored-gravity-and-rover-motion).
 
 After the USD stage and queued structural projection settle,
 `scene.time.select` runs once. It selects the authored non-zero root epoch when

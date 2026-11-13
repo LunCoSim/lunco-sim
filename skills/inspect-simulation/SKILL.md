@@ -25,6 +25,33 @@ switch to it silently when a visual check is requested.
 > **Read the ports, not the log.** A telemetry port snapshot is the authoritative
 > current value. `tail -f`/`sleep`-polling a log for a number is the anti-pattern.
 
+## Site-anchored gravity and rover motion
+
+When a rover floats or will not drive on an anchored site, check the world and
+vertical support before changing its drivetrain:
+
+1. Require `GetReadiness` to report `ready=true` and `world_hold=false`.
+2. Inspect the composed scene root with `QueryUsdPrim`. If it has `SiteAnchor`,
+   verify that `GeodeticAnchor.body` matches a composed
+   `CelestialBody.ephemeris_id`, that the body has its `GravityProvider`, and
+   that the rover has the corresponding body association. A `SiteAnchor` alone
+   is not a body payload: it selects body-surface gravity immediately, while
+   celestial declarations may still be projecting. In surface mode, a missing
+   body link/provider clears the rover's derived gravity; a stage `PhysicsScene`
+   does not restore flat gravity after that site-frame takeover. Wait for
+   projection to settle, then treat an unresolved body ID as a scene fault.
+3. Read any exposed environment `gravity_accel` port with `ReadPorts`, then
+   inspect `QueryPhysicsState.wheel_contacts` for valid contacts and positive
+   normal loads. No derived gravity and no wheel load points to the scene/body
+   binding; loaded contacts with no translation points onward to drive commands,
+   motor effort, and traction. Do not infer gravity or wheel support from visual
+   overlap or a nonzero throttle command.
+
+For a deliberately local flat-gravity pad, remove `SiteAnchor` and retain one
+authored `UsdPhysicsScene`. For a body-anchored surface, keep the anchor and
+compose the matching celestial body/provider. See [the scene contract](../build-usd-scene/SKILL.md#choose-the-scenes-lighting-and-time-model)
+and [gravity authoring](../author-usd-physics/SKILL.md#3-gravity-is-authored-per-scene).
+
 For tire contact, inspect `QueryPhysicsState.wheel_contacts` fields
 `contact_valid`, `normal_force_n` and `tire_force_n`; a valid positive load can
 be below 1 N. Shared physical tires expose native `contact_force`. On a free
