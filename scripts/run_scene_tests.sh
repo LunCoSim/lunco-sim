@@ -62,8 +62,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
 
 # Acceptance runs use a throwaway configuration root, in-memory settings, and
-# no runtime-overlay reads or writes. Each scene process below gets its own
-# workspace-state directory so a prior assertion cannot seed the next run.
+# no runtime-overlay reads or writes. The configuration root isolates process
+# settings; Twin workspace state lives beside each Twin in its .lunco folder.
 export LUNCOSIM_EPHEMERAL_SETTINGS=1
 export LUNCOSIM_ISOLATED_RUN=1
 export LUNCOSIM_CONFIG="$REPO_ROOT/target/scene-tests/config-suite-$$"

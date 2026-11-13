@@ -487,10 +487,9 @@ impl Plugin for ModelicaUiPlugin {
         app.register_settings_section::<panels::code_editor::EditorSettings>();
 
         // Document hot-exit: persist every open Modelica buffer into the
-        // per-Twin workspace-state and restore it (with unsaved edits) on
-        // next launch. The workbench owns the file + lifecycle; this
-        // codec just reads/writes Modelica buffers (AGENTS.md §3 + the
-        // VS Code `workspaceStorage` model in 11-workbench §9).
+        // Twin-local `.lunco/workspace.json` and restore it (with unsaved
+        // edits) on next launch. The workbench owns the file and lifecycle;
+        // this codec reads and writes Modelica buffers.
         use lunco_workbench_state::AppDocumentSessionExt;
         app.register_document_session_codec(session_codec::ModelicaSessionCodec);
 

@@ -1,11 +1,8 @@
-//! Per-Twin (per-project) workbench state — VSCode's `workspaceStorage`.
+//! Per-Twin hot-exit state in `<twin>/.lunco/workspace.json`.
 //!
-//! VSCode keeps *volatile UI state* (which editors were open, the active
-//! one, window layout) in a global store keyed by a hash of the
-//! workspace path — **not** inside the project folder, so repos stay
-//! clean. We do the same: each Twin gets a
-//! the shared LunCoSim config directory's `workspace-state/<hash>.json`, keyed
-//! off its root path.
+//! Each Twin keeps its volatile UI state (open documents, dock layout, and
+//! runtime views) in `<twin>/.lunco/workspace.json` beside its project-local
+//! settings. The `.lunco/` directory is ignored by version control.
 //!
 //! ## What's stored (and what isn't)
 //!
@@ -38,7 +35,7 @@ use std::pin::Pin;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use lunco_doc::{DocumentId, DocumentOrigin};
-use lunco_workbench_core::PanelId;
+use lunco_workbench_core::{PanelId, VIEW_PERSPECTIVE_ID};
 use serde::{Deserialize, Serialize};
 
 use lunco_workspace::WorkspaceResource;
@@ -125,13 +122,28 @@ pub trait WorkspaceStateViewProvider: Send + Sync + 'static {
     fn capture(&self, world: &World) -> Option<WorkspaceRuntimeViewSnapshot>;
     /// Queue or apply restored snapshots after their owning scenes are ready.
     fn restore(&self, world: &mut World, snapshots: Vec<WorkspaceRuntimeViewSnapshot>);
+    /// Clear live runtime views when the user resets the saved View layout.
+    fn reset(&self, world: &mut World);
 }
 
 #[derive(Resource, Default)]
 struct ViewProvider(Option<std::sync::Arc<dyn WorkspaceStateViewProvider>>);
 
 #[derive(Resource, Default)]
-struct SavedRuntimeViewSnapshots(Vec<WorkspaceRuntimeViewSnapshot>);
+struct SavedRuntimeViewSnapshots {
+    snapshots: Vec<WorkspaceRuntimeViewSnapshot>,
+    revision: u64,
+}
+
+#[derive(Resource, Default)]
+struct PendingWorkspaceViewReset(Option<u64>);
+
+/// Clear the active Twin's saved runtime-view state and its live view windows.
+#[derive(Event, Clone, Copy, Debug)]
+pub struct ResetWorkspaceRuntimeViews {
+    /// Exact active Twin selected by the settings action.
+    pub twin: u64,
+}
 
 /// Register the host's typed runtime-view adapter after installing
 /// [`WorkspaceStatePlugin`].
@@ -564,9 +576,8 @@ impl RuntimeSurfaceLayouts {
 pub struct WorkspaceState {
     /// Version of the persisted representation.
     pub schema_version: u32,
-    /// The non-empty Twin root this state belongs to. Stored so a hash
-    /// collision (two paths landing on the same file stem) is detectable —
-    /// a mismatch is treated as a miss.
+    /// The non-empty Twin root this state belongs to. Loading rebases this path
+    /// to the Twin-local `.lunco/workspace.json` location.
     pub twin_root: PathBuf,
     /// `PerspectiveId` string of the perspective active at save time.
     /// `None` ⇒ leave the app's startup default.
@@ -592,7 +603,7 @@ pub struct WorkspaceState {
     #[serde(default)]
     pub runtime_surface_layouts: HashMap<String, RuntimeSurfaceLayout>,
     /// Camera and graph windows keyed by their loaded scene path, when the
-    /// host supplies a runtime-view adapter and project restoration is enabled.
+    /// host supplies a runtime-view adapter and project saving is enabled.
     #[serde(default)]
     pub runtime_views: Vec<WorkspaceRuntimeViewSnapshot>,
 }
@@ -630,9 +641,9 @@ fn decode_workspace_state(text: &str) -> Result<WorkspaceState, String> {
 }
 
 impl WorkspaceState {
-    /// Load the state for a non-empty Twin root. Returns `None` for an empty
-    /// root, a missing / unreadable / corrupt file, or when the stored
-    /// `twin_root` doesn't match (hash collision guard) — all mean "use defaults".
+    /// Load the state for a non-empty Twin root. Returns `None` for an empty,
+    /// missing, unreadable, or corrupt file. The file location owns Twin
+    /// identity, so moving the Twin rebases its stored root.
     pub fn load(twin_root: &Path) -> Option<Self> {
         Self::load_with_json(twin_root).map(|(state, _)| state)
     }
@@ -649,7 +660,7 @@ impl WorkspaceState {
             .read_sync(&lunco_storage::StorageHandle::File(path.clone()))
             .ok()?;
         let text = String::from_utf8(bytes).ok()?;
-        let state = match decode_workspace_state(&text) {
+        let mut state = match decode_workspace_state(&text) {
             Ok(state) => state,
             Err(e) => {
                 // Falling back to defaults means the next save overwrites this
@@ -671,14 +682,7 @@ impl WorkspaceState {
                 return None;
             }
         };
-        if state.twin_root != twin_root {
-            warn!(
-                "[WorkspaceState] {} stores a different twin_root ({}); ignoring (hash collision?)",
-                path.display(),
-                state.twin_root.display(),
-            );
-            return None;
-        }
+        state.twin_root = twin_root.to_path_buf();
         Some((state, text))
     }
 
@@ -709,10 +713,8 @@ impl WorkspaceState {
     }
 }
 
-/// FNV-1a 64-bit hash. Used to key the per-Twin state file by path.
-/// Picked over `DefaultHasher` because the latter's output is *not*
-/// guaranteed stable across std versions — a state file written today
-/// must still be found after a toolchain bump.
+/// Stable FNV-1a 64-bit fold used by the in-process workspace save gate.
+/// `DefaultHasher` output is not guaranteed stable across std versions.
 fn fnv1a64(bytes: &[u8]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -724,39 +726,21 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     h
 }
 
-fn workspace_session_key(root: &Path) -> String {
-    format!("{:016x}", fnv1a64(root.to_string_lossy().as_bytes()))
-}
-
-/// Resolve the on-disk path for a Twin's state file (the root must be
-/// non-empty):
-/// `<config>/workspace-state/<fnv1a-hex>.json`. Uses the resolved directory
-/// from `lunco_settings::user_config_dir`, including `LUNCOSIM_CONFIG`.
-///
-/// The root is canonicalized first when possible so cwd-relative and
-/// absolute spellings of the same folder collapse to one key; falls back
-/// to the raw path bytes when canonicalization fails (e.g. the folder
-/// was deleted).
+/// Resolve the Twin-local session file (the root must be non-empty):
+/// `<twin>/.lunco/workspace.json`.
 pub fn workspace_state_path(twin_root: &Path) -> PathBuf {
-    let canonical = lunco_storage::canonicalize_file_path(twin_root)
-        .unwrap_or_else(|_| twin_root.to_path_buf());
-    let key = fnv1a64(canonical.to_string_lossy().as_bytes());
-    lunco_settings::user_config_dir()
-        .join("workspace-state")
-        .join(format!("{key:016x}.json"))
+    twin_root.join(".lunco").join("workspace.json")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Bevy wiring
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Last-saved snapshot, keyed by the active Twin, so the save system
-/// only writes the file when this Twin's state actually changed.
+/// Last-saved snapshot for the exact Twin root, so the save system only writes
+/// that Twin's file when its state actually changed.
 #[derive(Resource, Default)]
 struct WorkspaceStateLast {
-    /// Process-local key of the Twin root used to compare snapshots.
-    key: Option<String>,
-    /// Exact root path of the Twin the snapshot belongs to.
+    /// Exact Twin root whose state was last written or loaded.
     root: Option<PathBuf>,
     /// Serialized value of the last-saved [`WorkspaceState`].
     json: Option<String>,
@@ -788,7 +772,6 @@ enum WorkspaceRestoreTaskKind {
 struct PendingWorkspaceSave(Option<WorkspaceSaveTask>);
 
 struct WorkspaceSaveTask {
-    key: String,
     root: PathBuf,
     rev: u64,
     task: Task<Result<String, String>>,
@@ -881,6 +864,14 @@ fn runtime_view_revision(world: &World) -> u64 {
         .map_or(0, |provider| provider.revision(world))
 }
 
+fn clear_saved_runtime_views(world: &mut World) {
+    let mut saved = world.resource_mut::<SavedRuntimeViewSnapshots>();
+    if !saved.snapshots.is_empty() {
+        saved.snapshots.clear();
+        saved.revision = saved.revision.wrapping_add(1);
+    }
+}
+
 fn capture_runtime_views(world: &mut World) -> Vec<WorkspaceRuntimeViewSnapshot> {
     let current = world
         .get_resource::<ViewProvider>()
@@ -888,33 +879,90 @@ fn capture_runtime_views(world: &mut World) -> Vec<WorkspaceRuntimeViewSnapshot>
         .and_then(|provider| provider.capture(world));
     let mut saved = world.resource_mut::<SavedRuntimeViewSnapshots>();
     if let Some(current) = current {
-        upsert_runtime_view_snapshot(&mut saved.0, current);
+        if upsert_runtime_view_snapshot(&mut saved.snapshots, current) {
+            saved.revision = saved.revision.wrapping_add(1);
+        }
     }
-    saved.0.clone()
+    saved.snapshots.clone()
 }
 
 fn upsert_runtime_view_snapshot(
     snapshots: &mut Vec<WorkspaceRuntimeViewSnapshot>,
     snapshot: WorkspaceRuntimeViewSnapshot,
-) {
+) -> bool {
     if let Some(existing) = snapshots
         .iter_mut()
         .find(|existing| existing.scene_path == snapshot.scene_path)
     {
+        if *existing == snapshot {
+            return false;
+        }
         *existing = snapshot;
     } else {
         snapshots.push(snapshot);
     }
+    true
 }
 
 fn restore_runtime_views(world: &mut World, snapshots: Vec<WorkspaceRuntimeViewSnapshot>) {
-    world.resource_mut::<SavedRuntimeViewSnapshots>().0 = snapshots.clone();
+    let mut saved = world.resource_mut::<SavedRuntimeViewSnapshots>();
+    if saved.snapshots != snapshots {
+        saved.snapshots = snapshots.clone();
+        saved.revision = saved.revision.wrapping_add(1);
+    }
+    drop(saved);
     let provider = world
         .get_resource::<ViewProvider>()
         .and_then(|provider| provider.0.clone());
     if let Some(provider) = provider {
         provider.restore(world, snapshots);
     }
+}
+
+fn queue_workspace_runtime_view_reset(
+    event: On<ResetWorkspaceRuntimeViews>,
+    mut pending: ResMut<PendingWorkspaceViewReset>,
+) {
+    pending.0 = Some(event.event().twin);
+}
+
+fn apply_pending_workspace_runtime_view_reset(world: &mut World) {
+    let Some(twin) = world.resource_mut::<PendingWorkspaceViewReset>().0.take() else {
+        return;
+    };
+    let active_twin = world
+        .get_resource::<WorkspaceResource>()
+        .and_then(|workspace| workspace.active_twin)
+        .map(|id| id.raw());
+    if active_twin != Some(twin) {
+        warn!("[WorkspaceState] ignored View layout reset for inactive Twin {twin}");
+        return;
+    }
+    if world
+        .resource::<PendingWorkspaceRestore>()
+        .0
+        .as_ref()
+        .is_some_and(|pending| pending.twin.raw() == twin)
+    {
+        world.resource_mut::<PendingWorkspaceViewReset>().0 = Some(twin);
+        return;
+    }
+
+    let provider = world
+        .get_resource::<ViewProvider>()
+        .and_then(|provider| provider.0.clone());
+    if let Some(provider) = provider {
+        provider.reset(world);
+    }
+
+    let mut saved = world.resource_mut::<SavedRuntimeViewSnapshots>();
+    if !saved.snapshots.is_empty() {
+        saved.snapshots.clear();
+        saved.revision = saved.revision.wrapping_add(1);
+    }
+    drop(saved);
+    world.resource_mut::<RuntimeSurfaceLayouts>().clear();
+    world.resource_mut::<WorkspaceStateLast>().seeded = false;
 }
 
 /// Fold of every codec's `revision` — changes when any open buffer or
@@ -971,13 +1019,17 @@ fn gate_value(world: &mut World) -> Option<u64> {
     let twin = fnv1a64(twin_root.to_string_lossy().as_bytes());
     let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().revision();
     let runtime_views = runtime_view_revision(world);
+    let saved_runtime_views = world.resource::<SavedRuntimeViewSnapshots>().revision;
+    let save_view_layout = lunco_workspace::view_layout_saving_enabled(world);
     Some(
         docs.wrapping_add(persp)
             .wrapping_add(twin)
             .wrapping_add(active)
             .wrapping_add(dock)
             .wrapping_add(runtime_surface_layouts)
-            .wrapping_add(runtime_views),
+            .wrapping_add(runtime_views)
+            .wrapping_add(saved_runtime_views)
+            .wrapping_add(u64::from(save_view_layout)),
     )
 }
 
@@ -1025,15 +1077,28 @@ fn build_state(world: &mut World) -> Option<WorkspaceState> {
     // each perspective's chrome is checked individually inside the capture,
     // so a transient chrome-less dock is skipped rather than round-tripping
     // as a layout with missing panels.
-    let docks = if RESTORE_DOCK_ARRANGEMENT {
+    let mut docks = if RESTORE_DOCK_ARRANGEMENT {
         with_layout(world, |layout, world| {
             layout.capture_perspective_docks(world)
         })
     } else {
         HashMap::new() // see RESTORE_DOCK_ARRANGEMENT
     };
-    let runtime_surface_layouts = world.resource::<RuntimeSurfaceLayouts>().as_map().clone();
-    let runtime_views = capture_runtime_views(world);
+    let save_view_layout = lunco_workspace::view_layout_saving_enabled(world);
+    if !save_view_layout {
+        docks.remove(VIEW_PERSPECTIVE_ID);
+    }
+    let runtime_surface_layouts = if save_view_layout {
+        world.resource::<RuntimeSurfaceLayouts>().as_map().clone()
+    } else {
+        HashMap::new()
+    };
+    let runtime_views = if save_view_layout {
+        capture_runtime_views(world)
+    } else {
+        clear_saved_runtime_views(world);
+        Vec::new()
+    };
     Some(WorkspaceState {
         schema_version: WORKSPACE_STATE_SCHEMA_VERSION,
         twin_root,
@@ -1265,7 +1330,6 @@ fn prepare_workspace_documents(
 
 fn seed_workspace_state_last(world: &mut World, root: &Path, json: Option<String>) {
     let mut last = world.resource_mut::<WorkspaceStateLast>();
-    last.key = Some(workspace_session_key(root));
     last.root = Some(root.to_path_buf());
     last.json = json;
     last.rev = 0;
@@ -1277,10 +1341,22 @@ fn apply_workspace_state(
     state: WorkspaceState,
     initial_perspective: Option<String>,
 ) {
-    restore_runtime_views(world, state.runtime_views.clone());
+    let save_view_layout = lunco_workspace::view_layout_saving_enabled(world);
+    restore_runtime_views(
+        world,
+        if save_view_layout {
+            state.runtime_views.clone()
+        } else {
+            Vec::new()
+        },
+    );
     world
         .resource_mut::<RuntimeSurfaceLayouts>()
-        .replace(state.runtime_surface_layouts.clone());
+        .replace(if save_view_layout {
+            state.runtime_surface_layouts.clone()
+        } else {
+            HashMap::new()
+        });
 
     // Explicit navigation wins over late restoration; launch, personal and
     // authored defaults supply the starting task when no choice was made.
@@ -1402,6 +1478,9 @@ fn apply_workspace_state(
     // them. See RESTORE_DOCK_ARRANGEMENT.
     if RESTORE_DOCK_ARRANGEMENT {
         let mut docks = state.docks;
+        if !save_view_layout {
+            docks.remove(VIEW_PERSPECTIVE_ID);
+        }
         if let Some(explicit) = explicit {
             docks.remove(&explicit);
         }
@@ -1424,7 +1503,7 @@ fn persist_workspace_state(world: &mut World) {
             world.resource_mut::<PendingWorkspaceSave>().0 = Some(pending);
             return;
         };
-        record_workspace_save_result(world, pending.key, pending.root, pending.rev, result);
+        record_workspace_save_result(world, pending.root, pending.rev, result);
         return;
     }
 
@@ -1450,7 +1529,6 @@ fn persist_workspace_state(world: &mut World) {
     let Some(root) = active_twin_root(world) else {
         return;
     };
-    let key = workspace_session_key(&root);
     {
         let last = world.resource::<WorkspaceStateLast>();
         if last.seeded && last.rev == rev && last.root.as_ref() == Some(&root) {
@@ -1460,12 +1538,11 @@ fn persist_workspace_state(world: &mut World) {
     let Some(state) = build_state(world) else {
         return;
     };
-    let previous_key = world.resource::<WorkspaceStateLast>().key.clone();
+    let previous_root = world.resource::<WorkspaceStateLast>().root.clone();
     let previous_json = world.resource::<WorkspaceStateLast>().json.clone();
-    let task_key = key.clone();
     let task = AsyncComputeTaskPool::get().spawn(async move {
         let json = serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?;
-        if previous_key.as_deref() != Some(task_key.as_str())
+        if previous_root.as_ref() != Some(&state.twin_root)
             || previous_json.as_deref() != Some(json.as_str())
         {
             #[cfg(not(target_arch = "wasm32"))]
@@ -1475,23 +1552,16 @@ fn persist_workspace_state(world: &mut World) {
         }
         Ok(json)
     });
-    world.resource_mut::<PendingWorkspaceSave>().0 = Some(WorkspaceSaveTask {
-        key,
-        root,
-        rev,
-        task,
-    });
+    world.resource_mut::<PendingWorkspaceSave>().0 = Some(WorkspaceSaveTask { root, rev, task });
 }
 
 fn record_workspace_save_result(
     world: &mut World,
-    key: String,
     root: PathBuf,
     rev: u64,
     result: Result<String, String>,
 ) {
     let mut last = world.resource_mut::<WorkspaceStateLast>();
-    last.key = Some(key);
     last.root = Some(root);
     last.rev = rev;
     last.seeded = true;
@@ -1511,17 +1581,13 @@ fn wait_for_workspace_save_before_exit(world: &mut World) {
     if !has_exit {
         return;
     }
-    let Some(WorkspaceSaveTask {
-        key,
-        root,
-        rev,
-        task,
-    }) = world.resource_mut::<PendingWorkspaceSave>().0.take()
+    let Some(WorkspaceSaveTask { root, rev, task }) =
+        world.resource_mut::<PendingWorkspaceSave>().0.take()
     else {
         return;
     };
     let result = block_on(task);
-    record_workspace_save_result(world, key, root, rev, result);
+    record_workspace_save_result(world, root, rev, result);
 }
 
 /// Registers per-Twin workspace-state load/save for a host layout.
@@ -1546,14 +1612,21 @@ impl Plugin for WorkspaceStatePlugin {
             .init_resource::<PendingWorkspaceSave>()
             .init_resource::<AppliedTwin>()
             .init_resource::<SavedRuntimeViewSnapshots>()
+            .init_resource::<PendingWorkspaceViewReset>()
             .init_resource::<WorkspaceStateRestorePolicy>()
             .init_resource::<ViewProvider>()
             .init_resource::<RuntimeSurfaceLayouts>()
             .init_resource::<DocumentSessionRegistry>()
+            .add_observer(queue_workspace_runtime_view_reset)
             .add_observer(clear_runtime_surface_layouts_on_twin_closed)
             .add_systems(
                 Update,
-                (restore_workspace_state, persist_workspace_state).chain(),
+                (
+                    restore_workspace_state,
+                    apply_pending_workspace_runtime_view_reset,
+                    persist_workspace_state,
+                )
+                    .chain(),
             )
             .add_systems(Last, wait_for_workspace_save_before_exit);
     }
@@ -1574,7 +1647,10 @@ fn clear_runtime_surface_layouts_on_twin_closed(
     }
     if trigger.event().was_active {
         layouts.clear();
-        runtime_views.0.clear();
+        if !runtime_views.snapshots.is_empty() {
+            runtime_views.snapshots.clear();
+            runtime_views.revision = runtime_views.revision.wrapping_add(1);
+        }
     }
 }
 
@@ -1584,11 +1660,11 @@ mod tests {
 
     #[test]
     fn initial_perspective_is_consumed_once() {
-        let mut policy = WorkspaceStateRestorePolicy::with_initial_perspective("sandbox_view");
+        let mut policy = WorkspaceStateRestorePolicy::with_initial_perspective(VIEW_PERSPECTIVE_ID);
 
         assert_eq!(
             policy.take_initial_perspective().as_deref(),
-            Some("sandbox_view")
+            Some(VIEW_PERSPECTIVE_ID)
         );
         assert_eq!(policy.take_initial_perspective(), None);
     }
@@ -1602,7 +1678,6 @@ mod tests {
         app.init_resource::<WorkspaceStateLast>();
         let task = AsyncComputeTaskPool::get().spawn(async { Ok("saved snapshot".to_owned()) });
         app.world_mut().resource_mut::<PendingWorkspaceSave>().0 = Some(WorkspaceSaveTask {
-            key: "twin-key".into(),
             root: PathBuf::from("/twin"),
             rev: 42,
             task,
@@ -1679,16 +1754,15 @@ mod tests {
         let a = workspace_state_path(Path::new("/tmp/lunco-test-twin-a"));
         let b = workspace_state_path(Path::new("/tmp/lunco-test-twin-b"));
         assert_ne!(a, b);
-        assert!(a.to_string_lossy().ends_with(".json"));
+        assert_eq!(a, Path::new("/tmp/lunco-test-twin-a/.lunco/workspace.json"));
+        assert_eq!(b, Path::new("/tmp/lunco-test-twin-b/.lunco/workspace.json"));
     }
 
-    /// End-to-end: save round-trips through the storage boundary, and a state
-    /// file whose stored `twin_root` doesn't match the lookup root is rejected
-    /// (hash-collision guard). One test keeps the process-level test config
-    /// isolation in one place.
+    /// End-to-end: save round-trips through the storage boundary, and moving a
+    /// Twin rebases the stored root while preserving its layout. One test keeps
+    /// the file-system assertions together.
     #[test]
-    fn save_load_roundtrip_and_collision_guard() {
-        lunco_settings::isolate_config_dir_for_tests("workbench-state");
+    fn save_load_roundtrip_and_moved_twin() {
         let temp = tempfile::tempdir().expect("temporary workspace-state directory");
         let root = temp.path().join("proj");
         let state = WorkspaceState {
@@ -1755,6 +1829,7 @@ mod tests {
             ],
         };
         state.save().unwrap();
+        assert!(root.join(".lunco/workspace.json").is_file());
 
         let loaded = WorkspaceState::load(&root).expect("round-trips");
         assert_eq!(loaded, state);
@@ -1779,13 +1854,17 @@ mod tests {
         assert_eq!(snapshots.len(), 2);
         assert!(snapshots[0].camera_views.is_empty());
 
-        // Tamper the stored root → load must reject it.
+        // The file is Twin-local, so its location remains authoritative after
+        // the project folder moves.
         let path = workspace_state_path(&root);
-        let mut bad = state;
-        bad.twin_root = PathBuf::from("/totally/different");
-        lunco_storage::write_file_sync(&path, serde_json::to_string(&bad).unwrap().as_bytes())
+        let moved_root = PathBuf::from("/tmp/lunco-moved-twin");
+        let mut moved = state;
+        moved.twin_root = moved_root.clone();
+        lunco_storage::write_file_sync(&path, serde_json::to_string(&moved).unwrap().as_bytes())
             .unwrap();
-        assert!(WorkspaceState::load(&root).is_none(), "collision guard");
+        let rebased = WorkspaceState::load(&root).expect("Twin-local state survives a move");
+        assert_eq!(rebased.twin_root, root);
+        assert_eq!(&rebased.runtime_views, views);
     }
 
     /// Per-perspective docks round-trip through serde, and the written form

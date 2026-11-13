@@ -31,6 +31,8 @@ pub(super) fn install(app: &mut App) {
     app.init_resource::<PendingRuntimeViewRestore>()
         .init_resource::<SignalDescriptorRestoreCursor>()
         .add_systems(Update, restore_pending_runtime_views)
+        .add_observer(request_camera_view_restore_on_identity)
+        .add_observer(request_camera_view_restore_on_projection)
         .add_observer(reset_runtime_view_restore_after_transition)
         .add_observer(clear_runtime_view_restore_on_twin_closed);
     lunco_workbench_state::install_workspace_state_view_provider(app, RuntimeViewStateProvider);
@@ -52,8 +54,33 @@ fn reset_runtime_view_restore_after_transition(
     if let Some(pending) = pending.0.as_mut() {
         pending.progress_scene_path = None;
         pending.cameras_restored = false;
+        pending.camera_retry_requested = true;
         pending.graphs_restored.clear();
         pending.graph_retry_requested = true;
+    }
+}
+
+fn request_camera_view_restore(pending: &mut PendingRuntimeViews) {
+    if !pending.cameras_restored {
+        pending.camera_retry_requested = true;
+    }
+}
+
+fn request_camera_view_restore_on_identity(
+    _: On<Insert<GlobalEntityId>>,
+    mut pending: ResMut<PendingRuntimeViewRestore>,
+) {
+    if let Some(pending) = pending.0.as_mut() {
+        request_camera_view_restore(pending);
+    }
+}
+
+fn request_camera_view_restore_on_projection(
+    _: On<Insert<Projection>>,
+    mut pending: ResMut<PendingRuntimeViewRestore>,
+) {
+    if let Some(pending) = pending.0.as_mut() {
+        request_camera_view_restore(pending);
     }
 }
 
@@ -73,6 +100,7 @@ fn restore_pending_runtime_views(world: &mut World) {
     let Some(mut pending) = world.resource_mut::<PendingRuntimeViewRestore>().0.take() else {
         return;
     };
+    let mut retry_cameras = pending.take_camera_retry();
     let mut retry_graphs = pending.take_graph_retry(signal_descriptors_changed);
     if world
         .get_resource::<lunco_core::SceneTransitionCoordinator>()
@@ -92,6 +120,7 @@ fn restore_pending_runtime_views(world: &mut World) {
     else {
         pending.progress_scene_path = None;
         pending.cameras_restored = false;
+        pending.camera_retry_requested = false;
         pending.graphs_restored.clear();
         pending.graph_retry_requested = false;
         world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
@@ -101,6 +130,7 @@ fn restore_pending_runtime_views(world: &mut World) {
         .get_resource::<lunco_core::SceneMountState>()
         .is_some_and(|mount| mount.active_root().is_some())
     {
+        pending.camera_retry_requested = true;
         pending.graph_retry_requested = true;
         world.resource_mut::<PendingRuntimeViewRestore>().0 = Some(pending);
         return;
@@ -109,13 +139,25 @@ fn restore_pending_runtime_views(world: &mut World) {
     if pending.progress_scene_path.as_deref() != Some(current_path) {
         pending.progress_scene_path = Some(current_path.to_owned());
         pending.cameras_restored = false;
+        retry_cameras = true;
         pending.graphs_restored.clear();
         retry_graphs = true;
     }
 
-    if !pending.cameras_restored {
-        restore_camera_views(world, &snapshot.camera_views);
-        pending.cameras_restored = true;
+    if retry_cameras && !pending.cameras_restored {
+        match camera_view_sources_readiness(world, &snapshot.camera_views) {
+            CameraViewSourcesReadiness::Ready => {
+                restore_camera_views(world, &snapshot.camera_views);
+                pending.cameras_restored = true;
+            }
+            CameraViewSourcesReadiness::Waiting => {}
+            CameraViewSourcesReadiness::Invalid(reason) => {
+                warn!(
+                    "[workspace-view-state] camera views cannot be restored: {reason}; leaving those views closed"
+                );
+                pending.cameras_restored = true;
+            }
+        }
     }
 
     if retry_graphs {
@@ -240,6 +282,78 @@ enum GraphViewSourcesReadiness {
     Ready,
     Waiting,
     Invalid(String),
+}
+
+enum CameraViewSourcesReadiness {
+    Ready,
+    Waiting,
+    Invalid(String),
+}
+
+fn runtime_view_restore_pending(world: &World, scene_path: &str) -> bool {
+    let Some(pending) = world
+        .get_resource::<PendingRuntimeViewRestore>()
+        .and_then(|pending| pending.0.as_ref())
+    else {
+        return false;
+    };
+    let Some(snapshot) = pending
+        .snapshots
+        .iter()
+        .find(|snapshot| snapshot.scene_path == scene_path)
+    else {
+        return false;
+    };
+    !pending.cameras_restored
+        || snapshot
+            .graph_views
+            .iter()
+            .any(|view| !pending.graphs_restored.contains(&view.id))
+}
+
+fn camera_view_sources_readiness(
+    world: &World,
+    views: &[WorkspaceCameraViewState],
+) -> CameraViewSourcesReadiness {
+    if views.is_empty() {
+        return CameraViewSourcesReadiness::Ready;
+    }
+    let Some(entities) = world.get_resource::<lunco_api::registry::ApiEntityRegistry>() else {
+        return CameraViewSourcesReadiness::Waiting;
+    };
+    let scene_committed = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .is_some_and(|scene| {
+            scene.active().is_none()
+                && !scene.has_admitted()
+                && scene.completed_generation().is_some()
+        });
+    for view in views {
+        let Some(source) = view.source.map(GlobalEntityId::from_raw) else {
+            continue;
+        };
+        let Some(entity) = entities.resolve(&source) else {
+            return if scene_committed {
+                CameraViewSourcesReadiness::Invalid(format!(
+                    "camera source {} is unavailable",
+                    source.get()
+                ))
+            } else {
+                CameraViewSourcesReadiness::Waiting
+            };
+        };
+        if world.get::<Projection>(entity).is_none() {
+            return if scene_committed {
+                CameraViewSourcesReadiness::Invalid(format!(
+                    "source {} has no camera projection",
+                    source.get()
+                ))
+            } else {
+                CameraViewSourcesReadiness::Waiting
+            };
+        }
+    }
+    CameraViewSourcesReadiness::Ready
 }
 
 fn graph_view_sources_readiness(
@@ -373,11 +487,18 @@ struct PendingRuntimeViews {
     snapshots: Vec<WorkspaceRuntimeViewSnapshot>,
     progress_scene_path: Option<String>,
     cameras_restored: bool,
+    camera_retry_requested: bool,
     graphs_restored: std::collections::BTreeSet<u64>,
     graph_retry_requested: bool,
 }
 
 impl PendingRuntimeViews {
+    fn take_camera_retry(&mut self) -> bool {
+        let retry = self.camera_retry_requested;
+        self.camera_retry_requested = false;
+        retry
+    }
+
     fn take_graph_retry(&mut self, signal_descriptors_changed: bool) -> bool {
         let retry = self.graph_retry_requested || signal_descriptors_changed;
         self.graph_retry_requested = false;
@@ -389,7 +510,7 @@ struct RuntimeViewStateProvider;
 
 impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
     fn revision(&self, world: &World) -> u64 {
-        if !project_view_state_enabled(world) {
+        if !lunco_workspace::view_layout_saving_enabled(world) {
             return 0;
         }
         let mut revision = 0xcbf2_9ce4_8422_2325u64;
@@ -420,7 +541,7 @@ impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
     }
 
     fn capture(&self, world: &World) -> Option<WorkspaceRuntimeViewSnapshot> {
-        if !project_view_state_enabled(world) {
+        if !lunco_workspace::view_layout_saving_enabled(world) {
             return None;
         }
         if world
@@ -433,6 +554,9 @@ impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
             .get_resource::<CurrentScenePath>()
             .map(|path| path.0.clone())
             .filter(|path| !path.is_empty())?;
+        if runtime_view_restore_pending(world, &scene_path) {
+            return None;
+        }
         let camera_views = world
             .get_resource::<CameraFeeds>()
             .map(|feeds| {
@@ -485,7 +609,7 @@ impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
     }
 
     fn restore(&self, world: &mut World, snapshots: Vec<WorkspaceRuntimeViewSnapshot>) {
-        let snapshots = if project_view_state_enabled(world) {
+        let snapshots = if lunco_workspace::view_layout_saving_enabled(world) {
             snapshots
         } else {
             Vec::new()
@@ -495,22 +619,32 @@ impl WorkspaceStateViewProvider for RuntimeViewStateProvider {
                 snapshots,
                 progress_scene_path: None,
                 cameras_restored: false,
+                camera_retry_requested: true,
                 graphs_restored: std::collections::BTreeSet::new(),
                 graph_retry_requested: true,
             });
     }
-}
 
-fn project_view_state_enabled(world: &World) -> bool {
-    world
-        .get_resource::<lunco_workspace::WorkspaceResource>()
-        .and_then(|workspace| workspace.active_twin)
-        .and_then(|id| {
-            world
-                .resource::<lunco_workspace::WorkspaceResource>()
-                .project_ui_settings(id)
-        })
-        .is_none_or(|settings| settings.restore_view_state())
+    fn reset(&self, world: &mut World) {
+        let camera_feeds = world
+            .get_resource::<CameraFeeds>()
+            .map(|feeds| feeds.instances.keys().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for feed in camera_feeds {
+            world.trigger(RemoveCameraFeed { feed });
+        }
+        let graph_huds = lunco_viz::graph_hud_workspace_ids(world);
+        for hud in graph_huds {
+            world.trigger(lunco_viz::RemoveGraphHud { hud });
+        }
+        if let Some(mut state) = world.get_resource_mut::<CameraFeedUiState>() {
+            state.layouts.clear();
+            state.bump_revision();
+        }
+        if let Some(mut pending) = world.get_resource_mut::<PendingRuntimeViewRestore>() {
+            pending.0 = None;
+        }
+    }
 }
 
 fn hash_u64(hash: &mut u64, value: u64) {
@@ -953,10 +1087,13 @@ mod tests {
             snapshots: Vec::new(),
             progress_scene_path: None,
             cameras_restored: false,
+            camera_retry_requested: true,
             graphs_restored: Default::default(),
             graph_retry_requested: true,
         };
 
+        assert!(pending.take_camera_retry());
+        assert!(!pending.take_camera_retry());
         assert!(pending.take_graph_retry(false));
         assert!(!pending.take_graph_retry(false));
         assert!(pending.take_graph_retry(true));

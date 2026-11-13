@@ -39,6 +39,9 @@ pub use perspective::{
 pub use registration::{WorkbenchPanelAppExt, WorkbenchPanelRegistry};
 pub use snapshot::WorkbenchSnapshot;
 
+/// Stable identifier of the main scene View perspective.
+pub const VIEW_PERSPECTIVE_ID: &str = "sandbox_view";
+
 /// Ordering boundary for publishing the shell-independent workbench snapshot.
 /// Domain renderers that gate panel-owned work can reconcile after the exact
 /// active-tab set has been published without depending on the concrete shell.

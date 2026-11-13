@@ -929,31 +929,29 @@ restart:
 - **Global, app-wide prefs** (theme, perf HUD, **default window
   geometry**) → one shared `<OS config dir>/lunco/settings.json` via `lunco-settings`
   (§9b). No new file per feature.
-- **Per-project volatile UI state** (active perspective, open-document
-  list, dock arrangements, per-editor presentation views, camera feeds,
-  telemetry graph selections, and their window positions and sizes) → **global storage keyed by
-  a hash of the project path**, *not* written into the Twin folder:
-  `<OS config dir>/lunco/workspace-state/<fnv1a-hex>.json`. This is VS Code's
-  `workspaceStorage/<hash>/` model — repos stay clean, no `.gitignore`
-  churn, and personal layout never leaks into a shared project. A snapshot is
-  read or written only while a Twin is active. With no active Twin, the host
-  uses its startup windows and does not load or save a shared no-folder
-  session.
-`Settings → Project → Restore cameras and graphs` controls runtime view
-restoration; it defaults on and is stored in the project's
-`.lunco/settings.json` under `ui.restore_view_state`. Typed view snapshots are
-kept per loaded scene path, so moving between scenes in a project retains each
-scene's camera source/resolution and window geometry, plus graph signal
-selections and window geometry. Capture waits until scene transitions finish,
-so teardown cannot replace the outgoing scene's layout with empty state.
+- **Per-Twin UI state** (active perspective, open-document list, dock
+  arrangements, per-editor views, camera feeds, graph selections, and window
+  geometry) → `<twin>/.lunco/workspace.json`. The Twin-local `.lunco/` directory
+  is gitignored and moves with the project. A snapshot is read or written only
+  while a Twin is active. With no active Twin, the host uses its startup
+  windows and does not load or save a no-folder session.
+`Settings → Project → Save and restore View layout` controls View-perspective dock state,
+runtime camera and graph windows, and draggable Twin-surface positions. It
+defaults on and uses the project's `.lunco/settings.json` value
+`ui.restore_view_state`. **Reset saved View layout** restores the authored View
+dock and clears the saved camera, graph, and draggable-surface placements.
+Typed view snapshots are kept per loaded scene path, so moving between scenes
+retains each scene's camera source/resolution and window geometry, plus graph
+signal selections and window geometry. Capture waits until scene transitions
+finish, so teardown cannot replace the outgoing scene's layout with empty state.
 Restore keeps unmatched scene snapshots queued, then waits for the matching
-scene to mount and graph sources to publish. Pending graph selections are
-rechecked on signal descriptor changes; admitted scalar channels can open before
-their first sample and display the plot's waiting state. Retired or invalid
-owners are logged and left closed. The
+scene and camera sources to be projected; graph sources are retried when signal
+descriptors change. Admitted scalar channels can open before their first sample
+and display the plot's waiting state. Invalid graph owners are logged and left
+closed. The
 `lunco-workbench-window` crate restores global `WindowGeometry` settings before
 the main `Window` is created. The `lunco-workbench-state` crate owns volatile
-per-Twin `WorkspaceState` loading and saving; the concrete Workbench supplies
+per-Twin `WorkspaceState` loading and saving at `.lunco/workspace.json`; the concrete Workbench supplies
 the dock adapter and the UI host supplies the typed camera/graph adapter.
 Snapshot reads, serialization, and writes run on Bevy's task pool through the
 existing `lunco-storage` boundary, so disk work does not block the UI thread.
@@ -1146,9 +1144,8 @@ minimum width.
 **Don't** invent per-feature JSON files for new settings. **Do**
 keep the intentional exceptions separate, each for a documented
 reason: `recents.json` (different lifetime / churn), the planned
-`layouts.toml` (TOML schema, structural), and
-`workspace-state/<hash>.json` (per-project, path-keyed, high-churn —
-the VS Code `workspaceStorage` analog in §9).
+`layouts.toml` (TOML schema, structural), and each Twin's
+`.lunco/workspace.json` (volatile, high-churn session state; see §9).
 
 #### 9b.1 Multi-level namespacing
 

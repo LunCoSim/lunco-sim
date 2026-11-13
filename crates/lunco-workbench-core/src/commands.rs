@@ -63,6 +63,13 @@ pub struct ActivatePerspective {
 #[Command(default)]
 pub struct ResetWorkspaceLayout {}
 
+/// Reset the active Twin's View dock, camera/graph windows, and surface positions.
+#[Command]
+pub struct ResetTwinViewLayout {
+    /// Exact active Twin whose saved View layout is being cleared.
+    pub twin: u64,
+}
+
 /// Constrain the shell to an authored perspective, or release the constraint.
 #[Command(default)]
 pub struct SetRequiredPerspective {

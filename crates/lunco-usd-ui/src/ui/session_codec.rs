@@ -1,7 +1,7 @@
 //! USD side of workbench document hot-exit (VSCode-style session restore).
 //!
 //! Open USD documents and their primary preview tabs are stored in the
-//! per-Twin `workspace-state` file. Dirty buffers restore from that snapshot;
+//! Twin-local `.lunco/workspace.json`. Dirty buffers restore from that snapshot;
 //! clean file-backed buffers refresh from disk during background preparation.
 
 use std::collections::HashMap;

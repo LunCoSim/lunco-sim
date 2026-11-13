@@ -3,7 +3,7 @@
 //!
 //! Registers a [`DocumentSessionCodec`] so `lunco-workbench-state` can capture
 //! every persistable Modelica document's **live editor buffer** into the
-//! per-Twin `workspace-state` file and recreate it on next launch — the
+//! Twin-local `.lunco/workspace.json` and recreate it on next launch — the
 //! buffer is the source of truth, so unsaved edits survive a restart.
 //!
 //! Restore replays [`ModelicaDocuments::restore`],

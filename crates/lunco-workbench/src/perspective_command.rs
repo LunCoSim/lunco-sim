@@ -4,8 +4,10 @@
 
 use bevy::prelude::*;
 use lunco_core::{on_command, register_commands};
+use lunco_workbench_core::PerspectiveId;
 use lunco_workbench_core::commands::{
-    ActivatePerspective, ResetToDefaultPerspective, ResetWorkspaceLayout, SetRequiredPerspective,
+    ActivatePerspective, ResetToDefaultPerspective, ResetTwinViewLayout, ResetWorkspaceLayout,
+    SetRequiredPerspective,
 };
 use lunco_workbench_layout::WorkbenchLayout;
 
@@ -78,6 +80,39 @@ fn on_reset_workspace_layout(
     info!("[ResetWorkspaceLayout] dock reset to active perspective preset");
 }
 
+#[on_command(ResetTwinViewLayout)]
+fn on_reset_twin_view_layout(
+    trigger: On<ResetTwinViewLayout>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    layout: Option<ResMut<WorkbenchLayout>>,
+    mut snapshot: Option<ResMut<crate::WorkbenchSnapshot>>,
+    mut commands: Commands,
+) {
+    let twin = trigger.event().twin;
+    if workspace
+        .as_deref()
+        .and_then(|workspace| workspace.active_twin)
+        .map(|active| active.raw())
+        != Some(twin)
+    {
+        warn!("[ResetTwinViewLayout] ignored reset for inactive Twin {twin}");
+        return;
+    }
+
+    if let Some(mut layout) = layout {
+        layout.reset_perspective_layout(PerspectiveId::new(
+            lunco_workbench_core::VIEW_PERSPECTIVE_ID,
+        ));
+        if let Some(snapshot) = snapshot.as_deref_mut() {
+            if let Some(next) = crate::snapshot_for_layout_if_changed(&layout, snapshot) {
+                *snapshot = next;
+            }
+        }
+    }
+    commands.trigger(lunco_workbench_state::ResetWorkspaceRuntimeViews { twin });
+    info!("[ResetTwinViewLayout] cleared Twin View layout");
+}
+
 #[on_command(SetRequiredPerspective)]
 fn on_set_required_perspective(
     trigger: On<SetRequiredPerspective>,
@@ -109,6 +144,7 @@ fn on_reset_to_default_perspective(
 register_commands!(
     on_activate_perspective,
     on_reset_workspace_layout,
+    on_reset_twin_view_layout,
     on_set_required_perspective,
     on_reset_to_default_perspective,
 );

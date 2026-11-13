@@ -147,7 +147,10 @@ See [camera image controls](../../docs/architecture/render-decoupling.md#camera-
 for owners, shader bindings, physical scope and completion events. Verify both
 actual rendered depth/noise and negative `SetCameraImageEffects` admissions;
 a successful allocation is not pixel evidence. UI draft/search state belongs
-to the scene resource. Camera selection/viewing never toggles physical power.
+to the scene resource. Camera and graph windows restore their per-scene source,
+selection, size and position from the active Twin's `.lunco/workspace.json`.
+Settings → Project controls **Save and restore View layout** and **Reset saved View layout**.
+Camera selection/viewing never toggles physical power.
 
 The performance status bar consumes the execution owner's
 `engine-health.modelica_worker_ms_per_physics_step` and displays milliseconds per

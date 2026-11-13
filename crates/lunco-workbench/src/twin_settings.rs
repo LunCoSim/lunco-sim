@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_twin::TwinSettingValue;
+use lunco_workbench_core::commands::ResetTwinViewLayout;
 use lunco_workbench_widgets::{UiIcon, icon_button, text_editor};
 use lunco_workspace::{
     PhysicsEscapeGuardSettings, ResetTwinSetting, SceneLoadingCli, SceneLoadingSettings,
@@ -308,18 +309,18 @@ fn render_project_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
         ui.label(format!("Could not save project setting: {error}"));
     }
     ui.separator();
-    let restore_selected = match project_ui.restore_view_state {
+    let save_view_layout_selected = match project_ui.restore_view_state {
         None => "On (default)",
         Some(true) => "On",
         Some(false) => "Off",
     };
-    let mut restore_view_state = project_ui.restore_view_state;
-    let restore_changed = ui
+    let mut save_view_layout = project_ui.restore_view_state;
+    let save_view_layout_changed = ui
         .add_enabled_ui(!pending, |ui| {
             crate::render::settings_choice_menu(
                 ui,
-                format!("Restore cameras and graphs: {restore_selected}"),
-                &mut restore_view_state,
+                format!("Save and restore View layout: {save_view_layout_selected}"),
+                &mut save_view_layout,
                 [
                     (None, "On (default)".into()),
                     (Some(true), "On".into()),
@@ -328,16 +329,25 @@ fn render_project_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
             )
         })
         .inner;
-    if restore_changed {
+    if save_view_layout_changed {
         ctx.trigger_command(
             SetProjectViewStateRestoration {
                 twin: id.raw(),
-                value: restore_view_state,
+                value: save_view_layout,
             },
             local_user(),
         );
     }
-    ui.label("Camera views, telemetry graphs, and their window layouts are restored for this project by default.");
+    ui.label("View layout is saved in this Twin's .lunco folder. Camera views and telemetry graphs reopen with their saved selection and window layout.");
+    if ui
+        .add_enabled(!pending, egui::Button::new("Reset saved View layout"))
+        .on_hover_text(
+            "Restore the authored View dock and clear camera, graph, and surface positions.",
+        )
+        .clicked()
+    {
+        ctx.trigger_command(ResetTwinViewLayout { twin: id.raw() }, local_user());
+    }
     ui.separator();
     ui.label("Finite world escape containment");
     let Some(system_physics) = ctx.resource::<PhysicsEscapeGuardSettings>() else {

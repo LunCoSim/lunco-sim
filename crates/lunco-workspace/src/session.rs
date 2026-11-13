@@ -39,6 +39,14 @@ impl WorkspaceResource {
     }
 }
 
+/// Whether the active Twin's View layout should be saved and restored.
+/// Hosts without a workspace resource use the enabled default.
+pub fn view_layout_saving_enabled(world: &World) -> bool {
+    world
+        .get_resource::<WorkspaceResource>()
+        .is_none_or(|workspace| workspace.view_layout_saving_enabled())
+}
+
 impl Deref for WorkspaceResource {
     type Target = Workspace;
     fn deref(&self) -> &Workspace {

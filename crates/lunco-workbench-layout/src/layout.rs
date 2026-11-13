@@ -898,6 +898,24 @@ impl WorkbenchLayout {
         }
     }
 
+    /// Reset one registered perspective to its authored layout without
+    /// changing the currently active perspective.
+    pub fn reset_perspective_layout(&mut self, id: PerspectiveId) -> bool {
+        if !self
+            .perspectives
+            .iter()
+            .any(|perspective| perspective.id() == id)
+        {
+            return false;
+        }
+        if self.active_perspective.as_ref() == Some(&id) {
+            self.reset_to_default_layout();
+        } else {
+            self.dock_cache.remove(&id);
+        }
+        true
+    }
+
     /// Reset the entire workbench presentation to its first-registered
     /// perspective and its authored slot preset. This is stronger than
     /// [`Self::reset_to_default_layout`]: opening a guided guided must not

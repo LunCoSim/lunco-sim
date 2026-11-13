@@ -64,7 +64,7 @@ pub use scene_settings::{
 };
 pub use session::{
     DocumentClosed, DocumentOpened, FileRenamed, RegisterDocument, TwinAdded, TwinClosed,
-    UnregisterDocument, WorkspacePlugin, WorkspaceResource,
+    UnregisterDocument, WorkspacePlugin, WorkspaceResource, view_layout_saving_enabled,
 };
 pub use ui_settings::ProjectUiSettings;
 
@@ -587,9 +587,17 @@ impl Workspace {
         self.project_physics_escape_settings.get(&id)
     }
 
-    /// Local runtime-view persistence setting loaded for this Twin.
+    /// Local View-layout persistence override loaded for this Twin.
     pub fn project_ui_settings(&self, id: TwinId) -> Option<&ProjectUiSettings> {
         self.project_ui_settings.get(&id)
+    }
+
+    /// Whether the active Twin's View dock, camera windows, and graph windows
+    /// should be saved and restored.
+    pub fn view_layout_saving_enabled(&self) -> bool {
+        self.active_twin
+            .and_then(|id| self.project_ui_settings(id))
+            .is_none_or(ProjectUiSettings::save_view_layout)
     }
 
     /// Automatic-loading decision captured when this Twin was opened.

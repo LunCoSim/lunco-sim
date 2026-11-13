@@ -36,10 +36,9 @@
 //! - **Window geometry** (size / position / maximized) — global default
 //!   in the OS config directory via `lunco-settings`. See
 //!   [`lunco_workbench_window::WindowPersistencePlugin`].
-//! - **Per-Twin UI state** (active perspective + open-document list) —
-//!   `workspace-state/<hash>.json` in the shared LunCoSim config directory,
-//!   keyed by Twin path,
-//!   VSCode-`workspaceStorage` style. See [`lunco_workbench_state`].
+//! - **Per-Twin UI state** (active perspective, open documents, dock trees,
+//!   runtime views) — `<twin>/.lunco/workspace.json`. See
+//!   [`lunco_workbench_state`].
 //!
 //! Dock trees and per-perspective instance-center intent are persisted by
 //! `lunco-workbench-state`; user rearrangements survive policy reevaluation.
@@ -846,10 +845,9 @@ impl Plugin for WorkbenchPlugin {
         if !app.is_plugin_added::<lunco_workbench_window::WindowPersistencePlugin>() {
             app.add_plugins(lunco_workbench_window::WindowPersistencePlugin);
         }
-        // Per-Twin (per-project) volatile UI state — active perspective +
-        // open-document list — keyed by Twin path, VSCode `workspaceStorage`
-        // style. Persistence is a reusable capability; this adapter is the
-        // only concrete-shell bridge for dock capture and restore.
+        // Per-Twin volatile UI state. Persistence is a reusable capability;
+        // this adapter is the concrete-shell bridge for dock capture and
+        // restore.
         if !app.is_plugin_added::<lunco_workbench_state::WorkspaceStatePlugin>() {
             app.add_plugins(lunco_workbench_state::WorkspaceStatePlugin::new(
                 WorkbenchLayoutStateProvider,

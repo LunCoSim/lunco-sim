@@ -196,7 +196,7 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 
 | Crate | Responsibility |
 | :--- | :--- |
-| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance-tab identity and restoration contracts, tab/source-view commands, typed registered/native source drag addresses, scene display state, pending close state, panel registration, runtime-owned perspective identities, layout admission/plans, menu contributions, generic empty-viewport actions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
+| **`lunco-workbench-core`** | Renderer-independent workbench contracts: `Panel`/`PanelCtx`, instance-tab identity and restoration contracts, tab/source-view commands, typed registered/native source drag addresses, scene display state, pending close state, panel registration, runtime-owned perspective identities, the stable `VIEW_PERSPECTIVE_ID`, layout admission/plans, menu contributions, generic empty-viewport actions, the published `WorkbenchSnapshot`, and shell scheduling labels. It uses the Bevy ECS substrate and egui types but does not pull `bevy_render`, `bevy_egui`, `egui_dock`, storage, or window/render services. |
 | **`lunco-viewport-core`** | Small renderer-independent measured viewport geometry contract. Owns the physical-pixel `PanelRect` value shared by scene, camera, editor, and shell adapters without coupling that value to egui or the Workbench implementation. |
 | **`lunco-workbench-widgets`** | Shell-independent egui presentation primitives: semantic vector icons, standard text editors, and consistent hierarchy rows styled by `Theme.typography.tree`. Recursive and header-only branches share disclosure state; virtualized trees allocate only a fixed-height header. Lightweight panel crates use it without linking the concrete dock shell. |
 | **`lunco-workbench-layout`** | Renderer-independent `egui_dock` layout state: perspective registration/activation, live and cached tab retirement, view-owned instance restoration, dock snapshots, panel placement, split sanitization, and scene-interaction synchronization. It consumes workbench contracts/state without the concrete Bevy/egui shell. |
@@ -1321,11 +1321,12 @@ their primary window; the concrete Workbench composes its command and
 persistence plugins but does not re-export their APIs.
 
 **`lunco-workbench-state`**
-Reusable per-Twin session-state capability. It owns the persisted document,
-dock, and runtime-surface schemas, domain codec registry, storage-backed
-load/save lifecycle, and the layout-provider contract. The concrete Workbench
-implements that contract for `egui_dock`; state consumers import these APIs
-directly rather than through the shell.
+Reusable per-Twin session-state capability stored in `<twin>/.lunco/workspace.json`.
+It owns persisted document, dock, runtime-surface, camera and graph view schemas,
+the domain codec registry, storage-backed load/save lifecycle, and the
+layout-provider contract. The concrete Workbench implements that contract for
+`egui_dock`; state consumers import these APIs directly rather than through the
+shell.
 
 **`lunco-workbench-browser`**
 Reusable navigation feature for a rendered host. It owns the Twin browser and selected file/library/domain

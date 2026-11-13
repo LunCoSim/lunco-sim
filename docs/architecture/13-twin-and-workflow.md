@@ -38,7 +38,7 @@ constellation, an electrical subsystem study. On disk:
 my_lunar_base/              ← a Twin
 ├── twin.toml               ← tool manifest (the only file required to BE a Twin)
 ├── ... (domain-standard files — structure is flexible)
-└── .lunco/                 ← session / workspace state (gitignored)
+└── .lunco/                 ← local settings + workspace.json (gitignored)
 ```
 
 ### The two-file strategy
@@ -432,17 +432,19 @@ current workspace. `SetProjectSceneLoading` writes or removes the project
 override; `GetSceneLoadingSettings` reports the scopes, the next-open decision,
 the admitted decision, and the runtime scene override.
 
-#### Runtime view restoration
+#### View layout
 
-`ui.restore_view_state` is a project-local override in the same file. It
-defaults to `true`; **Settings → Project → Restore cameras and graphs** can
-turn it off or return it to the default. The toggle controls whether scenes in
-the project restore camera feeds, selected graph channels, and window
-sizes/positions. Each scene has its own view snapshot. Those snapshots remain
-personal workspace state in the user's project-keyed workspace store, not in
-USD or the shared Twin. Scene switching retains unmatched snapshots; capture
-runs after the scene transition commits so teardown cannot save an empty layout
-under the outgoing scene path.
+`ui.restore_view_state` is the project-local setting for saving and restoring
+the View layout. It defaults to `true`; **Settings → Project → Save and restore
+View layout** can turn it off or return it to the default. It controls the View dock,
+camera feeds, selected graph channels, draggable Twin-surface positions, and
+window sizes/positions. The complete per-Twin session is stored in
+`.lunco/workspace.json`, while the setting remains in `.lunco/settings.json`.
+Each scene has its own camera and graph snapshot. Scene switching retains
+unmatched snapshots; capture runs after the scene transition commits so teardown
+cannot save an empty layout under the outgoing scene path. The **Reset saved
+View layout** action restores the authored View dock and clears saved camera,
+graph, and draggable-surface placements.
 
 ```json
 { "ui": { "restore_view_state": false } }

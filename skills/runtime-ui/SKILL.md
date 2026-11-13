@@ -397,14 +397,16 @@ Manifest reconciliation prunes unknown surface ids, and `TwinClosed` clears the
 in-memory layout scope.
 
 Native camera-feed windows and telemetry graph HUDs also persist their
-selection and logical-point size/position in per-project workspace state.
-Snapshots are kept per scene path and restored after the matching scene mounts;
+selection and logical-point size/position in the Twin's
+`.lunco/workspace.json`. Snapshots are kept per scene path and restored after
+the matching scene mounts; camera restore waits for its source projection,
 switching scenes retains each one's layout, capture waits for scene transitions
 to commit, and graph views wait for their scalar sources to publish. **Settings →
-Project → Restore cameras and graphs** defaults on and stores the project
-override as `ui.restore_view_state` in `.lunco/settings.json`. Keep capture and
-restore in the UI view owners, with the workspace-state adapter carrying
-typed snapshot records across process runs.
+Project → Save and restore View layout** defaults on and stores the project override as
+`ui.restore_view_state` in `.lunco/settings.json`. **Reset saved View layout**
+restores the authored View dock and clears camera, graph, and draggable-surface
+placements. Keep capture and restore in the UI view owners, with the
+workspace-state adapter carrying typed snapshot records across process runs.
 
 Script-driven hint/objective/action cards belong to `lunco-workbench-guided-ui`.
 Omitting `hud` uses the calling script's card; unscripted API/REPL input uses

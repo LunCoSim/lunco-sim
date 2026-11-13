@@ -158,7 +158,7 @@ pub struct SetProjectPhysicsEscapeGuard {
     pub value: Option<bool>,
 }
 
-/// Request a local project override for restoring camera and graph views.
+/// Request a local project override for saving and restoring the View layout.
 #[lunco_core::Command(default)]
 pub struct SetProjectViewStateRestoration {
     /// Twin whose project settings are being edited.

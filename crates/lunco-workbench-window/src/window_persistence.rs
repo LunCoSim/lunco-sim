@@ -5,8 +5,8 @@
 //! file under the `"window"` key, via
 //! [`lunco_settings`] — the canonical home for persisted user
 //! preferences (AGENTS.md §3). Per-Twin window bounds layer on top in the
-//! concrete Workbench's workspace-state capability (VSCode's
-//! `workspaceStorage`); this module owns only the global baseline.
+//! concrete Workbench's Twin-local `.lunco/workspace.json`; this module owns
+//! only the global baseline.
 //!
 //! ## Restore happens before the window exists
 //!

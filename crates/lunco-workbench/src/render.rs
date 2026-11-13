@@ -4699,7 +4699,9 @@ mod tests {
     #[test]
     fn perspective_help_anchor_uses_the_registered_id() {
         assert_eq!(
-            perspective_help_anchor(PerspectiveId::new("sandbox_view")),
+            perspective_help_anchor(PerspectiveId::new(
+                lunco_workbench_core::VIEW_PERSPECTIVE_ID,
+            )),
             "menu.perspective.sandbox_view"
         );
     }

@@ -16,7 +16,9 @@ use lunco_modelica_ui::ModelicaWorkbenchPlugin;
 use lunco_usd_bevy_camera::camera_switch::{CameraSelectionStatus, ObserveAvatar};
 use lunco_workbench_core::presentation::{ViewportPlaceholder, ViewportPlaceholderAction};
 use lunco_workbench_core::scene::{CurrentSceneName, CurrentScenePath};
-use lunco_workbench_core::{PanelCtx, WorkbenchMenuRegistry, WorkbenchSnapshot};
+use lunco_workbench_core::{
+    PanelCtx, VIEW_PERSPECTIVE_ID, WorkbenchMenuRegistry, WorkbenchSnapshot,
+};
 
 mod camera_feed;
 mod camera_feed_images;
@@ -514,7 +516,9 @@ impl Plugin for LunCoSimUiPlugin {
         install_runtime_ui_dropdown_state(app);
         dataset_provisioning::install(app);
         app.insert_resource(lunco_workbench_guided_ui::GuidedHudVisibility {
-            visible_in_perspective: Some(lunco_workbench_core::PerspectiveId::new("sandbox_view")),
+            visible_in_perspective: Some(lunco_workbench_core::PerspectiveId::new(
+                VIEW_PERSPECTIVE_ID,
+            )),
         });
         // `lunco_render_bevy::LuncoRenderPlugin` owns the wireframe pass used by
         // per-prim contour display. Keep it at the render boundary so this UI
@@ -539,7 +543,7 @@ impl Plugin for LunCoSimUiPlugin {
         if has_explicit_scene {
             app.insert_resource(
                 lunco_workbench_state::WorkspaceStateRestorePolicy::with_initial_perspective(
-                    "sandbox_view",
+                    VIEW_PERSPECTIVE_ID,
                 ),
             );
         }
@@ -751,7 +755,10 @@ fn update_runtime_ui_gates(
     }
     *initialized = true;
     let in_view = layout.is_some_and(|value| {
-        value.active_perspective() == Some(lunco_workbench_core::PerspectiveId::new("sandbox_view"))
+        value.active_perspective()
+            == Some(lunco_workbench_core::PerspectiveId::new(
+                VIEW_PERSPECTIVE_ID,
+            ))
     });
     let overlay_enabled = overlays.is_some_and(|value| value.view_switcher);
     let recording = recording.is_some_and(|value| value.active);
@@ -767,7 +774,9 @@ fn recording_offline(
 fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
     layout.is_some_and(|layout| {
         layout.active_perspective()
-            == Some(lunco_workbench_core::PerspectiveId::new("sandbox_view"))
+            == Some(lunco_workbench_core::PerspectiveId::new(
+                VIEW_PERSPECTIVE_ID,
+            ))
     })
 }
 
@@ -1273,7 +1282,9 @@ fn draw_runtime_ui_dropdowns(
 ) {
     if !layout.is_some_and(|layout| {
         layout.active_perspective()
-            == Some(lunco_workbench_core::PerspectiveId::new("sandbox_view"))
+            == Some(lunco_workbench_core::PerspectiveId::new(
+                VIEW_PERSPECTIVE_ID,
+            ))
     }) {
         dropdowns.close();
         return;
