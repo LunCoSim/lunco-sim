@@ -21,11 +21,16 @@ This policy covers Windows x86_64 LunCoSim releases built by the manual
 
 ## Test builds
 
-Test signing uses a separate test policy and certificate. Test-signed files are
-published only as temporary GitHub Actions artifacts and never as GitHub
-releases or updater packages. A self-signed test certificate is not trusted by
-Windows by default; only test it on an isolated Windows machine after
-installing that certificate in the appropriate trust stores.
+Test signing uses a separate test policy and certificate. `signing_mode=test`
+produces Actions artifacts only. For a downloadable test build, use
+`signing_mode=test-release` with `make_release=true` and an explicit development
+version based on the current app version, such as `0.6.0-dev.1`. This publishes
+a GitHub prerelease and matching updater prerelease; neither is marked latest.
+The Windows installer and updater payload use the test certificate; Linux and
+macOS installers are unsigned by this policy. Release notes identify the test
+certificate. A self-signed test certificate is not trusted by Windows by
+default; only test it on an isolated Windows machine after installing that
+certificate in the appropriate trust stores.
 
 ## Signature coverage
 

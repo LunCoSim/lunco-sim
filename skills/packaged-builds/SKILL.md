@@ -36,12 +36,17 @@ The workflow submits one ZIP containing the Windows executable and MSI to
 SignPath. Its artifact configuration signs the executable, the executable
 embedded in the MSI, and the MSI. It then repacks the Velopack update from the
 signed executable so the full update package contains the signed binary.
-`signing_mode=test` uses a test signing policy and produces Actions artifacts
-only; that certificate must be trusted on the isolated test machine.
-`signing_mode=off` produces unsigned sample artifacts for initial configuration.
-Only `signing_mode=release` can publish the human installers and updater feed.
-Production release signing runs from `main` and waits up to two hours for the
-SignPath approval before downloading and verifying the signed files.
+`signing_mode=test` uses the test policy and produces Actions artifacts only.
+Use `signing_mode=test-release` with `make_release=true` and an explicit
+development version to publish a prerelease with a Windows test-signed
+installer and updater feed; Linux and macOS installers are unsigned by this
+policy. The Windows test certificate must be trusted on an isolated test
+machine. Test prereleases do not become the latest GitHub release. `signing_mode=off`
+produces unsigned sample artifacts and cannot publish. `signing_mode=release`
+uses the production policy, allocates the next version automatically, and can
+publish the production-signed release. Published builds run from `main`.
+SignPath requests wait up to two hours for approval before downloading and
+verifying the signed files.
 
 Configure these repository settings before dispatching a signed build:
 

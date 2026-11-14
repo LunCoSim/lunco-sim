@@ -66,18 +66,38 @@ class DevReleaseContractTests(unittest.TestCase):
         self.assertIn('scripts/msi_version.py --check-published "$version"', workflow)
         self.assertIn("Release versions are allocated automatically", workflow)
         self.assertIn("LunCoSim/lunco-sim-updates", workflow)
-        self.assertIn("if: needs.meta.outputs.signing_mode == 'release' && inputs.make_release", workflow)
+        self.assertIn(
+            "if: inputs.make_release && (needs.meta.outputs.signing_mode == 'release' || needs.meta.outputs.signing_mode == 'test-release')",
+            workflow,
+        )
         self.assertIn("build_matrix: ${{ steps.metadata.outputs.build_matrix }}", workflow)
         self.assertIn("matrix: ${{ fromJSON(needs.meta.outputs.build_matrix) }}", workflow)
-        self.assertIn('if $signing_mode == "release" then . else map(select(.platform == "windows")) end', workflow)
+        self.assertIn(
+            'if $signing_mode == "release" or $signing_mode == "test-release" then . else map(select(.platform == "windows")) end',
+            workflow,
+        )
         self.assertNotIn(
             "if: needs.meta.outputs.signing_mode == 'release' || matrix.platform == 'windows'",
             workflow,
         )
         self.assertIn("contents: read", workflow)
         self.assertIn("contents: write", workflow)
-        self.assertIn("Test/off signing modes only create Actions artifacts", workflow)
+        self.assertIn("Test mode creates Actions artifacts only", workflow)
+        self.assertIn("select test-release to publish a test-signed prerelease", workflow)
+        self.assertIn("Unsigned sample artifacts cannot be published", workflow)
+        self.assertIn("test-release requires make_release=true", workflow)
+        self.assertIn(
+            '"$base_version-dev."[1-9]*) ;;',
+            workflow,
+        )
         self.assertIn("Published releases must be dispatched from the main branch", workflow)
+        self.assertIn("Production release signing and test signing must use different policies", workflow)
+        self.assertIn("SIGNPATH_TEST_POLICY_SLUG", workflow)
+        self.assertIn("SIGNPATH_RELEASE_POLICY_SLUG", workflow)
+        self.assertIn(
+            "(needs.meta.outputs.signing_mode == 'test' || needs.meta.outputs.signing_mode == 'test-release') && vars.SIGNPATH_TEST_POLICY_SLUG",
+            workflow,
+        )
 
     def test_one_signpath_request_covers_exe_msi_and_velopack_payload(self) -> None:
         workflow = (ROOT / ".github/workflows/dev.yml").read_text(encoding="utf-8")
@@ -124,6 +144,9 @@ class DevReleaseContractTests(unittest.TestCase):
         self.assertIn('gh release upload "$RELEASE_TAG"', workflow)
         self.assertIn("--latest=false", workflow)
         self.assertIn("--latest=true", workflow)
+        self.assertIn("Windows files and updater payloads use the test signing certificate", workflow)
+        self.assertIn('if [[ "$SIGNING_MODE" == test-release ]]; then', workflow)
+        self.assertIn("--prerelease \\\n              --latest=false", workflow)
         self.assertNotIn("--clobber", workflow)
 
     def test_release_notes_describe_a_signed_dev_release_without_updater_mechanics(self) -> None:

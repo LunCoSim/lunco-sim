@@ -28,15 +28,16 @@ on:
         type: boolean
         default: true
       signing_mode:
-        description: 'Release signs with the production policy; test signs an Actions-only artifact; off creates a sample bundle for SignPath setup.'
+        description: 'release uses production signing; test creates Actions artifacts; test-release publishes a prerelease with Windows test signing; off creates an unsigned sample bundle.'
         type: choice
         options:
           - release
           - test
+          - test-release
           - off
         default: release
       release_version:
-        description: 'SemVer2 version for test/off runs (for example 0.6.0-dev.1); release mode allocates the next version automatically.'
+        description: 'SemVer2 version for test/test-release/off runs (for example 0.6.0-dev.1); release mode allocates the next version automatically.'
         type: string
         required: false
 
@@ -83,19 +84,27 @@ jobs:
           signing_mode="${SIGNING_MODE_INPUT:-release}"
 
           case "$signing_mode" in
-            release|test|off) ;;
+            release|test|test-release|off) ;;
             *) echo "Invalid signing mode: '$signing_mode'" >&2; exit 1 ;;
           esac
-          if [[ "$signing_mode" != release && "$MAKE_RELEASE_INPUT" != false ]]; then
-            echo "Test/off signing modes only create Actions artifacts; set make_release=false." >&2
+          if [[ "$signing_mode" == test && "$MAKE_RELEASE_INPUT" != false ]]; then
+            echo "Test mode creates Actions artifacts only; select test-release to publish a test-signed prerelease." >&2
             exit 1
           fi
-          if [[ "$signing_mode" == release && "$MAKE_RELEASE_INPUT" == true && "$REF_NAME" != refs/heads/main ]]; then
+          if [[ "$signing_mode" == test-release && "$MAKE_RELEASE_INPUT" != true ]]; then
+            echo "test-release requires make_release=true." >&2
+            exit 1
+          fi
+          if [[ "$signing_mode" == off && "$MAKE_RELEASE_INPUT" != false ]]; then
+            echo "Unsigned sample artifacts cannot be published; set make_release=false." >&2
+            exit 1
+          fi
+          if [[ "$MAKE_RELEASE_INPUT" == true && "$REF_NAME" != refs/heads/main ]]; then
             echo "Published releases must be dispatched from the main branch." >&2
             exit 1
           fi
 
-          # Test/off runs build only Windows; release runs build every desktop target.
+          # Artifact-only test/off runs build Windows; published test and production releases build every target.
           build_matrix=$(jq -cn --arg signing_mode "$signing_mode" '
             [
               {
@@ -123,7 +132,7 @@ jobs:
                 cross_target: ""
               }
             ]
-            | {include: (if $signing_mode == "release" then . else map(select(.platform == "windows")) end)}
+            | {include: (if $signing_mode == "release" or $signing_mode == "test-release" then . else map(select(.platform == "windows")) end)}
           ')
 
           {
@@ -163,6 +172,15 @@ jobs:
             if [ -z "$RELEASE_VERSION_INPUT" ]; then
               echo "Test/off runs require an explicit release_version, for example 0.6.0-dev.1." >&2
               exit 1
+            fi
+            if [[ "$SIGNING_MODE" == test-release ]]; then
+              case "$RELEASE_VERSION_INPUT" in
+                "$base_version-dev."[1-9]*) ;;
+                *)
+                  echo "Test releases require a development version based on $base_version, for example $base_version-dev.1." >&2
+                  exit 1
+                  ;;
+              esac
             fi
             version="$RELEASE_VERSION_INPUT"
           fi
@@ -476,12 +494,16 @@ jobs:
               exit 1
             fi
           done
-          if [ "$SIGNING_MODE" = test ] && [ -z "$SIGNPATH_TEST_POLICY_SLUG" ]; then
+          if [[ "$SIGNING_MODE" == test || "$SIGNING_MODE" == test-release ]] && [ -z "$SIGNPATH_TEST_POLICY_SLUG" ]; then
             echo "GitHub variable SIGNPATH_TEST_POLICY_SLUG is required for test signing." >&2
             exit 1
           fi
           if [ "$SIGNING_MODE" = release ] && [ -z "$SIGNPATH_RELEASE_POLICY_SLUG" ]; then
             echo "GitHub variable SIGNPATH_RELEASE_POLICY_SLUG is required for release signing." >&2
+            exit 1
+          fi
+          if [ "$SIGNING_MODE" = release ] && [ "$SIGNPATH_RELEASE_POLICY_SLUG" = "$SIGNPATH_TEST_POLICY_SLUG" ]; then
+            echo "Production release signing and test signing must use different policies; use test-release for test certificates." >&2
             exit 1
           fi
 
@@ -492,7 +514,7 @@ jobs:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
           project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
-          signing-policy-slug: ${{ needs.meta.outputs.signing_mode == 'test' && vars.SIGNPATH_TEST_POLICY_SLUG || vars.SIGNPATH_RELEASE_POLICY_SLUG }}
+          signing-policy-slug: ${{ (needs.meta.outputs.signing_mode == 'test' || needs.meta.outputs.signing_mode == 'test-release') && vars.SIGNPATH_TEST_POLICY_SLUG || vars.SIGNPATH_RELEASE_POLICY_SLUG }}
           artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
           github-artifact-id: ${{ steps.upload-signpath-input.outputs.artifact-id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -598,11 +620,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── Optional: publish a signed development release ─────────────────────
+  # ── Optional: publish a signed development release or test prerelease ───
   release:
     needs: [meta, build]
     runs-on: ubuntu-latest
-    if: needs.meta.outputs.signing_mode == 'release' && inputs.make_release
+    if: inputs.make_release && (needs.meta.outputs.signing_mode == 'release' || needs.meta.outputs.signing_mode == 'test-release')
     permissions:
       contents: write
       actions: read
@@ -633,6 +655,7 @@ jobs:
           RELEASE_DATE: ${{ needs.meta.outputs.date }}
           RELEASE_TAG: ${{ needs.meta.outputs.release_tag }}
           RELEASE_VERSION: ${{ needs.meta.outputs.version }}
+          SIGNING_MODE: ${{ needs.meta.outputs.signing_mode }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           MAIN_GH_TOKEN: ${{ github.token }}
           UPDATES_GH_TOKEN: ${{ secrets.LUNCOSIM_UPDATES_TOKEN }}
@@ -666,6 +689,14 @@ jobs:
             --release-date "$RELEASE_DATE" \
             --repo-url "$REPO_URL" \
             --output release_notes.md
+          if [[ "$SIGNING_MODE" == test-release ]]; then
+            cat >> release_notes.md <<'EOF'
+
+          ## Test signature
+
+          Windows files and updater payloads use the test signing certificate. Windows may report the signer as untrusted unless that certificate is trusted on an isolated test machine. Do not use this build for general distribution.
+          EOF
+          fi
 
           # Check for an existing immutable traceability tag before asking the
           # Release API to create it. A rerun must use a new release tag rather
@@ -730,13 +761,20 @@ jobs:
           GH_TOKEN="$MAIN_GH_TOKEN" gh release upload "$RELEASE_TAG" \
             "${release_assets[@]}"
 
-          # Publish the complete updater release first. The human-facing
-          # development release is the final success marker testers see.
+          # Publish the complete updater release first. Test-signed human
+          # releases remain prereleases; production-signed releases are latest.
           GH_TOKEN="$UPDATES_GH_TOKEN" gh release edit "$RELEASE_TAG" \
             --repo "$UPDATES_REPOSITORY" \
             --draft=false \
             --prerelease \
             --latest=false
-          GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG" \
-            --draft=false \
-            --latest=true
+          if [[ "$SIGNING_MODE" == test-release ]]; then
+            GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG" \
+              --draft=false \
+              --prerelease \
+              --latest=false
+          else
+            GH_TOKEN="$MAIN_GH_TOKEN" gh release edit "$RELEASE_TAG" \
+              --draft=false \
+              --latest=true
+          fi
