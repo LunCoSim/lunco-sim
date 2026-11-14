@@ -141,7 +141,15 @@ pub fn apply_joint_torque_actuators(
             speed_contracts,
             [actuator.bearing_heat_port, actuator.brake_heat_port]
                 .map(|endpoint| endpoint.and_then(|entity| q_contracts.get(entity).ok())),
-        ) {
+        )
+        .and_then(|_| {
+            validate_local_brake_contract(
+                actuator,
+                actuator
+                    .brake_input
+                    .and_then(|endpoint| q_contracts.get(endpoint).ok()),
+            )
+        }) {
             reject_joint_torque_coupling(
                 faults.as_deref_mut(),
                 holds.as_deref_mut(),
@@ -246,6 +254,26 @@ pub fn apply_joint_torque_actuators(
             );
             return;
         }
+        let local_brake = actuator
+            .brake_input
+            .and_then(|endpoint| q_ports.p0().get(endpoint).ok().map(|port| port.value));
+        let braking = match actuator.brake_requested(
+            q_inputs
+                .get(actuator.control_entity)
+                .is_ok_and(|inputs| inputs.brake_active),
+            local_brake,
+        ) {
+            Ok(braking) => braking,
+            Err(detail) => {
+                reject_joint_torque_coupling(
+                    faults.as_deref_mut(),
+                    holds.as_deref_mut(),
+                    entity,
+                    detail,
+                );
+                return;
+            }
+        };
         if let Ok(mut speed_port) = q_ports.p1().get_mut(actuator.speed_endpoint()) {
             speed_port.value = coordinate_speed;
         } else {
@@ -270,17 +298,17 @@ pub fn apply_joint_torque_actuators(
         };
         // A capped native velocity constraint reacts to the contact load even
         // at zero shaft speed. An explicit spin-down torque cannot do that.
+        let mut brake_changed = false;
         if actuator.brake_torque > 0.0 {
             let mut brake = actuator.passive_brake_motor();
-            brake.enabled = q_inputs
-                .get(actuator.control_entity)
-                .is_ok_and(|inputs| inputs.brake_active);
+            brake.enabled = braking;
             if joint.motor != brake {
                 info!(joint = ?entity, command_owner = ?actuator.control_entity,
                     enabled = brake.enabled, limit_nm = brake.max_torque,
                     coordinate_speed_rad_s = coordinate_speed,
                     "native passive joint brake changed");
                 joint.motor = brake;
+                brake_changed = true;
             }
         }
         // Conjugate torque/speed use the same relative axle coordinate as the
@@ -368,7 +396,7 @@ pub fn apply_joint_torque_actuators(
             );
             return;
         }
-        if coordinate_torque == 0.0 {
+        if coordinate_torque == 0.0 && !brake_changed {
             continue;
         }
         for (body, dynamic, sign) in receivers {
@@ -417,7 +445,38 @@ pub fn joint_effort_contract_error(world: &World, entity: Entity) -> Option<Stri
             endpoint.and_then(|entity| world.get::<lunco_port_core::ScalarPortContracts>(entity))
         }),
     )
+    .and_then(|_| {
+        validate_local_brake_contract(
+            actuator,
+            actuator
+                .brake_input
+                .and_then(|endpoint| world.get::<lunco_port_core::ScalarPortContracts>(endpoint)),
+        )
+    })
     .err()
+}
+
+fn validate_local_brake_contract(
+    actuator: &JointTorqueActuator,
+    contracts: Option<&lunco_port_core::ScalarPortContracts>,
+) -> Result<(), String> {
+    if actuator.brake_input.is_none() {
+        return Ok(());
+    }
+    let contract = contracts
+        .and_then(|contracts| contracts.get(lunco_port_core::PORT_NAME))
+        .ok_or("local joint brake requires an explicit scalar contract")?;
+    if contract.unit != Some(lunco_port_core::EngineUnit::Dimensionless.reference())
+        || contract.min != Some(0.0)
+        || contract.max != Some(1.0)
+        || contract.frame.is_some()
+    {
+        return Err(
+            "local joint brake requires a dimensionless 0..=1 contract without a spatial frame"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn validate_joint_effort_contract(

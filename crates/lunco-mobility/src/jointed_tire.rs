@@ -14,7 +14,10 @@ use lunco_port_core::InputPorts;
 use lunco_port_core::Port;
 
 use crate::wheel_kinematics::body_point_velocity;
-use crate::{TireLateralStiffnessGraph, contact_plane_basis, solve_axle_step, tire_patch_force};
+use crate::{
+    TireLateralStiffnessGraph, jointed_contact_plane_basis, solve_axle_step_with_roundoff,
+    tire_patch_force,
+};
 
 /// Authored tire parameters and topology for one Avian-backed wheel body.
 ///
@@ -184,7 +187,10 @@ pub fn apply_jointed_tire_forces(
     q_gravity: Query<&lunco_physics::kinematics::LocalGravity>,
     collisions: Collisions,
     mut pending: Local<Vec<lunco_physics::BodyForce>>,
-    mut force_scratch: Local<lunco_physics::ForceBatchScratch>,
+    mut scratch: Local<(
+        lunco_physics::ForceBatchScratch,
+        std::collections::HashMap<Entity, bool>,
+    )>,
     mut commands: Commands,
     fixed_time: Res<Time<Fixed>>,
     mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
@@ -215,18 +221,47 @@ pub fn apply_jointed_tire_forces(
         return;
     }
     pending.clear();
+    let (force_scratch, brake_states) = &mut *scratch;
+    brake_states.clear();
+    for wheel in &wheel_order {
+        let Ok((_, _, tire, _, _)) = q_tires.get(*wheel) else {
+            continue;
+        };
+        let Ok((motor, _)) = q_joints.get(tire.drive_joint) else {
+            continue;
+        };
+        let local = motor
+            .brake_input
+            .and_then(|endpoint| q_ports.p0().get(endpoint).ok().map(|port| port.value));
+        let vehicle = q_inputs
+            .get(motor.control_entity)
+            .is_ok_and(|inputs| inputs.brake_active);
+        match motor.brake_requested(vehicle, local) {
+            Ok(braking) => {
+                brake_states.insert(tire.drive_joint, braking);
+            }
+            Err(detail) => {
+                if let Some(holds) = holds.as_deref_mut() {
+                    holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
+                }
+                if let Some(faults) = faults.as_deref_mut() {
+                    faults.raise(
+                        "physics-wheel-brake-invalid",
+                        Some(*wheel),
+                        "jointed tire brake",
+                        detail,
+                    );
+                }
+                return;
+            }
+        }
+    }
 
     // Apportion each articulated vehicle's mass across all its loaded external
     // contacts, including native wheels and non-wheel support. Internal
     // contacts cannot support their own joint island.
     let mut tire_islands = std::collections::HashSet::new();
     let mut loads: std::collections::HashMap<Entity, Vec<f64>> = std::collections::HashMap::new();
-    let is_braking = |motor: &JointTorqueActuator| {
-        q_inputs
-            .get(motor.control_entity)
-            .ok()
-            .is_some_and(|inputs| inputs.brake_active)
-    };
     for (wheel, _, tire, _, _) in &q_tires {
         if !q_body_modes
             .get(wheel)
@@ -237,7 +272,7 @@ pub fn apply_jointed_tire_forces(
         let Ok((motor, _)) = q_joints.get(tire.drive_joint) else {
             continue;
         };
-        if motor.brake_torque <= 0.0 || !is_braking(motor) {
+        if motor.brake_torque <= 0.0 || !brake_states[&tire.drive_joint] {
             continue;
         }
         if let Some(island) = islands.get(wheel) {
@@ -337,11 +372,16 @@ pub fn apply_jointed_tire_forces(
             let omega = (wheel_state.angular_velocity - chassis_state.angular_velocity)
                 .dot(axle_world)
                 * motor.coordinate_sign();
+            // Motor and brake coordinates are relative to the housing, but
+            // contact tread speed is relative to the support/world. A wheel
+            // locked to a pitching chassis still rotates at the contact.
+            let housing_speed =
+                chassis_state.angular_velocity.dot(axle_world) * motor.coordinate_sign();
             let drive_torque = match q_ports.p0().get(motor.torque_endpoint()) {
                 Ok(port) => port.value,
                 Err(_) => continue,
             };
-            let braking = is_braking(motor);
+            let braking = brake_states[&tire.drive_joint];
             let other_velocity_at = |other: Option<Entity>, point: DVec3| {
                 other
                     .and_then(|entity| body_state(&q_state, entity))
@@ -374,7 +414,12 @@ pub fn apply_jointed_tire_forces(
                     let Some(normal) = crate::contact_normal_for_body(pair, manifold, wheel) else {
                         continue;
                     };
-                    let (forward, right) = contact_plane_basis(heading_world, axle_world, normal);
+                    let (forward, right) = jointed_contact_plane_basis(
+                        heading_world,
+                        axle_world,
+                        motor.coordinate_sign(),
+                        normal,
+                    );
                     for point in &manifold.points {
                         // Native impulse already counts delivered momentum once;
                         // the completed master interval converts it to load.
@@ -449,6 +494,19 @@ pub fn apply_jointed_tire_forces(
                     };
                 }
             }
+            if let Some(endpoint) = heat_ports.and_then(|ports| ports.fixed_contact) {
+                let fixed = contacts.iter().any(|contact| {
+                    contact.normal_force > 0.0
+                        && contact.support.is_none_or(|body| {
+                            q_body_modes.get(body).is_ok_and(|(_, mode, disabled)| {
+                                *mode == RigidBody::Static && !disabled
+                            })
+                        })
+                });
+                if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
+                    port.value = if fixed { 1.0 } else { 0.0 };
+                }
+            }
             if total_normal_force <= 0.0 || contacts.is_empty() {
                 if let Some(endpoint) = heat_ports.and_then(|ports| ports.tire) {
                     if let Ok(mut port) = q_ports.p1().get_mut(endpoint) {
@@ -459,17 +517,18 @@ pub fn apply_jointed_tire_forces(
             }
 
             let patch = |contact: &TireContact, w: f64| {
+                let tread_speed = (w + housing_speed) * tire.radius;
                 tire_patch_force(
                     tire.slip_stiffness * contact.normal_force / total_normal_force,
-                    w * tire.radius - contact.v_long,
-                    contact.v_long.abs().max((w * tire.radius).abs()).max(
+                    tread_speed - contact.v_long,
+                    contact.v_long.abs().max(tread_speed.abs()).max(
                         tire.longitudinal_slip_denominators
                             .minimum(drive_torque != 0.0 || (braking && motor.brake_torque > 0.0)),
                     ),
                     contact
                         .v_long
                         .abs()
-                        .max((w * tire.radius).abs())
+                        .max(tread_speed.abs())
                         .max(tire.min_validated_speed),
                     contact.v_lat,
                     contact.normal_force,
@@ -477,7 +536,7 @@ pub fn apply_jointed_tire_forces(
                     tire.lateral_stiffness_graph,
                 )
             };
-            let step = match solve_axle_step(
+            let step = match solve_axle_step_with_roundoff(
                 omega,
                 tire.axle_inertia,
                 tire.bearing_damping,
@@ -489,6 +548,50 @@ pub fn apply_jointed_tire_forces(
                     contacts
                         .iter()
                         .map(|contact| patch(contact, w).0 * tire.radius)
+                        .sum()
+                },
+                |w| {
+                    // Subtraction of nearly equal tread/hub velocities can
+                    // amplify one speed ulp by the unsaturated slip stiffness.
+                    // Coulomb projection is nonexpansive; include both force
+                    // components and the cone's arithmetic scale. No absolute
+                    // force floor: the bound scales with authored force laws.
+                    contacts
+                        .iter()
+                        .map(|contact| {
+                            let tread = (w + housing_speed) * tire.radius;
+                            let velocity_scale = tire.radius * (w.abs() + housing_speed.abs())
+                                + contact.v_long.abs();
+                            let reference = contact.v_long.abs().max(tread.abs()).max(
+                                tire.longitudinal_slip_denominators.minimum(
+                                    drive_torque != 0.0 || (braking && motor.brake_torque > 0.0),
+                                ),
+                            );
+                            let rolling = contact
+                                .v_long
+                                .abs()
+                                .max(tread.abs())
+                                .max(tire.min_validated_speed);
+                            let lateral_gain = tire
+                                .lateral_stiffness_graph
+                                .stiffness_at_load(contact.normal_force);
+                            let lateral_error = if lateral_gain == 0.0 || contact.v_lat == 0.0 {
+                                0.0
+                            } else {
+                                let magnitude = rolling.hypot(contact.v_lat);
+                                lateral_gain
+                                    * (1.0
+                                        + (contact.v_lat.abs() / magnitude)
+                                            * (velocity_scale / magnitude))
+                            };
+                            tire.radius
+                                * (64.0 * f64::EPSILON)
+                                * (tire.slip_stiffness * contact.normal_force / total_normal_force
+                                    * velocity_scale
+                                    / reference
+                                    + lateral_error
+                                    + tire.friction_mu * contact.normal_force)
+                        })
                         .sum()
                 },
             ) {
@@ -559,7 +662,9 @@ pub fn apply_jointed_tire_forces(
                         let (long, lat) = patch(contact, interval.speed);
                         force += (contact.forward * long + contact.right * lat) * fraction;
                         tire_heat += fraction
-                            * (long * (interval.speed * tire.radius - contact.v_long)
+                            * (long
+                                * ((interval.speed + housing_speed) * tire.radius
+                                    - contact.v_long)
                                 - lat * contact.v_lat);
                     }
                 }
@@ -602,9 +707,7 @@ pub fn apply_jointed_tire_forces(
         }
     }
 
-    if let Err(error) =
-        lunco_physics::prepare_force_batch(&bodies.p2(), &pending, &mut force_scratch)
-    {
+    if let Err(error) = lunco_physics::prepare_force_batch(&bodies.p2(), &pending, force_scratch) {
         crate::report_wheel_force_error(
             &mut commands,
             error,

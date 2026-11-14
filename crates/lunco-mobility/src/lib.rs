@@ -78,6 +78,9 @@ pub struct WheelHeatPorts {
     pub tire: Option<Entity>,
     /// Actual support contact (0 or 1), consumed by thermal contact conductance.
     pub contact: Option<Entity>,
+    /// Loaded contact with fixed world support, rather than another dynamic
+    /// body. Published by the collider-backed tire owner only.
+    pub fixed_contact: Option<Entity>,
 }
 
 /// Manages the integration of mobility physics and control observers.
@@ -1291,6 +1294,24 @@ pub fn contact_plane_basis(
     (forward, right)
 }
 
+/// Collider-backed wheel traction follows its signed physical axle. Projecting
+/// the chassis heading instead reverses traction as the chassis pitches through
+/// vertical, although the axle and positive motor coordinate stay unchanged.
+/// Retain the heading basis for degenerate sidewall contacts, where axle and
+/// normal are parallel and no circumferential rolling tangent is defined.
+pub fn jointed_contact_plane_basis(
+    wheel_forward: DVec3,
+    axle: DVec3,
+    coordinate_sign: f64,
+    normal: DVec3,
+) -> (DVec3, DVec3) {
+    let n = normal.normalize_or_zero();
+    let Some(forward) = (coordinate_sign * axle.cross(n)).try_normalize() else {
+        return contact_plane_basis(wheel_forward, axle, normal);
+    };
+    (forward, forward.cross(n).normalize_or_zero())
+}
+
 /// Whether a solved contact carries a physical normal load. Tire, drive and
 /// parking consumers share this scale-independent boundary; a sub-newton load
 /// remains a contact and contributes its proportionate friction capacity.
@@ -1512,6 +1533,33 @@ pub fn solve_axle_step(
     dt: f64,
     traction_torque: impl Fn(f64) -> f64,
 ) -> Result<AxleStep, &'static str> {
+    solve_axle_step_with_roundoff(
+        speed,
+        inertia,
+        bearing_damping,
+        drive_torque,
+        brake_limit,
+        traction_bound,
+        dt,
+        traction_torque,
+        |_| 0.0,
+    )
+}
+
+/// The native tire additionally certifies its floating-point evaluation error.
+/// This bound is consulted only when the root bracket reaches adjacent f64
+/// speeds, never as a relaxed ordinary convergence target.
+pub(crate) fn solve_axle_step_with_roundoff(
+    speed: f64,
+    inertia: f64,
+    bearing_damping: f64,
+    drive_torque: f64,
+    brake_limit: f64,
+    traction_bound: f64,
+    dt: f64,
+    traction_torque: impl Fn(f64) -> f64,
+    contact_roundoff: impl Fn(f64) -> f64,
+) -> Result<AxleStep, &'static str> {
     if ![
         speed,
         inertia,
@@ -1558,6 +1606,19 @@ pub fn solve_axle_step(
                 return Ok(middle);
             }
             if middle == lower || middle == upper {
+                // At adjacent representable speeds no further refinement is
+                // possible. Slip subtracts nearly equal rolling/contact speeds;
+                // certify that evaluation error against the admitted contact
+                // torque range, while retaining the tighter ordinary target.
+                let evaluation_error = contact_roundoff(middle);
+                if !evaluation_error.is_finite() || evaluation_error < 0.0 {
+                    return Err("axle contact evaluation error is invalid");
+                }
+                if residual.abs()
+                    <= (scale.max(traction_bound) * (64.0 * f64::EPSILON)).max(evaluation_error)
+                {
+                    return Ok(middle);
+                }
                 break;
             }
             if residual > 0.0 {
@@ -1676,18 +1737,109 @@ mod tire_patch_tests {
     }
 
     #[test]
+    fn axle_balances_near_rolling_contact_at_representable_speed() {
+        for scale in [1.0, 1e-24] {
+            let radius = 0.465;
+            let velocity: f64 = -0.03156994047678835;
+            let initial = -0.034873556114436405;
+            let drive = 3.53403831590483 * scale;
+            let bound = radius * 0.6 * 400.0 * scale;
+            let contact = |speed: f64| {
+                tire_patch_force(
+                    14_000.0 * scale,
+                    speed * radius - velocity,
+                    velocity.abs().max((speed * radius).abs()).max(0.1),
+                    0.0,
+                    0.0,
+                    400.0 * scale,
+                    0.6,
+                    TireLateralStiffnessGraph::default(),
+                )
+                .0 * radius
+            };
+            let step = solve_axle_step(
+                initial,
+                1.946 * scale,
+                0.45 * scale,
+                drive,
+                0.0,
+                bound,
+                1.0 / 60.0,
+                contact,
+            )
+            .unwrap();
+            let residual = (1.946 * 60.0 + 0.45) * scale * step.speed + contact(step.speed)
+                - (1.946 * 60.0 * scale * initial + drive);
+            assert!(residual.abs() <= bound * (64.0 * f64::EPSILON));
+            assert!((step.speed - -0.0676481799699605).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn axle_rejects_a_discontinuous_contact_law_without_a_torque_balance() {
-        let result = solve_axle_step(0.0, 2.0, 0.45, 10.0, 0.0, 176.0, 1.0 / 60.0, |speed| {
-            if speed == 0.0 {
-                0.0
-            } else {
-                176.0 * speed.signum()
-            }
-        });
-        assert_eq!(
-            result.unwrap_err(),
-            "axle contact law did not converge to a finite torque balance"
-        );
+        for offset in [0.0, 1.0] {
+            let result =
+                solve_axle_step(offset, 2.0, 0.45, 10.0, 0.0, 176.0, 1.0 / 60.0, |speed| {
+                    if speed == offset {
+                        0.0
+                    } else {
+                        176.0 * (speed - offset).signum()
+                    }
+                });
+            assert_eq!(
+                result.unwrap_err(),
+                "axle contact law did not converge to a finite torque balance"
+            );
+        }
+    }
+
+    #[test]
+    fn axle_resolves_stiff_rolling_contact_with_rotating_housing_at_float_boundary() {
+        for scale in [1.0, 1e-24] {
+            let radius = 0.465;
+            let housing = 0.01_f64;
+            let velocity = 0.05_f64;
+            let initial = velocity / radius - housing;
+            let bound = radius * 0.6 * scale;
+            let contact = |speed: f64| {
+                let tread = (speed + housing) * radius;
+                tire_patch_force(
+                    14_000.0 * scale,
+                    tread - velocity,
+                    tread.abs().max(velocity.abs()).max(0.1),
+                    0.0,
+                    0.0,
+                    scale,
+                    0.6,
+                    TireLateralStiffnessGraph::default(),
+                )
+                .0 * radius
+            };
+            let error = |speed: f64| {
+                64.0 * f64::EPSILON
+                    * radius
+                    * 14_000.0
+                    * scale
+                    * (radius * (speed.abs() + housing.abs()) + velocity.abs())
+                    / 0.1
+            };
+            let result = super::solve_axle_step_with_roundoff(
+                initial,
+                1.946025 * scale,
+                0.45 * scale,
+                0.1 * scale,
+                0.0,
+                bound,
+                1.0 / 60.0,
+                contact,
+                error,
+            )
+            .unwrap();
+            let residual = (1.946025 * 60.0 + 0.45) * scale * result.speed + contact(result.speed)
+                - (1.946025 * 60.0 * scale * initial + 0.1 * scale);
+            assert!(residual.abs() <= error(result.speed));
+            assert!((result.speed - 0.09752872822528194).abs() < 1e-14);
+        }
     }
 
     #[test]
@@ -3865,6 +4017,27 @@ mod force_law_tests {
         );
         assert!((f.length() - 1.0).abs() < 1e-9 && (r.length() - 1.0).abs() < 1e-9);
         assert!(f.dot(r).abs() < 1e-9, "forward/right not orthogonal");
+    }
+
+    #[test]
+    fn jointed_contact_basis_retains_motor_direction_through_vertical_pitch() {
+        for sign in [-1.0, 1.0] {
+            for degrees in [0.0_f64, 70.0, 89.0, 90.0, 91.0, 95.0, 110.0] {
+                let rotation = bevy::math::DQuat::from_rotation_x(degrees.to_radians());
+                let heading = rotation * VehicleFrame::FORWARD_LOCAL;
+                let axle = rotation * DVec3::X;
+                let (forward, right) = jointed_contact_plane_basis(heading, axle, sign, DVec3::Y);
+                assert!((forward - sign * DVec3::Z).length() < 1e-12);
+                assert!(forward.dot(DVec3::Y).abs() < 1e-12);
+                assert!((right.length() - 1.0).abs() < 1e-12);
+                // Positive coordinate speed must roll in positive traction
+                // direction, with zero material slip at the bottom contact.
+                let radius = 0.465;
+                let velocity = forward * radius;
+                let omega = axle * sign;
+                assert!((velocity + omega.cross(-radius * DVec3::Y)).length() < 1e-12);
+            }
+        }
     }
 
     // ── suspension_force_mag: bounded, never negative, damps both ways ───────
