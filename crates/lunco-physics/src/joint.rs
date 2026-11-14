@@ -68,6 +68,9 @@ pub struct JointTorqueActuator {
     /// Authored command-surface owner. Mechanical and transform ancestry may
     /// differ, especially for bodies with a USD transform-stack reset.
     pub control_entity: Entity,
+    /// Optional wheel-local brake request. It adds to the vehicle parking
+    /// brake; a local release can never cancel the vehicle-wide hold.
+    pub brake_input: Option<Entity>,
     /// Passive opposing torque when the owning vessel's brake command is active.
     pub brake_torque: f64,
     /// Viscous axle friction relative to the housing, N m s/rad.
@@ -113,6 +116,7 @@ impl JointTorqueActuator {
             port_entity: torque_endpoint,
             speed_port_entity: speed_endpoint,
             control_entity,
+            brake_input: None,
             brake_torque: 0.0,
             bearing_damping: 0.0,
             bearing_heat_port: None,
@@ -134,6 +138,19 @@ impl JointTorqueActuator {
         self.sign.factor()
     }
 
+    /// Resolve the two admitted brake sources without inventing a missing
+    /// local sample. An omitted local endpoint means vehicle-only braking.
+    pub fn brake_requested(&self, vehicle: bool, local: Option<f64>) -> Result<bool, &'static str> {
+        if self.brake_input.is_none() {
+            return Ok(vehicle);
+        }
+        let value = local.ok_or("local joint brake input is missing")?;
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err("local joint brake input must be finite and in 0..=1");
+        }
+        Ok(vehicle || value > 0.5)
+    }
+
     /// Structural invariant shared by runtime admission and authoring diagnostics.
     pub fn validate_parameters(&self) -> Result<(), String> {
         if self.port_entity == Entity::PLACEHOLDER
@@ -141,6 +158,13 @@ impl JointTorqueActuator {
             || self.port_entity == self.speed_port_entity
         {
             return Err("external effort requires distinct torque and motion endpoints".into());
+        }
+        if self.brake_input.is_some_and(|endpoint| {
+            endpoint == Entity::PLACEHOLDER
+                || endpoint == self.port_entity
+                || endpoint == self.speed_port_entity
+        }) {
+            return Err("local brake requires its own scalar input endpoint".into());
         }
         let heat = [self.bearing_heat_port, self.brake_heat_port];
         if heat.into_iter().flatten().any(|endpoint| {
@@ -462,6 +486,35 @@ mod tests {
             );
             assert!(app.world().get::<AngularVelocity>(rotor).unwrap().x * target > 0.0);
         }
+    }
+
+    #[test]
+    fn local_brake_request_retains_vehicle_hold_and_rejects_missing_or_invalid_samples() {
+        use super::{JointCoordinateSign, JointTorqueActuator};
+        let mut world = World::new();
+        let effort = world.spawn_empty().id();
+        let motion = world.spawn_empty().id();
+        let local = world.spawn_empty().id();
+        let mut actuator =
+            JointTorqueActuator::new(effort, motion, effort, JointCoordinateSign::Positive)
+                .unwrap();
+        assert_eq!(actuator.brake_requested(false, None), Ok(false));
+        assert_eq!(actuator.brake_requested(true, None), Ok(true));
+        actuator.brake_input = Some(local);
+        for vehicle in [false, true] {
+            for value in [0.0, 0.5, 1.0] {
+                assert_eq!(
+                    actuator.brake_requested(vehicle, Some(value)),
+                    Ok(vehicle || value > 0.5)
+                );
+            }
+        }
+        assert!(actuator.brake_requested(false, None).is_err());
+        for invalid in [-0.1, 1.1, f64::NAN, f64::INFINITY] {
+            assert!(actuator.brake_requested(false, Some(invalid)).is_err());
+        }
+        actuator.brake_input = Some(effort);
+        assert!(actuator.validate_parameters().is_err());
     }
 
     #[test]

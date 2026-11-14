@@ -3037,6 +3037,38 @@ fn process_usd_sim_prim_read(
             scalar_endpoint("Port_BearingHeat", EngineUnit::Watt, Some(0.0), None, None);
         let p_brake_heat =
             scalar_endpoint("Port_BrakeHeat", EngineUnit::Watt, Some(0.0), None, None);
+        // A wheel-local brake is an additional hold, never a replacement for
+        // the vehicle parking brake. Its neutral/default sample is authored.
+        let brake_default = if reader.has_authored_attribute(&sdf_path, "inputs:brake") {
+            match reader.real(&sdf_path, "inputs:brake") {
+                Some(value) if is_physical && value.is_finite() && (0.0..=1.0).contains(&value) => {
+                    Some(value)
+                }
+                _ => {
+                    lunco_core::trigger_runtime_error(
+                        commands,
+                        "usd-wheel-brake-invalid",
+                        format!(
+                            "{}: local brake requires a collider-backed wheel and an explicit finite real default in 0..=1",
+                            prim_path.path
+                        ),
+                    );
+                    commands.entity(entity).try_insert(UsdSimProcessed);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let p_local_brake = brake_default.map(|_| {
+            scalar_endpoint(
+                "Port_LocalBrake",
+                EngineUnit::Dimensionless,
+                Some(0.0),
+                Some(1.0),
+                None,
+            )
+        });
         // The tire realization owns contact work; native material contact has
         // no separate tire-law heat output.
         let p_tire_heat = (!is_physical || native_material.is_none())
@@ -3050,11 +3082,24 @@ fn process_usd_sim_prim_read(
                 None,
             )
         });
+        let p_fixed_contact = (is_physical && p_contact.is_some()).then(|| {
+            scalar_endpoint(
+                "Port_FixedWheelContact",
+                EngineUnit::Dimensionless,
+                Some(0.0),
+                Some(1.0),
+                None,
+            )
+        });
+        if let (Some(endpoint), Some(value)) = (p_local_brake, brake_default) {
+            commands.entity(endpoint).insert(Port { value });
+        }
         let heat_ports = lunco_mobility::WheelHeatPorts {
             bearing: p_bearing_heat,
             brake: p_brake_heat,
             tire: p_tire_heat,
             contact: p_contact,
+            fixed_contact: p_fixed_contact,
         };
         commands.entity(entity).try_insert(heat_ports);
 
@@ -3119,6 +3164,18 @@ fn process_usd_sim_prim_read(
                 PortSurfacePort::new(p_speed, PortDirection::Out),
             ),
         ]);
+        if let Some(endpoint) = p_local_brake {
+            wheel_surface.insert(
+                "brake".to_owned(),
+                PortSurfacePort::new(endpoint, PortDirection::In),
+            );
+        }
+        if let Some(endpoint) = p_fixed_contact {
+            wheel_surface.insert(
+                "fixed_contact".to_owned(),
+                PortSurfacePort::new(endpoint, PortDirection::Out),
+            );
+        }
         wheel_surface.insert(
             "bearing_heat".to_owned(),
             PortSurfacePort::new(p_bearing_heat, PortDirection::Out),
@@ -3134,6 +3191,12 @@ fn process_usd_sim_prim_read(
             );
         }
         if let Some(endpoint) = p_contact {
+            // `contact` also exists in Avian's broad touching-pair surface.
+            // Give authored safety policy an unambiguous normal-load sample.
+            wheel_surface.insert(
+                "loaded_contact".to_owned(),
+                PortSurfacePort::new(endpoint, PortDirection::Out),
+            );
             wheel_surface.insert(
                 "contact".to_owned(),
                 PortSurfacePort::new(endpoint, PortDirection::Out),
@@ -3269,6 +3332,7 @@ fn process_usd_sim_prim_read(
                 vehicle_mount,
                 p_drive,
                 p_speed,
+                p_local_brake,
                 heat_ports,
                 authored_collider,
                 native_material,
@@ -3771,6 +3835,7 @@ fn setup_physical_wheel(
     vehicle_mount: lunco_core::DTransform,
     p_drive: Entity,
     p_speed: Entity,
+    p_local_brake: Option<Entity>,
     heat_ports: lunco_mobility::WheelHeatPorts,
     authored_geometry: WheelGeometry,
     native_material: Option<lunco_usd_avian::material::PhysicsMaterial>,
@@ -3883,6 +3948,7 @@ fn setup_physical_wheel(
     )
     .expect("newly spawned wheel endpoints are distinct");
     coupling.brake_torque = params.brake_torque_max;
+    coupling.brake_input = p_local_brake;
     coupling.bearing_damping = params.bearing_damping;
     coupling.bearing_heat_port = Some(heat_ports.bearing);
     coupling.brake_heat_port = Some(heat_ports.brake);

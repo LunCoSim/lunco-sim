@@ -941,14 +941,15 @@ fn site_anchor_gravity_source(facts) {
                 break;
             }
         }
-        if !resolved {
-            out.push(finding(
-                "site-anchor-celestial-body-missing",
-                "error",
-                anchor.path,
-                "SiteAnchor body ID " + anchor.body_id.to_string() + " has no matching composed `LunCoCelestialBodyAPI` declaration. `SiteAnchor` selects body-surface gravity but does not load its body/provider; compose a celestial system containing this ID, or remove the anchor and use flat `UsdPhysicsScene` gravity.",
-            ));
-        }
+        if resolved { continue; }
+        let message = "SiteAnchor body ID " + anchor.body_id.to_string()
+            + " has no matching composed `LunCoCelestialBodyAPI` declaration. `SiteAnchor` selects body-surface gravity but does not load its body/provider; compose a celestial system containing this ID, or remove the anchor and use flat `UsdPhysicsScene` gravity.";
+        out.push(finding(
+            "site-anchor-celestial-body-missing",
+            "error",
+            anchor.path,
+            message,
+        ));
     }
     out
 }

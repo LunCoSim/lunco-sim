@@ -62,6 +62,7 @@ pub struct UsdCurveViewPlugin;
 impl Plugin for UsdCurveViewPlugin {
     fn build(&self, app: &mut App) {
         use lunco_core::AppSceneExt;
+        app.register_type::<UsdCurveViewProjection>();
         app.init_scene_resource::<PendingUsdCurveViews>();
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
@@ -154,6 +155,8 @@ struct UsdCurveViewRequest {
     parent: Entity,
     stage_id: bevy::asset::AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
     points: Vec<[f64; 3]>,
+    normals: Vec<[f64; 3]>,
+    projection: UsdCurveViewProjection,
     width_m: f64,
     color: LinearRgba,
 }
@@ -168,7 +171,7 @@ struct UsdCurveViewBuild {
 
 enum CurveViewProduct {
     /// A scene without terrain uses its authored three-dimensional curve.
-    Authored(Mesh, DVec3, usize),
+    Authored(Mesh, Option<DVec3>, usize),
     Surface(SurfaceCurveAnnotation),
 }
 
@@ -460,11 +463,21 @@ fn on_set_usd_view_preview_transform(
     Ok(Ack::new(OpId::new()))
 }
 
-/// Queue a live render update for an existing USD curve entity. The request is
-/// coalesced by target and immutable preparations run on the compute pool.
-/// Terrain curves publish sparse strokes consumed by the ground shader; a scene
-/// without declared terrain renders its authored 3D curve. No USD layer or
-/// scene projection is changed.
+/// Whether a transient curve is a ground annotation or spatial geometry.
+#[derive(
+    Reflect, Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
+pub enum UsdCurveViewProjection {
+    /// Project onto declared terrain, with the existing 3D fallback in flat scenes.
+    #[default]
+    Surface,
+    /// Keep curve-local control points in space, retaining the authored material and pose.
+    Spatial,
+}
+
+/// Coalesced presentation update of an existing USD curve, preserving its material.
+/// Spatial geometry is not projected onto terrain and does not move its anchor.
+/// No USD layer, document generation or physical geometry is changed.
 #[Command(default)]
 pub struct UpdateUsdCurveView {
     /// USD document which owns both target prims.
@@ -475,6 +488,10 @@ pub struct UpdateUsdCurveView {
     pub curve_entity_id: u64,
     /// Ordered centerline points in the route parent's local USD coordinates.
     pub points: Vec<[f64; 3]>,
+    /// Spatial points are curve-local; surface points retain route-parent coordinates.
+    pub projection: UsdCurveViewProjection,
+    /// Optional per-point ribbon normals. Empty uses local Y, as for legacy views.
+    pub normals: Vec<[f64; 3]>,
     /// Full ribbon width in metres.
     pub width_m: f64,
 }
@@ -678,7 +695,11 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             "applied_revision": applied_revision,
             "local_visibility": visibility,
             "result_segment_count": status.segment_count as u64,
-            "projection": if annotation.is_some() { "terrain_surface" } else { "authored_curve" },
+            "projection": if annotation.is_some() { "terrain_surface" }
+                else if world.get_resource::<PendingUsdCurveViews>()
+                    .and_then(|views| views.sources.get(&entity))
+                    .is_some_and(|source| source.projection == UsdCurveViewProjection::Spatial) { "spatial_curve" }
+                else { "authored_curve" },
             "surface_binding_count": surface_binding_count as u64,
             "displayed_surface_binding_count": displayed_surface_binding_count as u64,
             "surface_texture": displayed_publication.and_then(|p| p.image.as_ref()).map(|image| format!("{:?}", image.id())),
@@ -729,6 +750,16 @@ fn on_update_usd_curve_view(
     {
         return Err("curve view centerline contains a non-finite coordinate".to_string());
     }
+    if !command.normals.is_empty()
+        && (command.projection != UsdCurveViewProjection::Spatial
+            || command.normals.len() != command.points.len()
+            || command.normals.iter().any(|n| {
+                let n = DVec3::from_array(*n);
+                !n.is_finite() || n.length_squared() <= f64::EPSILON
+            }))
+    {
+        return Err("spatial curve normals must be finite, nonzero and match its points".into());
+    }
 
     let root = entities
         .resolve(&lunco_core::GlobalEntityId::from_raw(
@@ -756,15 +787,21 @@ fn on_update_usd_curve_view(
     if target_doc != doc {
         return Err("curve view targets belong to another USD document".to_string());
     }
-    let look = q_look
-        .get(curve)
-        .map_err(|_| "curve view material is not projected".to_string())?;
-    let color = LinearRgba::new(
-        look.base_color.red + look.emissive.red,
-        look.base_color.green + look.emissive.green,
-        look.base_color.blue + look.emissive.blue,
-        look.base_color.alpha,
-    );
+    // Spatial meshes retain either their authored shader or PBR material.
+    // Only terrain annotations need a PBR colour to publish into the ground.
+    let color = if command.projection == UsdCurveViewProjection::Spatial {
+        LinearRgba::WHITE
+    } else {
+        let look = q_look
+            .get(curve)
+            .map_err(|_| "curve view material is not projected".to_string())?;
+        LinearRgba::new(
+            look.base_color.red + look.emissive.red,
+            look.base_color.green + look.emissive.green,
+            look.base_color.blue + look.emissive.blue,
+            look.base_color.alpha,
+        )
+    };
     let parent = q_parents
         .get(root)
         .map_err(|_| "curve view anchor has no USD route parent".to_string())?
@@ -848,6 +885,8 @@ fn on_update_usd_curve_view(
             parent,
             stage_id: root_prim.stage_handle.id(),
             points: command.points.clone(),
+            normals: command.normals.clone(),
+            projection: command.projection,
             width_m: command.width_m,
             color,
         },
@@ -896,7 +935,11 @@ pub(crate) fn prepare_pending_usd_curve_views(
         let sources: Vec<_> = pending
             .sources
             .values()
-            .filter(|source| q_root.contains(source.root) && q_curve.contains(source.curve))
+            .filter(|source| {
+                source.projection == UsdCurveViewProjection::Surface
+                    && q_root.contains(source.root)
+                    && q_curve.contains(source.curve)
+            })
             .cloned()
             .collect();
         for mut source in sources {
@@ -919,24 +962,29 @@ pub(crate) fn prepare_pending_usd_curve_views(
     if pending.tasks.len() >= MAX_ACTIVE_CURVE_VIEW_BUILDS || pending.requests.is_empty() {
         return;
     }
-    let has_surface_curve = pending
-        .requests
-        .values()
-        .any(|request| request.points.len() >= 2);
+    let has_surface_curve = pending.requests.values().any(|request| {
+        request.projection == UsdCurveViewProjection::Surface && request.points.len() >= 2
+    });
     let terrain = if !pending.terrain_owners.is_empty() && has_surface_curve {
         surface.snapshot()
     } else {
         None
     };
-    if !pending.terrain_owners.is_empty() && has_surface_curve && !surface.has_terrain() {
-        return;
-    }
     let frame = active_frame.as_deref().map(|frame| frame.0);
     let mut entities: Vec<_> = pending.requests.keys().copied().collect();
     entities.sort_unstable_by_key(|entity| entity.to_bits());
     for entity in entities {
         if pending.tasks.len() >= MAX_ACTIVE_CURVE_VIEW_BUILDS {
             break;
+        }
+        if pending
+            .requests
+            .get(&entity)
+            .is_some_and(|request| request.projection == UsdCurveViewProjection::Surface)
+            && !pending.terrain_owners.is_empty()
+            && !surface.has_terrain()
+        {
+            continue;
         }
         // Keep each target's latest request queued behind its active build.
         // Dropping a Bevy task detaches its worker; replacing it here would
@@ -947,7 +995,9 @@ pub(crate) fn prepare_pending_usd_curve_views(
         let Some(queued) = pending.requests.get(&entity) else {
             continue;
         };
-        let needs_surface = queued.points.len() >= 2 && !pending.terrain_owners.is_empty();
+        let needs_surface = queued.projection == UsdCurveViewProjection::Surface
+            && queued.points.len() >= 2
+            && !pending.terrain_owners.is_empty();
         if needs_surface && terrain.is_none() {
             continue;
         }
@@ -1130,8 +1180,7 @@ pub(crate) fn poll_pending_usd_curve_views(
                 complete_curve_view_status(&mut pending, entity, revision, count, None);
             }
             Some(CurveViewProduct::Authored(mesh, anchor, count)) => {
-                let anchor = anchor.as_vec3();
-                if !anchor.is_finite() {
+                if anchor.is_some_and(|anchor| !anchor.as_vec3().is_finite()) {
                     *visibility = Visibility::Hidden;
                     complete_curve_view_status(
                         &mut pending,
@@ -1154,8 +1203,13 @@ pub(crate) fn poll_pending_usd_curve_views(
                     continue;
                 };
                 *current_mesh = mesh;
-                root_transform.translation = anchor;
+                if let Some(anchor) = anchor {
+                    root_transform.translation = anchor.as_vec3();
+                }
                 *visibility = Visibility::Inherited;
+                commands
+                    .entity(entity)
+                    .try_remove::<bevy::camera::primitives::Aabb>();
                 commands
                     .entity(entity)
                     .try_remove::<SurfaceCurveAnnotation>();
@@ -1207,7 +1261,8 @@ fn prepare_usd_curve_view_product(
         .iter()
         .map(|point| DVec3::from_array(*point))
         .collect();
-    if let Some(terrain) = terrain {
+    if let Some(terrain) = terrain.filter(|_| request.projection == UsdCurveViewProjection::Surface)
+    {
         let world: Vec<_> = local
             .iter()
             .map(|point| parent_position + parent_rotation * *point)
@@ -1223,12 +1278,20 @@ fn prepare_usd_curve_view_product(
             ),
         )));
     }
-    let anchor = local[0];
+    let anchor = if request.projection == UsdCurveViewProjection::Spatial {
+        DVec3::ZERO
+    } else {
+        local[0]
+    };
     let points: Vec<_> = local
         .iter()
-        .map(|point| RibbonPoint {
+        .enumerate()
+        .map(|(index, point)| RibbonPoint {
             position: *point,
-            normal: DVec3::Y,
+            normal: request
+                .normals
+                .get(index)
+                .map_or(DVec3::Y, |normal| DVec3::from_array(*normal).normalize()),
         })
         .collect();
     let half_width = (request.width_m * 0.5) as f32;
@@ -1239,7 +1302,11 @@ fn prepare_usd_curve_view_product(
         .ok_or_else(|| "curve cannot form a finite authored mesh".to_string())?;
     Ok(Some(CurveViewProduct::Authored(
         mesh,
-        anchor,
+        if request.projection == UsdCurveViewProjection::Spatial {
+            None
+        } else {
+            Some(anchor)
+        },
         points.len() - 1,
     )))
 }
@@ -2519,6 +2586,8 @@ mod usd_curve_view_tests {
             parent: Entity::PLACEHOLDER,
             stage_id: bevy::asset::AssetId::default(),
             points,
+            normals: Vec::new(),
+            projection: UsdCurveViewProjection::Surface,
             width_m: 0.12,
             color: LinearRgba::WHITE,
         }
@@ -2537,7 +2606,11 @@ mod usd_curve_view_tests {
             panic!("authored mesh");
         };
 
-        assert!(anchor.abs_diff_eq(DVec3::from_array(points[0]), 1.0e-9));
+        assert!(
+            anchor
+                .unwrap()
+                .abs_diff_eq(DVec3::from_array(points[0]), 1.0e-9)
+        );
         assert!(mesh.count_vertices() >= 4);
         let bevy::mesh::VertexAttributeValues::Float32x3(vertices) = mesh
             .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -2559,6 +2632,39 @@ mod usd_curve_view_tests {
         assert_eq!(count, 1);
 
         assert_eq!(mesh.count_vertices(), 4);
+    }
+
+    #[test]
+    fn spatial_vertical_ribbon_preserves_local_height_and_anchor_pose() {
+        let mut request = request(vec![[2.0, 3.0, 1.0], [2.0, 7.0, 1.0]]);
+        request.projection = UsdCurveViewProjection::Spatial;
+        request.normals = vec![[1.0, 0.0, 0.0]; 2];
+        let Some(CurveViewProduct::Authored(mesh, anchor, count)) = prepare_usd_curve_view_product(
+            &request,
+            None,
+            DVec3::splat(100.0),
+            DQuat::from_rotation_z(1.0),
+        )
+        .unwrap() else {
+            panic!("spatial mesh");
+        };
+        assert!(
+            anchor.is_none(),
+            "spatial updates must preserve the authored anchor"
+        );
+        assert_eq!(count, 1);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(vertices)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("spatial positions");
+        };
+        assert!(
+            vertices
+                .iter()
+                .all(|p| p[0] == 2.0 && (p[1] == 3.0 || p[1] == 7.0))
+        );
+        assert!(vertices.iter().any(|p| p[2] < 1.0));
+        assert!(vertices.iter().any(|p| p[2] > 1.0));
     }
 
     #[test]

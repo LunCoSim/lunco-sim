@@ -61,6 +61,20 @@ pose; incomplete or ambiguous footprint coverage is a terminal error. With
 no declared terrain, the three-dimensional authored curve is rendered directly.
 Fewer than two points removes the presentation immediately.
 
+`UpdateUsdCurveView.projection = "Spatial"` explicitly selects a spatial curve
+instead of a terrain annotation. Its points are in the curve prim's local
+coordinates; optional per-point `normals` orient a ribbon, including vertical
+straps. This mode retains the authored anchor transform and material, native
+depth and shadow participation. It does not alter physical geometry or document
+generation. The default `"Surface"` preserves route behavior. Both modes share
+coalescing, bounded preparation, revision fencing and teardown; an unavailable
+terrain cannot block a spatial request. `InspectUsdCurveView` reports
+`"spatial_curve"` for this mode. Live mesh publication invalidates its bounds so
+camera and shadow culling follow the current shape.
+Continuous producers wait for the previous snapshot's completion before
+submitting another. Replacing it on every fixed step can invalidate every
+background result when physics runs multiple steps per presentation frame.
+
 `lunco-terrain-surface::annotations` owns surface presentation. Each disposable
 curve entity carries its terrain identity, source revision, independent segments,
 width and colour. At most two background jobs update persistent spatial indexes, with one serial

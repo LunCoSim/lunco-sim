@@ -567,6 +567,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<lunco_core_runtime::SimTick>();
         app.init_resource::<lunco_physics::PhysicsHolds>();
+        app.init_resource::<lunco_physics::DynamicJointIslandMasses>();
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.add_plugins((
             MinimalPlugins,
