@@ -15,7 +15,7 @@
     </pe-file>
     <msi-file path="LunCoSim-Windows-x86_64.msi">
       <pe-file
-        path="current/luncosim.exe"
+        path="LunCoSim/current/luncosim.exe"
         product-name="LunCoSim"
         product-version="${version}"
         file-version="${version}"

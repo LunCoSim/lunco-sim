@@ -100,7 +100,7 @@ class DevReleaseContractTests(unittest.TestCase):
         msi_exe = msi.find(SIGNPATH_NS + "pe-file")
         self.assertIsNotNone(msi_exe)
         assert msi_exe is not None
-        self.assertEqual(msi_exe.attrib["path"], "current/luncosim.exe")
+        self.assertEqual(msi_exe.attrib["path"], "LunCoSim/current/luncosim.exe")
         self.assertIsNotNone(msi.find(SIGNPATH_NS + "authenticode-sign"))
 
         sign = workflow.index("Sign Windows executable and MSI with SignPath")
