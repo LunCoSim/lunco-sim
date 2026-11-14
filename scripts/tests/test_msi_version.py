@@ -13,6 +13,13 @@ class MsiVersionTests(unittest.TestCase):
         self.assertEqual(windows_installer_version("0.6.0-dev.2"), "1.6.2")
         self.assertEqual(windows_installer_version("0.6.0"), "1.6.999")
 
+    def test_legacy_nightly_versions_keep_their_msi_sequence(self):
+        self.assertEqual(
+            windows_installer_version("0.6.0-nightly.139.1"), "1.0.13901"
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported legacy nightly"):
+            windows_installer_version("0.6.0-nightly.139.100")
+
     def test_release_allocator_uses_the_next_dev_sequence(self):
         assets = [
             "luncosim-0.6.0-dev.1-win-x64-full.nupkg",

@@ -23,10 +23,10 @@ _WINDOWS_PACKAGE = re.compile(
 
 
 def windows_installer_version(version: str) -> str:
-    """Map app SemVer to the ordered three-number Windows Installer version."""
+    """Map app SemVer or a legacy nightly version to its MSI version."""
     match = _SEMVER.fullmatch(version)
     if match is None:
-        raise ValueError(f"unsupported release version: {version}")
+        return ".".join(map(str, _legacy_nightly_msi_identity(version)))
     major, minor, patch = map(int, match.groups()[:3])
     development = int(match.group(4)) if match.group(4) is not None else 999
 
@@ -39,6 +39,20 @@ def windows_installer_version(version: str) -> str:
     if build > 65535:
         raise ValueError("release version exceeds the Windows Installer build limit")
     return f"{major + 1}.{minor}.{build}"
+
+
+def _legacy_nightly_msi_identity(version: str) -> tuple[int, int, int]:
+    legacy = _LEGACY_NIGHTLY.fullmatch(version)
+    if legacy is None:
+        raise ValueError(f"unsupported release version: {version}")
+    run_number, attempt = map(int, legacy.groups()[3:])
+    if attempt > 99:
+        raise ValueError(f"unsupported legacy nightly version: {version}")
+    ordinal = run_number * 100 + attempt
+    minor, build = divmod(ordinal, 65536)
+    if minor > 255:
+        raise ValueError("legacy MSI version sequence exhausted")
+    return 1, minor, build
 
 
 def _package_versions(asset_names: list[str]) -> list[str]:
@@ -80,19 +94,7 @@ def _msi_identity(version: str) -> tuple[int, int, int]:
     match = _SEMVER.fullmatch(version)
     if match is not None:
         return tuple(map(int, windows_installer_version(version).split(".")))
-
-    legacy = _LEGACY_NIGHTLY.fullmatch(version)
-    if legacy is not None:
-        run_number, attempt = map(int, legacy.groups()[3:])
-        if not 1 <= attempt <= 99:
-            raise ValueError(f"unsupported legacy nightly version: {version}")
-        ordinal = run_number * 100 + attempt
-        minor, build = divmod(ordinal, 65536)
-        if minor > 255:
-            raise ValueError("legacy MSI version sequence exhausted")
-        return (1, minor, build)
-
-    raise ValueError(f"unsupported published package version: {version}")
+    return _legacy_nightly_msi_identity(version)
 
 
 def check_published_versions(candidate: str, asset_names: list[str]) -> None:
