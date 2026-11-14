@@ -39,6 +39,7 @@ class MsiVersionTests(unittest.TestCase):
         assets = [
             "luncosim-0.6.0-nightly.135.2-win-x64-full.nupkg",
             "LunCoSim-win-x64-0.6.0-nightly.151.1-full.nupkg",
+            "luncosim-0.6.0-nightly.999.1-osx-x64-full.nupkg",
             "luncosim-0.6.0-dev.3-win-x64-full.nupkg",
         ]
         self.assertEqual(next_nightly_run_number(assets), 152)

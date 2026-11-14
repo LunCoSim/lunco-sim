@@ -67,13 +67,16 @@ def _package_versions(asset_names: list[str]) -> list[str]:
 def next_nightly_run_number(asset_names: list[str]) -> int:
     """Continue the nightly run sequence published in Windows update packages."""
     latest_run_number = 0
-    for version in _package_versions(asset_names):
-        if "-nightly." not in version:
+    for asset_name in asset_names:
+        if "-win-x64-" not in asset_name.lower():
             continue
-        match = _LEGACY_NIGHTLY.fullmatch(version)
-        if match is None:
-            raise ValueError(f"unsupported legacy nightly version: {version}")
-        latest_run_number = max(latest_run_number, int(match.group(4)))
+        for version in _package_versions([asset_name]):
+            if "-nightly." not in version:
+                continue
+            match = _LEGACY_NIGHTLY.fullmatch(version)
+            if match is None:
+                raise ValueError(f"unsupported legacy nightly version: {version}")
+            latest_run_number = max(latest_run_number, int(match.group(4)))
     return latest_run_number + 1
 
 
