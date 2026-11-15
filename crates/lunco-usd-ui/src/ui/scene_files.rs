@@ -159,6 +159,7 @@ struct SceneFileInputs {
     scope: lunco_workspace::DocumentRuntimeOwner,
     replication: Option<lunco_workspace::ReplicationOwner>,
     mount_revision: Option<u64>,
+    twin_root: Option<PathBuf>,
     limits: FileClosureLimits,
 }
 impl SceneFileInputs {
@@ -176,6 +177,7 @@ impl SceneFileInputs {
         self.scope == other.scope
             && self.replication == other.replication
             && self.mount_revision == other.mount_revision
+            && self.twin_root == other.twin_root
     }
 }
 
@@ -281,7 +283,15 @@ fn assets_root_for(roots: &[PathBuf]) -> Option<PathBuf> {
 }
 
 /// Label a path relative to whichever root it sits under, so rows stay readable.
-fn label_for(path: &Path, assets_root: Option<&Path>, roots: &[PathBuf]) -> String {
+fn label_for(
+    path: &Path,
+    twin_root: Option<&Path>,
+    assets_root: Option<&Path>,
+    roots: &[PathBuf],
+) -> String {
+    if let Some(rel) = twin_root.and_then(|root| path.strip_prefix(root).ok()) {
+        return rel.to_string_lossy().into_owned();
+    }
     if let Some(rel) = assets_root.and_then(|a| path.strip_prefix(a).ok()) {
         return rel.to_string_lossy().into_owned();
     }
@@ -368,7 +378,12 @@ fn prepare_scene_file_view(
                     }
                 };
             Ok(SceneFileRow {
-                label: label_for(&path, assets_root.as_deref(), &roots),
+                label: label_for(
+                    &path,
+                    inputs.twin_root.as_deref(),
+                    assets_root.as_deref(),
+                    &roots,
+                ),
                 kind: SceneFileKind::of(&path),
                 missing,
                 path,
@@ -405,6 +420,14 @@ fn capture_scene_file_inputs(world: &World) -> Result<SceneFileInputs, String> {
         .map(|roots| roots.revision())
         .transpose()
         .map_err(|error| error.to_string())?;
+    let twin_root = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .and_then(|workspace| {
+            workspace
+                .active_twin
+                .and_then(|id| workspace.twin(id))
+                .map(|twin| twin.root.clone())
+        });
     let limits = *world
         .get_resource::<FileClosureLimits>()
         .ok_or("scene file traversal limits are unavailable")?;
@@ -414,6 +437,7 @@ fn capture_scene_file_inputs(world: &World) -> Result<SceneFileInputs, String> {
         scope,
         replication,
         mount_revision,
+        twin_root,
         limits,
     })
 }
@@ -592,7 +616,11 @@ impl BrowserSection for SceneFilesSection {
     }
 
     fn title(&self) -> &str {
-        "Document dependencies"
+        "Scene files"
+    }
+
+    fn search_hint(&self) -> &'static str {
+        "Search files used by the open scene…"
     }
 
     fn order(&self) -> u32 {
@@ -602,6 +630,12 @@ impl BrowserSection for SceneFilesSection {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
+        ui.label(
+            egui::RichText::new(
+                "Files referenced by the open scene. Select a Modelica file to inspect its model.",
+            )
+            .weak(),
+        );
         let Some(view) = ctx.resource::<SceneFileView>() else {
             ui.label(
                 egui::RichText::new("SceneFileView resource missing")
@@ -644,7 +678,7 @@ impl BrowserSection for SceneFilesSection {
 
         if no_roots {
             ui.label(
-                egui::RichText::new("No file-backed scene open.")
+                egui::RichText::new("Open a scene to browse its referenced files.")
                     .weak()
                     .italics(),
             );
@@ -777,6 +811,7 @@ mod tests {
             scope: DocumentRuntimeOwner::LocalTwin(twin),
             replication: None,
             mount_revision: Some(1),
+            twin_root: None,
             limits: FileClosureLimits::default(),
         };
         let pending = SceneFileTask {
@@ -850,6 +885,7 @@ mod tests {
             scope: DocumentRuntimeOwner::LocalTwin(TwinId::new(1)),
             replication: None,
             mount_revision: Some(1),
+            twin_root: None,
             limits: FileClosureLimits::default(),
         };
         assert!(accepts_scene_file_result(&inputs, 1, &inputs, 1));
@@ -1115,6 +1151,7 @@ mod tests {
         assert_eq!(
             label_for(
                 Path::new("/proj/assets/vessels/rovers/rb.usda"),
+                None,
                 Some(&assets),
                 &[]
             ),
@@ -1124,6 +1161,7 @@ mod tests {
         assert_eq!(
             label_for(
                 Path::new("/work/scenes/props/rock.usda"),
+                None,
                 Some(&assets),
                 &[PathBuf::from("/work/scenes/scene.usda")]
             ),

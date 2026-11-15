@@ -11,7 +11,7 @@ in the bottom dock when reopened. View → Reset Layout reapplies this placement
 ## Keep your place
 
 The **Twin** panel starts with the active Twin's files. Its selector opens
-Libraries or a specialist view such as Modelica or Document dependencies, one
+Libraries or a specialist view such as Modelica or Scene files, one
 at a time. Changing views clears the filter. The **…** menu offers Open Twin,
 Recent Twins and Find file. View can reopen the Twin panel.
 

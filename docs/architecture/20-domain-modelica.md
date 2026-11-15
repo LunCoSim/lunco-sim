@@ -1790,6 +1790,12 @@ document dirty, and reinitializes that participant with the checked replacement.
 The edit is a source change and becomes a type default when saved. Other
 instance overrides remain intact. USD-backed controls require editing their
 authored USD binding and are disabled in the document-only inspector path.
+The selected participant's Modelica Parameters section identifies its class,
+shows its source URI and Modelica state, and opens the class through the typed
+`OpenClass` view command. The source URI is provenance; the fully qualified
+class is the navigation identity. A Modelica failure exposes its owner error
+in the Inspector. “Compiled” describes the compile result and does not claim
+that a participant is currently stepping.
 
 ## 7a. Document identity — three tiers, one truth
 
@@ -2300,6 +2306,20 @@ An active filter completes candidate roots on background workers before
 presenting matching paths. Twin paths come from `Twin::files()` and open
 through the existing Modelica file loader with the emitting Twin's absolute
 source path; read-only source ownership comes from the shared source store.
+The same filter searches Twin file paths and classes already indexed by open
+Twin documents; rows show open, modified, parsing, parsed, and parse-error
+state from their owning documents. Unopened Twin files remain searchable by
+path without being parsed as a side effect of browsing. The section's search
+prompt names these scopes, and read-only library roots are grouped separately
+from Twin files. A parse-error row opens its source and focuses Modelica
+Diagnostics.
+
+The Twin Browser's **Scene files** view reads the loaded scene's resolved
+dependency closure and opens its `.mo` entries through the Modelica file
+dispatcher. The selected Modelica participant's Inspector also offers an
+**Open model** action using its exact fully qualified class identity. These
+paths reuse the existing dependency resolver and Modelica class navigation;
+they do not maintain a second scene-to-source index.
 
 ## 11. Current gaps
 

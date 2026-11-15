@@ -46,4 +46,5 @@ Open Twin, Find file and Recent Twins.
 `BrowserView.section` and `BrowserQuery.text` are reflected transient resources;
 active Twin closure restores Files and clears the filter. Contributions use the
 existing `BrowserSectionRegistry`; navigation search reads the existing Twin
-and library inventories through `NavigationRegistry`.
+and library inventories through `NavigationRegistry`. Each selected section
+provides a search hint while continuing to use the shared `BrowserQuery`.

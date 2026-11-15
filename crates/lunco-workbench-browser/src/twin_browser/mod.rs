@@ -43,7 +43,7 @@ impl BrowserQuery {
 
 /// Paint the common browser search control and queue the changed query as a
 /// panel intent. The panel never mutates [`BrowserQuery`] during egui paint.
-pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx, hint: &str) {
     let mut query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
     let original = query.text.clone();
 
@@ -51,7 +51,7 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let width = (ui.available_width() - if query.is_active() { 28.0 } else { 0.0 }).max(40.0);
         ui.add(
             lunco_workbench_widgets::text_editor::singleline(&mut query.text)
-                .hint_text("Filter files or names…")
+                .hint_text(hint)
                 .desired_width(width),
         );
         if !query.text.trim().is_empty()
@@ -350,6 +350,12 @@ pub trait BrowserSection: Send + Sync + 'static {
     /// Title shown in the view selector.
     fn title(&self) -> &str;
 
+    /// Search prompt for this view. All sections use the shared
+    /// [`BrowserQuery`]; this explains what its filter matches here.
+    fn search_hint(&self) -> &'static str {
+        "Search this view…"
+    }
+
     /// Render order within the panel — lower numbers render first.
     /// Conventional values: Modelica/domain catalogs ~100, Files ~200,
     /// Library/system ~300. Sections with equal `order` fall back to
@@ -414,6 +420,11 @@ impl Panel for TwinBrowserPanel {
                 );
                 return;
             };
+            let search_hint = registry
+                .iter()
+                .find(|section| section.id() == section_id)
+                .map(|section| section.search_hint())
+                .unwrap_or("Search this view…");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("twin_browser_view")
                     .selected_text(registry.section_mut(selected).title())
@@ -472,7 +483,7 @@ impl Panel for TwinBrowserPanel {
                     }
                 });
             });
-            render_search_bar(ui, ctx);
+            render_search_bar(ui, ctx, search_hint);
             ui.separator();
             ctx.resource_scope::<BrowserActions, _>(|ctx, actions| {
                 egui::ScrollArea::vertical()
