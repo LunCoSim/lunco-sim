@@ -2,26 +2,27 @@
 //!
 //! ## What it shows
 //!
-//! 1. Modelica documents in the active Twin scope from the
-//!    [`crate::ui::document_context::ModelicaDocuments`] — drafts and files currently
-//!    associated with that Twin.
-//! 2. Shared read-only library roots from the package-tree provider.
+//! 1. Every Modelica file indexed by the active Twin.
+//! 2. Open standalone workspace documents from
+//!    [`crate::ui::document_context::ModelicaDocuments`].
+//! 3. Installed Modelica source roots from the shared package-tree provider.
 //!
-//! Each row is a Modelica class keyed by its **fully-qualified path**
-//! (e.g. `"AnnotatedRocketStage.RocketStage"`). Click → emits
-//! [`lunco_workbench_browser::BrowserAction::OpenLoadedClass`] for in-memory docs, dispatched
-//! into the existing drill-in machinery so the canvas tab opens
-//! directly on the requested class.
+//! Library and open-document class rows are keyed by their **fully-qualified
+//! path** (e.g. `"AnnotatedRocketStage.RocketStage"`). Twin source rows retain
+//! their indexed relative path and open that exact file through the shared
+//! Modelica loader. Class clicks emit typed browser actions for the existing
+//! document and drill-in machinery.
 //!
 //! ## Single source of truth
 //!
-//! This panel **does not parse**. It reads
+//! This panel **does not parse**. For open-document class rows, it reads
 //! [`ModelicaDocument::syntax`](lunco_modelica_document::ModelicaDocument::syntax)
 //! — the lenient parse cache that the off-thread refresh in
 //! [`lunco_modelica_core::engine_resource::drive_engine_sync`] keeps up to date.
-//! It derives the class tree from it on each render. The browser sees exactly the
-//! same parse the rest of the workbench sees; no panel-local cache
-//! and no panel-local rumoca call.
+//! It derives those class trees on each render. The browser sees exactly the
+//! same parse the rest of the workbench sees; no panel-local cache and no
+//! panel-local rumoca call. Installed classes and Twin file identities come
+//! from their respective source inventories.
 //!
 //! Building the `ClassEntry` tree from a `SyntaxCache` is sub-
 //! millisecond on typical Modelica files (just walks the AST and
@@ -75,14 +76,14 @@ impl BrowserSection for ModelicaSection {
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
         let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
-        // OMEdit-style flat list — system libraries on top, then
-        // writable workspace documents. Both source-of-truth reads:
+        // OMEdit-style source browser — installed source roots, active-Twin
+        // files, and standalone workspace documents. Each comes from its
+        // owning source-of-truth resource:
         //   * libraries come from `PackageTreeCache::roots` (the
         //     same tree the Package Browser panel renders);
-        //   * workspace docs come from `ModelicaDocuments`
-        //     filtered for writable / untitled origins.
-        // The cache plus document registry are the complete read sources for
-        // this section; there is no separate UI-owned class list.
+        //   * Twin files come from `Twin::files()`;
+        //   * open documents come from `ModelicaDocuments`, excluding files
+        //     already represented by the active Twin inventory.
 
         // ── System library roots ─────────────────────────────────
         // Pull `(id, name)` pairs first so we can re-borrow `world`
@@ -110,6 +111,66 @@ impl BrowserSection for ModelicaSection {
                     .collect()
             })
             .unwrap_or_default();
+
+        let active_twin = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| {
+                workspace
+                    .active_twin
+                    .and_then(|id| workspace.twin(id))
+                    .map(|twin| {
+                        let files = twin
+                            .files()
+                            .iter()
+                            .filter(|file| {
+                                matches!(
+                                    &file.kind,
+                                    lunco_twin::FileKind::Document(kind)
+                                        if kind.as_str() == "modelica"
+                                )
+                            })
+                            .map(|file| file.relative_path.clone())
+                            .collect::<Vec<_>>();
+                        (twin.display_name(), twin.root.clone(), files)
+                    })
+            });
+        let twin_model_rows: Vec<std::path::PathBuf> = active_twin
+            .as_ref()
+            .map(|(_, _, files)| {
+                files
+                    .iter()
+                    .filter(|path| !query.is_active() || query.matches(&path.to_string_lossy()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if !twin_model_rows.is_empty()
+            && let Some((twin_name, twin_root, files)) = active_twin.as_ref()
+        {
+            let count = files.len();
+            let header =
+                egui::CollapsingHeader::new(format!("{twin_name} Modelica files ({count})"))
+                    .id_salt(("twin.modelica.files", twin_root))
+                    .default_open(false)
+                    .open(query.is_active().then_some(true));
+            header.show(ui, |ui| {
+                for relative_path in &twin_model_rows {
+                    let label = relative_path.to_string_lossy();
+                    let response =
+                        ui.selectable_label(false, label.as_ref())
+                            .on_hover_text(format!(
+                                "Open Modelica source from {twin_name}: {}",
+                                relative_path.display()
+                            ));
+                    if response.clicked() {
+                        ctx.actions.push(BrowserAction::OpenFile {
+                            relative_path: twin_root.join(relative_path),
+                        });
+                    }
+                }
+            });
+        }
 
         for (root_id, root_name) in &library_rows {
             // All libraries start collapsed; user expands the ones
@@ -158,6 +219,13 @@ impl BrowserSection for ModelicaSection {
                         if !(origin.is_writable() || origin.is_untitled()) {
                             return None;
                         }
+                        if origin.canonical_path().is_some_and(|path| {
+                            active_twin
+                                .as_ref()
+                                .is_some_and(|(_, root, _)| path.starts_with(root))
+                        }) {
+                            return None;
+                        }
                         // Doc-row label reflects the *container* (origin
                         // slug for Untitled drafts, filename for on-disk
                         // docs). The inner class name is rendered as the
@@ -179,7 +247,41 @@ impl BrowserSection for ModelicaSection {
             })
             .unwrap_or_default();
 
-        if library_rows.is_empty() && workspace_docs.is_empty() {
+        let generated = ctx
+            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
+            .map(|sources| sources.entries.clone())
+            .unwrap_or_default();
+        let matching_generated: Vec<_> = generated
+            .into_iter()
+            .filter(|entry| generated_entry_matches(entry, &query))
+            .collect();
+
+        let has_matching_library_item = ctx
+            .resource::<crate::package_tree::PackageTreeCache>()
+            .is_some_and(|cache| {
+                cache.roots.iter().any(|root| match root {
+                    lunco_modelica_index::package_tree::types::PackageNode::Category {
+                        id, ..
+                    } => crate::ui::panels::package_browser::root_matches(cache, id, &query),
+                    lunco_modelica_index::package_tree::types::PackageNode::Model {
+                        name, ..
+                    } => query.matches(name),
+                })
+            });
+
+        let has_matching_workspace_doc = !workspace_docs.is_empty();
+        let has_matching_twin_file = !twin_model_rows.is_empty();
+        let has_matching_generated = !matching_generated.is_empty();
+        let has_matching_library_item = if query.is_active() {
+            has_matching_library_item
+        } else {
+            !library_rows.is_empty()
+        };
+        if !has_matching_library_item
+            && !has_matching_workspace_doc
+            && !has_matching_twin_file
+            && !has_matching_generated
+        {
             ui.label(
                 egui::RichText::new(if query.is_active() {
                     "No Modelica items match the filter."
@@ -199,31 +301,21 @@ impl BrowserSection for ModelicaSection {
         // linked to their scene-network entity. They use the same class/view
         // path as every other model — source editor, diagram, and telemetry —
         // rather than opening in the generic text viewer.
-        let generated = ctx
-            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-            .map(|sources| sources.entries.clone())
-            .unwrap_or_default();
-        if !generated.is_empty() {
+        if !matching_generated.is_empty() {
             let theme = ctx
                 .resource::<lunco_theme::Theme>()
                 .cloned()
                 .unwrap_or_else(lunco_theme::Theme::dark);
-            let matching_generated: Vec<_> = generated
-                .into_iter()
-                .filter(|entry| generated_entry_matches(entry, &query))
-                .collect();
-            if !matching_generated.is_empty() {
-                ui.separator();
-                let header = egui::CollapsingHeader::new("Generated scene networks")
-                    .id_salt("twin.modelica.generated")
-                    .default_open(false)
-                    .open(query.is_active().then_some(true));
-                header.show(ui, |ui| {
-                    for entry in matching_generated {
-                        render_generated_network_row(ui, ctx, &theme, &entry);
-                    }
-                });
-            }
+            ui.separator();
+            let header = egui::CollapsingHeader::new("Generated scene networks")
+                .id_salt("twin.modelica.generated")
+                .default_open(false)
+                .open(query.is_active().then_some(true));
+            header.show(ui, |ui| {
+                for entry in matching_generated {
+                    render_generated_network_row(ui, ctx, &theme, &entry);
+                }
+            });
         }
     }
 }

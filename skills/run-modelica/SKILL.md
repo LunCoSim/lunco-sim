@@ -21,6 +21,23 @@ providers over `POST /api/commands`. **Drive everything with curl.** The
 is the primary surface because it is available in every build and exposes the
 exact wire response.
 
+## Find Modelica sources in the native browser
+
+In the Twin Browser, select **Modelica** to browse installed package roots,
+generated scene networks, open standalone documents, and every `.mo` file
+indexed by the active Twin. Native builds include the engine's structured
+Modelica packages even when no external source library is installed. Expand a
+package to browse it; an active filter searches all installed package roots on
+background workers and filters Twin files by their indexed relative paths.
+Opening a Twin row uses that Twin's indexed relative path. Installed source
+files use the shared read-only source loader.
+
+Opening a `.mo` file displays its source and parse diagnostics; it does not
+establish that the file is runnable alone. For example, a component such as
+`LunCo.Electrical.SolarPanel` may require inputs supplied by its composed USD
+network. Keep missing required inputs visible and validate that component in
+its owning composed scene rather than assigning fabricated standalone values.
+
 ## 0. Launch an app in API mode
 
 For disk-source admission errors, keep native absolute paths unchanged through

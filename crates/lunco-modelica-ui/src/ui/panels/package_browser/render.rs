@@ -25,7 +25,7 @@ pub(crate) fn render_node_single_ro(
     active_path: Option<&str>,
     _active_drill: Option<&str>,
     _depth: usize,
-    load_out: &mut Vec<String>,
+    load_out: &mut Vec<(String, bool)>,
     scan_errors: &std::collections::HashMap<String, String>,
     theme: &lunco_theme::Theme,
     query: &BrowserQuery,
@@ -71,7 +71,7 @@ pub(crate) fn render_node_single_ro(
                     if let Some(error) = scan_errors.get(id) {
                         ui.add(egui::Label::new(format!("Could not load package: {error}")).wrap());
                         if ui.button("Retry").clicked() {
-                            load_out.push(id.clone());
+                            load_out.push((id.clone(), false));
                         }
                         return;
                     }
@@ -96,7 +96,7 @@ pub(crate) fn render_node_single_ro(
                         // Unscanned: request a lazy scan (the caller
                         // defers the AsyncComputeTaskPool spawn) and show
                         // a loading row until the `ScanResult` lands.
-                        load_out.push(id.clone());
+                        load_out.push((id.clone(), false));
                     }
                     if children.is_none() || *is_loading {
                         ui.horizontal(|ui| {

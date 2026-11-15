@@ -694,7 +694,10 @@ the Twin's authored files and `.cache` before that same global cache.
 `lunco-assets-runtime::library` is the common installed-source store for native
 filesystem and in-memory backends. `LibrarySource::filesystem` prepares a complete,
 language-neutral resident inventory through `discovery::inventory_files`;
-source-language consumers filter that inventory themselves. Source byte reads
+source-language consumers filter that inventory themselves. Installation
+records the configured source-library filesystem root independently of source
+ordering, so additional engine-owned Modelica roots remain readable without
+becoming the user's primary library. Source byte reads
 revalidate containment after inventory and consume the resolved path. Source membership
 never probes storage during painting. Installations after UI startup prepare
 the store on a worker before publication. Relative paths use that owner's

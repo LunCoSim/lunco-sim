@@ -777,13 +777,12 @@ impl Plugin for ModelicaUiPlugin {
         // first to avoid
         // panics during mixed-mode or deferred plugin builds.
         app.init_resource::<lunco_workbench_browser::BrowserSectionRegistry>();
-        // One section per domain — `ModelicaSection` reads system
-        // libraries straight from `PackageTreeCache::roots` and
-        // workspace docs from `ModelicaDocuments`. No parallel
-        // registry to keep in sync. Adding a new library is a one-line
-        // `roots.push(...)` in `PackageTreeCache::new`; future domain
-        // crates (`UsdSection`, `SysmlSection`, ...) follow the same
-        // outer pattern with their own per-domain section.
+        // One section per domain — `ModelicaSection` reads installed source
+        // roots from `PackageTreeCache`, Twin files from `Twin::files()`, open
+        // documents from `ModelicaDocuments`, and generated networks from
+        // their runtime registry. No parallel Modelica inventory is maintained
+        // here. Future domain sections (`UsdSection`, `SysmlSection`, ...) follow
+        // the same outer pattern.
         app.world_mut()
             .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
             .register(browser_section::ModelicaSection);

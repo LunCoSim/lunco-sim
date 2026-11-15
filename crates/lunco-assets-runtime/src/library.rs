@@ -62,29 +62,56 @@ impl InMemoryLibrary {
     }
 }
 
-/// Process-wide, ordered source-library roots.
+/// Process-wide source roots and the configured library root, when present.
 ///
 /// This is installed once during boot. The source list may contain multiple
 /// libraries and may mix filesystem and in-memory backends. The Modelica
 /// loader owns the admission policy; this store only provides read-side
 /// access to the installed roots.
-static GLOBAL_LIBRARY_SOURCES: OnceLock<Vec<LibrarySource>> = OnceLock::new();
+#[derive(Clone)]
+struct InstalledLibrarySources {
+    sources: Vec<LibrarySource>,
+    primary_filesystem_root: Option<PathBuf>,
+}
 
-/// Install the process-wide, ordered list of source-library roots.
-pub fn install_global_library_sources(sources: Vec<LibrarySource>) -> std::io::Result<()> {
-    install_sources(&GLOBAL_LIBRARY_SOURCES, sources)
+static GLOBAL_LIBRARY_SOURCES: OnceLock<InstalledLibrarySources> = OnceLock::new();
+
+/// Install source roots and identify the configured library root, if present.
+/// The primary root must be one of the installed filesystem sources.
+pub fn install_global_library_sources(
+    sources: Vec<LibrarySource>,
+    primary_filesystem_root: Option<PathBuf>,
+) -> std::io::Result<()> {
+    install_sources(&GLOBAL_LIBRARY_SOURCES, sources, primary_filesystem_root)
 }
 
 fn install_sources(
-    slot: &OnceLock<Vec<LibrarySource>>,
+    slot: &OnceLock<InstalledLibrarySources>,
     sources: Vec<LibrarySource>,
+    primary_filesystem_root: Option<PathBuf>,
 ) -> std::io::Result<()> {
     let sources = admit_sources(sources)?;
-    let installed = slot.get_or_init(|| sources.clone());
-    let same = installed.len() == sources.len()
+    if primary_filesystem_root.as_ref().is_some_and(|primary| {
+        !sources.iter().any(
+            |source| matches!(source, LibrarySource::Filesystem(root) if root.root() == primary),
+        )
+    }) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "primary source-library root must be an installed filesystem source",
+        ));
+    }
+    let candidate = InstalledLibrarySources {
+        sources,
+        primary_filesystem_root,
+    };
+    let installed = slot.get_or_init(|| candidate.clone());
+    let same = installed.primary_filesystem_root == candidate.primary_filesystem_root
+        && installed.sources.len() == candidate.sources.len()
         && installed
+            .sources
             .iter()
-            .zip(&sources)
+            .zip(&candidate.sources)
             .all(|(left, right)| match (left, right) {
                 (LibrarySource::Filesystem(left), LibrarySource::Filesystem(right)) => {
                     left.root == right.root
@@ -129,7 +156,7 @@ fn admit_sources(sources: Vec<LibrarySource>) -> std::io::Result<Vec<LibrarySour
 pub fn global_library_sources() -> &'static [LibrarySource] {
     GLOBAL_LIBRARY_SOURCES
         .get()
-        .map(Vec::as_slice)
+        .map(|installed| installed.sources.as_slice())
         .unwrap_or(&[])
 }
 
@@ -138,7 +165,7 @@ pub fn has_library_source() -> bool {
     !global_library_sources().is_empty()
 }
 
-/// Return whether `path` belongs to an installed filesystem-backed library.
+/// Return whether `path` belongs to a read-only Modelica source library.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn owns_filesystem_path(path: &std::path::Path) -> bool {
     global_library_sources().iter().any(
@@ -146,7 +173,7 @@ pub fn owns_filesystem_path(path: &std::path::Path) -> bool {
     )
 }
 
-/// wasm has no filesystem-backed source roots.
+/// wasm has no filesystem-backed Modelica sources.
 #[cfg(target_arch = "wasm32")]
 pub fn owns_filesystem_path(_path: &std::path::Path) -> bool {
     false
@@ -221,14 +248,11 @@ pub fn has_in_memory_library() -> bool {
         .any(|source| matches!(source, LibrarySource::InMemory(_)))
 }
 
-/// Return the first filesystem-backed library root, if any.
+/// Return the configured source-library filesystem root, if one is installed.
 pub fn primary_filesystem_library_root() -> Option<&'static std::path::Path> {
-    global_library_sources()
-        .iter()
-        .find_map(|source| match source {
-            LibrarySource::Filesystem(path) => Some(path.root()),
-            LibrarySource::InMemory(_) => None,
-        })
+    GLOBAL_LIBRARY_SOURCES
+        .get()
+        .and_then(|installed| installed.primary_filesystem_root.as_deref())
 }
 
 impl LibrarySource {
@@ -482,9 +506,26 @@ mod resolution_tests {
             assert_eq!(catalog.read(path).unwrap(), parity.read(path).unwrap());
         }
         let slot = OnceLock::new();
-        install_sources(&slot, vec![native.clone()]).unwrap();
-        install_sources(&slot, vec![native.clone()]).unwrap();
-        assert!(install_sources(&slot, vec![memory.clone()]).is_err());
+        install_sources(&slot, vec![native.clone()], Some(root.clone())).unwrap();
+        install_sources(&slot, vec![native.clone()], Some(root.clone())).unwrap();
+        assert_eq!(
+            slot.get().unwrap().primary_filesystem_root.as_deref(),
+            Some(root.as_path())
+        );
+        assert!(install_sources(&slot, vec![native.clone()], None).is_err());
+        assert!(install_sources(&slot, vec![memory.clone()], None).is_err());
+        assert!(
+            install_sources(
+                &OnceLock::new(),
+                vec![native.clone()],
+                Some(outside.clone())
+            )
+            .is_err()
+        );
+
+        let additional_source = OnceLock::new();
+        install_sources(&additional_source, vec![native.clone()], None).unwrap();
+        assert!(additional_source.get().unwrap().primary_filesystem_root.is_none());
         for source in [&native, &memory] {
             assert_eq!(source.read(literal).unwrap(), Some(b"inside".to_vec()));
             assert!(source.read(Path::new("../outside.bin")).is_err());

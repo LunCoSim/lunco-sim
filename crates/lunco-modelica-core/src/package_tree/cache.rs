@@ -37,17 +37,14 @@ pub struct PackageTreeCache {
     pub in_memory_models: Vec<InMemoryEntry>,
     pub bundled_tree_indexed: bool,
     /// Whether the library roots have been reconciled against the provider
-    /// after construction. Native is complete at `new()`; web gains its
-    /// bundle-derived extra roots once `LibraryLoadState::Ready`. See
+    /// after construction. Source roots can arrive asynchronously on either
+    /// target. See
     /// [`Self::reconcile_library_roots`].
     pub library_roots_synced: bool,
 }
 
 impl PackageTreeCache {
     pub fn new() -> Self {
-        // Native roots project the admitted source inventory; browser roots
-        // appear when the parsed bundle becomes resident. Reconciliation keeps
-        // the existing nodes and expansion state when those facts arrive.
         let mut roots: Vec<PackageNode> = super::library_tree::library_tree()
             .library_roots()
             .iter()
@@ -78,12 +75,9 @@ impl PackageTreeCache {
         }
     }
 
-    /// Insert any library roots that became known after construction — on web,
-    /// the third-party libs carried by the parsed bundle, which isn't resident
-    /// when `new()` runs. Idempotent and flag-gated; native is already complete
-    /// at `new()` so this only flips the flag. Preserves existing nodes and
-    /// their expansion state, inserting extras just before the bundled-examples
-    /// root. Call only once the bundle is ready (see the reconcile system).
+    /// Insert roots that became known after construction. Idempotent and
+    /// flag-gated; preserves existing nodes and their expansion state while
+    /// inserting new roots before the bundled-examples root.
     pub fn reconcile_library_roots(&mut self) {
         if self.library_roots_synced {
             return;

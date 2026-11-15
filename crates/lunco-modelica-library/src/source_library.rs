@@ -4,10 +4,10 @@
 //!
 //! ## Native
 //!
-//! If the configured source-library root returns a path, we install it as the
-//! runtime source. Native editor indexing/provisioning is composed separately
-//! by `lunco-modelica-assets`; this plugin never opens a native network
-//! connection.
+//! Native installs the engine Modelica asset directory and, when present, the
+//! configured source-library root. Native editor indexing/provisioning is
+//! composed separately by `lunco-modelica-assets`; this plugin never opens a
+//! native network connection.
 //!
 //! ## Web
 //!
@@ -54,6 +54,42 @@ pub fn source_library_cache_dir() -> PathBuf {
 /// Resolve the materialised Modelica source-library root, if it exists.
 pub fn source_library_root_path() -> std::io::Result<Option<PathBuf>> {
     lunco_assets_core::source_library_root_path(SOURCE_LIBRARY_ASSET_ROOT)
+}
+
+/// Install all native Modelica source roots into the shared source store.
+/// The configured source-library root remains explicitly identified as the
+/// primary library; the engine model root is always available independently.
+/// Filesystem inventories are prepared before publication so all readers
+/// observe the same complete, immutable source set.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn install_native_source_roots(primary_root: Option<PathBuf>) -> std::io::Result<()> {
+    let primary_root = primary_root
+        .as_deref()
+        .map(lunco_assets_core::canonical_directory_root)
+        .transpose()?;
+    let mut roots = primary_root.iter().cloned().collect::<Vec<_>>();
+    let engine_models_root =
+        lunco_assets_core::canonical_directory_root(&lunco_assets_core::engine_models_root()?)?;
+    if !roots.contains(&engine_models_root) {
+        roots.push(engine_models_root);
+    }
+
+    let installed = lunco_assets_runtime::library::global_library_sources();
+    let already_installed = installed.len() == roots.len()
+        && lunco_assets_runtime::library::primary_filesystem_library_root()
+            == primary_root.as_deref()
+        && installed.iter().zip(&roots).all(|(source, root)| {
+            matches!(source, LibraryAssetSource::Filesystem(source) if source.root() == root)
+        });
+    if already_installed {
+        return Ok(());
+    }
+
+    let sources = roots
+        .into_iter()
+        .map(LibraryAssetSource::filesystem)
+        .collect::<std::io::Result<Vec<_>>>()?;
+    lunco_assets_runtime::library::install_global_library_sources(sources, primary_root)
 }
 
 /// Return the web-relative path of one source-library bundle artifact.
@@ -520,9 +556,12 @@ pub fn ensure_library_source_unpacked() -> Result<(), String> {
     match lunco_assets_core::web_fetch::unpack_tar_zst(bytes, meta.file_count) {
         Ok(files) => {
             let n = files.len();
-            lunco_assets_runtime::library::install_global_library_sources(vec![
-                LibraryAssetSource::InMemory(Arc::new(LibraryInMemory { files })),
-            ])
+            lunco_assets_runtime::library::install_global_library_sources(
+                vec![LibraryAssetSource::InMemory(Arc::new(LibraryInMemory {
+                    files,
+                }))],
+                None,
+            )
             .map_err(|error| error.to_string())?;
             info!("[source library] source bundle unpacked lazily ({n} files) for drill-in");
             Ok(())
@@ -672,8 +711,16 @@ fn on_library_install_action(
 /// Source-language filtering belongs here, over the shared resident catalog.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn source_file_count() -> usize {
+    let Some(primary_root) = lunco_assets_runtime::library::primary_filesystem_library_root()
+    else {
+        return 0;
+    };
     lunco_assets_runtime::library::global_library_sources()
         .iter()
+        .find(|source| {
+            matches!(source, LibraryAssetSource::Filesystem(root) if root.root() == primary_root)
+        })
+        .into_iter()
         .flat_map(|source| source.files())
         .filter(|path| {
             path.extension()
@@ -706,11 +753,7 @@ impl Plugin for SourceLibraryPlugin {
         {
             let settings = app.world().resource::<crate::settings::LibrarySettings>();
             let resolved = configured_native_library_root(settings).and_then(|root| {
-                if let Some(root) = &root {
-                    lunco_assets_runtime::library::install_global_library_sources(vec![
-                        LibraryAssetSource::filesystem(root.clone())?,
-                    ])?;
-                }
+                install_native_source_roots(root.clone())?;
                 Ok(root)
             });
             let state = match resolved {

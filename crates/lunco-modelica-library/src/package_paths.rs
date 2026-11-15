@@ -50,9 +50,9 @@ pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
         return None;
     }
 
-    // Search every installed library root in priority order (source library
-    // first, then any extra libraries). The walk (`resolve_in_root`:
-    // longest-prefix-first, package.mo over flat `.mo`) is pure §13
+    // Search every installed source root in the store's priority order. The
+    // walk (`resolve_in_root`: longest-prefix-first, package.mo over flat
+    // `.mo`) is pure §13
     // path logic; each root's backend membership (`contains`) and its
     // join base (`base`) are owned by `lunco_assets` — no filesystem
     // access here. So both targets run identical logic and the §13
