@@ -526,7 +526,9 @@ waypoints for the electrical bus. Causal signals retain their scalar Modelica
 bindings and equality equations; the policy draws directed orthogonal lines
 from the same typed link facts and bundles each component pair. High-fanout
 sources share a trunk; external inputs use short local captions and shared
-input buses. Member captions omit generated path prefixes.
+input buses. Each receiving component emits its local boundary-input bundle
+once, with one stub and caption per distinct input. Member captions omit
+generated path prefixes.
 Exact variable bindings remain in the generated equations, while promoted
 output telemetry stays in the interface and equations without one canvas wire
 per scalar output. The shared `POWER BUS` rail is used only when the complete

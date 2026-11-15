@@ -215,6 +215,11 @@ for signatures and apply boundaries.
 
 ## Componentized vehicle workflow
 
+For inspectable subsystem topology and diagram delivery, read
+[Usable USD system models](references/inspectable-usd-systems.md) before choosing
+component and solver boundaries. Apply its acceptance evidence to the installed
+assembly, not only the reusable parts.
+
 Build a vehicle as a small set of contracts, not one monolithic USD file. Put
 each independently reusable, articulated, or domain-owning subsystem in its
 own component boundary when it has a local frame, mount interface, mass or

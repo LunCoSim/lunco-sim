@@ -1201,7 +1201,8 @@ fn signal_label(source, target) {
 fn port_caption(name) {
     let segments = name.split(".");
     let caption = segments[segments.len - 1];
-    caption.replace("_", " ")
+    caption.replace("_", " ");
+    caption
 }
 
 fn causal_wire_graphics(x1, y1, x2, y2, label, index, show_label) {
@@ -1420,7 +1421,8 @@ fn boundary_signal_graphics(net, members, positions) {
     for link in net.boundary_links {
         if !has_member(members, link.target_path) { continue; }
         if shared_input_index.contains(link.input) { continue; }
-        let key = link.target_path + " -> " + link.target_input;
+        // One pass draws every non-shared input on this receiving component.
+        let key = link.target_path;
         if handled.contains(key) { continue; }
         handled[key] = true;
         let bundle = [];

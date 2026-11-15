@@ -259,6 +259,11 @@ retaining the diagram's authored DynamicSelect readouts.
 floating panel. Embedded scopes use a `PlotNode` record, bare or qualified as
 `LunCoAnnotations.PlotNode`; arbitrary record names are not plot annotations.
 
+When authoring the USD assembly behind a generated model, apply
+[Usable USD system models](../compose-multidomain-twin/references/inspectable-usd-systems.md).
+Generated equation diagrams and the complete USD Connections view have distinct
+scopes; verify both before claiming full system coverage.
+
 Generated USD unit diagrams place connected causal branches together, route
 high fan-out outputs on shared trunks with target taps, and group boundary
 inputs shared across members on labeled buses. Single-target boundary inputs
@@ -268,6 +273,9 @@ and member captions identify their native Modelica types. The unit header report
 connection, signal-link, and external-input counts. These are Modelica diagram
 annotations; inspect the generated declarations and `connect()` equations for
 the authoritative bindings and physical topology.
+When changing boundary-input graphics, run the authored production scene
+`assets/scenes/tests/generated_boundary_graphics.usda`. It checks that two
+inputs on one receiver each draw one caption and retain their solved bindings.
 
 **In `luncosim`, switch to the Modelica view before plotting/screenshotting.**
 The compile/run/experiment *commands and query providers work regardless* (they're

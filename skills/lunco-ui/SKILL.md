@@ -310,6 +310,10 @@ source. Navigation must preserve exact source identity and reject missing cards.
 Modelica `OpenFile` resolves registered asset URIs on its worker through
 `SchemeRegistry`, preserving the document owner and read-only library state.
 Exercise the installed policy with `assets/scripting/tests/test_diagram_layout.rhai`.
+For system-diagram acceptance and model/view ownership, read
+[Usable USD system models](../compose-multidomain-twin/references/inspectable-usd-systems.md).
+Check source-graph retention and reopened views as well as visual fit.
+
 Use `diagram.group.plan` for optional Rhai grouping over immutable program-source,
 typed-port, topology and standard CollectionAPI facts; Rust validates and renders
 its disjoint partition on the existing layout worker. Expanded frames and collapsed
