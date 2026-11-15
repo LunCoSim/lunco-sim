@@ -9,6 +9,40 @@ use lunco_canvas::{DrawCtx, EdgeVisual, Node, NodeVisual, Pos};
 
 use super::projection::{UsdPrimNodeData, UsdWireData, WireKind};
 
+/// Conservative two-column caption geometry in canvas rendering points.
+pub(super) fn caption_card_width(longest_caption: usize) -> f32 {
+    // String lengths are bounded by usize, whose range fits finite f32.
+    (36.0 + longest_caption as f32 * 16.0).max(250.0)
+}
+
+pub(super) fn endpoint_caption(identity: &str, member: Option<&str>) -> String {
+    let name = identity.split_once(':').map_or(identity, |(_, name)| name);
+    let caption = if name.starts_with('~') {
+        "body".into()
+    } else {
+        name.replace('_', " ")
+    };
+    member.map_or(caption.clone(), |member| format!("{member} · {caption}"))
+}
+
+fn port_caption(node: &Node, port: &lunco_canvas::Port) -> String {
+    let data = node.data.downcast_ref::<UsdPrimNodeData>();
+    let endpoint = data.and_then(|data| data.group_ports.get(port.id.as_str()));
+    let identity = endpoint.map_or(port.id.as_str(), |endpoint| endpoint.port.as_str());
+    if let (Some(data), Some(endpoint)) = (data, endpoint) {
+        let repeated = data
+            .group_ports
+            .values()
+            .filter(|other| other.port == endpoint.port)
+            .count()
+            > 1;
+        if repeated || identity.starts_with('~') {
+            return endpoint_caption(identity, Some(&endpoint.node.label));
+        }
+    }
+    endpoint_caption(identity, None)
+}
+
 /// Card visual for a `"usd.prim"` node.
 pub(crate) struct UsdPrimNodeVisual {
     pub type_name: String,
@@ -170,8 +204,24 @@ impl NodeVisual for UsdPrimNodeVisual {
         // Causal ports use circles; acausal connectors use hollow diamonds.
         // Labels retain the authored USD property leaf and connector kind.
         let zoom = ctx.viewport.zoom;
-        let port_font = lunco_theme::TypographyRole::DenseData.font_id(ctx.ui.style().as_ref());
-        let readable_rows = super::projection::PORT_ROW_H * zoom >= port_font.size * 1.25;
+        let mut port_font = lunco_theme::TypographyRole::DenseData.font_id(ctx.ui.style().as_ref());
+        let row_spacing = if node
+            .data
+            .downcast_ref::<UsdPrimNodeData>()
+            .is_some_and(|data| data.group_id.is_some())
+        {
+            let outputs = node
+                .ports
+                .iter()
+                .filter(|port| port.kind.as_str() == "output")
+                .count();
+            (node.rect.height() - 70.0) / outputs.max(node.ports.len() - outputs).max(1) as f32
+        } else {
+            super::projection::PORT_ROW_H
+        };
+        let readable_rows =
+            row_spacing >= port_font.size * 1.25 && row_spacing * zoom >= port_font.size * 1.25;
+        port_font.size *= zoom;
         let r = (4.0 * zoom).clamp(2.5, 6.0);
         for port in &node.ports {
             if port.id.as_str().starts_with('~') {
@@ -225,23 +275,7 @@ impl NodeVisual for UsdPrimNodeVisual {
                 painter.clone().with_clip_rect(label_rect).text(
                     egui::pos2(p.x + offset.x, p.y + offset.y),
                     anchor,
-                    if port.kind.as_str() == "acausal" {
-                        format!(
-                            "{} · acausal",
-                            port.id
-                                .as_str()
-                                .split_once(':')
-                                .map(|(_, name)| name)
-                                .unwrap_or(port.id.as_str())
-                        )
-                    } else {
-                        port.id
-                            .as_str()
-                            .split_once(':')
-                            .map(|(_, name)| name)
-                            .unwrap_or(port.id.as_str())
-                            .to_string()
-                    },
+                    port_caption(node, port),
                     port_font.clone(),
                     t.text_subdued,
                 );

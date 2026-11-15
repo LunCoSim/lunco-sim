@@ -1377,6 +1377,9 @@ the UI tool library.
 Transient editor panel snapshots, row indexes, drafts, menus and worker handles
 use registered scene resources. Connections retains isolated preview graphs
 through document lifetime and fences async results by exact source lease.
+Connections uses `lunco-assets-core` to persist stable source identities for
+named view documents. Collapsed port labels resolve to their original endpoints,
+and the shared canvas bounds include feedback routes when fitting a full schema.
 Rendered scene-editing presentation. Implements the egui/workbench panels,
 selection and USD preview interaction, physics diagnostic visualization, and
 the bounded async preparation/commit path for transient curve views and terrain-local annotation sources.

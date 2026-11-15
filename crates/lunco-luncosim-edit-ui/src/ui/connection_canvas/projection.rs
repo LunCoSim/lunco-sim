@@ -42,9 +42,8 @@ pub(crate) const NODE_KIND: &str = "usd.prim";
 /// Edge kind id registered in the canvas `VisualRegistry`.
 pub(crate) const EDGE_KIND: &str = "usd.wire";
 
-// Layout constants (world units). A node is a fixed card; ranks march right,
-// rows march down. Wide enough to fit a prim leaf name + type label.
-const NODE_W: f32 = 250.0;
+// Canvas rendering dimensions in world units. Caption widths are measured
+// per card; ranks march right and port rows march down.
 const NODE_H: f32 = 96.0;
 pub(super) const PORT_ROW_H: f32 = 19.0;
 pub(super) const COL_SPACING: f32 = 360.0;
@@ -808,7 +807,15 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
     let mut node_ids = Vec::with_capacity(n);
     for i in 0..n {
         let node = &relevant[i];
-        let rect = Rect::from_min_size(positions[i], NODE_W, node_heights[i]);
+        let longest_caption = in_ports[i]
+            .iter()
+            .chain(out_ports[i].iter())
+            .chain(acausal_ports[i].iter())
+            .map(|name| super::visuals::endpoint_caption(name, None).chars().count())
+            .max()
+            .unwrap_or(0);
+        let width = super::visuals::caption_card_width(longest_caption);
+        let rect = Rect::from_min_size(positions[i], width, node_heights[i]);
         let mut ports: Vec<Port> = Vec::new();
 
         let ins: Vec<&String> = in_ports[i].iter().collect();
@@ -817,7 +824,7 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
                 id: PortId::new(format!("inputs:{name}")),
                 local_offset: Pos::new(
                     if node.boundary == Some(BoundaryRole::Inputs) {
-                        NODE_W
+                        width
                     } else {
                         0.0
                     },
@@ -834,7 +841,7 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
                     if node.boundary == Some(BoundaryRole::Outputs) {
                         0.0
                     } else {
-                        NODE_W
+                        width
                     },
                     port_y(k, outs.len(), node_heights[i]),
                 ),
@@ -861,7 +868,7 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         // every node so any joint edge resolves.
         ports.push(Port {
             id: PortId::new("~jr"),
-            local_offset: Pos::new(NODE_W, node_heights[i] * 0.5),
+            local_offset: Pos::new(width, node_heights[i] * 0.5),
             kind: "joint".into(),
         });
         ports.push(Port {
@@ -1358,6 +1365,22 @@ mod tests {
     }
 
     #[test]
+    fn parallel_feedback_edges_share_trunk_and_keep_ports() {
+        let scene = build_scene(
+            vec![prim("/Controller", &["u", "v"], &["x", "y"], false)],
+            vec![
+                dataflow("/Controller", "x", "/Controller", "u"),
+                dataflow("/Controller", "y", "/Controller", "v"),
+            ],
+        );
+        let edges: Vec<_> = scene.edges().map(|(_, edge)| edge).collect();
+        assert_eq!(edges.len(), 2);
+        assert_ne!(edges[0].from.port, edges[1].from.port);
+        assert_ne!(edges[0].to.port, edges[1].to.port);
+        assert_eq!(edges[0].waypoints[1].y, edges[1].waypoints[1].y);
+    }
+
+    #[test]
     fn referenced_interface_does_not_require_duplicate_authored_attribute() {
         let mut body = prim("/Body", &[], &[], true);
         body.referenced_ports.insert("outputs:position_y".into());
@@ -1658,6 +1681,7 @@ mod tests {
 /// Refresh unauthored wire geometry after automatic or saved layout changes.
 pub(super) fn route_edges(scene: &mut Scene) {
     let mut lanes: Vec<Vec<(f32, f32)>> = Vec::new();
+    let mut pair_lanes = HashMap::new();
     let routes: Vec<_> = scene
         .edges()
         .filter(|(_, edge)| {
@@ -1677,20 +1701,28 @@ pub(super) fn route_edges(scene: &mut Scene) {
                     source.rect.min.x.min(target.rect.min.x) - 24.0,
                     source.rect.max.x.max(target.rect.max.x) + 24.0,
                 );
-                // Interval coloring gives overlapping feedback spans independent
-                // lanes while reusing lanes for disjoint spans.
-                let lane = lanes
-                    .iter()
-                    .position(|intervals| {
-                        intervals
-                            .iter()
-                            .all(|other| span.1 < other.0 || span.0 > other.1)
-                    })
-                    .unwrap_or(lanes.len());
-                if lane == lanes.len() {
-                    lanes.push(Vec::new());
-                }
-                lanes[lane].push(span);
+                // Parallel bindings share a geometric trunk for their exact
+                // node pair. Every edge keeps its own ports and identity.
+                let kind = edge.data.downcast_ref::<UsdWireData>()?.kind;
+                let pair = (edge.from.node, edge.to.node, kind);
+                let lane = if let Some(lane) = pair_lanes.get(&pair) {
+                    *lane
+                } else {
+                    let lane = lanes
+                        .iter()
+                        .position(|intervals| {
+                            intervals
+                                .iter()
+                                .all(|other| span.1 < other.0 || span.0 > other.1)
+                        })
+                        .unwrap_or(lanes.len());
+                    if lane == lanes.len() {
+                        lanes.push(Vec::new());
+                    }
+                    lanes[lane].push(span);
+                    pair_lanes.insert(pair, lane);
+                    lane
+                };
                 let top = scene
                     .nodes()
                     .filter(|(_, node)| node.rect.max.x >= span.0 && node.rect.min.x <= span.1)

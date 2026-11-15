@@ -314,17 +314,39 @@ Use `diagram.group.plan` for optional Rhai grouping over immutable program-sourc
 typed-port, topology and standard CollectionAPI facts; Rust validates and renders
 its disjoint partition on the existing layout worker. Expanded frames and collapsed
 summary cards preserve full USD topology. Resolve summary ports to their exact
-original endpoint before authoring or inspecting a connection. Use the typed
+original endpoint before authoring or inspecting a connection.
+Component collections use their owning system's label; USD lighting collections
+(`lightLink`, `shadowLink`, `filterLink`) remain illumination membership and do
+not partition the engineering diagram. Use the typed
 `SetConnectionGroup`, `SetConnectionGroupCollapsed`, `RemoveConnectionGroup`,
 `MoveConnectionGroup` and `SetConnectionGrouping` commands; group movement is one
 journaled edit for all member placements. Manual membership, disclosure, exclusions
-and the grouping switch belong to each existing named view. Salvage usable groups
+and the grouping switch belong to each existing named view.
+Membership edits validate against the full current source graph, including
+members of collapsed groups, and reject summary-card keys or absent prims.
+Salvage usable groups
 and placements independently when an optional view file is damaged. Verify installed
 policies through `assets/scripting/tests/test_diagram_groups.rhai` as well as the
 layout gate; exercise collapse/expand, movement and rejection in the production API.
 Persist named scopes and layouts in separate `.lunco-view.toml` project
 artifacts using `lunco-doc::diagram_view` / `DocumentHost`, through typed view
 commands. Each view has independent placement; USD files only own topology.
+Saved source addresses use `lunco-assets-core` stable source URIs rather than
+mount authorities, so views can reopen after the Twin is remounted.
+Use the authored **Systems** perspective (`ActivatePerspective { id: "systems" }`)
+for a full workspace Connections canvas; the Editor also exposes the same panel.
+Collapsed port captions resolve their original endpoints; generated group keys are never
+display labels. Repeated port names retain the member label for disambiguation.
+System framing includes routed feedback wires as well as node rectangles.
+Ordinary and summary card widths are computed from endpoint captions at the
+renderer owner; right-side port anchors use the resulting card width. Summary
+geometry is passed as `summary_width` / `summary_height` in each layout group fact. The policy
+uses those dimensions; it does not estimate card geometry independently.
+Collapsed cards cap their height at sixteen port rows and distribute every exact
+endpoint along that boundary. Captions appear only when the actual row spacing
+permits readable text; the inspector retains all original endpoint identities.
+Parallel feedback bindings of the same node pair and wire kind share a routed
+lane; each edge still retains its own original ports for tracing and inspection.
 `Save views` / `Load views` use bounded asynchronous `lunco-storage` work and
 recover valid entries from missing/corrupted optional view files with warnings
 and automatic layout. Different sources or unsupported versions use the loaded

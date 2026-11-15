@@ -335,6 +335,16 @@ own feeder lane to the shared power rail. This is only Modelica `Placement` and
 remain the topology authority, and the generic canvas flow animation reads the
 declared `Pin.i` values from the live model state.
 
+Generated USD networks keep repeated causal branches together in their unit
+diagrams. High fan-out sources use one shared signal trunk with a tap to each
+target; boundary inputs shared across members use a labeled trunk, and
+single-target inputs use short, named stubs at their receiving members. The
+annotations are presentation only: typed USD connectors still
+generate the physical `connect()` equations, and each causal or boundary
+binding remains explicit in the generated Modelica declaration. A subsystem
+label reports both its connector domain and any signal-only members, so a
+propulsion group does not imply that every member owns a `FluidPort`.
+
 The battery owns `outputs:soc_out`. A network-root `outputs:soc` is an optional,
 explicit public boundary for scripts and external consumers; its authored USD
 connection records that the value comes from the battery. It is not a second

@@ -1,4 +1,20 @@
-# Rocket engine presentation
+# Propulsion assemblies and presentation
+
+`pressure_fed_engine.usda` references three reusable Modelica program parts:
+`FuelValve`, `OxidizerValve`, and `Chamber`. Its USD connections own the internal
+fluid topology. Install it under an engine identity and include all three part
+paths in the parent `CollectionAPI:components`; the assembly creates no separate
+solver. Connect tank outlets to the valve inlets, command and health to both
+valves, reservoir mass to each valve, and nozzle-design velocity to the chamber.
+Install the reference and wait for its composed ports before applying external
+connections. Set valve/chamber parameters from the owning design requirements. Use chamber
+outputs for thrust, plume photometry and wall heating.
+
+The `pressure_fed_engine::component_plan` Rhai tool creates this component with
+typed USD document operations. Its numerical models retain passive pressure
+loss, valve response, mass conservation and chamber performance equations.
+
+## Rocket engine presentation
 
 Reference `rocket_engine_visual.usda` at `/Engine`; position its render-only
 `Exhaust` frame at the physical nozzle exit. It provides expanding volume

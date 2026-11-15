@@ -7,7 +7,7 @@
 //! initialization owns evaluated defaults and live variable values.
 
 use rumoca_core::{Causality, ClassType, Variability};
-use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, StoredDefinition, TerminalType};
+use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, Import, StoredDefinition, TerminalType};
 use std::collections::{BTreeSet, HashMap};
 
 /// True when an expression names a `PlotNode` record in a `__LunCo` annotation.
@@ -71,6 +71,10 @@ pub struct ModelInterface {
     /// Direct declarations with explicit `output` causality in the selected
     /// class. Checked compiler facts resolve alias and inherited causality.
     pub outputs: std::collections::BTreeSet<String>,
+    /// Direct component declaration names and source-scoped Modelica types.
+    /// USD-generated diagram policies use these source facts to classify
+    /// connector edges without guessing from instance or class names.
+    pub component_types: std::collections::BTreeMap<String, String>,
     /// Authored documentation from the selected declarations. Checked FMI
     /// inventory supplies live telemetry metadata.
     pub variable_metadata: HashMap<String, ModelicaVariableMetadata>,
@@ -163,13 +167,24 @@ fn project_model_interface(
     class: Option<&ClassDef>,
 ) -> ModelInterface {
     let mut interface = ModelInterface {
-        model_name,
+        model_name: model_name.clone(),
         within: within_package(ast),
         required_source_roots: rumoca_compile::compile::source_root_dependencies(ast),
         ..Default::default()
     };
     if let Some(class) = class {
+        let class_name = model_name.unwrap_or_default();
+        let within = interface.within.clone();
         for component in class.components.values() {
+            interface.component_types.insert(
+                component.name.clone(),
+                authored_component_type(
+                    &component.type_name.to_string(),
+                    class,
+                    &class_name,
+                    within.as_deref(),
+                ),
+            );
             if matches!(component.variability, Variability::Parameter(_))
                 && let Some(value) = extract_numeric_binding(&component.binding)
             {
@@ -197,6 +212,63 @@ fn project_model_interface(
         }
     }
     interface
+}
+
+fn authored_component_type(
+    authored: &str,
+    class: &ClassDef,
+    class_name: &str,
+    within: Option<&str>,
+) -> String {
+    if matches!(authored, "Real" | "Integer" | "Boolean" | "String") {
+        return authored.to_owned();
+    }
+
+    let parts: Vec<_> = authored.split('.').collect();
+    let first = parts.first().copied().unwrap_or_default();
+    for import in &class.imports {
+        let resolved = match import {
+            Import::Qualified { path, .. } => {
+                let path = path.to_string();
+                let alias = path.rsplit('.').next().unwrap_or(&path);
+                (alias == first).then_some((path, parts.len() > 1))
+            }
+            Import::Renamed { alias, path, .. } => {
+                (alias.text.as_ref() == first).then_some((path.to_string(), parts.len() > 1))
+            }
+            Import::Selective { path, names, .. } => names
+                .iter()
+                .any(|name| name.text.as_ref() == first)
+                .then_some((format!("{}.{}", path, first), parts.len() > 1)),
+            Import::Unqualified { .. } => None,
+        };
+        if let Some((mut base, has_suffix)) = resolved {
+            if has_suffix {
+                for part in parts.iter().skip(1) {
+                    base.push('.');
+                    base.push_str(part);
+                }
+            }
+            return base;
+        }
+    }
+
+    // A nested class is the nearest exact declaration scope. Otherwise a
+    // simple name in a packaged source resolves from that package's scope.
+    if parts.len() == 1 && class.classes.contains_key(authored) {
+        return format!("{class_name}.{authored}");
+    }
+    if parts.len() == 1
+        && !class
+            .imports
+            .iter()
+            .any(|import| matches!(import, Import::Unqualified { .. }))
+    {
+        if let Some(within) = within.filter(|within| !within.is_empty()) {
+            return format!("{within}.{authored}");
+        }
+    }
+    authored.to_owned()
 }
 
 /// Extract the model name from Modelica source code.
@@ -809,6 +881,37 @@ end Test;
         let params = parse_model_interface(source, "parameters.mo").parameters;
         // Parameter without binding value should not appear (no numeric value)
         assert!(params.is_empty());
+    }
+
+    #[test]
+    fn interface_preserves_source_scoped_component_types() {
+        let source = r#"
+within Demo;
+model Network
+  import Electrical = LunCo.Electrical;
+  Electrical.Pin battery;
+  LunCo.Thermal.HeatPort radiator;
+  Pin terminal;
+  Real temperature;
+end Network;
+"#;
+        let component_types = parse_model_interface(source, "Network.mo").component_types;
+        assert_eq!(
+            component_types.get("battery").map(String::as_str),
+            Some("LunCo.Electrical.Pin")
+        );
+        assert_eq!(
+            component_types.get("radiator").map(String::as_str),
+            Some("LunCo.Thermal.HeatPort")
+        );
+        assert_eq!(
+            component_types.get("terminal").map(String::as_str),
+            Some("Demo.Pin")
+        );
+        assert_eq!(
+            component_types.get("temperature").map(String::as_str),
+            Some("Real")
+        );
     }
 
     #[test]

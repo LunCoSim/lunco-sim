@@ -33,6 +33,8 @@ pub(super) struct Group {
     pub rect: Option<Rect>,
     pub internal_links: usize,
     pub feedback_links: usize,
+    pub summary_width: f32,
+    pub summary_height: f32,
 }
 impl Group {
     pub(super) fn key(&self) -> String {
@@ -165,9 +167,74 @@ pub(super) fn evaluate(
             rect: None,
             internal_links: 0,
             feedback_links: 0,
+            summary_width: 0.0,
+            summary_height: 0.0,
         });
     }
     (groups, warnings)
+}
+
+/// Rendering geometry is computed once from the same endpoint captions used by
+/// the cards, then supplied to both layout policy and quotient projection.
+pub(super) fn size_summaries(groups: &mut [Group], facts: &HookValue) -> Result<(), String> {
+    let Some(HookValue::Array(nodes)) = facts.get("nodes") else {
+        return Err("Summary geometry lacks nodes".into());
+    };
+    let Some(HookValue::Array(edges)) = facts.get("edges") else {
+        return Err("Summary geometry lacks edges".into());
+    };
+    let labels: BTreeMap<_, _> = nodes
+        .iter()
+        .filter_map(|node| Some((node.get("path")?.as_str()?, node.get("label")?.as_str()?)))
+        .collect();
+    for group in groups {
+        let mut endpoints = BTreeMap::new();
+        for edge in edges {
+            let source = edge
+                .get("source")
+                .and_then(HookValue::as_str)
+                .ok_or("Summary edge lacks source")?;
+            let target = edge
+                .get("target")
+                .and_then(HookValue::as_str)
+                .ok_or("Summary edge lacks target")?;
+            let from = group.members.contains(source);
+            let to = group.members.contains(target);
+            if from == to {
+                continue;
+            }
+            let (path, key) = if from {
+                (source, "source_port")
+            } else {
+                (target, "target_port")
+            };
+            let port = edge
+                .get(key)
+                .and_then(HookValue::as_str)
+                .ok_or("Summary edge lacks port")?;
+            endpoints.insert((path, port), port.starts_with("outputs:"));
+        }
+        let mut widths = [0_usize; 2];
+        let mut rows = [0_usize; 2];
+        for ((path, port), output) in &endpoints {
+            let repeated = endpoints.keys().filter(|(_, other)| other == port).count() > 1;
+            let member = if repeated || port.starts_with('~') {
+                Some(*labels.get(path).ok_or("Summary endpoint lacks label")?)
+            } else {
+                None
+            };
+            let caption = super::visuals::endpoint_caption(port, member);
+            let side = usize::from(*output);
+            widths[side] = widths[side].max(caption.chars().count());
+            rows[side] += 1;
+        }
+        // Explicit rendering boundary: conservative glyph advance in canvas
+        // points; the font and card scale together with the viewport.
+        group.summary_width = super::visuals::caption_card_width(widths[0].max(widths[1]));
+        group.summary_height =
+            (70.0 + rows[0].max(rows[1]).min(16) as f32 * projection::PORT_ROW_H).max(96.0);
+    }
+    Ok(())
 }
 
 /// Resolve a summary endpoint once at the generic authoring/inspection boundary.
@@ -269,13 +336,23 @@ pub(super) fn project(state: &mut UsdCanvasSessionState) {
                 });
             }
         }
-        let height = (projection::PORT_ROW_H * endpoints.len() as f32 + 70.0).max(96.0);
-        let rect = Rect::from_min_size(bounds.min, 250.0, height);
+        let rect = Rect::from_min_size(bounds.min, group.summary_width, group.summary_height);
         group.rect = Some(rect);
         let mut ports = Vec::new();
         let mut types = BTreeMap::new();
         let mut left = 0;
         let mut right = 0;
+        let right_count = endpoints
+            .values()
+            .filter(|endpoint| {
+                endpoint
+                    .node
+                    .ports
+                    .iter()
+                    .any(|port| port.id == endpoint.port && port.kind.as_str() == "output")
+            })
+            .count();
+        let left_count = endpoints.len() - right_count;
         for (key, endpoint) in &endpoints {
             let Some(original) = endpoint.node.ports.iter().find(|p| p.id == endpoint.port) else {
                 continue;
@@ -294,8 +371,11 @@ pub(super) fn project(state: &mut UsdCanvasSessionState) {
                 id: PortId::new(key.as_str()),
                 kind: original.kind.clone(),
                 local_offset: Pos::new(
-                    if output { 250.0 } else { 0.0 },
-                    49.5 + row as f32 * projection::PORT_ROW_H,
+                    if output { group.summary_width } else { 0.0 },
+                    49.5 + row as f32
+                        * ((group.summary_height - 70.0)
+                            / if output { right_count } else { left_count }.max(1) as f32)
+                            .min(projection::PORT_ROW_H),
                 ),
             });
             if let Some(data) = endpoint
@@ -441,15 +521,16 @@ fn set_group(
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
     let state = state_for(&mut views, cmd.view_id)?;
+    let source = state.expanded_scene.as_ref().unwrap_or(&state.canvas.scene);
     if cmd.members.iter().any(|path| {
-        !state.canvas.scene.nodes().any(|(_, n)| {
+        !source.nodes().any(|(_, n)| {
             projection::diagram_key(n) == Some(path)
                 && n.data
                     .downcast_ref::<projection::UsdPrimNodeData>()
                     .is_some_and(|d| d.boundary.is_none() && d.group_id.is_none())
         })
     }) {
-        return Err("Manual grouping needs visible USD prim cards".into());
+        return Err("Manual grouping needs current USD prim cards".into());
     }
     let id = if cmd.group_id.is_empty() {
         format!("manual:{}", OpId::new().0)

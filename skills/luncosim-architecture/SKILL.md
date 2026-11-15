@@ -1256,6 +1256,17 @@ current default.
   domain-specific presentation belong there. Rust may provide generic source
   loading, class resolution, and typed projection metadata, but must not encode
   a domain poster or duplicate the policy's graph.
+- Carry each USD-connected port's declared Modelica type from the loaded member
+  source into the synthesis facts. Use those exact types to lay out and label
+  electrical, thermal, fluid, rotational, and other connector groups; never
+  infer a domain from the component's class or instance name. Keep physical
+  connector edges as Modelica `connect()` equations. Preserve scalar causal
+  bindings and equality equations, and draw directed orthogonal lines from the
+  same causal-link facts. Bundle each component pair into one line, use trunks
+  for high-fanout sources and shared external inputs, and keep local input
+  captions short. Exact variable bindings remain in the generated equations. Use the shared power-rail
+  annotation only for a unit whose connected ports are all
+  `LunCo.Electrical.Pin`.
 - For a power-network policy, make common-bus semantics visible with standard
   Modelica `Line` waypoints and a policy-owned diagram rail. Use adaptive,
   extent-aware placement for repeated members. Derive the visual hub from

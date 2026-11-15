@@ -334,6 +334,15 @@ not** host N solvers on one entity — that forces `SimComponent` to a multi-ins
 and touches the propagation core. One program prim per domain gives the same composition
 with zero core change and clean per-domain telemetry.
 
+For pressure-fed engines, reference
+`lunco://components/propulsion/pressure_fed_engine.usda` and explicitly include
+its `FuelValve`, `OxidizerValve` and `Chamber` paths in the parent network's
+collection. USD owns both tank-to-valve and valve-to-chamber connections;
+Modelica owns the component equations. Keep one propulsion solver, bind health
+to both valves, and retain chamber-to-actuator/plume/thermal wiring. Verify the
+installed topology and the owning Twin's engine-out and propellant-starvation
+verdicts through the production runtime.
+
 ### Acausal networks and solver boundaries
 
 There are two different meanings of multidomain:
@@ -348,6 +357,16 @@ one public boundary. The synthesizer may emit several connected units below
 that root; those units are Modelica structure, not extra ECS entities. Keep
 `Pin`, `HeatPort`, `FluidPort`, `Flange`, and other conservation connectors
 inside the root that solves them.
+
+Generated member diagrams carry each connected port's declared Modelica type
+into the Rhai synthesis policy. Use those source types to group and label
+electrical, thermal, propellant, and other connector networks. Keep physical
+connector edges as Modelica `connect()` equations. Preserve scalar causal
+bindings and equality equations, and draw directed orthogonal lines from the
+same causal-link facts. Bundle each source/target component pair into one line,
+route high-fanout sources and shared external inputs through trunks, and keep
+local input captions short. Keep exact variable names in the generated equations. A shared power rail is only
+appropriate for an electrical `LunCo.Electrical.Pin` network.
 
 Across separate roots, use typed scalar causal USD connections. A one-step or
 macro-step boundary is an explicit coupling choice, not an acausal `connect()`.

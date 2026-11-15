@@ -1462,6 +1462,18 @@ pub fn network_facts(
                     ),
                 ),
                 (
+                    "connector_types",
+                    H::Map(
+                        component
+                            .connector_types
+                            .iter()
+                            .map(|(name, type_name)| {
+                                (name.clone(), H::str(type_name.clone()))
+                            })
+                            .collect(),
+                    ),
+                ),
+                (
                     "inputs",
                     H::Map(
                         component

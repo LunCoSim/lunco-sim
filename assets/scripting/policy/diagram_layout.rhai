@@ -144,7 +144,7 @@ fn group_bounds(placements,nodes) {
 }
 fn member_of(path,id,membership) {membership.contains(path) && membership[path]==id}
 fn group_graph(group,facts,membership) {
-    let nodes=[];let edges=[];let external=#{};let rank=1000000;
+    let nodes=[];let edges=[];let rank=1000000;
     for node in facts.nodes {
         if !member_of(node.path,group.id,membership) {continue;}
         nodes.push(node);if node.rank<rank {rank=node.rank;}
@@ -152,10 +152,8 @@ fn group_graph(group,facts,membership) {
     for edge in facts.edges {
         let from=member_of(edge.source,group.id,membership);let to=member_of(edge.target,group.id,membership);
         if from && to {edges.push(edge);}
-        if from && !to {let key=edge.source+"."+edge.source_port;external[key]=true;}
-        if to && !from {let key=edge.target+"."+edge.target_port;external[key]=true;}
     }
-    #{nodes:nodes,edges:edges,external:external,rank:rank}
+    #{nodes:nodes,edges:edges,rank:rank}
 }
 // Pack group interiors first, then their quotient graph. Collapsed summaries
 // reserve only their external endpoint rows; every original member is placed.
@@ -164,12 +162,12 @@ fn layout_diagram(facts) {
     let membership = #{}; let local = #{}; let quotient = []; let result = [];
     for group in facts.groups { for path in group.members { membership[path] = group.id; } }
     for group in facts.groups {
-        let graph=group_graph(group,facts,membership);let nodes=graph.nodes;let edges=graph.edges;let external=graph.external;let rank=graph.rank;
+        let graph=group_graph(group,facts,membership);let nodes=graph.nodes;let edges=graph.edges;let rank=graph.rank;
         let placements = layout_flat_diagram(#{nodes:nodes,edges:edges,scope:facts.scope});
         let bounds=group_bounds(placements,nodes);
         local[group.id] = placements;
         let width = bounds.right + 24.0; let height = bounds.bottom + 24.0;
-        if group.collapsed { width = 250.0; height = 70.0 + external.len() * 19.0; if height < 96.0 { height = 96.0; } }
+        if group.collapsed { width = group.summary_width; height = group.summary_height; }
         quotient.push(#{path:group.id,role:"prim",programs:[],rank:rank,width:width,height:height});
     }
     for node in facts.nodes { if !membership.contains(node.path) { quotient.push(node); } }

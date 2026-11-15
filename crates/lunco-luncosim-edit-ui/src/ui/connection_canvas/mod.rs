@@ -493,6 +493,7 @@ fn sort_graph(nodes: &mut [PrimNode], wires: &mut [Wire]) {
 /// rebuilds its canvas scene when the topology changes. Runs on the main thread
 /// because `StageView` is `!Send`.
 pub fn produce_usd_canvas(
+    asset_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     q: Query<(Entity, &UsdPrimPath)>,
     path_changes: Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
@@ -546,6 +547,7 @@ pub fn produce_usd_canvas(
             &path_changes,
             &q_parents,
             &stages,
+            asset_roots.as_deref(),
             &mut canonical,
             &mut views.scene,
             changes_by_stage.get(&path.stage_handle.id()),
@@ -564,6 +566,7 @@ pub fn produce_usd_canvas(
             &path_changes,
             &q_parents,
             &stages,
+            asset_roots.as_deref(),
             &mut canonical,
             state,
             changes_by_stage.get(&session.stage_handle().id()),
@@ -582,6 +585,7 @@ fn produce_usd_canvas_session(
     path_changes: &Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: &Query<&ChildOf>,
     stages: &Assets<UsdStageAsset>,
+    asset_roots: Option<&lunco_assets_core::TwinRoots>,
     canonical: &mut CanonicalStages,
     state: &mut UsdCanvasSessionState,
     changes: Option<&CanvasStageChanges>,
@@ -615,10 +619,19 @@ fn produce_usd_canvas_session(
         state.pending_changes = accumulated_changes;
         return;
     }
-    state.source_uri = stages
+    let source_uri = stages
         .get(&handle)
         .and_then(|asset| asset.recipe.as_ref())
-        .map(|recipe| recipe.root_id.clone());
+        .map(|recipe| {
+            lunco_assets_core::asset_path::source_uri_for_address(&recipe.root_id, asset_roots)
+        });
+    state.source_uri = match source_uri.transpose() {
+        Ok(uri) => uri,
+        Err(error) => {
+            state.last_error = Some(format!("Diagram source identity: {error}"));
+            return;
+        }
+    };
     if state.view_document.is_none() {
         if let Some(uri) = state.source_uri.as_ref() {
             state.diagram_root = root_prim.path.clone();

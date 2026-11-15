@@ -1,0 +1,75 @@
+#usda 1.0
+(
+    defaultPrim = "PressureFedEngine"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Scope "PressureFedEngine" (
+    kind = "assembly"
+    doc = "Pressure-fed bipropellant engine assembly. FuelValve and OxidizerValve feed Chamber through explicit USD fluid connections. Include all three program parts in the parent propulsion collection; the assembly has no separate solver. Numerical parameters and external feed/control connections belong to the installing vehicle."
+)
+{
+    def Scope "FuelValve" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PressureFedValve.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        custom token connectors:inlet
+        token connectors:inlet.connect = None
+        custom token connectors:outlet
+        token connectors:outlet.connect = None
+        custom double outputs:mass_flow_kgs = 0.0
+        custom double outputs:outlet_pressure_pa = 0.0
+        custom double outputs:pressure_drop_pa = 0.0
+        custom double outputs:activity = 0.0
+    }
+    def Scope "OxidizerValve" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PressureFedValve.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        custom token connectors:inlet
+        token connectors:inlet.connect = None
+        custom token connectors:outlet
+        token connectors:outlet.connect = None
+        custom double outputs:mass_flow_kgs = 0.0
+        custom double outputs:outlet_pressure_pa = 0.0
+        custom double outputs:pressure_drop_pa = 0.0
+        custom double outputs:activity = 0.0
+    }
+    def Scope "Chamber" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://models/LunCo/Propulsion/PressureFedCombustionChamber.mo@
+        uniform bool lunco:program:realtimeSafe = true
+        custom token connectors:fuel_in
+        token connectors:fuel_in.connect = </PressureFedEngine/FuelValve.connectors:outlet>
+        custom token connectors:oxidizer_in
+        token connectors:oxidizer_in.connect = </PressureFedEngine/OxidizerValve.connectors:outlet>
+        custom double outputs:thrust_n = 0.0
+        custom double outputs:maximum_thrust_n = 0.0
+        custom double outputs:activity = 0.0
+        custom double outputs:chamber_pressure_pa = 0.0
+        custom double outputs:propellant_flow = 0.0
+        custom double outputs:fuel_flow_kgs = 0.0
+        custom double outputs:oxidizer_flow_kgs = 0.0
+        custom double outputs:mixture_ratio = 0.0
+        custom double outputs:mixture_efficiency = 0.0
+        custom double outputs:exhaust_velocity_mps = 0.0
+        custom double outputs:design_exhaust_velocity_mps = 0.0
+        custom double outputs:heat_release_w = 0.0
+        custom double outputs:chamber_temperature_k = 0.0
+        custom double outputs:ideal_chamber_pressure_pa = 0.0
+        custom double outputs:mixture_ratio_error = 0.0
+        custom double outputs:reacting_fuel_flow_kgs = 0.0
+        custom double outputs:fuel_specific_enthalpy_j_kg = 0.0
+        custom double outputs:oxidizer_specific_enthalpy_j_kg = 0.0
+    }
+}

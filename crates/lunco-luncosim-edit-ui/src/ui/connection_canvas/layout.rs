@@ -79,6 +79,7 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
                     ),
                 ),
                 ("width", HookValue::Float(f64::from(node.rect.width()))),
+                ("label", HookValue::str(&node.label)),
                 (
                     "type_name",
                     HookValue::str(
@@ -255,7 +256,8 @@ fn evaluate(mut facts: HookValue) -> Result<LayoutResult, String> {
         sequence: None,
         producer: None,
     };
-    let (groups, warnings) = super::groups::evaluate(&facts, context.clone());
+    let (mut groups, warnings) = super::groups::evaluate(&facts, context.clone());
+    super::groups::size_summaries(&mut groups, &facts)?;
     if let HookValue::Map(map) = &mut facts {
         map.push((
             "groups".into(),
@@ -267,6 +269,14 @@ fn evaluate(mut facts: HookValue) -> Result<LayoutResult, String> {
                             ("id", HookValue::str(&g.id)),
                             ("label", HookValue::str(&g.label)),
                             ("collapsed", HookValue::Bool(g.collapsed)),
+                            (
+                                "summary_width",
+                                HookValue::Float(f64::from(g.summary_width)),
+                            ),
+                            (
+                                "summary_height",
+                                HookValue::Float(f64::from(g.summary_height)),
+                            ),
                             (
                                 "members",
                                 HookValue::Array(g.members.iter().map(HookValue::str).collect()),

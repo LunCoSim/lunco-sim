@@ -427,6 +427,10 @@ pub struct DomainComponent {
     pub inputs: BTreeMap<String, String>,
     /// Public causal outputs declared by the reusable model facet.
     pub declared_outputs: BTreeSet<String>,
+    /// Modelica connector member names to their source-scoped declared types.
+    /// These types are presentation facts for generated diagrams; USD remains
+    /// authoritative for which connector endpoints are actually connected.
+    pub connector_types: BTreeMap<String, String>,
     /// Optional presentation role for a generated Modelica topology. This is
     /// USD-authored metadata, not a solver direction: acausal Modelica flow
     /// remains reversible and runtime sign still controls animated direction.
@@ -2590,6 +2594,7 @@ pub enum MemberClass {
 pub struct MemberClasses {
     known: HashMap<String, MemberClass>,
     outputs: HashMap<String, BTreeSet<String>>,
+    component_types: HashMap<String, BTreeMap<String, String>>,
     metadata: HashMap<String, HashMap<String, ModelicaVariableMetadata>>,
     /// Resident handles let source modification events invalidate the exact
     /// declaration they changed without rescanning every pending source.
@@ -2618,6 +2623,12 @@ impl MemberClasses {
     /// be the authority.
     pub fn output_names(&self, asset: &str) -> Option<&BTreeSet<String>> {
         self.outputs.get(asset)
+    }
+
+    /// Authored component declaration types from the exact loaded Modelica
+    /// source revision. Missing source-interface facts remain absent.
+    pub fn component_types(&self, asset: &str) -> Option<&BTreeMap<String, String>> {
+        self.component_types.get(asset)
     }
 
     /// Units and descriptions for the output declarations that the generated
@@ -2669,6 +2680,11 @@ impl MemberClasses {
         }
         if let Some(outputs) = self.outputs.get(asset) {
             snapshot.outputs.insert(asset.to_string(), outputs.clone());
+        }
+        if let Some(component_types) = self.component_types.get(asset) {
+            snapshot
+                .component_types
+                .insert(asset.to_string(), component_types.clone());
         }
         if let Some(metadata) = self.metadata.get(asset) {
             snapshot
@@ -2860,6 +2876,7 @@ pub fn resolve_member_classes(
     for (asset, handle) in modified_assets {
         classes.known.remove(&asset);
         classes.outputs.remove(&asset);
+        classes.component_types.remove(&asset);
         classes.metadata.remove(&asset);
         classes.pending.insert(asset, handle);
     }
@@ -3038,6 +3055,7 @@ pub fn resolve_member_classes(
                 String,
                 BTreeSet<String>,
                 HashMap<String, ModelicaVariableMetadata>,
+                BTreeMap<String, String>,
             ),
             String,
         >,
@@ -3071,6 +3089,7 @@ pub fn resolve_member_classes(
                         class,
                         interface.outputs.clone(),
                         interface.variable_metadata.clone(),
+                        interface.component_types.clone(),
                     )),
                 ));
             }
@@ -3085,8 +3104,11 @@ pub fn resolve_member_classes(
     for (asset, result) in settled {
         classes.pending.remove(&asset);
         match result {
-            Ok((class, outputs, metadata)) => {
+            Ok((class, outputs, metadata, component_types)) => {
                 classes.outputs.insert(asset.clone(), outputs);
+                classes
+                    .component_types
+                    .insert(asset.clone(), component_types);
                 classes.metadata.insert(asset.clone(), metadata);
                 classes
                     .known
@@ -3639,6 +3661,7 @@ mod tests {
                 .map(|target| BTreeMap::from([("p".into(), vec![target.into()])]))
                 .unwrap_or_default(),
             declared_connectors: BTreeSet::from(["p".into()]),
+            connector_types: BTreeMap::from([("p".into(), "LunCo.Electrical.Pin".into())]),
             inputs: BTreeMap::new(),
             declared_outputs: BTreeSet::new(),
             topology_role: "neutral".into(),

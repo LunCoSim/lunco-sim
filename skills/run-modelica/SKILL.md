@@ -259,6 +259,16 @@ retaining the diagram's authored DynamicSelect readouts.
 floating panel. Embedded scopes use a `PlotNode` record, bare or qualified as
 `LunCoAnnotations.PlotNode`; arbitrary record names are not plot annotations.
 
+Generated USD unit diagrams place connected causal branches together, route
+high fan-out outputs on shared trunks with target taps, and group boundary
+inputs shared across members on labeled buses. Single-target boundary inputs
+remain short stubs labeled with the receiving input beside their members. Each member and
+connector-domain group is named, repeated causal chains have outlined groups,
+and member captions identify their native Modelica types. The unit header reports member, physical
+connection, signal-link, and external-input counts. These are Modelica diagram
+annotations; inspect the generated declarations and `connect()` equations for
+the authoritative bindings and physical topology.
+
 **In `luncosim`, switch to the Modelica view before plotting/screenshotting.**
 The compile/run/experiment *commands and query providers work regardless* (they're
 headless-safe), but the diagram/plot panels only paint when their perspective is
@@ -616,11 +626,20 @@ multi-unit networks open the root wrapper. Use `FitCanvas` after drill-in when
 the tab was opened alongside the root, since navigation is scoped to the
 focused Modelica tab.
 
-For electrical generated networks, verify the unit diagram's labelled power
-bus and follow at least one routed `connect(...)` branch through the rail. The
-Rhai policy uses readable `network_system`/`network_unit_N` unit instances and a
-topology-derived hub with adaptive branch lanes, so inspect a larger network
-with `FitCanvas` rather than assuming the six-member demo's geometry scales.
+For a pure electrical generated network, verify its labelled power bus and
+follow at least one routed `connect(...)` branch through the rail. Mixed-domain
+units group and label members by their declared connector type, retain native
+acausal connector routes, and draw directed orthogonal lines for scalar causal
+links. Shared sources use labeled trunks and each target has an explicit tap.
+Disconnected physical circuits occupy separate rows with a common-name heading
+and short member captions. Exact variable names stay
+in the generated source equations, while promoted output telemetry stays in
+the interface and equations without one visual wire per output. The rail
+appears only when every connected port is `LunCo.Electrical.Pin`. A single-unit
+generated root opens as `network_system`;
+multi-unit roots use the source-derived unit names in the root diagram. Use
+`FitCanvas` to review larger networks rather than assuming the six-member
+electrical demo's geometry scales.
 Components that need directional presentation apply
 `LunCoModelicaTopologyAPI` with `source`, `storage`, or `load`; this metadata
 does not alter acausal solver direction.

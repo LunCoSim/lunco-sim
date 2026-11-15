@@ -72,6 +72,12 @@ fn collection_members(collection,nodes,used) {
     }
     members.sort();members
 }
+fn collection_group_label(collection) {
+    if collection.label != "components" { return collection.label; }
+    let segments=collection.id.split('/');
+    let owner=segments[segments.len()-1].split('.');
+    owner[0]
+}
 fn plan_diagram_groups(facts) {
     let signatures=#{};let families=#{};let nodes=#{};let used=#{};let result=[];
     for node in facts.nodes {
@@ -82,8 +88,10 @@ fn plan_diagram_groups(facts) {
     }
     if facts.contains("collections") {
         for collection in facts.collections {
+            if ["lightLink","shadowLink","filterLink"].contains(collection.label) {continue;}
             let members=collection_members(collection,nodes,used);if members.len()<2 {continue;}
-            result.push(group_entry(collection.id,collection.label,members));for path in members {used[path]=true;}
+            let label=collection_group_label(collection);
+            result.push(group_entry(collection.id,label,members));for path in members {used[path]=true;}
         }
     }
     let neighbors=neighbor_index(facts.edges,signatures,families);let paths=signatures.keys();paths.sort();
