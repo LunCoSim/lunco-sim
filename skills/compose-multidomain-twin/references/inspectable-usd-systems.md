@@ -96,8 +96,24 @@ in a screenshot.
 
 Scripted force application and mission actions are runtime relationships. Show
 and document their owning controller or bridge; do not fabricate static USD
-connections for them. A static exit ramp does not imply hydraulic actuation.
+connections for them. In the live Connections scene browser, enable **Scenario
+access** to inspect separately styled declared reads and writes. Expand a group
+to see its controller and target identities. The overlay and `ScriptInspect`'s
+`access_plan` come from the scenario's admitted dependency plan; they describe
+authorization, not observed port transfers or a validated mechanical coupling.
+Use native state/force telemetry and an authored behavioral gate for that claim.
+A document preview has no live authorization overlay. Collapsed-group access
+links aggregate by displayed pair and direction; their counts are separate from
+static connection counts. A static exit ramp does not imply hydraulic actuation.
 List genuinely missing domains separately from hidden or unexpanded detail.
+
+Keep constitutive-law calibration separate from measured state. If a declared
+study limits a coefficient's input range, retain the actual state and expose
+whether limiting occurred; an assumed cold reference hold does not calibrate
+colder hardware. Reject unsupported hot operation at the model owner. Thermal
+acceptance permits heating or cooling while independently checking conservation.
+For switched loads, qualify battery-voltage rebound as well as a prescribed
+voltage trace; event-driven hysteresis must retain its admitted mode.
 
 ## Acceptance evidence
 

@@ -24,26 +24,10 @@ fn semantic_subject(record) {
     located_subject(record.qualified_name, element.file, element.start)
 }
 
-fn same_element_handle(left, right) {
-    if left == () || right == () { return false; }
-    left.source_revision == right.source_revision
-        && left.source_fingerprint == right.source_fingerprint
-        && left.element_id == right.element_id
-}
-
-fn verification_has_requirement(verification, requirement) {
-    let requirement_handle = requirement.element.handle;
-    for target_handle in verification.verified_requirements {
-        if same_element_handle(target_handle, requirement_handle) { return true; }
-    }
-    false
-}
-
-fn requirement_is_verified(requirement, verifications) {
-    for verification in verifications {
-        if verification_has_requirement(verification, requirement) { return true; }
-    }
-    false
+// Index the complete snapshot-scoped integer identity, never display names.
+fn element_key(handle) {
+    handle.source_revision.to_string() + ":" + handle.source_fingerprint.to_string()
+        + ":" + handle.element_id.to_string()
 }
 
 fn requirement_documentation(facts) {
@@ -104,9 +88,18 @@ fn verification_shape(facts) {
 
 fn unverified_usages(facts) {
     let out = [];
+    let verified = #{};
+    for verification in facts.verifications {
+        for target in verification.verified_requirements {
+            if target == () { continue; }
+            let key = element_key(target);
+            verified[key] = true;
+        }
+    }
     for requirement in facts.requirements {
         if requirement.kind != "RequirementUsage" { continue; }
-        if requirement_is_verified(requirement, facts.verifications) { continue; }
+        let key = element_key(requirement.element.handle);
+        if verified.contains(key) { continue; }
         let subject = semantic_subject(requirement);
         out.push(finding(
             "sysml-requirement-usage-unverified",
@@ -118,49 +111,47 @@ fn unverified_usages(facts) {
     out
 }
 
-fn source_record_has_locator(source_owner, attributes) {
-    for attribute in attributes {
-        if !same_element_handle(attribute.owner_handle, source_owner) { continue; }
-        if attribute.name != "locator" || attribute.value == () { continue; }
-        if attribute.value.string_value == () { continue; }
-        if attribute.value.string_value == "" { continue; }
-        return true;
-    }
-    false
-}
-
-fn evidence_owner_has_source(evidence_owner, references, attributes) {
-    for source_link in references {
-        if !same_element_handle(source_link.from_owner, evidence_owner) { continue; }
-        if source_link.from_feature_name != "sources" { continue; }
-        if source_link.target == () { continue; }
-        if source_record_has_locator(source_link.target, attributes) { return true; }
-    }
-    false
-}
-
-fn requirement_has_source_evidence(requirement, references, attributes) {
-    for target_link in references {
-        if target_link.from_feature_name != "targetRequirement" { continue; }
-        if !same_element_handle(target_link.target, requirement.element.handle) { continue; }
-        if target_link.from_owner == () { continue; }
-        if evidence_owner_has_source(target_link.from_owner, references, attributes) {
-            return true;
-        }
-    }
-    false
-}
-
 fn requirement_source_evidence(facts) {
     let out = [];
     // AnalyzeSysml selections may omit either table. Do not report a false
     // missing-source result when the caller supplied a partial fact set.
     if facts.references == () || facts.attributes == () { return out; }
+    // Rhai arguments are values. Scan each rich table once instead of copying
+    // both complete tables into nested helpers for every requirement/link.
+    let located_sources = #{};
+    for attribute in facts.attributes {
+        if attribute.owner_handle == () || attribute.name != "locator"
+            || attribute.value == () { continue; }
+        let locator = attribute.value.string_value;
+        if locator != () && locator != "" {
+            let key = element_key(attribute.owner_handle);
+            located_sources[key] = true;
+        }
+    }
+    let sourced_evidence = #{};
+    for link in facts.references {
+        if link.from_feature_name != "sources" || link.target == ()
+            || link.from_owner == () { continue; }
+        let target_key = element_key(link.target);
+        if located_sources.contains(target_key) {
+            let owner_key = element_key(link.from_owner);
+            sourced_evidence[owner_key] = true;
+        }
+    }
+    let sourced_requirements = #{};
+    for link in facts.references {
+        if link.from_feature_name != "targetRequirement" || link.target == ()
+            || link.from_owner == () { continue; }
+        let owner_key = element_key(link.from_owner);
+        if sourced_evidence.contains(owner_key) {
+            let target_key = element_key(link.target);
+            sourced_requirements[target_key] = true;
+        }
+    }
     for requirement in facts.requirements {
         if requirement.kind != "RequirementUsage" { continue; }
-        if requirement_has_source_evidence(requirement, facts.references, facts.attributes) {
-            continue;
-        }
+        let key = element_key(requirement.element.handle);
+        if sourced_requirements.contains(key) { continue; }
         let subject = semantic_subject(requirement);
         out.push(finding(
             "sysml-requirement-usage-missing-source",
@@ -189,7 +180,7 @@ fn requirement_formal_acceptance(facts) {
             "sysml-requirement-usage-missing-formal-acceptance",
             "warn",
             subject,
-            "requirement usage has no inherited or owned require constraint; add a formal acceptance predicate, or define the finite qualitative rubric in its verification case",
+            "requirement usage has no inherited or owned require constraint; add a formal acceptance predicate, or bind a finite qualitative rubric through a required constraint",
         ));
     }
     out

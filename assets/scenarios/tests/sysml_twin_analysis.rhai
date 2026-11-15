@@ -11,7 +11,7 @@ fn simulation_dependencies(me, ctx) {
     #{
         modelica_entities: [],
         entity_reads: [], entity_writes: [],
-        query_reads: ["AnalyzeSysml", "InspectSysmlDocument", "ListOpenDocuments"],
+        query_reads: ["AnalyzeSysml", "ValidateSysml", "ValidateTwin", "InspectSysmlDocument", "ListOpenDocuments"],
         required_inputs: [
             #{ owner: "sysml.twin-analysis", identity: twin_source_identity() },
         ],
@@ -56,7 +56,7 @@ fn initial_analysis_checks(analyzed) {
         requirement_coverage = sysml_requirement_coverage(
             analyzed.analysis.verifications);
     }
-    checks.push(t_true(analyzed != () && analyzed.ok == true
+    checks.push(t_true(analyzed != () && analyzed.state == "ready" && analyzed.ok == true
         && analyzed.analysis != ()
         && analyzed.analysis.source_files.len() == 1
         && analyzed.analysis.source_files[0] == SOURCE_PATH
@@ -86,13 +86,14 @@ fn initial_analysis_checks(analyzed) {
     checks.push(t_true(excludes_unrelated_usage,
         "verification coverage excludes the other same-snapshot requirement"));
 
-    let unmounted = query("AnalyzeSysml", #{
-        path: "twin://sysml_async_analysis_missing",
-        tables: ["requirements"],
-    });
-    checks.push(t_true(unmounted != () && unmounted.ok == false
-        && unmounted.errors.len() > 0,
-        "an unmounted Twin returns an explicit analysis error"));
+    let analysis_rejected = query("AnalyzeSysml", #{path: "twin://sysml_async_analysis_missing", tables: ["requirements"]});
+    checks.push(t_true(analysis_rejected.ok == false && analysis_rejected.status == "rejected"
+        && analysis_rejected.error != () && analysis_rejected.analysis == (),
+        "an unmounted Twin rejects analysis admission"));
+    let validation_rejected = query("ValidateSysml", #{path: "twin://sysml_async_analysis_missing"});
+    checks.push(t_true(validation_rejected.ok == false && validation_rejected.status == "rejected"
+        && validation_rejected.error != () && validation_rejected.operation_id == (),
+        "an unmounted Twin rejects validation admission without an operation"));
     checks
 }
 
@@ -188,6 +189,9 @@ fn on_start(me, ctx) {
     this.restore_complete = false;
     this.refresh_pending_seen = false;
     this.stale_ready_after_pending = false;
+    this.preflight_queries = ["ValidateSysml", "ValidateTwin"];
+    this.preflight_index = 0;
+    this.preflight_id = ();
 }
 
 fn on_tick(me, ctx) {
@@ -236,6 +240,45 @@ fn on_tick(me, ctx) {
             }
         } else {
             inspection = query("InspectSysmlDocument", #{ doc_id: this.doc_id });
+        }
+
+        if this.preflight_index < this.preflight_queries.len() {
+            let query_name = this.preflight_queries[this.preflight_index];
+            let validation = if this.preflight_id == () {
+                query(query_name, #{path: PATH})
+            } else {
+                query(query_name, #{operation_id: this.preflight_id})
+            };
+            if this.preflight_id == () {
+                this.checks.push(t_true(validation != () && validation.state == "pending"
+                    && validation.operation_id != (),
+                    query_name + " admits one asynchronous operation for a stable Twin source identity"));
+            }
+            if validation != () && validation.state == "pending" {
+                this.preflight_id = validation.operation_id;
+                if this.wait_ticks <= REFRESH_TIMEOUT_TICKS { return; }
+            } else if validation != () && validation.state == "ready" {
+                let report = validation.report;
+                if query_name == "ValidateSysml" {
+                    this.checks.push(t_true(report != () && report.ok == true
+                        && report.source_revision == this.baseline_revision
+                        && report.source_files == [SOURCE_PATH]
+                        && validation.source_revisions.len() == 1,
+                        "validation publishes the captured source-set revision and read identities"));
+                } else {
+                    this.checks.push(t_true(report != () && report.ok == true
+                        && report.path == PATH && report.twin == "sysml_async_analysis"
+                        && validation.source_revisions.len() > 0,
+                        "stable Twin source identity resolves one complete namespace report"));
+                }
+                this.preflight_index += 1;
+                this.preflight_id = ();
+                return;
+            }
+            this.failure = query_name + " did not produce its ready report: " + validation.to_string();
+            finish(this.checks, this.failure);
+            this.done = true;
+            return;
         }
 
         if inspection == () || inspection.generation == () || inspection.source == () {
@@ -380,9 +423,7 @@ fn on_tick(me, ctx) {
 
     if this.phase == 1 {
         let analyzed = analyze_twin();
-        let refresh_pending = analyzed != () && analyzed.ok == false
-            && analyzed.errors != () && analyzed.errors.len() > 0
-            && analyzed.errors[0].contains("preparing asynchronously");
+        let refresh_pending = analyzed != () && analyzed.state == "pending";
         if refresh_pending {
             this.refresh_pending_seen = true;
         }

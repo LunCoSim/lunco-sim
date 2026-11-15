@@ -133,7 +133,9 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
 /// "what is it *doing*?" — the running per-entity state object, which lifecycle
 /// hooks it defines, the compiled generation, started/paused flags, plus the
 /// same `status` block so one call gives the full runtime picture (no log
-/// grepping). `{ "scripted": false }` if the entity has no scenario.
+/// grepping). `access_plan` exposes admitted authorization grants independently
+/// of execution state; it is null for an entity without an admitted plan.
+/// An entity with no scenario reports `scripted: false`.
 struct ScriptInspectProvider;
 
 impl ApiQueryProvider for ScriptInspectProvider {
@@ -159,9 +161,12 @@ impl ApiQueryProvider for ScriptInspectProvider {
             ));
         };
 
+        let access_plan = scenario_access_api_value(world, entity)?;
         // Not scripted → say so plainly (not an error: a bare entity is valid).
         let Some(model) = world.get::<ScriptedModel>(entity) else {
-            return Ok(Some(api_value!({ "scripted": false })));
+            return Ok(Some(
+                api_value!({ "scripted": false, "access_plan": access_plan }),
+            ));
         };
         let paused = model.paused;
         let language = model.language;
@@ -200,6 +205,7 @@ impl ApiQueryProvider for ScriptInspectProvider {
                 "generation": i.generation,
                 "hooks": i.hooks,
                 "state": i.state,
+                "access_plan": access_plan,
             }))),
             // Tracked-but-not-yet-driven (or a non-rhai backend): attached but the
             // driver hasn't compiled/started it this run.
@@ -209,9 +215,42 @@ impl ApiQueryProvider for ScriptInspectProvider {
                 "paused": paused,
                 "status": status,
                 "running": false,
+                "access_plan": access_plan,
             }))),
         }
     }
+}
+
+fn scenario_access_api_value(world: &World, entity: Entity) -> Result<ApiValue, ApiQueryError> {
+    let Some(owner) = world.get_resource::<lunco_core_runtime::SimulationBarrierParticipants>()
+    else {
+        return Ok(api_value!(null));
+    };
+    let Some(plan) = owner.scenario_access_plan(entity) else {
+        return Ok(api_value!(null));
+    };
+    let identities =
+        |entities: &bevy::ecs::entity::EntityHashSet| -> Result<Vec<u64>, ApiQueryError> {
+            let mut ids = entities
+                .iter()
+                .map(|entity| {
+                    world.get::<GlobalEntityId>(*entity).map(GlobalEntityId::get).ok_or_else(|| {
+                ApiQueryError::new(ApiErrorCode::EntityNotFound,
+                    format!("Committed scenario access target {entity:?} has no live API identity"))
+            })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            ids.sort_unstable();
+            Ok(ids)
+        };
+    Ok(api_value!({
+        "revision": owner.scenario_plan_revision(),
+        "semantics": "declared_access",
+        "modelica_entities": identities(plan.modelica)?,
+        "entity_reads": identities(plan.reads)?,
+        "entity_writes": identities(plan.writes)?,
+        "query_reads": plan.query_reads.iter().collect::<Vec<_>>(),
+    }))
 }
 
 fn document_status_api_value(entry: Option<&DocDiagnostics>) -> ApiValue {

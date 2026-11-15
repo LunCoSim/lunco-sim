@@ -448,8 +448,18 @@ returned as explicit errors. `InspectSysmlDocument` supplies source identity,
 generation, origin and diagnostics for the Editor. For production checks,
 `ValidateSysml` reports source validation status, structural `lint.sysml`
 findings, source files and revision; it does not evaluate Twin manifest
-bindings or requirement observations. `AnalyzeSysml` exposes selected
-language-neutral semantic fact tables through the `HookValue` ABI. Its table,
+bindings or requirement observations. File and mounted-source-set validation
+admit one asynchronous operation and return `pending` with an `operation_id`;
+poll that ID once per interaction until `ready.report` or `failed.diagnostic`.
+Mounted validation captures the current immutable source-set analysis and checks
+that exact analysis and mount at publication; full facts and pure lint policy
+run in the native preparation worker. `AnalyzeSysml` exposes selected
+language-neutral semantic fact tables through the `HookValue` ABI. Mounted
+source-set observations carry `state: pending|ready|failed|unprepared`; only
+`ready` includes analysis facts, and failed/unprepared states retain their owner
+diagnostics. Unknown or unmounted sources reject. Observe pending until ready
+before admitting source-set `ValidateSysml` once; a rejected validation request
+is terminal. Its table,
 name, and bounded-page selectors limit API payload size; they do not encode
 project acceptance policy. A page request supplies non-negative `offset` and
 positive `limit`; `analysis.page.tables` reports each selected table's total,

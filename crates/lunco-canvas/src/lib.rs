@@ -58,6 +58,7 @@
 #[cfg(feature = "ui")]
 pub mod canvas;
 pub mod event;
+pub mod geometry;
 #[cfg(feature = "ui")]
 pub mod layer;
 #[cfg(feature = "ui")]

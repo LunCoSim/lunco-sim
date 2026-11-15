@@ -13,8 +13,10 @@ description: >
 
 `ValidateAsset` answers one question — **does this file parse, and would the
 engine accept it?** — without mounting a scene or starting simulation. Runtime
-queries prepare fresh source facts asynchronously, then apply the authored lint
-policy serially in the captured runtime context. Browser preparation uses the
+queries prepare fresh source facts and evaluate captured standalone policies
+asynchronously, preserving caller scope and clock. Twin namespace queries also
+prepare their typed response in that job; serial publication checks source and
+policy leases. Browser preparation uses the
 cooperative executor; it does not promise a separate CPU worker.
 
 Implementation: [`crates/lunco-scene-validation/src/validate.rs`](../../crates/lunco-scene-validation/src/validate.rs).
@@ -95,6 +97,22 @@ Use the returned ID in place of `1`. Admission is bounded by the shared
 `AsyncWorkAdmission`; running tasks and unconsumed results retain their permit.
 `lunco-scene-validation` registers the providers. The CLI remains a native
 synchronous entry point over the same validators.
+
+Keep source identity and runtime ownership distinct. Native files under the
+admitted Twin compose with its captured read scope; a native Twin directory
+declares its own source scope. Reports retain logical `twin://` revision names,
+while registered reads fence publication by their exact origin's load lease.
+Public `twin://<source-identity>/<file>` queries resolve that stable identity
+once at admission and keep its captured private mount through the read and
+publication check. Private load authorities are not public source aliases.
+Do not reconstruct a load authority from the manifest name or retry a retired
+operation against a reopened Twin.
+
+Twin namespace validation inspects and releases each USD closure before reading
+the next source. Its retained results are namespace facts, diagnostics and
+deduplicated source revisions; per-closure read limits remain enforced. A
+source changing between closures is a terminal inconsistency, not a second
+accepted revision in one report.
 
 ## The report
 
@@ -183,7 +201,17 @@ boundary with a diagnostic; recognizing its extension does not establish
 binary composition support.
 
 For a Twin source set, use `ValidateSysml` for source status, diagnostics, and
-source identity; use `AnalyzeSysml` when a policy needs typed semantic facts.
+source identity. It uses the same one-shot pending/ready/failed envelope as file
+validation: admit with `path: "twin://<source-identity>"`, then poll only its
+`operation_id`. The ready report comes from the captured immutable analysis;
+source replacement or mount retirement rejects publication. Source-set analysis
+must already be ready; its actual preparing/failed/missing state rejects
+admission. Observe `AnalyzeSysml {path, tables: []}` first: `state: "pending"`
+means the owner's current preparation is still running; `ready` includes its
+source revision, while `failed` and `unprepared` are terminal states with
+diagnostics. Unknown or unmounted sources reject the query. Admit validation
+once after `ready`; do not retry a rejected validation request. Use selected
+`AnalyzeSysml` tables when a policy needs typed semantic facts.
 Manifest bindings are a separate active-Twin contract read and are joined with
 SysML identities by Rhai policy. See
 [`sysml-requirements`](../sysml-requirements/SKILL.md).

@@ -202,7 +202,7 @@ from `ValidateAsset`'s file-only preflight.
 ## Runtime query preparation
 
 `lunco-scene-validation` owns one-shot preparation for `ValidateAsset`,
-`ValidateTwin`, and single-file `ValidateSysml`/`AnalyzeSysml`. Initial typed
+`ValidateTwin`, `ValidateSysml`, and single-file `AnalyzeSysml`. Initial typed
 parameters admit one operation. Its `pending` result carries an `operation_id`;
 poll the same query with only that ID. `ready` carries the actual report and
 read-source revisions; `failed` carries a terminal diagnostic. Terminal results
@@ -211,9 +211,27 @@ name-only result cache or automatic retry.
 
 Logical sources use the registered asset reader and the shared USD closure
 owner. Native file ingress uses captured `FileDocumentAdmission::read_bounded`.
+Native USD files inside the admitted Twin retain its `TwinReadScope`; native
+Twin-directory validation uses its explicit declared source scope. Read revisions
+keep authored logical Twin identities. Registered-reader revisions resolve those
+identities against the captured origin and retain exact load authorities for
+publication checks. A logical source name is never looked up as a mount lease,
+and a retired origin cannot bind to a reopened Twin with the same source name.
+Public Twin root and file URIs name stable logical source identities. Admission
+resolves that identity through `TwinRoots::mounted_authority_for_logical` once;
+the prepared source and publication fence retain the resulting private mount.
+File reads replace the public source identity with that captured load authority
+at the registered-reader boundary; the report still echoes the public path.
+Twin `RunLint` checks its captured mount before admitting that same public source
+identity. A raw private mount is not an alternate public root identity.
 `QueryPreparationLimits` exposes the existing `StageClosureLimits`; queries read
-serially by default, and Twin preparation passes the remaining aggregate byte
-budget into every recipe before dependency allocation. USD crate bytes still
+serially by default. Twin preparation inspects one USD closure at a time and
+releases its stage and layer bytes before the next source. It retains scoped
+namespace facts, diagnostics and unique source revisions; conflicting content
+for one revision identity rejects the preparation. Remaining source-byte
+allowance accounts for retained Modelica text and bounds each transient USD
+closure before dependency allocation. Shared dependencies are not retained and
+charged repeatedly across scene recipes. USD crate bytes still
 fail the current text-layer dependency inspector explicitly.
 
 Native requests use `AsyncWorkAdmission::submit_transport`: temporary worker
@@ -225,8 +243,20 @@ The shared permit lasts through running work and its unconsumed result, includin
 the retained Twin lint continuation. Retirement drops the result receiver, so
 late immutable completions cannot publish. Publication checks
 exact document runtime ownership, mount incarnation, indexed source input,
-and policy identity; the report identifies the bytes actually read. Pure facts prepare asynchronously;
-policy hooks run serially after the operation-state lock is released. Browser
+and policy identity; the report identifies the bytes actually read. Mounted
+SysML validation captures the ready immutable analysis and requires that exact
+analysis allocation to remain current at publication. A preparing, failed, or
+missing source-set analysis rejects admission with its actual diagnostic.
+`AnalyzeSysml` source-set observations expose the owner state as `pending`,
+`ready`, `failed`, or `unprepared`. Only `ready` includes selected analysis facts;
+`failed` and `unprepared` include their diagnostics, and an unknown or unmounted
+source rejects the query. Callers may observe `pending` until the source-set
+snapshot is ready, then admit `ValidateSysml` once.
+Preparation evaluates captured standalone lint registrations against immutable
+facts with the caller's original typed execution context. Full SysML facts and
+structural policy also run in that job. Twin preparation additionally prepares
+the query's typed response off the World thread. Live Twin lint consumes those
+same prepared diagnostics; publication remains serial and source-fenced. Browser
 preparation reserves immediate shared capacity on Bevy's cooperative executor,
 without an off-main CPU guarantee.
 Native CLI and bounded native SysML constructors retain their synchronous
@@ -282,18 +312,19 @@ identifies the requested scope revision. The deferred admission boundary checks
 those facts, then shares `QueryPreparations` tasks, permits, registered readers,
 closure budgets, and publication fences with `ValidateTwin`; native and mounted
 browser Twins use the same path. The command handler dispatches preparation;
-source I/O and parsing stay in the task. Native tasks use the compute pool;
+source I/O, parsing, immutable Twin policy and result preparation stay in the task.
+Native tasks use the shared bounded admission;
 browser task execution remains cooperative on the page executor.
 
 The private `PendingTwinLint` owner retains only the exact operation ID and
-publication facts. One serial consumer takes typed prepared Twin facts and
-invokes the common lint policy mechanism with the captured scope, clock, and
-logical sequence. `GetDiagnostics` carries the actual pending/ready/failed
+publication facts. The worker evaluates the common pure lint mechanism with
+the captured scope, clock, registration and logical sequence. One serial
+consumer applies its typed prepared diagnostics. `GetDiagnostics` carries the actual pending/ready/failed
 scope; the queued Ack does not assert a completed lint result. Source failures
 emit owner errors and fail the scope independently of collision severity.
 Closing the exact Twin, changing its scene/mount/policy, or superseding the
 scope cancels/discards the operation. A retired completion cannot update a newer
-scope, and the permit remains held through serial policy consumption.
+scope, and the permit remains held through serial result consumption.
 
 Native CLI inspection keeps its bounded synchronous adapter. File composition
 preserves available sibling content when a dependency is missing; the shared

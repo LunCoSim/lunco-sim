@@ -1050,9 +1050,17 @@ feature path.
 Twin lifecycle policy selects the checked manifest source set and requests one
 preparation; Bevy loads its `twin://` assets, the worker parses and resolves the
 complete immutable snapshot, and the SysML owner commits only the current
-Twin-id/root/operation. Runtime `AnalyzeSysml` and `ValidateSysml` queries read
-that committed snapshot and report pending, failed, or unprepared state
-explicitly. The production Rhai contract at
+Twin-id/root/operation. Runtime `AnalyzeSysml` reads that committed snapshot
+and reports typed `ready`, `pending`, `failed`, or `unprepared` state.
+Nonready states contain no fabricated analysis; unknown or unmounted sources
+reject at admission. Source-set
+`ValidateSysml` admits the same one-shot preparation envelope used by file
+validation: immutable facts, captured standalone lint registration/context and
+report construction run in the existing worker. Publication checks the exact
+Twin mount, root and committed analysis Arc; callers poll the operation until
+its terminal report. Source-set validation requires a ready committed analysis;
+callers await typed `AnalyzeSysml` readiness before admitting validation once.
+The production Rhai contract at
 `assets/scenarios/tests/sysml_twin_analysis.rhai` checks the committed
 requirement facts and the unmounted-Twin diagnostic. Source-asset changes admit
 a new revision, and `TwinClosed` retires queued work and fences late results for

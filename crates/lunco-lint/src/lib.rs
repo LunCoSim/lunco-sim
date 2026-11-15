@@ -276,8 +276,33 @@ pub fn run_lint_with_context(
     facts: H,
     context: lunco_hooks::RuntimeExecutionContext,
 ) -> Vec<Diagnostic> {
+    let registration = lunco_hooks::get(&hook_id(domain));
+    run_lint_with_registration(domain, facts, context, registration.as_deref())
+}
+
+/// Evaluate the immutable policy registration captured by an asynchronous
+/// owner. Publication remains fenced by that owner's source and policy lease.
+pub fn run_lint_with_registration(
+    domain: &str,
+    facts: H,
+    context: lunco_hooks::RuntimeExecutionContext,
+    registration: Option<&lunco_hooks::RegisteredHook>,
+) -> Vec<Diagnostic> {
     let hook = hook_id(domain);
-    let Some(outcome) = lunco_hooks::invoke_with_context(&hook, &[facts], context) else {
+    if registration.is_some_and(|registration| registration.id != hook) {
+        return vec![policy_failure(
+            domain,
+            "policy-execution-failed",
+            &hook,
+            "captured lint registration belongs to another domain".to_owned(),
+        )];
+    }
+    let Some(outcome) = registration.map(|registration| {
+        registration.invoke(&lunco_hooks::HookInvocation {
+            args: &[facts],
+            context,
+        })
+    }) else {
         // No rules authored for this domain. Not a problem, and not worth a log
         // line on every scene load.
         return Vec::new();
@@ -420,14 +445,42 @@ mod tests {
         assert!(
             run_lint_with_context("test_prepared_context", H::Map(Vec::new()), context).is_empty()
         );
+        let admitted = lunco_hooks::get(&hook_id("test_prepared_context")).unwrap();
+        register(RegisteredHook {
+            id: hook_id("test_prepared_context"),
+            backend: "test".into(),
+            deterministic: true,
+            hook: Arc::new(Faulting),
+        });
+        assert!(
+            run_lint_with_registration(
+                "test_prepared_context",
+                H::Map(Vec::new()),
+                context,
+                Some(&admitted)
+            )
+            .is_empty()
+        );
         let invalid = lunco_hooks::RuntimeExecutionContext {
             time_seconds: None,
             ..context
         };
-        let findings = run_lint_with_context("test_prepared_context", H::Map(Vec::new()), invalid);
+        let findings = run_lint_with_registration(
+            "test_prepared_context",
+            H::Map(Vec::new()),
+            invalid,
+            Some(&admitted),
+        );
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].code.as_deref(), Some("policy-execution-failed"));
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let wrong_domain =
+            run_lint_with_registration("foreign", H::Map(Vec::new()), context, Some(&admitted));
+        assert_eq!(wrong_domain.len(), 1);
+        assert_eq!(
+            wrong_domain[0].code.as_deref(),
+            Some("policy-execution-failed")
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
         lunco_hooks::unregister(&hook_id("test_prepared_context"));
     }
 

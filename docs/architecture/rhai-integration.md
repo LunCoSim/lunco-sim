@@ -28,7 +28,15 @@ built script-free, with optional Python, and for `wasm32-unknown-unknown`.
   closures out of the neutral mechanism package while preserving the public
   script surface.
 - **Introspection** — `ScriptStatus` (compile/runtime health) + `ScriptInspect`
-  (live `this` state, defined hooks, generation, running/paused).
+  (live `this` state, defined hooks, generation, running/paused and the admitted
+  `access_plan`). `access_plan` is a typed read-only projection of
+  `SimulationBarrierParticipants`: global plan revision, declared Modelica
+  participants, directional entity reads/writes, and broad query reads. IDs are
+  sorted API identities; a missing, failed or retired plan is `null`. Missing
+  live identities in an admitted plan produce an inspection diagnostic.
+  These grants authorize access; they do not prove an observed signal or force
+  transfer. Repeated admission of an existing grant leaves the revision stable;
+  replacement, extension and retirement advance it.
 - **Authoring catalog** — `ScriptingCatalog` aggregates the full callable surface
   (verbs/hooks/prelude/tools/commands/queries). Rhai callers use bounded
   `ScriptComplete { prefix, limit }` queries over the same owner; a full catalog

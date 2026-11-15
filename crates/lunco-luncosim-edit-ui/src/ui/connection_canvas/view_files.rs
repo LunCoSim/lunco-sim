@@ -727,6 +727,7 @@ pub fn init_view_commands(app: &mut App) {
     super::drop_assets::init(app);
     super::navigation::init(app);
     super::groups::init(app);
+    super::runtime_interactions::init(app);
     register_all_commands(app);
     app.init_scene_resource::<PendingViewFiles>()
         .add_systems(lunco_core::SceneTeardown, retire_scene_view_files)
@@ -743,7 +744,7 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
         "InspectConnectionDiagram"
     }
     fn schema(&self) -> lunco_api_core::ApiQuerySchema {
-        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, viewport:{center_x,center_y,zoom}, variants:[{name,selection}], variant_error, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], groups:[{id,label,key,members,collapsed,internal_links,feedback_links}], nodes:[{path,key,role,accent,label,x,y,width,height,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind,emphasized}], selection:{key,port,connection_count}, editing, edit_target, connection_count, rendered_connection_count, unresolved_links, error }".into()) }
+        lunco_api_core::ApiQuerySchema { name: self.name().into(), description: Some("Inspect the active Connections source, named views, system interfaces, program facets and rendered node/port coordinates".into()), parameters: Some(Vec::new()), exactly_one_of: Vec::new(), response: Some("{ built, active_scene, source, view_id, view, scope, viewport:{center_x,center_y,zoom}, variants:[{name,selection}], variant_error, definitions:[{name,scope,include_descendants,positions:[{path,x,y}]}], groups:[{id,label,key,members,collapsed,internal_links,feedback_links}], nodes:[{path,key,role,accent,label,x,y,width,height,screen_x,screen_y,ports:[{name,kind,x,y,screen_x,screen_y}],programs:[{path,backend,source,issue}]}], connections:[{source,source_key,source_port,target,target_key,target_port,kind,emphasized}], selection:{key,port,connection_count}, editing, edit_target, connection_count, rendered_connection_count, unresolved_links, runtime_interactions_enabled, runtime_interaction_revision, runtime_interactions:[{scenario,target,kind,scenario_key,target_key,visible,semantics}], runtime_interaction_groups:[{scenario_key,target_key,kind,count}], rendered_runtime_interaction_count, runtime_interaction_issues, error }".into()) }
     }
     fn execute(
         &self,
@@ -827,8 +828,27 @@ impl lunco_api::queries::ApiQueryProvider for InspectConnectionDiagram {
             let positions: Vec<_> = definition.positions.iter().map(|(path, pos)| api_value!({ "path": path, "x": pos.x, "y": pos.y })).collect();
             api_value!({ "name": name, "scope": definition.scope.clone(), "include_descendants": definition.include_descendants, "positions": positions })
         }).collect()).unwrap_or_default();
+        let runtime_interactions: Vec<_> = state.runtime_interactions.links.iter().map(|link| {
+            let displayed = link.displayed.and_then(|(scenario, target)| {
+                let scenario = state.canvas.scene.node(scenario)?;
+                let target = state.canvas.scene.node(target)?;
+                Some((super::projection::diagram_key(scenario), super::projection::diagram_key(target)))
+            });
+            api_value!({"scenario":link.scenario.clone(),"target":link.target.clone(),
+                "kind":link.access.name(),"scenario_key":displayed.as_ref().and_then(|value|value.0),
+                "target_key":displayed.as_ref().and_then(|value|value.1),
+                "visible":state.runtime_interactions.enabled && link.displayed.is_some_and(|(scenario,target)|scenario!=target),
+                "semantics":"declared_access"})
+        }).collect();
+        let runtime_interaction_groups: Vec<_> = state.runtime_interactions.displayed_links.iter().map(|link| {
+            api_value!({
+                "scenario_key": state.canvas.scene.node(link.scenario).and_then(super::projection::diagram_key),
+                "target_key": state.canvas.scene.node(link.target).and_then(super::projection::diagram_key),
+                "kind": link.access.name(), "count": link.count,
+            })
+        }).collect();
         Ok(Some(
-            api_value!({ "viewport": { "center_x": state.canvas.viewport.center.x, "center_y": state.canvas.viewport.center.y, "zoom": state.canvas.viewport.zoom }, "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "groups":groups,"nodes": nodes, "connections": connections, "selection": { "key": selected_key, "port": state.canvas.selection.port().map(|port| port.port.as_str()), "connection_count": selected_edges.len() }, "editing": state.doc.is_some(), "edit_target": state.edit_target.as_ref().map(|target| format!("{target:?}")), "connection_count": full.edge_count(),"rendered_connection_count":state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "error": state.last_error.clone() }),
+            api_value!({ "viewport": { "center_x": state.canvas.viewport.center.x, "center_y": state.canvas.viewport.center.y, "zoom": state.canvas.viewport.zoom }, "built": state.built, "active_scene": views.show_scene, "source": state.source_uri.clone(), "view_id": state.view_document.as_ref().map(|host| host.document().id().raw()), "view": state.selected_view.clone(), "scope": state.diagram_root.clone(), "variants": variants, "variant_error": variant_error, "definitions": definitions, "groups":groups,"nodes": nodes, "connections": connections, "selection": { "key": selected_key, "port": state.canvas.selection.port().map(|port| port.port.as_str()), "connection_count": selected_edges.len() }, "editing": state.doc.is_some(), "edit_target": state.edit_target.as_ref().map(|target| format!("{target:?}")), "connection_count": full.edge_count(),"rendered_connection_count":state.canvas.scene.edge_count(), "unresolved_links": state.unresolved_links.clone(), "runtime_interactions":runtime_interactions,"runtime_interactions_enabled":state.runtime_interactions.enabled,"runtime_interaction_groups":runtime_interaction_groups,"rendered_runtime_interaction_count":if state.runtime_interactions.enabled {state.runtime_interactions.displayed_links.len()}else{0},"runtime_interaction_revision":state.runtime_interactions.revision,"runtime_interaction_issues":state.runtime_interactions.issues.clone(),"error": state.last_error.clone() }),
         ))
     }
 }

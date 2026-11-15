@@ -305,6 +305,22 @@ the workbench's menu, status, inspector, and window-control boundaries without
 inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
+Connections' scene browser has a **Scenario access** overlay. It draws dashed,
+color-distinguished declared reads toward each controller and writes toward its
+targets, with separate directional lanes. The snapshot borrows committed plans
+from `SimulationBarrierParticipants`; it rebuilds on plan revision, structural
+source generation or exact scene-source lease changes. Grouping rebinds the
+cached endpoints, retaining exact scenario and target paths even when both are
+inside one collapsed group. Internal group accesses are inspectable but do not
+paint a self-loop. Document previews do not inherit live-scene authorizations.
+Displayed accesses aggregate by node/group pair and direction, with multiplicity
+labels; exact endpoint identities remain individually inspectable. The overlay
+never creates authored USD wires or changes static connection counts. `InspectConnectionDiagram` exposes its enabled state, plan revision,
+exact links, displayed group/node keys and unresolved runtime identities.
+Only declared access is shown: applying forces or issuing commands is not
+inferred from these grants.
+
+
 Script-driven hint/objective/action cards are owned by
 `lunco-workbench-guided-ui`. `GuidedHudVisibility` restricts the complete card;
 LunCoSim defaults it to `sandbox_view`. Rhai declares a card-specific allowlist
@@ -1567,3 +1583,10 @@ launches LunCoSim) is a later task — see task #90.
 - [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Run/Scenario control surface
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific panels
 - `specs/008-developer-experience` — detail
+
+The live Connections scenario-access overlay uses the typed
+`SetConnectionRuntimeInteractions { view_id, enabled }` command from both its
+checkbox and API callers. Its producer wakes on the access-plan owner's revision
+as well as stage and workbench changes, so admitted or retired plans refresh
+without requiring a new scene edit or simulation tick. Static wiring counts
+remain independent of the overlay.

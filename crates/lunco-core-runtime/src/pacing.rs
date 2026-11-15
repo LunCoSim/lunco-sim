@@ -468,14 +468,40 @@ pub struct SimulationBarrierParticipants {
     /// simulation_dependencies hook. The scenario owner replaces the full plan
     /// on recompile, detach, or despawn.
     scenario_plans: HashMap<Entity, ScenarioEntityAccess>,
+    scenario_plan_revision: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ScenarioEntityAccess {
     modelica: EntityHashSet,
     reads: EntityHashSet,
     writes: EntityHashSet,
     query_reads: BTreeSet<String>,
+}
+
+/// Borrowed inspection of one committed scenario authorization plan.
+/// These sets describe permitted access, not observed port transfers.
+#[derive(Debug, Clone, Copy)]
+pub struct ScenarioAccessPlan<'a> {
+    /// Declared Modelica entities; each grant authorizes reads and writes.
+    pub modelica: &'a EntityHashSet,
+    /// Additional directional entity read grants.
+    pub reads: &'a EntityHashSet,
+    /// Additional directional entity write grants.
+    pub writes: &'a EntityHashSet,
+    /// Broad query providers explicitly admitted by this plan.
+    pub query_reads: &'a BTreeSet<String>,
+}
+
+impl ScenarioEntityAccess {
+    fn inspect(&self) -> ScenarioAccessPlan<'_> {
+        ScenarioAccessPlan {
+            modelica: &self.modelica,
+            reads: &self.reads,
+            writes: &self.writes,
+            query_reads: &self.query_reads,
+        }
+    }
 }
 
 /// Owner namespace for an operation that must finish before authoritative
@@ -721,6 +747,26 @@ impl SimulationProgress {
 }
 
 impl SimulationBarrierParticipants {
+    /// Changes only when a scenario plan is committed, extended or retired.
+    pub fn scenario_plan_revision(&self) -> u64 {
+        self.scenario_plan_revision
+    }
+
+    /// Inspect an admitted plan. Missing, failed and retired plans return None.
+    pub fn scenario_access_plan(&self, scenario: Entity) -> Option<ScenarioAccessPlan<'_>> {
+        self.scenario_plans
+            .get(&scenario)
+            .map(ScenarioEntityAccess::inspect)
+    }
+
+    /// Iterate committed plans without copying their access sets.
+    /// Presentation consumers choose stable authored identities for ordering.
+    pub fn scenario_access_plans(&self) -> impl Iterator<Item = (Entity, ScenarioAccessPlan<'_>)> {
+        self.scenario_plans
+            .iter()
+            .map(|(entity, plan)| (*entity, plan.inspect()))
+    }
+
     #[inline]
     pub fn requires_barrier(&self, entity: Entity) -> bool {
         !self.topology_ready || self.modelica_entities.contains(&entity)
@@ -791,15 +837,16 @@ impl SimulationBarrierParticipants {
         writes: impl IntoIterator<Item = Entity>,
         query_reads: impl IntoIterator<Item = String>,
     ) {
-        self.scenario_plans.insert(
-            scenario,
-            ScenarioEntityAccess {
-                modelica: modelica.into_iter().collect(),
-                reads: reads.into_iter().collect(),
-                writes: writes.into_iter().collect(),
-                query_reads: query_reads.into_iter().collect(),
-            },
-        );
+        let plan = ScenarioEntityAccess {
+            modelica: modelica.into_iter().collect(),
+            reads: reads.into_iter().collect(),
+            writes: writes.into_iter().collect(),
+            query_reads: query_reads.into_iter().collect(),
+        };
+        if self.scenario_plans.get(&scenario) != Some(&plan) {
+            self.scenario_plans.insert(scenario, plan);
+            self.scenario_plan_revision = self.scenario_plan_revision.wrapping_add(1);
+        }
     }
 
     /// Add one runtime-discovered read to a committed scenario plan.
@@ -808,6 +855,9 @@ impl SimulationBarrierParticipants {
     /// command after the static dependency plan was resolved.
     pub fn add_scenario_read(&mut self, scenario: Entity, entity: Entity) -> Option<bool> {
         let inserted = self.scenario_plans.get_mut(&scenario)?.reads.insert(entity);
+        if inserted {
+            self.scenario_plan_revision = self.scenario_plan_revision.wrapping_add(1);
+        }
         Some(inserted)
     }
 
@@ -818,18 +868,26 @@ impl SimulationBarrierParticipants {
             .get_mut(&scenario)?
             .writes
             .insert(entity);
+        if inserted {
+            self.scenario_plan_revision = self.scenario_plan_revision.wrapping_add(1);
+        }
         Some(inserted)
     }
 
     /// Remove one scenario's access plan.
     pub fn remove_scenario_dependencies(&mut self, scenario: Entity) {
-        self.scenario_plans.remove(&scenario);
+        if self.scenario_plans.remove(&scenario).is_some() {
+            self.scenario_plan_revision = self.scenario_plan_revision.wrapping_add(1);
+        }
     }
 
     /// Clear all scenario contributions after a shared scripting contract is
     /// replaced. The next lifecycle pass will rebuild them from current source.
     pub fn clear_scenario_dependencies(&mut self) {
-        self.scenario_plans.clear();
+        if !self.scenario_plans.is_empty() {
+            self.scenario_plans.clear();
+            self.scenario_plan_revision = self.scenario_plan_revision.wrapping_add(1);
+        }
     }
 
     /// Whether this entity is a live Modelica participant in the latest

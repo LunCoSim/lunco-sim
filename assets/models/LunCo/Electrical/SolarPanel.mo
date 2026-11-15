@@ -8,6 +8,10 @@ model SolarPanel
   parameter Real efficiency = 0.30 "Irradiance-to-electrical conversion, 0..1";
   parameter Real reference_temperature_k(unit="K") = 298.15
     "Cell temperature at the reference efficiency and power rating";
+  parameter Real temperature_curve_min_k(unit="K") = 0.0
+    "Lower coefficient-evaluation bound; zero leaves the lower bound omitted";
+  parameter Real temperature_curve_max_k(unit="K") = 0.0
+    "Upper coefficient-validity bound; zero leaves the upper bound omitted";
   parameter Real power_temperature_coefficient_per_k(unit="1/K") = -0.0037
     "Relative power change per kelvin; generic PVWatts standard-silicon study value, not flight-cell calibration";
   parameter Real solar_absorptivity = 1.0
@@ -38,7 +42,10 @@ model SolarPanel
   output Real cos_incidence "Live clamped cosine of solar incidence, 0..1";
   output Real terminal_voltage_v(unit="V") "Electrical bus voltage at the solar-panel terminals";
   output Real generated_current_a(unit="A") "Current delivered from the panel to the electrical bus";
-  output Real temperature_k(unit="K") "Cell temperature used by the electrical model";
+  output Real temperature_k(unit="K") "Actual cell temperature from the prescribed or thermal input";
+  output Real curve_temperature_k(unit="K") "Temperature used to evaluate the electrical coefficient";
+  output Real curve_limited "1 when the lower coefficient bound holds the evaluated temperature";
+  output Real curve_in_range "1 when actual cell temperature is inside all authored coefficient bounds";
   output Real temperature_factor "Bounded relative power-temperature multiplier";
   output Real conversion_efficiency "Temperature-adjusted conversion before bus loading";
   output Real temperature_adjusted_peak_power_w(unit="W") "Reference power rating adjusted for cell temperature";
@@ -54,6 +61,14 @@ equation
     and efficiency >= 0.0 and efficiency <= solar_absorptivity
     and solar_absorptivity <= 1.0 and peak_power_rating_w >= 0.0,
     "SolarPanel requires positive area, voltage and reference temperature, and 0 <= efficiency <= absorptivity <= 1");
+  assert(temperature_curve_min_k >= 0.0 and temperature_curve_max_k >= 0.0
+    and (temperature_curve_min_k <= 0.0 or temperature_curve_min_k <= reference_temperature_k)
+    and (temperature_curve_max_k <= 0.0 or temperature_curve_max_k >= reference_temperature_k)
+    and (temperature_curve_min_k <= 0.0 or temperature_curve_max_k <= 0.0
+      or temperature_curve_min_k < temperature_curve_max_k),
+    "SolarPanel coefficient bounds require nonnegative bounds, a reference inside the authored interval and lower < upper");
+  assert(temperature_curve_max_k <= 0.0 or cell_temperature_k <= temperature_curve_max_k,
+    "SolarPanel cell temperature exceeds the authored coefficient upper bound");
   assert(cell_temperature_k > 0.0 and irradiance >= 0.0
     and sun_visibility >= 0.0 and sun_visibility <= 1.0,
     "SolarPanel requires positive absolute cell temperature, nonnegative irradiance and visibility in [0,1]");
@@ -72,8 +87,15 @@ equation
   incident_irradiance_w_m2 = irradiance * cos_incidence * sun_visibility;
   incident_power_w = area * incident_irradiance_w_m2;
   temperature_k = cell_temperature_k;
+  // Lower-bound holding is an explicit reduced electrical assumption. The
+  // actual thermal input is retained, and temperatures above an authored
+  // upper validity bound fail rather than imply a calibrated hot tail.
+  curve_temperature_k = max(cell_temperature_k, temperature_curve_min_k);
+  curve_limited = if noEvent(cell_temperature_k < temperature_curve_min_k) then 1.0 else 0.0;
+  curve_in_range = if noEvent((temperature_curve_min_k <= 0.0 or cell_temperature_k >= temperature_curve_min_k)
+    and (temperature_curve_max_k <= 0.0 or cell_temperature_k <= temperature_curve_max_k)) then 1.0 else 0.0;
   temperature_factor = max(0.0, 1.0 + power_temperature_coefficient_per_k
-    * (cell_temperature_k - reference_temperature_k));
+    * (curve_temperature_k - reference_temperature_k));
   conversion_efficiency = min(solar_absorptivity, efficiency * temperature_factor);
   temperature_adjusted_peak_power_w = peak_power_rating_w * temperature_factor;
   unconstrained_available_power_w = conversion_efficiency * incident_power_w;

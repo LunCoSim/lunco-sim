@@ -46,7 +46,7 @@ fn on_tick(me, ctx) {
     if !prepared_analysis.ready { return; }
     let analysis = prepared_analysis.report;
     checks.push(t_true(analysis != () && analysis.ok == true
-        && analysis.analysis.requirements.len() == 2,
+        && analysis.analysis.requirements.len() == 5,
         "typed source analysis remains available independently of structural lint findings"));
 
     let usage_found = false;
@@ -58,6 +58,18 @@ fn on_tick(me, ctx) {
     }
     checks.push(t_true(usage_found,
         "the independent analysis policy receives the source-backed requirement usage"));
+    let missing_source = #{};
+    for item in validation.findings {
+        if item.rule == "sysml-requirement-usage-missing-source" {
+            missing_source[item.subject.split(" @ ")[0]] = true;
+        }
+    }
+    checks.push(t_true(!missing_source.contains("PolicyIsolation::sourcedBudget"),
+        "a requirement linked to a source with a populated locator has provenance"));
+    checks.push(t_true(missing_source.contains("PolicyIsolation::emptySourceBudget"),
+        "a linked source with an empty locator remains a missing-source diagnostic"));
+    checks.push(t_true(missing_source.contains("PolicyIsolation::unlinkedBudget"),
+        "another requirement's populated locator cannot satisfy an unlinked evidence record"));
     this.done = true;
     report_verdict(checks, "SYSML POLICY ISOLATION", "SYSML_POLICY_ISOLATION");
 }

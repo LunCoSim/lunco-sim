@@ -34,7 +34,10 @@ checkable claim. That is the whole reason the split exists — not tidiness.
 camera, computer, headlight, mass memory and transmitter loads. Its positive
 UVLO turn-off and higher restart threshold are explicit equipment parameters;
 the illustrative 18/20 V defaults describe a generic 28 V device. Modelica
-owns hysteresis through discrete converter state. Actual input power is
+owns hysteresis through discrete converter state. That equation is the sole
+switching owner; `powered` projects its Boolean result. The finite current-law
+denominator uses `noEvent(max(voltage_off_v, p.v))`, keeping inactive algebraic
+evaluations defined without adding another UVLO event surface. Actual input power is
 `p.v*p.i`; the off converter draws zero current, including at zero or reverse
 voltage. Active capture, processing, memory service, lamp output and RF follow
 that powered state. This does not model converter capacitance, startup delay or
@@ -405,12 +408,25 @@ vector; do not require a tracker yaw response from a component that has no joint
 `SolarPanel` accepts `cell_temperature_k` as a prescribed input or feedback
 from a thermal network. The reference temperature is 298.15 K. With relative
 coefficient `gamma = power_temperature_coefficient_per_k`, it uses
-`f = max(0, 1 + gamma * (T - Tref))`. Both reference efficiency and nameplate
+`f = max(0, 1 + gamma * (Tcurve - Tref))`. Both reference efficiency and nameplate
 power change with `f`; conversion efficiency is bounded by solar absorptivity.
 The reference nameplate is a rating at `Tref`, not an all-temperature ceiling.
 The default -0.0037/K means -0.37 percent per kelvin, from the
 [PVWatts standard crystalline-silicon model](https://samrepo.nlr.gov/help/pvwatts_system_design.html).
 It is a configurable study default; it does not identify FLIP's cell technology.
+
+`temperature_curve_min_k` and `temperature_curve_max_k` author a coefficient
+validity interval; zero omits the corresponding bound. Both must be nonnegative,
+the reference must lie inside authored bounds, and a fully authored interval must
+have lower < upper. `curve_temperature_k = max(cell_temperature_k,
+temperature_curve_min_k)` holds the coefficient at the lower bound when the cell
+is colder. This is an explicit reduced electrical assumption, not evidence that
+the cold cell is calibrated. `temperature_k` retains the actual input;
+`curve_limited` reports lower-bound holding and `curve_in_range` reports whether
+that actual temperature lies inside the authored interval. An actual temperature
+above a positive upper bound fails at the model owner; it is not silently
+clamped into a claimed hot operating range. With both bounds omitted, the generic
+linear study law uses the actual temperature.
 
 The reduced I-V source has a current plateau below `v_mp` and a power limit
 above it. `absorbed_power_w = solar_absorptivity * incident_power_w` and
@@ -429,7 +445,8 @@ require their own models. The reusable facet is
 `components/thermal/limited_cooling_sink.usda`.
 
 Run `python3 scripts/api/test_solar_temperature.py --headless --output <dir>`
-for 45 authored production checks. They cover hot/cold ratings, high bus voltage,
+for 59 authored production checks. They cover hot/cold ratings, explicit cold
+coefficient holding, visible upper-range and invalid-bound rejection, high bus voltage,
 power/energy conservation, bounded cooling, the sink floor, invalid parameters,
 and a disconnected heat-path counterexample. The 300-second coupled benches
 use explicitly synthetic heat capacities and cooling ratings.

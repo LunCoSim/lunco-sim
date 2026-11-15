@@ -10,8 +10,11 @@ package SolarTemperatureContracts
     parameter Real temperature_k = 298.15;
     parameter Real irradiance_w_m2 = 1000.0;
     parameter Real voltage_v = 48.0;
+    parameter Real temperature_curve_min_k = 0.0;
+    parameter Real temperature_curve_max_k = 0.0;
     LunCo.Electrical.SolarPanel panel(area=0.7, efficiency=0.35,
       peak_power_rating_w=270.0, cell_temperature_k=temperature_k,
+      temperature_curve_min_k=temperature_curve_min_k,temperature_curve_max_k=temperature_curve_max_k,
       irradiance=irradiance_w_m2, sun_visibility=1.0,
       target_mount_x=0.0, target_mount_y=0.0, target_mount_z=1.0,
       panel_normal_x=0.0, panel_normal_y=0.0, panel_normal_z=1.0);
@@ -20,6 +23,10 @@ package SolarTemperatureContracts
     output Real delivered_w = panel.power_out;
     output Real heat_w = panel.heat_w;
     output Real factor = panel.temperature_factor;
+    output Real actual_temperature_k = panel.temperature_k;
+    output Real curve_temperature_k = panel.curve_temperature_k;
+    output Real curve_limited = panel.curve_limited;
+    output Real curve_in_range = panel.curve_in_range;
     output Real energy_balance_w = panel.incident_power_w-panel.reflected_power_w
       -panel.power_out-panel.heat_w;
   equation
@@ -46,6 +53,25 @@ package SolarTemperatureContracts
   model ExtremeHot
     extends StaticPanel(temperature_k=600.0);
   end ExtremeHot;
+  model BoundedCold
+    extends StaticPanel(temperature_k=248.15,
+      temperature_curve_min_k=298.15,temperature_curve_max_k=398.15);
+  end BoundedCold;
+  model BoundedColdNameplate
+    extends StaticPanel(temperature_k=248.15,irradiance_w_m2=2000.0,
+      temperature_curve_min_k=298.15,temperature_curve_max_k=398.15);
+  end BoundedColdNameplate;
+  model BoundedHot
+    extends StaticPanel(temperature_k=348.15,
+      temperature_curve_min_k=298.15,temperature_curve_max_k=398.15);
+  end BoundedHot;
+  model InvalidCurveBounds
+    extends StaticPanel(temperature_curve_min_k=320.0,temperature_curve_max_k=310.0);
+  end InvalidCurveBounds;
+  model InvalidCalibrationHot
+    extends StaticPanel(temperature_k=398.16,
+      temperature_curve_min_k=298.15,temperature_curve_max_k=398.15);
+  end InvalidCalibrationHot;
   model InvalidTemperature
     extends StaticPanel(temperature_k=0.0);
   end InvalidTemperature;

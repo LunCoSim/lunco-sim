@@ -608,7 +608,6 @@ struct TwinLintTask {
     operation_id: u64,
     revision: u64,
     twin: lunco_workspace::TwinId,
-    context: lunco_core::RuntimeExecutionContext,
     scene_generation: Option<u64>,
 }
 
@@ -689,14 +688,15 @@ fn poll_pending_twin_lint(world: &mut World) {
             world.resource_mut::<PendingTwinLint>().0 = Some(task)
         }
         Ok(PreparationPoll::ReadyTwin {
-            snapshot,
-            registry_errors,
-            policy,
+            result:
+                crate::preparation::PreparedTwinResult::Lint {
+                    twin,
+                    source_errors,
+                    findings,
+                },
             permit: _permit,
             ..
         }) => {
-            let mut source_errors = registry_errors;
-            source_errors.extend(snapshot.read_errors.iter().cloned());
             if !source_errors.is_empty() {
                 let message = format!(
                     "Twin namespace inspection failed for {} source(s)",
@@ -710,7 +710,7 @@ fn poll_pending_twin_lint(world: &mut World) {
                             lint_command_error(
                                 "twin",
                                 "twin-lint-source-read-failed",
-                                snapshot.twin.clone(),
+                                twin.clone(),
                                 error,
                             )
                         })
@@ -719,11 +719,6 @@ fn poll_pending_twin_lint(world: &mut World) {
                 report.fail_scope("twin", task.revision, message);
                 return;
             }
-            let findings = lunco_lint::run_lint_with_context(
-                "twin",
-                crate::twin_lint::facts(&snapshot, &policy),
-                task.context,
-            );
             let mut report = world.resource_mut::<lunco_lint::LintReport>();
             if twin_lint_scope_current(&report, task.revision) {
                 let policy_failure = findings
@@ -745,6 +740,12 @@ fn poll_pending_twin_lint(world: &mut World) {
         Ok(PreparationPoll::Failed { diagnostic, .. }) => {
             fail_pending_twin_lint(world, &task, "twin-lint-preparation-failed", diagnostic)
         }
+        Ok(PreparationPoll::ReadyTwin { .. }) => fail_pending_twin_lint(
+            world,
+            &task,
+            "twin-lint-result-mismatch",
+            "Twin lint returned a validation query result".to_owned(),
+        ),
         Err(error) => {
             fail_pending_twin_lint(world, &task, "twin-lint-owner-retired", error.message)
         }
@@ -999,8 +1000,16 @@ pub fn on_run_lint(
                         );
                     }
                 }
-                crate::preparation::admit_twin_lint(world, &format!("twin://{authority}"), &policy)
-                    .map_err(|error| error.message)
+                let source_identity = roots
+                    .logical_identity_for_authority(&authority)
+                    .map_err(|error| error.to_string())?;
+                crate::preparation::admit_twin_lint(
+                    world,
+                    &format!("twin://{source_identity}"),
+                    &policy,
+                    context,
+                )
+                .map_err(|error| error.message)
             })();
             match admitted {
                 Ok(operation_id) => {
@@ -1008,7 +1017,6 @@ pub fn on_run_lint(
                         operation_id,
                         revision,
                         twin: twin_id,
-                        context,
                         scene_generation,
                     });
                 }

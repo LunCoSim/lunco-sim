@@ -2,17 +2,18 @@
 //!
 //! Runtime file queries admit a typed source once, read and prepare pure facts
 //! through the existing asynchronous asset boundary, then consume the exact
-//! operation. Authored lint policy runs serially after source/runtime/mount and
-//! policy binding checks. Browser tasks use its cooperative page executor.
+//! operation. Pure policy over immutable facts prepares in that job.
+//! Publication checks exact source,
+//! runtime, mount and policy bindings. Browser tasks use its cooperative executor.
 //! Native CLI and source-session constructors retain their bounded synchronous
 //! transport. Validation does not launch a solver, scene, physics, or rendering.
 
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry};
-use lunco_api::{ApiQueryError, ApiQueryResult, api_param_str};
+use lunco_api::{ApiQueryError, ApiQueryResult};
 use lunco_api_core::ApiErrorCode;
 use lunco_api_core::{ApiValue, api_value};
-use lunco_doc::DiagnosticSeverity;
+use lunco_doc::{Diagnostic, DiagnosticSeverity};
 use lunco_hooks::HookValue as H;
 use lunco_usd_bevy_stage::{UsdRead, canonical::CanonicalStage};
 use serde_json::json;
@@ -274,7 +275,7 @@ fn sysml_diagnostic_messages(analysis: &lunco_sysml_ast::SysmlAnalysis) -> Vec<S
         .collect()
 }
 
-fn finish_sysml_report(
+pub(crate) fn finish_sysml_report(
     reference: &str,
     analysis: std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>,
 ) -> ValidationReport {
@@ -284,10 +285,8 @@ fn finish_sysml_report(
     // of the semantic AST. `sysml_analysis` is the typed in-process snapshot;
     // the generic AnalyzeSysml query projects only the tables a caller asks
     // for, and Rhai policies own interpretation.
-    // Keep structural lint facts on the same immutable snapshot. Validation
-    // callers can run `lint.sysml`; policy-neutral analysis callers consume
-    // `sysml_analysis` without making their result depend on lint findings.
-    report.lint_facts = Some(lunco_sysml_ast::lint_facts::sysml_facts(&analysis));
+    // Structural validation projects its full lint facts only when it executes
+    // policy. Analysis queries project their requested tables from this snapshot.
     report.sysml_analysis = Some(analysis);
     report.finish()
 }
@@ -394,11 +393,13 @@ pub fn validate_twin(reference: &str, requested_policy: &str) -> TwinValidationR
         }
     };
     let snapshot = crate::twin_lint::inspect_twin(&twin);
+    let findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
     finish_twin_report(
         reference,
         policy,
         snapshot,
         crate::twin_lint::TwinInspectionInput::capture(&twin).registry_errors,
+        findings,
     )
 }
 
@@ -407,8 +408,8 @@ pub(crate) fn finish_twin_report(
     policy: &str,
     snapshot: crate::twin_lint::TwinNamespaceSnapshot,
     registry_errors: Vec<String>,
+    lint_findings: Vec<Diagnostic>,
 ) -> TwinValidationReport {
-    let lint_findings = lunco_lint::run_lint("twin", crate::twin_lint::facts(&snapshot, policy));
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     let mut findings = Vec::with_capacity(lint_findings.len());
@@ -431,14 +432,14 @@ pub(crate) fn finish_twin_report(
     errors.extend(snapshot.read_errors.iter().cloned());
     TwinValidationReport {
         path: reference.to_string(),
-        twin: snapshot.twin.clone(),
-        root: snapshot.root.clone(),
+        twin: snapshot.twin,
+        root: snapshot.root,
         policy: policy.to_string(),
         ok: errors.is_empty(),
         errors,
         warnings,
-        entries: snapshot.entries.clone(),
-        collisions: snapshot.collisions.clone(),
+        entries: snapshot.entries,
+        collisions: snapshot.collisions,
         read_errors: snapshot.read_errors,
         findings,
     }
@@ -460,9 +461,29 @@ pub(crate) fn finish_twin_report(
 ///
 /// Findings never fail a file that the loader would accept: `error` severities
 /// join `errors` (and flip `ok`), everything else joins `warnings`.
-pub(crate) fn apply_lint_policy(mut report: ValidationReport, text: &str) -> ValidationReport {
+pub(crate) fn apply_lint_policy(report: ValidationReport, text: &str) -> ValidationReport {
+    let registration = lunco_hooks::get(&lunco_lint::hook_id(&report.kind));
+    apply_lint_policy_with_registration(
+        report,
+        text,
+        lunco_hooks::RuntimeExecutionContext::unclassified(),
+        registration.as_deref(),
+    )
+}
+
+pub(crate) fn apply_lint_policy_with_registration(
+    mut report: ValidationReport,
+    text: &str,
+    context: lunco_hooks::RuntimeExecutionContext,
+    registration: Option<&lunco_hooks::RegisteredHook>,
+) -> ValidationReport {
     if report.kind == "unknown" {
         return report;
+    }
+    if report.kind == "sysml"
+        && let Some(analysis) = report.sysml_analysis.as_deref()
+    {
+        report.lint_facts = Some(lunco_sysml_ast::lint_facts::sysml_facts(analysis));
     }
     let mut facts = vec![
         ("path".to_string(), H::str(report.path.clone())),
@@ -488,7 +509,9 @@ pub(crate) fn apply_lint_policy(mut report: ValidationReport, text: &str) -> Val
         facts.extend(domain_facts);
     }
 
-    for finding in lunco_lint::run_lint(&report.kind, H::Map(facts)) {
+    for finding in
+        lunco_lint::run_lint_with_registration(&report.kind, H::Map(facts), context, registration)
+    {
         let line = finding.summary();
         report.findings.push(ValidationFinding {
             domain: finding.domain.expect("run_lint sets the requested domain"),
@@ -782,9 +805,7 @@ impl ApiQueryProvider for ValidateSysmlProvider {
 
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         use crate::preparation::{PreparationPoll, QueryKind};
-        let prepared = if api_param_str(params, "path").is_some_and(is_twin_source_set) {
-            None
-        } else {
+        let (operation_id, report, revisions) =
             match crate::preparation::poll(world, QueryKind::Sysml, params)? {
                 PreparationPoll::Pending { operation_id } => {
                     return Ok(Some(crate::preparation::pending(operation_id)));
@@ -804,21 +825,8 @@ impl ApiQueryProvider for ValidateSysmlProvider {
                     report,
                     revisions,
                     ..
-                } => Some((operation_id, report, revisions)),
-            }
-        };
-        let (operation_id, report, revisions) = match prepared {
-            Some((id, report, revisions)) => (Some(id), report, revisions),
-            None => (
-                None,
-                validate_sysml_reference(
-                    world,
-                    api_param_str(params, "path").expect("source-set path"),
-                    true,
-                ),
-                ApiValue::Unit,
-            ),
-        };
+                } => (operation_id, report, revisions),
+            };
         let analysis = report.sysml_analysis.as_deref();
         let source_files: Vec<_> = analysis
             .into_iter()
@@ -839,15 +847,12 @@ impl ApiQueryProvider for ValidateSysmlProvider {
             "source_files": ApiValue::Array(source_files),
             "source_revision": source_revision,
         });
-        Ok(Some(operation_id.map_or_else(
-            || value.clone(),
-            |id| crate::preparation::report_envelope(id, value.clone(), revisions),
+        Ok(Some(crate::preparation::report_envelope(
+            operation_id,
+            value,
+            revisions,
         )))
     }
-}
-
-pub(crate) fn is_twin_source_set(reference: &str) -> bool {
-    lunco_assets_core::parse_twin_root_uri(reference).is_some()
 }
 
 pub fn analyze_sysml_reference(world: &World, reference: &str) -> ValidationReport {
@@ -912,7 +917,7 @@ pub(crate) fn validate_sysml_reference(
 
 /// Resolve a stable `twin://<source-identity>` SysML reference to its current
 /// mounted Workspace Twin and keep the load lease inside this owner.
-fn mounted_sysml_twin<'w>(
+pub(crate) fn mounted_sysml_twin<'w>(
     world: &'w World,
     name: &str,
     reference: &str,
@@ -956,7 +961,7 @@ fn mounted_sysml_twin<'w>(
 
 /// The prepared, revision-pinned analysis of a mounted Twin's SysML source set.
 #[cfg(feature = "sysml-runtime")]
-fn prepared_twin_sysml_analysis(
+pub(crate) fn prepared_twin_sysml_analysis(
     analyses: &lunco_sysml::TwinSysmlAnalyses,
     name: &str,
     reference: &str,
@@ -1155,20 +1160,17 @@ impl ApiQueryProvider for ValidateTwinProvider {
             } => Ok(Some(crate::preparation::failed(operation_id, diagnostic))),
             PreparationPoll::ReadyTwin {
                 operation_id,
-                snapshot,
-                registry_errors,
-                policy,
-                reference,
-                revisions,
+                result: crate::preparation::PreparedTwinResult::Query { report, revisions },
                 permit: _permit,
-            } => {
-                let report = finish_twin_report(&reference, &policy, snapshot, registry_errors);
-                Ok(Some(crate::preparation::report_envelope(
-                    operation_id,
-                    lunco_api_core::api_value_from_serializable(&report)?,
-                    lunco_api_core::api_value_from_serializable(&revisions)?,
-                )))
-            }
+            } => Ok(Some(crate::preparation::report_envelope(
+                operation_id,
+                report,
+                revisions,
+            ))),
+            PreparationPoll::ReadyTwin { .. } => Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "Twin validation returned a live lint result",
+            )),
             PreparationPoll::Ready { .. } => Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "Twin preparation returned an asset report",
