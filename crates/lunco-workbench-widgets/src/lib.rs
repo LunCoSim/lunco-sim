@@ -4,6 +4,11 @@
 //! They can therefore be used by lightweight panels, headless composition
 //! code, and alternate hosts without pulling in docking, viewport, or window
 //! management.
+//!
+//! Application text fields use [`text_editor`] builders so domain panels can
+//! add their own labels, validation, and commit behavior without creating a
+//! second widget setup. Panels own any containing `ScrollArea` needed to bound
+//! multiline editors or long result lists.
 
 pub mod icons;
 pub mod text_editor;

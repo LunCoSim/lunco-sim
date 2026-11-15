@@ -556,51 +556,64 @@ impl Panel for ComponentPalettePanel {
                         );
                     }
                 } else {
-                    // Group by root and immediate package. Include the root
-                    // in group labels until the user has selected one.
                     let mut groups: std::collections::BTreeMap<
-                        (&'static str, &'static str),
-                        Vec<&lunco_modelica_index::index::ClassEntry>,
+                        &'static str,
+                        std::collections::BTreeMap<
+                            &'static str,
+                            Vec<&lunco_modelica_index::index::ClassEntry>,
+                        >,
                     > = std::collections::BTreeMap::new();
                     for (comp, _score) in scored.iter() {
-                        let key = (
-                            library_of(comp.name.as_str()),
-                            category_of(comp.name.as_str()),
-                        );
-                        groups.entry(key).or_default().push(*comp);
+                        groups
+                            .entry(library_of(comp.name.as_str()))
+                            .or_default()
+                            .entry(category_of(comp.name.as_str()))
+                            .or_default()
+                            .push(*comp);
                     }
-                    for ((library, category), list) in groups {
-                        let title = if selected_library.is_some() {
-                            category.to_owned()
-                        } else {
-                            format!("{library} · {category}")
-                        };
-                        let header = egui::CollapsingHeader::new(
-                            egui::RichText::new(format!("{} ({})", title, list.len()))
-                                .color(theme.tokens.text_subdued)
-                                .strong(),
-                        )
-                        .default_open(false)
-                        .id_salt(("palette_group", library, category));
-                        header.show(ui, |ui| {
-                            for comp in list {
-                                let being_dragged = dragging_path
-                                    .as_deref()
-                                    .map(|p| p == comp.name.as_str())
-                                    .unwrap_or(false);
-                                let action = ui
-                                    .add_enabled_ui(can_insert, |ui| {
-                                        render_component_row(ui, comp, &theme, being_dragged)
-                                    })
-                                    .inner;
-                                if action.clicked {
-                                    clicked = Some((*comp).clone());
-                                }
-                                if action.drag_started {
-                                    drag_started_def = Some((*comp).clone());
-                                }
+
+                    if selected_library.is_some() {
+                        for (library, packages) in groups {
+                            for (category, list) in packages {
+                                render_palette_package(
+                                    ui,
+                                    library,
+                                    category,
+                                    &list,
+                                    &theme,
+                                    can_insert,
+                                    dragging_path.as_deref(),
+                                    &mut clicked,
+                                    &mut drag_started_def,
+                                );
                             }
-                        });
+                        }
+                    } else {
+                        for (library, packages) in groups {
+                            let count: usize = packages.values().map(Vec::len).sum();
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new(format!("{library} ({count})"))
+                                    .color(theme.tokens.text_subdued)
+                                    .strong(),
+                            )
+                            .default_open(false)
+                            .id_salt(("palette_library", library))
+                            .show(ui, |ui| {
+                                for (category, list) in packages {
+                                    render_palette_package(
+                                        ui,
+                                        library,
+                                        category,
+                                        &list,
+                                        &theme,
+                                        can_insert,
+                                        dragging_path.as_deref(),
+                                        &mut clicked,
+                                        &mut drag_started_def,
+                                    );
+                                }
+                            });
+                        }
                     }
                 }
             });
@@ -634,6 +647,42 @@ impl Panel for ComponentPalettePanel {
             });
         }
     }
+}
+
+fn render_palette_package(
+    ui: &mut egui::Ui,
+    library: &str,
+    category: &str,
+    components: &[&lunco_modelica_index::index::ClassEntry],
+    theme: &lunco_theme::Theme,
+    can_insert: bool,
+    dragging_path: Option<&str>,
+    clicked: &mut Option<lunco_modelica_index::index::ClassEntry>,
+    drag_started_def: &mut Option<lunco_modelica_index::index::ClassEntry>,
+) {
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("{category} ({})", components.len()))
+            .color(theme.tokens.text_subdued)
+            .strong(),
+    )
+    .default_open(false)
+    .id_salt(("palette_package", library, category))
+    .show(ui, |ui| {
+        for comp in components {
+            let is_being_dragged = dragging_path == Some(comp.name.as_str());
+            let action = ui
+                .add_enabled_ui(can_insert, |ui| {
+                    render_component_row(ui, comp, theme, is_being_dragged)
+                })
+                .inner;
+            if action.clicked {
+                *clicked = Some((*comp).clone());
+            }
+            if action.drag_started {
+                *drag_started_def = Some((*comp).clone());
+            }
+        }
+    });
 }
 
 /// Persistent counter for palette-driven placement so successive

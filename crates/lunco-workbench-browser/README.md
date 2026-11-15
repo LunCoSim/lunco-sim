@@ -31,6 +31,9 @@ processing stack. Hosts that want Twin dataset controls add
 Domain sections use `BrowserSectionRegistry` and emit typed `BrowserAction`
 values through `BrowserActions`. Browser panels consume `WorkspaceResource`;
 they do not open USD layers or read asset bytes directly.
+File rows send domain documents and Twin source files through `BrowserActions`.
+The browser dispatches source opens after rendering with the captured Twin root
+and a `LocalUser` origin; domain dispatchers own their document types.
 
 See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md)
 for the ownership and composition rules.

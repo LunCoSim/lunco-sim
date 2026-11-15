@@ -221,7 +221,8 @@ fn connection_picker(
 
 pub(super) fn find(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &mut UsdCanvasSessionState) {
     ui.add(
-        egui::TextEdit::singleline(&mut state.scope_search).hint_text("Find prim, port or program"),
+        lunco_workbench_widgets::text_editor::singleline(&mut state.scope_search)
+            .hint_text("Find prim, port or program"),
     );
     let needle = state.scope_search.to_lowercase();
     let Some(host) = &state.view_document else {

@@ -452,16 +452,26 @@ impl Panel for SysmlRequirementDetailsPanel {
 fn dispatch_panel_actions(ctx: &mut PanelCtx, actions: Vec<PanelAction>) {
     for action in actions {
         match action {
-            PanelAction::OpenFile(path) => ctx.trigger(OpenFile { path }),
+            PanelAction::OpenFile(path) => ctx.trigger_command(
+                OpenFile { path },
+                lunco_core::CommandOrigin::LocalUser {
+                    session_id: lunco_command_contracts::SessionId::LOCAL,
+                },
+            ),
             PanelAction::OpenTwinSource {
                 twin_root,
                 relative_path,
-            } => ctx.trigger(OpenTwinSource {
-                twin_root,
-                relative_path,
-                pinned: true,
-                focus: Some(true),
-            }),
+            } => ctx.trigger_command(
+                OpenTwinSource {
+                    twin_root,
+                    relative_path,
+                    pinned: true,
+                    focus: Some(true),
+                },
+                lunco_core::CommandOrigin::LocalUser {
+                    session_id: lunco_command_contracts::SessionId::LOCAL,
+                },
+            ),
             PanelAction::ApplySource {
                 doc_id,
                 parent_generation,
@@ -774,7 +784,7 @@ impl SysmlRequirementsPanel {
         ui.horizontal_wrapped(|ui| {
             ui.label("Requirement");
             ui.add(
-                egui::TextEdit::singleline(&mut self.trace_search)
+                lunco_workbench_widgets::text_editor::singleline(&mut self.trace_search)
                     .hint_text("Filter requirements")
                     .desired_width(190.0),
             );
@@ -1037,7 +1047,7 @@ impl SysmlRequirementsPanel {
             );
         });
         ui.add(
-            egui::TextEdit::singleline(&mut self.structure_search)
+            lunco_workbench_widgets::text_editor::singleline(&mut self.structure_search)
                 .hint_text("Find a package, part, interface, port or connection")
                 .desired_width(ui.available_width()),
         );
@@ -1871,7 +1881,7 @@ impl SysmlRequirementsPanel {
         });
         ui.horizontal_wrapped(|ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut self.search)
+                lunco_workbench_widgets::text_editor::singleline(&mut self.search)
                     .hint_text("Search name, ID, docs or test")
                     .desired_width((ui.available_width() * 0.52).clamp(120.0, 400.0)),
             );
@@ -2971,7 +2981,7 @@ impl SysmlRequirementsPanel {
             .max_height(ui.available_height().max(1.0))
             .show(ui, |ui| {
                 ui.add(
-                    egui::TextEdit::multiline(&mut editor.buffer)
+                    lunco_workbench_widgets::text_editor::code(&mut editor.buffer)
                         .id(text_edit_id)
                         .code_editor()
                         .interactive(document.writable && !editor.conflict)
@@ -4447,7 +4457,7 @@ fn render_structure_details(
         ui.small(format!("{} declared", attributes.len()));
     });
     ui.add(
-        egui::TextEdit::singleline(parameter_search)
+        lunco_workbench_widgets::text_editor::singleline(parameter_search)
             .hint_text("Find a parameter, type or value")
             .desired_width(ui.available_width()),
     );

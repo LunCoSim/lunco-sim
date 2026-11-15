@@ -183,6 +183,15 @@ pub enum BrowserAction {
         /// one when the emitter already resolved it.
         relative_path: std::path::PathBuf,
     },
+    /// User opened a Twin file owned by the generic source editor.
+    OpenTwinSource {
+        /// Exact Twin root that supplied the file.
+        twin_root: std::path::PathBuf,
+        /// File path relative to that Twin root.
+        relative_path: std::path::PathBuf,
+        /// Keep the source tab open when another file is previewed.
+        pinned: bool,
+    },
     /// User clicked a class row → open / focus a diagram tab on it.
     /// `qualified_path` is the full Modelica path (e.g.
     /// `"AnnotatedRocketStage.RocketStage"`).

@@ -6,7 +6,7 @@
 use bevy::prelude::*;
 use egui;
 use lunco_doc_bevy::rename::RenameOpenDocument;
-use lunco_workbench_core::source::{OpenTwinSource, is_source_only_text_path};
+use lunco_workbench_core::source::is_source_only_text_path;
 use lunco_workspace::rename::RenameTwinEntry;
 use std::sync::Arc;
 
@@ -545,11 +545,10 @@ impl BrowserSection for FilesSection {
                     relative_path: twin_root.join(relative_path),
                 });
             } else {
-                ctx.trigger(OpenTwinSource {
-                    twin_root: twin_root.to_string_lossy().into_owned(),
-                    relative_path: relative_path.to_string_lossy().into_owned(),
+                ctx.actions.push(BrowserAction::OpenTwinSource {
+                    twin_root: twin_root.clone(),
+                    relative_path,
                     pinned,
-                    focus: None,
                 });
             }
         }

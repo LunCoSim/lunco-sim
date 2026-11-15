@@ -728,7 +728,12 @@ pub(crate) fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
     let mut name_changed = false;
     ui.horizontal(|ui| {
         ui.label("Name:");
-        if ui.text_edit_singleline(&mut profile.username).changed() {
+        if ui
+            .add(lunco_workbench_widgets::text_editor::singleline(
+                &mut profile.username,
+            ))
+            .changed()
+        {
             name_changed = true;
         }
     });
@@ -757,7 +762,9 @@ pub(crate) fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
             });
             ui.horizontal(|ui| {
                 ui.label("Guest dials:");
-                ui.text_edit_singleline(&mut invite_addr);
+                ui.add(lunco_workbench_widgets::text_editor::singleline(
+                    &mut invite_addr,
+                ));
             });
             let digest = status.invite_digest.trim();
             let frag = if digest.is_empty() {
@@ -824,7 +831,9 @@ pub(crate) fn render_network_menu(ui: &mut egui::Ui, world: &mut World) {
             });
             ui.horizontal(|ui| {
                 ui.label("Server:");
-                ui.text_edit_singleline(&mut address);
+                ui.add(lunco_workbench_widgets::text_editor::singleline(
+                    &mut address,
+                ));
             });
             // Optional self-signed cert digest to pin. A browser
             // joining a self-signed LAN/dev host by IP needs this
@@ -2262,7 +2271,7 @@ fn render_status_history_log(
         ui.fonts_mut(|fonts| fonts.layout_job(job))
     };
     ui.add(
-        egui::TextEdit::multiline(&mut text)
+        lunco_workbench_widgets::text_editor::multiline(&mut text)
             .id_salt("recent_status_history_text")
             .desired_width(ui.available_width())
             .desired_rows(1)

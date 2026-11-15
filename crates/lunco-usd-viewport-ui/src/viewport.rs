@@ -208,7 +208,7 @@ fn render_preview_view(
                         .unwrap_or_else(|| "inspection".to_string())
                 });
             ui.add(
-                egui::TextEdit::singleline(&mut preset_name)
+                lunco_workbench_widgets::text_editor::singleline(&mut preset_name)
                     .desired_width(110.0)
                     .hint_text("preset name"),
             );

@@ -1368,7 +1368,7 @@ fn draw_runtime_ui_dropdowns(
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         if let Some(hint) = &definition.search_hint {
             ui.add(
-                egui::TextEdit::singleline(&mut dropdowns.search)
+                lunco_workbench_widgets::text_editor::singleline(&mut dropdowns.search)
                     .hint_text(hint)
                     .desired_width(f32::INFINITY),
             );
@@ -1811,7 +1811,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
                 });
                 ui.horizontal(|ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut filter)
+                        lunco_workbench_widgets::text_editor::singleline(&mut filter)
                             .hint_text("Search assets or source files")
                             .desired_width(f32::INFINITY),
                     );

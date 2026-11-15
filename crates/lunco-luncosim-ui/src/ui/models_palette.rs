@@ -409,7 +409,7 @@ fn models_palette_content(
     }
 
     ui.add(
-        egui::TextEdit::singleline(&mut palette.filter)
+        lunco_workbench_widgets::text_editor::singleline(&mut palette.filter)
             .hint_text("Find a program or language…")
             .desired_width(ui.available_width()),
     );

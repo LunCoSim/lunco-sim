@@ -134,7 +134,8 @@ pub(super) fn render(
                 }
                 ui.separator();
                 ui.add(
-                    egui::TextEdit::singleline(&mut state.new_view_name).hint_text("New view name"),
+                    lunco_workbench_widgets::text_editor::singleline(&mut state.new_view_name)
+                        .hint_text("New view name"),
                 );
                 if ui.button("Create view of this system").clicked() {
                     ctx.trigger(view_files::CreateConnectionView {
@@ -161,7 +162,7 @@ pub(super) fn render(
                 ui.separator();
                 ui.label("Repository view file");
                 ui.add(
-                    egui::TextEdit::singleline(&mut state.view_file_path)
+                    lunco_workbench_widgets::text_editor::singleline(&mut state.view_file_path)
                         .hint_text("Path to .lunco-view.toml"),
                 );
                 ui.horizontal(|ui| {

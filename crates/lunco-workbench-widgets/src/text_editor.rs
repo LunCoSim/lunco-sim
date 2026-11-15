@@ -3,6 +3,11 @@
 //! Domain panels own their buffer lifecycle, persistence, diagnostics, and
 //! language-specific behavior. These builders own the common egui setup so a
 //! source editor has the same typography and interaction baseline everywhere.
+//! Application text fields should start with these builders and customize the
+//! returned builder when a domain needs a different width, hint, font, or
+//! commit policy. The enclosing panel owns overflow layout: egui scrolls a
+//! single-line caret horizontally, while multiline editors use their containing
+//! `ScrollArea` for vertical movement when the content exceeds the viewport.
 
 use egui;
 

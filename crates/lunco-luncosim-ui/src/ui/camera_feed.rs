@@ -822,7 +822,10 @@ pub(super) fn draw_camera_feed(
                     egui::ComboBox::from_id_salt(("camera-picker",id)).selected_text(selected_text)
                         .width(ui.available_width()).wrap_mode(egui::TextWrapMode::Truncate).show_ui(ui,|ui| {
                         let search=state.searches.entry(*id).or_default();
-                        ui.add(egui::TextEdit::singleline(search).hint_text("Find rover or camera…"));
+                        ui.add(
+                            lunco_workbench_widgets::text_editor::singleline(search)
+                                .hint_text("Find rover or camera…"),
+                        );
                         let filter=search.to_lowercase();let mut previous=None;
                         for (source,path,label) in &candidates {
                             let owner=group(path);
@@ -1000,7 +1003,7 @@ fn image_controls(
     }
     ui.collapsing("Shader workflow", |ui| {
         ui.weak("Edit a library WESL shader, then ReloadShader to update live views.");
-        ui.text_edit_singleline(shader);
+        ui.add(lunco_workbench_widgets::text_editor::singleline(shader));
         if ui.button("Apply shader asset").clicked() {
             effects.shader = shader.clone();
             changed = true;

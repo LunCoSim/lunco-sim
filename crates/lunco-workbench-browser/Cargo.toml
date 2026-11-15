@@ -7,6 +7,7 @@ description = "Twin, file and library browser for the LunCoSim workbench"
 
 [dependencies]
 lunco-core = { path = "../lunco-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 bevy = { workspace = true }
