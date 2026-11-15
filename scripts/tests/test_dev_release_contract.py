@@ -136,7 +136,7 @@ class DevReleaseContractTests(unittest.TestCase):
     def test_release_keeps_human_installers_and_machine_updates_separate(self) -> None:
         workflow = (ROOT / ".github/workflows/dev.yml").read_text(encoding="utf-8")
 
-        self.assertIn("python3 scripts/stage_dev_release.py", workflow)
+        self.assertIn("python3 scripts/stage_release_artifacts.py", workflow)
         self.assertIn("LunCoSim/lunco-sim-updates", workflow)
         self.assertIn("secrets.LUNCOSIM_UPDATES_TOKEN", workflow)
         self.assertIn("--draft", workflow)
