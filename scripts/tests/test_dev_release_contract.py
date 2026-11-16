@@ -28,7 +28,7 @@ class DevReleaseContractTests(unittest.TestCase):
                     os.environ,
                     PLATFORM=platform,
                     PACKAGE_ICON=icon,
-                    MSI_VERSION="1.6.1",
+                    MSI_VERSION="0.6.1",
                     WITH_MSI="1",
                     VPK_PACK_ID="luncosim",
                     RELEASE_VERSION="0.6.0-dev.1",
@@ -49,7 +49,7 @@ class DevReleaseContractTests(unittest.TestCase):
                 self.assertEqual("--msi" in args, platform == "windows")
                 if platform == "windows":
                     self.assertEqual(args[args.index("--instLocation") + 1], "Either")
-                    self.assertEqual(args[args.index("--msiVersion") + 1], "1.6.1")
+                    self.assertEqual(args[args.index("--msiVersion") + 1], "0.6.1")
                 self.assertEqual("--icon" in args, bool(icon))
                 if icon:
                     self.assertEqual(args[args.index("--icon") + 1], icon)

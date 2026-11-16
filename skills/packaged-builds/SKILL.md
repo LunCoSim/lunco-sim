@@ -25,12 +25,15 @@ packaged-release claim.
 
 Windows MSI packaging requires an ordered three-part `--msi-version` (or
 `LUNCO_MSI_VERSION`) in addition to the app's SemVer `--version`. The manual
-Dev Builds workflow maps versions such as `0.6.0-dev.1` to MSI version `1.6.1`
-and stable `0.6.0` to `1.6.999`. `scripts/msi_version.py` allocates the next
-`dev.N`, rejects non-increasing versions within the Dev SemVer train, and keeps
-the MSI version ahead of all published Windows packages.
+Dev Builds workflow maps `0.6.0-dev.1` to MSI version `0.6.1`, `0.6.0-dev.2` to
+`0.6.2`, and stable `0.6.0` to `0.6.999`. `scripts/msi_version.py` allocates the
+next `dev.N` and rejects non-increasing app SemVer versions. Scheduled unsigned
+Nightly Builds use the same allocator in `LunCoSim/lunco-sim-updates`, so Dev
+and nightly releases share one increasing version sequence. MSI numbering is
+internal to Windows Installer and may differ from the Velopack SemVer order;
+the app version remains the update sequence.
 The first `0.6.0-dev.1` release sorts below existing `0.6.0-nightly.*` builds
-in SemVer, so users must install its MSI once before automatic Dev updates.
+in SemVer, so users must install its MSI once before automatic updates resume.
 
 The workflow submits one ZIP containing the Windows executable and MSI to
 SignPath. Its artifact configuration signs the executable, the executable
