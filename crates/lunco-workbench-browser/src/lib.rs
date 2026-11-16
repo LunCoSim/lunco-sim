@@ -34,7 +34,7 @@ impl Plugin for TwinBrowserPlugin {
             .register_type::<BrowserQuery>()
             .init_resource::<UnsavedDocs>()
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
-            .add_systems(Update, drain_browser_navigation);
+            .add_systems(Update, drain_browser_actions);
         app.init_resource::<twin_browser::files_section::FileTreeView>()
             .add_systems(Update, twin_browser::files_section::prepare_file_tree)
             .add_observer(twin_browser::files_section::retire_file_tree);
@@ -47,20 +47,40 @@ impl Plugin for TwinBrowserPlugin {
     }
 }
 
-/// Turn browser panel-navigation actions into the workbench's typed focus
-/// command. The browser never reaches into the shell's private dock state.
-fn drain_browser_navigation(world: &mut World) {
+/// Dispatch browser-owned actions after the UI render pass.
+fn drain_browser_actions(world: &mut World) {
     let actions = {
         let Some(mut outbox) = world.get_resource_mut::<BrowserActions>() else {
             return;
         };
-        outbox.take_where(|action| matches!(action, BrowserAction::OpenPanel { .. }))
+        outbox.take_where(|action| {
+            matches!(
+                action,
+                BrowserAction::OpenPanel { .. } | BrowserAction::OpenTwinSource { .. }
+            )
+        })
     };
 
     for action in actions {
-        let BrowserAction::OpenPanel { id } = action else {
-            continue;
-        };
-        world.trigger(FocusPanel { id });
+        match action {
+            BrowserAction::OpenPanel { id } => world.trigger(FocusPanel { id }),
+            BrowserAction::OpenTwinSource {
+                twin_root,
+                relative_path,
+                pinned,
+            } => lunco_workbench_core::trigger_command_with_origin(
+                world,
+                lunco_workbench_core::source::OpenTwinSource {
+                    twin_root: twin_root.to_string_lossy().into_owned(),
+                    relative_path: relative_path.to_string_lossy().into_owned(),
+                    pinned,
+                    focus: None,
+                },
+                lunco_core::CommandOrigin::LocalUser {
+                    session_id: lunco_command_contracts::SessionId::LOCAL,
+                },
+            ),
+            _ => {}
+        }
     }
 }

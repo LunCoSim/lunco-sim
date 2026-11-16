@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify dev release and signing contracts
-        run: python3 -m unittest scripts.tests.test_msi_version scripts.tests.test_dev_release_contract scripts.tests.test_stage_dev_release scripts.tests.test_generate_dev_release_notes
+        run: python3 -m unittest scripts.tests.test_msi_version scripts.tests.test_dev_release_contract scripts.tests.test_stage_release_artifacts scripts.tests.test_generate_dev_release_notes
       - name: Verify runtime font bundle targets
         run: python3 -m unittest scripts.tests.test_asset_bundle_contract
       - id: metadata
@@ -641,7 +641,7 @@ jobs:
       # Portable archives and legacy RELEASES indexes are intentionally omitted.
       - name: Stage public installers and updater assets
         run: |
-          python3 scripts/stage_dev_release.py \
+          python3 scripts/stage_release_artifacts.py \
             --input artifacts/raw \
             --public release/public \
             --updates release/updates

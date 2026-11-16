@@ -1821,6 +1821,12 @@ document dirty, and reinitializes that participant with the checked replacement.
 The edit is a source change and becomes a type default when saved. Other
 instance overrides remain intact. USD-backed controls require editing their
 authored USD binding and are disabled in the document-only inspector path.
+The selected participant's Modelica Parameters section identifies its class,
+shows its source URI and Modelica state, and opens the class through the typed
+`OpenClass` view command. The source URI is provenance; the fully qualified
+class is the navigation identity. A Modelica failure exposes its owner error
+in the Inspector. “Compiled” describes the compile result and does not claim
+that a participant is currently stepping.
 
 ## 7a. Document identity — three tiers, one truth
 
@@ -2310,11 +2316,41 @@ twin-journal doc; not in scope here.
 | **Diagram** | ✅ Working, authored Modelica icons, routed connections, editable placements | `canvas_diagram/`, on `lunco-canvas` |
 | **Code Editor** | ✅ Working | 423 LOC, plain egui TextEdit |
 | **MSL Palette** | ✅ Working | ~20 MSL components |
-| **Library Browser** | ✅ Working | File tree of `.mo` files |
-| **Package Browser** | ✅ Working | MSL package hierarchy |
+| **Library Browser** | ✅ Working | File tree of available `.mo` files |
+| **Package Browser** | ✅ Working | Installed source-library roots and structured engine Modelica packages |
 | **Telemetry / Parameters** | ✅ Working | Runtime values, inputs, plotting toggles, and document-backed parameter edits |
 | **Inspector** | ✅ Working | Context-aware selected-component editor backed by `ModelicaOp::SetParameter` |
 | **Graphs** | ✅ Working | Live and completed-run trajectories via shared `lunco-viz` rendering |
+
+The Twin Browser's **Modelica** section uses the shared source store for the
+configured source library and structured engine Modelica packages, including
+the engine packages when no external source library is installed, and lists
+every `.mo` file indexed by the active Twin, including files that have not yet
+been opened as documents. Native source inventory combines the configured
+optional library root with the engine's `assets/models` root, so authored `package.mo`
+files determine each package identity and nested package paths remain under
+their declared root. The source store retains the configured library root as
+explicit metadata, so the engine root does not become the indexer's or
+settings panel's primary library when no configured library is present. The
+shared package-tree provider scans every installed source root.
+An active filter completes candidate roots on background workers before
+presenting matching paths. Twin paths come from `Twin::files()` and open
+through the existing Modelica file loader with the emitting Twin's absolute
+source path; read-only source ownership comes from the shared source store.
+The same filter searches Twin file paths and classes already indexed by open
+Twin documents; rows show open, modified, parsing, parsed, and parse-error
+state from their owning documents. Unopened Twin files remain searchable by
+path without being parsed as a side effect of browsing. The section's search
+prompt names these scopes, and read-only library roots are grouped separately
+from Twin files. A parse-error row opens its source and focuses Modelica
+Diagnostics.
+
+The Twin Browser's **Scene files** view reads the loaded scene's resolved
+dependency closure and opens its `.mo` entries through the Modelica file
+dispatcher. The selected Modelica participant's Inspector also offers an
+**Open model** action using its exact fully qualified class identity. These
+paths reuse the existing dependency resolver and Modelica class navigation;
+they do not maintain a second scene-to-source index.
 
 ## 11. Current gaps
 

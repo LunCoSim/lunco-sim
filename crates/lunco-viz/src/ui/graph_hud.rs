@@ -568,7 +568,7 @@ fn parameter_picker(
         ui.separator();
     }
     ui.add(
-        egui::TextEdit::singleline(&mut search)
+        lunco_workbench_widgets::text_editor::singleline(&mut search)
             .hint_text("Filter names, components or descriptions…")
             .desired_width(f32::INFINITY),
     );

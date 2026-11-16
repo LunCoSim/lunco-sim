@@ -43,7 +43,7 @@ impl BrowserQuery {
 
 /// Paint the common browser search control and queue the changed query as a
 /// panel intent. The panel never mutates [`BrowserQuery`] during egui paint.
-pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx, hint: &str) {
     let mut query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
     let original = query.text.clone();
 
@@ -51,7 +51,7 @@ pub fn render_search_bar(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         let width = (ui.available_width() - if query.is_active() { 28.0 } else { 0.0 }).max(40.0);
         ui.add(
             lunco_workbench_widgets::text_editor::singleline(&mut query.text)
-                .hint_text("Filter files or names…")
+                .hint_text(hint)
                 .desired_width(width),
         );
         if !query.text.trim().is_empty()
@@ -182,6 +182,15 @@ pub enum BrowserAction {
         /// Twin-root-relative path of the file the user picked, or an absolute
         /// one when the emitter already resolved it.
         relative_path: std::path::PathBuf,
+    },
+    /// User opened a Twin file owned by the generic source editor.
+    OpenTwinSource {
+        /// Exact Twin root that supplied the file.
+        twin_root: std::path::PathBuf,
+        /// File path relative to that Twin root.
+        relative_path: std::path::PathBuf,
+        /// Keep the source tab open when another file is previewed.
+        pinned: bool,
     },
     /// User clicked a class row → open / focus a diagram tab on it.
     /// `qualified_path` is the full Modelica path (e.g.
@@ -335,6 +344,18 @@ impl<'a, 'w> BrowserCtx<'a, 'w> {
     {
         self.panel.trigger(event);
     }
+
+    /// Queue a typed command after painting while preserving the producer
+    /// origin across the deferred render boundary.
+    pub fn trigger_command<E: bevy::ecs::event::Event>(
+        &mut self,
+        event: E,
+        origin: lunco_core::CommandOrigin,
+    ) where
+        for<'t> <E as bevy::ecs::event::Event>::Trigger<'t>: Default,
+    {
+        self.panel.trigger_command(event, origin);
+    }
 }
 
 /// One pluggable section in the Twin Browser.
@@ -349,6 +370,12 @@ pub trait BrowserSection: Send + Sync + 'static {
 
     /// Title shown in the view selector.
     fn title(&self) -> &str;
+
+    /// Search prompt for this view. All sections use the shared
+    /// [`BrowserQuery`]; this explains what its filter matches here.
+    fn search_hint(&self) -> &'static str {
+        "Search this view…"
+    }
 
     /// Render order within the panel — lower numbers render first.
     /// Conventional values: Modelica/domain catalogs ~100, Files ~200,
@@ -414,6 +441,11 @@ impl Panel for TwinBrowserPanel {
                 );
                 return;
             };
+            let search_hint = registry
+                .iter()
+                .find(|section| section.id() == section_id)
+                .map(|section| section.search_hint())
+                .unwrap_or("Search this view…");
             ui.horizontal(|ui| {
                 egui::ComboBox::from_id_salt("twin_browser_view")
                     .selected_text(registry.section_mut(selected).title())
@@ -472,7 +504,7 @@ impl Panel for TwinBrowserPanel {
                     }
                 });
             });
-            render_search_bar(ui, ctx);
+            render_search_bar(ui, ctx, search_hint);
             ui.separator();
             ctx.resource_scope::<BrowserActions, _>(|ctx, actions| {
                 egui::ScrollArea::vertical()

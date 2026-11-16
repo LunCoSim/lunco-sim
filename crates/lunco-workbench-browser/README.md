@@ -31,6 +31,12 @@ processing stack. Hosts that want Twin dataset controls add
 Domain sections use `BrowserSectionRegistry` and emit typed `BrowserAction`
 values through `BrowserActions`. Browser panels consume `WorkspaceResource`;
 they do not open USD layers or read asset bytes directly.
+Twin-root file rows send source opens through `BrowserActions`; the browser
+dispatches them after rendering with the captured Twin root and a `LocalUser`
+origin. Domain dispatchers own their document types. Sections with an already
+resolved path can dispatch another user-facing command through
+`BrowserCtx::trigger_command`, preserving its explicit origin across the same
+deferred render boundary.
 
 See [`docs/architecture/11-workbench.md`](../../docs/architecture/11-workbench.md)
 for the ownership and composition rules.
@@ -46,4 +52,5 @@ Open Twin, Find file and Recent Twins.
 `BrowserView.section` and `BrowserQuery.text` are reflected transient resources;
 active Twin closure restores Files and clears the filter. Contributions use the
 existing `BrowserSectionRegistry`; navigation search reads the existing Twin
-and library inventories through `NavigationRegistry`.
+and library inventories through `NavigationRegistry`. Each selected section
+provides a search hint while continuing to use the shared `BrowserQuery`.

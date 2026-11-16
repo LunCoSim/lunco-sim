@@ -1,15 +1,15 @@
-//! Native source-library provisioning and editor-index lifecycle.
+//! Native Modelica source-library editor-index lifecycle.
 //!
-//! The compiler/runtime host installs an already materialised source root and exposes
-//! the generic load state. This application adapter composes dataset delivery
-//! with the Modelica asset indexer and keeps the blocking scan/decode off the
+//! The compiler/runtime host installs the complete immutable source store and
+//! exposes its load state. This application adapter composes dataset delivery
+//! with the Modelica asset indexer and keeps the blocking index scan off the
 //! render thread.
 
 use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use lunco_assets_datasets::{DatasetRegistry, DatasetState};
-use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState, LibrarySource};
+use lunco_assets_runtime::library::{LibraryLoadPhase, LibraryLoadState};
 use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
 use lunco_modelica_source_roots::NativeLibraryIndexLoad;
 
@@ -52,7 +52,6 @@ impl Plugin for NativeLibraryIndexerPlugin {
         else {
             return;
         };
-
         app.init_resource::<NativeLibraryIndexLoad>();
         if !root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
             info!(
@@ -91,13 +90,13 @@ fn spawn_native_index(
                 root.display()
             );
             let completed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let source =
-                    LibrarySource::filesystem(root.clone()).map_err(|error| error.to_string())?;
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Ok(());
                 }
-                lunco_assets_runtime::library::install_global_library_sources(vec![source])
-                    .map_err(|error| error.to_string())?;
+                lunco_modelica_library::source_library::install_native_source_roots(Some(
+                    root.clone(),
+                ))
+                .map_err(|error| error.to_string())?;
                 if !rebuild && root.join(LIBRARY_INDEX_FILE_NAME).is_file() {
                     return Ok(());
                 }

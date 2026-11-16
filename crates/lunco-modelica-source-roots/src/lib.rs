@@ -812,7 +812,7 @@ impl Plugin for ModelicaSourceRootsPlugin {
         #[cfg(not(target_arch = "wasm32"))]
         {
             app.add_systems(Update, drive_native_library_index);
-            if lunco_assets_runtime::library::has_library_source() {
+            if lunco_assets_runtime::library::primary_filesystem_library_root().is_some() {
                 app.init_resource::<NativeLibraryIndexLoad>();
             }
         }

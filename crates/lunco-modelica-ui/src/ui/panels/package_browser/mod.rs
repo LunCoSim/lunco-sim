@@ -52,13 +52,12 @@ pub(crate) fn on_open_package_class_requested(
 }
 
 // The cache resource and its loading systems are registered directly by the
-// Modelica UI plugin because the cache must be seeded via
-// `PackageTreeCache::new()` (native filesystem roots), not `Default`.
+// Modelica UI plugin because the cache must be seeded from the active source
+// provider, not `Default`.
 
-/// Fill in library roots that only become known after the source library bundle loads
-/// (web: third-party libs carried in the parsed bundle). Native is already
-/// complete at `PackageTreeCache::new()`, so this flips the flag on first
-/// ready and does nothing further. Cheap no-op every frame until ready.
+/// Reconcile package roots after the source store becomes ready. On native,
+/// roots include engine Modelica assets and the optional configured source
+/// library; on web, the fetched parsed bundle can add roots unavailable at startup.
 pub fn reconcile_library_roots_on_ready(
     mut cache: ResMut<PackageTreeCache>,
     state: Option<Res<lunco_assets_runtime::library::LibraryLoadState>>,
@@ -229,9 +228,9 @@ fn find_and_update_node(
 }
 
 /// Render the children of one named root in [`PackageTreeCache::roots`]
-/// inside the Twin panel's per-library section. Lazily kicks off the
-/// first scan if the root hasn't been populated yet; subsequent
-/// renders walk the cached tree.
+/// inside the Twin panel's per-library section. Ordinary browsing scans one
+/// package at a time; filtering completes each candidate source root in the
+/// background so the query covers every package below it.
 pub fn render_root_subtree(
     ui: &mut egui::Ui,
     ctx: &mut lunco_workbench_browser::BrowserCtx<'_, '_>,
@@ -256,40 +255,43 @@ pub fn render_root_subtree(
     // collect (1) any user action and (2) lazy-scan requests. Both are
     // dispatched through typed intents after the read borrow ends.
     let mut action: Option<render::PackageAction> = None;
-    let mut load_out: Vec<String> = Vec::new();
+    let mut load_out: Vec<(String, bool)> = Vec::new();
     if let Some(cache) = ctx.resource::<PackageTreeCache>() {
-        if let Some(PackageNode::Category { children, .. }) = cache
+        if let Some(PackageNode::Category {
+            name,
+            package_path,
+            children,
+            is_loading,
+            ..
+        }) = cache
             .roots
             .iter()
-            .find(|r| matches!(r, PackageNode::Category { id, .. } if id == root_id))
+            .find(|root| matches!(root, PackageNode::Category { id, .. } if id == root_id))
         {
             ui.set_max_width(ui.available_width());
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-            let root_matches = cache
-                .roots
-                .iter()
-                .find_map(|root| match root {
-                    PackageNode::Category {
-                        id,
-                        name,
-                        package_path,
-                        children,
-                        ..
-                    } if id == root_id => Some(
-                        query.matches(name)
-                            || query.matches(package_path)
-                            || children.as_deref().is_some_and(|kids| {
-                                kids.iter().any(|kid| render::node_matches(kid, &query))
-                            }),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or(false);
+            let root_label_matches = query.matches(name) || query.matches(package_path);
+            let tree_incomplete = children
+                .as_deref()
+                .is_none_or(package_tree_has_unscanned_nodes);
+            let tree_loading = *is_loading
+                || children
+                    .as_deref()
+                    .is_some_and(package_tree_has_loading_nodes);
+            let search_pending = query.is_active() && !root_label_matches && tree_incomplete;
             if let Some(error) = cache.scan_errors.get(root_id) {
                 ui.add(egui::Label::new(format!("Could not load package: {error}")).wrap());
                 if ui.button("Retry").clicked() {
-                    load_out.push(root_id.to_owned());
+                    load_out.push((root_id.to_owned(), search_pending));
                 }
+            } else if search_pending {
+                if !tree_loading {
+                    load_out.push((root_id.to_owned(), true));
+                }
+                ui.horizontal(|ui| {
+                    ui.add_space(20.0);
+                    ui.label("Searching source packages…");
+                });
             } else if let Some(kids) = children {
                 for kid in kids.iter() {
                     if let Some(a) = render::render_node_single_ro(
@@ -302,13 +304,13 @@ pub fn render_root_subtree(
                         &cache.scan_errors,
                         &theme,
                         &query,
-                        root_matches,
+                        root_label_matches,
                     ) {
                         action = Some(a);
                     }
                 }
             } else {
-                load_out.push(root_id.to_string());
+                load_out.push((root_id.to_string(), false));
                 ui.horizontal(|ui| {
                     ui.add_space(20.0);
                     ui.label(
@@ -325,22 +327,40 @@ pub fn render_root_subtree(
     }
 
     // Resolve requested IDs through the current tree after the egui pass.
-    for id in load_out {
+    for (id, complete) in load_out {
         let _ = ctx.resource_scope::<PackageTreeCache, _>(move |_, cache| {
             use bevy::tasks::AsyncComputeTaskPool;
-            cache.scan_errors.remove(&id);
+            if complete {
+                let mut affected = Vec::new();
+                if let Some(root) = cache
+                    .roots
+                    .iter()
+                    .find(|root| matches!(root, PackageNode::Category { id: root_id, .. } if root_id == &id))
+                {
+                    collect_package_tree_ids(root, &mut affected);
+                }
+                for affected_id in affected {
+                    cache.scan_errors.remove(&affected_id);
+                }
+            } else {
+                cache.scan_errors.remove(&id);
+            }
             // Resolve the package_path for `id` from the live tree (the
             // read-only renderer only had the id for nested categories).
             if let Some((children, is_loading, package_path)) =
                 find_category_scan_target(&mut cache.roots, &id)
             {
-                if children.is_none() && !*is_loading {
+                if (children.is_none() || complete) && !*is_loading {
                     *is_loading = true;
                     let pool = AsyncComputeTaskPool::get();
                     let parent_id = id.clone();
                     let task = pool.spawn(async move {
-                        let children = crate::package_tree::library_tree::library_tree()
-                            .children(&package_path);
+                        let library_tree = crate::package_tree::library_tree::library_tree();
+                        let children = if complete {
+                            library_tree.complete_tree(&package_path)
+                        } else {
+                            library_tree.children(&package_path)
+                        };
                         crate::package_tree::cache::ScanResult {
                             parent_id,
                             children,
@@ -373,6 +393,69 @@ pub(crate) fn root_matches(cache: &PackageTreeCache, root_id: &str, query: &Brow
     if !query.is_active() {
         return true;
     }
+    root_has_matching_content(cache, root_id, query) || root_has_unscanned_content(cache, root_id)
+}
+
+fn root_has_unscanned_content(cache: &PackageTreeCache, root_id: &str) -> bool {
+    cache
+        .roots
+        .iter()
+        .find_map(|root| match root {
+            PackageNode::Category {
+                id,
+                children,
+                is_loading,
+                ..
+            } if id == root_id => Some(
+                children.is_none()
+                    || *is_loading
+                    || children
+                        .as_deref()
+                        .is_some_and(package_tree_has_unscanned_nodes),
+            ),
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+fn package_tree_has_unscanned_nodes(nodes: &[PackageNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        PackageNode::Category {
+            children,
+            is_loading,
+            ..
+        } => {
+            children.is_none()
+                || *is_loading
+                || children
+                    .as_deref()
+                    .is_some_and(package_tree_has_unscanned_nodes)
+        }
+        PackageNode::Model { .. } => false,
+    })
+}
+
+fn package_tree_has_loading_nodes(nodes: &[PackageNode]) -> bool {
+    nodes.iter().any(|node| match node {
+        PackageNode::Category {
+            children,
+            is_loading,
+            ..
+        } => {
+            *is_loading
+                || children
+                    .as_deref()
+                    .is_some_and(package_tree_has_loading_nodes)
+        }
+        PackageNode::Model { .. } => false,
+    })
+}
+
+pub(crate) fn root_has_matching_content(
+    cache: &PackageTreeCache,
+    root_id: &str,
+    query: &BrowserQuery,
+) -> bool {
     cache
         .roots
         .iter()
@@ -424,6 +507,17 @@ fn find_category_scan_target<'a>(
         }
     }
     None
+}
+
+fn collect_package_tree_ids(node: &PackageNode, out: &mut Vec<String>) {
+    if let PackageNode::Category { id, children, .. } = node {
+        out.push(id.clone());
+        if let Some(children) = children {
+            for child in children {
+                collect_package_tree_ids(child, out);
+            }
+        }
+    }
 }
 
 /// Single entry point for "open a Modelica class in the workbench".

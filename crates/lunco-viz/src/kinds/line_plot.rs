@@ -1063,15 +1063,30 @@ pub fn render_appearance_menu(
     }
     let mut caption = style.caption.clone().unwrap_or_default();
     ui.label("Title above graph");
-    if ui.text_edit_singleline(&mut caption).changed() {
+    if ui
+        .add(lunco_workbench_widgets::text_editor::singleline(
+            &mut caption,
+        ))
+        .changed()
+    {
         request.caption = Some(caption);
     }
     ui.label("X axis title (include units)");
-    if ui.text_edit_singleline(&mut x_label).changed() {
+    if ui
+        .add(lunco_workbench_widgets::text_editor::singleline(
+            &mut x_label,
+        ))
+        .changed()
+    {
         request.x_label = Some(x_label);
     }
     ui.label("Y axis title (include units)");
-    if ui.text_edit_singleline(&mut y_label).changed() {
+    if ui
+        .add(lunco_workbench_widgets::text_editor::singleline(
+            &mut y_label,
+        ))
+        .changed()
+    {
         request.y_label = Some(y_label);
     }
     let mut use_range = style.y_reference_range.is_some();

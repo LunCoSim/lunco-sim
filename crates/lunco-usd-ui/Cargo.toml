@@ -13,6 +13,7 @@ bevy = { workspace = true, features = ["bevy_asset"] }
 egui = { workspace = true }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-path = { path = "../lunco-assets-path" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }

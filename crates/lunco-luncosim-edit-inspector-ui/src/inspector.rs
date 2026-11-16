@@ -3647,23 +3647,70 @@ fn modelica_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: En
     use lunco_modelica_runtime::ModelicaModel;
 
     // Snapshot the current params so we can render stable sliders.
-    let (params, unavailable) = match ctx.get::<ModelicaModel>(entity) {
-        Some(model) => (
-            model.parameters.clone(),
-            if model.document.is_unassigned() {
-                Some(
-                    "Edit this participant's authored USD parameters; it has no editable Modelica document.",
-                )
-            } else if !model.is_compiled || model.last_error.is_some() {
-                Some("Compile the current Modelica source before editing its live parameters.")
-            } else if model.is_compiling || model.is_stepping {
-                Some("Wait for the current Modelica transaction to complete.")
-            } else {
-                None
-            },
-        ),
-        None => return,
-    };
+    let (model_name, source_uri, model_state, model_error, params, unavailable) =
+        match ctx.get::<ModelicaModel>(entity) {
+            Some(model) => (
+                model.model_name.clone(),
+                model.source_uri.clone(),
+                if model.last_error.is_some() {
+                    "Modelica error"
+                } else if model.is_compiling {
+                    "Compiling"
+                } else if model.is_compiled {
+                    "Compiled"
+                } else {
+                    "Not compiled"
+                },
+                model.last_error.clone(),
+                model.parameters.clone(),
+                if model.document.is_unassigned() {
+                    Some(
+                        "Edit this participant's authored USD parameters; it has no editable Modelica document.",
+                    )
+                } else if !model.is_compiled || model.last_error.is_some() {
+                    Some("Compile the current Modelica source before editing its live parameters.")
+                } else if model.is_compiling || model.is_stepping {
+                    Some("Wait for the current Modelica transaction to complete.")
+                } else {
+                    None
+                },
+            ),
+            None => return,
+        };
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(&model_name);
+        let state = egui::RichText::new(model_state);
+        if model_error.is_some() {
+            ui.colored_label(ui.visuals().error_fg_color, state);
+        } else {
+            ui.label(state.weak());
+        }
+        if ui
+            .add_enabled(!model_name.is_empty(), egui::Button::new("Open model"))
+            .on_hover_text(format!(
+                "Open the Modelica class used by this scene participant. Source: {source_uri}"
+            ))
+            .clicked()
+        {
+            ctx.trigger(lunco_modelica_ui_core::OpenClass {
+                qualified: model_name.clone(),
+                action: lunco_modelica_ui_core::ClassAction::View,
+            });
+        }
+    });
+    if !source_uri.is_empty() {
+        ui.add(
+            egui::Label::new(egui::RichText::new(&source_uri).small().weak())
+                .truncate()
+                .sense(egui::Sense::hover()),
+        )
+        .on_hover_text(&source_uri);
+    }
+    if let Some(error) = &model_error {
+        ui.collapsing("Modelica error details", |ui| {
+            ui.label(error);
+        });
+    }
     if params.is_empty() {
         ui.label(egui::RichText::new("(no tunable parameters)").weak());
         return;

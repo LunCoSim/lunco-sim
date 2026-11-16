@@ -7,6 +7,8 @@ description = "Focused SysML requirements and source editing panels for LunCoSim
 
 [dependencies]
 bevy = { workspace = true }
+lunco-core = { path = "../lunco-core" }
+lunco-command-contracts = { path = "../lunco-command-contracts" }
 bevy_egui = { workspace = true }
 egui_extras = { version = "0.36", default-features = false }
 lunco-assets-core = { path = "../lunco-assets-core" }

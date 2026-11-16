@@ -165,6 +165,16 @@ one row when the window is narrow; it does not truncate physics or Modelica timi
 
 ## Core Principles
 
+### Shared text entry
+
+Build application text fields with
+`lunco_workbench_widgets::text_editor::{singleline, multiline, code}` and
+customize the returned builder for domain-specific hints, widths, fonts, or
+commit behavior. Do not instantiate `egui::TextEdit` directly in panel code.
+Single-line fields keep egui's caret-follow horizontal scrolling; place
+multiline editors and long result lists in a bounded `ScrollArea` owned by the
+panel layout.
+
 Render recovery warnings and terminal presentation failures belong in Recent
 Events through the existing StatusBus and RuntimeDiagnostics owners. Keep them
 out of floating viewport banners; presentation-stop decisions stay at the
@@ -231,7 +241,13 @@ optional reusable Twin browser feature: it owns browser state, selected file/lib
 and filesystem/library sections, including the asset-provisioning dependency.
 Domain crates must not read the shell's private `WorkbenchLayout`; use
 `WorkbenchSnapshot` for layout facts and typed workbench/browser actions for
-navigation.
+navigation. Twin-root file rows queue source opens through `BrowserActions`;
+the browser dispatches them after rendering with the captured Twin root and a
+`LocalUser` origin, while domain documents stay with their owning dispatchers.
+Sections with an already resolved path can dispatch a typed command through
+`BrowserCtx::trigger_command` with its explicit origin. Scene Files keeps its
+large USD-layer group compact and expands groups that contain active search
+results.
 
 Universal runtime inspections should read an authoritative view model produced
 outside egui. For ports, use `PortRegistry::entity_port_infos` so values,

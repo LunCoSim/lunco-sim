@@ -1,9 +1,8 @@
-//! Source-tree provider — one cfg-free API for browsing explicitly installed
-//! Modelica source roots, with the native/web split hidden behind a trait.
+//! Source-tree provider — one cfg-free API for browsing installed Modelica
+//! source roots, with the native/web split hidden behind a trait.
 //!
 //! The provider never invents a library identity. Native roots come from the
-//! asset source registry; web roots come from the parsed source bundle. Both
-//! backends expose the same package-tree queries.
+//! shared asset source store; web roots come from the parsed source bundle.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -17,6 +16,39 @@ pub trait LibraryTree {
 
     /// Immediate child nodes of a package path, ready to render.
     fn children(&self, package_path: &str) -> Result<Vec<PackageNode>, String>;
+
+    /// Complete one root tree for an active search. Implementations expose
+    /// immediate children; this default recursively resolves every unscanned
+    /// package through the same provider used for ordinary browsing.
+    fn complete_tree(&self, package_path: &str) -> Result<Vec<PackageNode>, String> {
+        fn complete_nodes(
+            provider: &(impl LibraryTree + ?Sized),
+            nodes: &mut [PackageNode],
+        ) -> Result<(), String> {
+            for node in nodes {
+                let PackageNode::Category {
+                    package_path,
+                    children,
+                    ..
+                } = node
+                else {
+                    continue;
+                };
+                if let Some(children) = children {
+                    complete_nodes(provider, children)?;
+                } else {
+                    let mut descendants = provider.children(package_path)?;
+                    complete_nodes(provider, &mut descendants)?;
+                    *children = Some(descendants);
+                }
+            }
+            Ok(())
+        }
+
+        let mut children = self.children(package_path)?;
+        complete_nodes(self, &mut children)?;
+        Ok(children)
+    }
 }
 
 /// The process-wide provider, selected once per target.
@@ -96,5 +128,79 @@ pub fn library_root_node(lib: &str) -> PackageNode {
         package_path: lib.to_string(),
         children: None,
         is_loading: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lunco_modelica_index::package_tree::types::ModelSource;
+    use std::collections::HashMap;
+
+    struct FixtureTree(HashMap<String, Vec<PackageNode>>);
+
+    impl LibraryTree for FixtureTree {
+        fn library_roots(&self) -> Vec<String> {
+            vec!["Root".into()]
+        }
+
+        fn children(&self, package_path: &str) -> Result<Vec<PackageNode>, String> {
+            self.0
+                .get(package_path)
+                .cloned()
+                .ok_or_else(|| format!("unknown package `{package_path}`"))
+        }
+    }
+
+    #[test]
+    fn complete_tree_resolves_unscanned_packages_recursively() {
+        let provider = FixtureTree(HashMap::from([
+            (
+                "Root".into(),
+                vec![PackageNode::Category {
+                    id: "root_one".into(),
+                    name: "One".into(),
+                    package_path: "Root.One".into(),
+                    children: None,
+                    is_loading: false,
+                }],
+            ),
+            (
+                "Root.One".into(),
+                vec![PackageNode::Category {
+                    id: "root_one_two".into(),
+                    name: "Two".into(),
+                    package_path: "Root.One.Two".into(),
+                    children: None,
+                    is_loading: false,
+                }],
+            ),
+            (
+                "Root.One.Two".into(),
+                vec![PackageNode::Model {
+                    id: "library_path:Root.One.Two.Leaf".into(),
+                    name: "Leaf".into(),
+                    library: ModelSource::Source,
+                    class_kind: None,
+                }],
+            ),
+        ]));
+
+        let tree = provider.complete_tree("Root").unwrap();
+        let PackageNode::Category {
+            children: Some(one),
+            ..
+        } = &tree[0]
+        else {
+            panic!("the first package level was not completed");
+        };
+        let PackageNode::Category {
+            children: Some(two),
+            ..
+        } = &one[0]
+        else {
+            panic!("the nested package level was not completed");
+        };
+        assert!(matches!(two[0], PackageNode::Model { ref name, .. } if name == "Leaf"));
     }
 }

@@ -800,10 +800,13 @@ open/dirty markers. Untitled and loose documents have separate rows; saved Twin
 files appear once in their folders.
 
 A single selector chooses Files, Libraries, Modelica, open USD documents,
-Connections, Twin resources or document dependencies. Only the selected owner
-renders. The `BrowserSectionRegistry` remains the contribution owner; sections
-publish ids, titles and render order, consume domain view models, and emit
-`BrowserActions` or typed commands. The browser's compact actions menu offers
+Connections, Twin resources or Scene files. Scene files lists the resolved
+references of the open scene, including its Modelica source files, with paths
+relative to the active Twin or library root. Only the selected owner renders.
+The `BrowserSectionRegistry` remains the contribution owner; sections publish
+ids, titles, render order and a view-specific search hint, consume domain view
+models, and emit `BrowserActions` or typed commands. All sections use the same
+`BrowserQuery`. The browser's compact actions menu offers
 Open Twin, Find file and Recent Twins. View and quick navigation can reopen the
 Twin panel. All these surfaces consume the same existing commands.
 
@@ -812,6 +815,8 @@ Twin panel. All these surfaces consume the same existing commands.
 `BrowserView.section` and `BrowserQuery.text` are transient reflected owner
 resources. `SetBrowserSection` validates the registered identity and clears the
 filter when choosing a view. Invalid views reject without changing selection.
+The selected section supplies the search hint so the shared filter makes its
+current scope clear.
 The file tree rebuilds outside painting on workspace/filter changes; painting
 visits expanded branches. Source reveal chooses Files or Libraries, filters the
 known exact source and opens matching ancestors, without opening a document or
