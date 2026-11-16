@@ -755,87 +755,104 @@ fn render_selected_components_inspector(
                 return;
             }
             let class = editing_class.expect("class is Some by the branch above");
-            // Per-node branches keep multi-select navigable on tall lists.
-            for row in &rows {
-                let leaf_type = row
-                    .qualified_type
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or(&row.qualified_type)
-                    .to_string();
-                let row_id = ui.make_persistent_id(("selected_component", row.instance.as_str()));
-                let _ = lunco_workbench_widgets::tree::branch(
-                    ui,
-                    row_id,
-                    true,
-                    None,
-                    |ui| {
-                        let width = ui.available_width();
-                        lunco_workbench_widgets::tree::label(
+            // Bound the inspector so a large multi-selection cannot push the
+            // rest of the panel below the viewport. A single selection opens
+            // its parameters immediately; newly shown rows in a multi-selection
+            // start collapsed so users can expand the components they need.
+            egui::ScrollArea::vertical()
+                .id_salt("selected_components_scroll")
+                .max_height(320.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for row in &rows {
+                        let leaf_type = row
+                            .qualified_type
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or(&row.qualified_type)
+                            .to_string();
+                        let row_id =
+                            ui.make_persistent_id(("selected_component", row.instance.as_str()));
+                        let _ = lunco_workbench_widgets::tree::branch(
                             ui,
-                            egui::RichText::new(format!("{} — {}", row.instance, leaf_type))
-                                .strong(),
-                            width,
-                            egui::Sense::click(),
-                        )
-                        .clicked()
-                    },
-                    |ui| {
-                        if row.parameters.is_empty() {
-                            ui.label(
-                                egui::RichText::new("(no parameters)")
-                                    .text_style(lunco_theme::TypographyRole::Caption.text_style())
-                                    .color(muted)
-                                    .italics(),
-                            );
-                            return;
-                        }
-                        // Two-pass: collect edits during the row loop, apply
-                        // after the immutable borrow on `rows` is done. Using
-                        // a String value keeps the editor general — Modelica
-                        // params can be Real / Integer / Boolean / enumeration,
-                        // and `SetParameter` accepts a textual replacement.
-                        let mut edits: Vec<(String, String)> = Vec::new();
-                        for (name, value) in &row.parameters {
-                            let mut buf = value.clone();
-                            let desc = row.param_desc.get(name);
-                            ui.horizontal(|ui| {
-                                let name_resp = ui.add(
-                                    egui::Label::new(format!("{name:14}"))
-                                        .sense(egui::Sense::hover()),
-                                );
-                                if let Some(d) = desc {
-                                    name_resp.on_hover_text(d);
+                            row_id,
+                            rows.len() == 1,
+                            None,
+                            |ui| {
+                                let width = ui.available_width();
+                                lunco_workbench_widgets::tree::label(
+                                    ui,
+                                    egui::RichText::new(format!(
+                                        "{} — {}",
+                                        row.instance, leaf_type
+                                    ))
+                                    .strong(),
+                                    width,
+                                    egui::Sense::click(),
+                                )
+                                .clicked()
+                            },
+                            |ui| {
+                                if row.parameters.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("(no parameters)")
+                                            .text_style(
+                                                lunco_theme::TypographyRole::Caption.text_style(),
+                                            )
+                                            .color(muted)
+                                            .italics(),
+                                    );
+                                    return;
                                 }
-                                let resp = ui.add(
-                                    lunco_workbench_widgets::text_editor::singleline(&mut buf)
-                                        .desired_width(120.0),
-                                );
-                                if let Some(d) = desc {
-                                    resp.clone().on_hover_text(d);
+                                // Two-pass: collect edits during the row loop, apply
+                                // after the immutable borrow on `rows` is done. Using
+                                // a String value keeps the editor general — Modelica
+                                // params can be Real / Integer / Boolean / enumeration,
+                                // and `SetParameter` accepts a textual replacement.
+                                let mut edits: Vec<(String, String)> = Vec::new();
+                                for (name, value) in &row.parameters {
+                                    let mut buf = value.clone();
+                                    let desc = row.param_desc.get(name);
+                                    ui.horizontal(|ui| {
+                                        let name_resp = ui.add(
+                                            egui::Label::new(format!("{name:14}"))
+                                                .sense(egui::Sense::hover()),
+                                        );
+                                        if let Some(d) = desc {
+                                            name_resp.on_hover_text(d);
+                                        }
+                                        let resp = ui.add(
+                                            lunco_workbench_widgets::text_editor::singleline(
+                                                &mut buf,
+                                            )
+                                            .desired_width(120.0),
+                                        );
+                                        if let Some(d) = desc {
+                                            resp.clone().on_hover_text(d);
+                                        }
+                                        if resp.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            if buf != *value {
+                                                edits.push((name.clone(), buf.clone()));
+                                            }
+                                        } else if resp.lost_focus() && buf != *value {
+                                            edits.push((name.clone(), buf.clone()));
+                                        }
+                                    });
                                 }
-                                if resp.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                {
-                                    if buf != *value {
-                                        edits.push((name.clone(), buf.clone()));
-                                    }
-                                } else if resp.lost_focus() && buf != *value {
-                                    edits.push((name.clone(), buf.clone()));
+                                for (param, value) in edits {
+                                    collected_ops.push(ModelicaOp::SetParameter {
+                                        class: class.clone(),
+                                        component: row.instance.clone(),
+                                        param,
+                                        value,
+                                    });
                                 }
-                            });
-                        }
-                        for (param, value) in edits {
-                            collected_ops.push(ModelicaOp::SetParameter {
-                                class: class.clone(),
-                                component: row.instance.clone(),
-                                param,
-                                value,
-                            });
-                        }
-                    },
-                );
-            }
+                            },
+                        );
+                    }
+                });
         });
     if !collected_ops.is_empty() {
         ctx.trigger(crate::ui::panels::canvas_diagram::ApplyOpsRequested {
