@@ -47,6 +47,35 @@ fn ui_save_rejected(target) {
         t_true(query("GetReadiness").application_available, "rejected source authoring preserves the application"),
     ], "UI source rejection", "UI_REVIEW");
 }
+
+fn ui_shader_rejections(missing_source, invalid_target) {
+    let invalid = cmd("CreateShader", #{name:"invalid_probe", source:"fn helper() {}"});
+    let missing = cmd("ImportShader", #{source_path:missing_source});
+    let target = cmd("CreateShader", #{name:"invalid_target", template:"solid", target:invalid_target});
+    report_verdict([
+        t_true(!invalid.ok, "invalid shader schema rejects terminally"),
+        t_true(!missing.ok, "missing import rejects terminally"),
+        t_true(!target.ok, "retired shader target rejects before creating a file"),
+        t_true(query("GetReadiness").application_available, "shader rejection preserves the application"),
+    ], "UI shader rejection", "UI_REVIEW");
+}
+
+fn ui_shader_collisions(path) {
+    let create = cmd("CreateShader", #{name:"protected", template:"solid"});
+    let imported = cmd("ImportShader", #{name:"protected", source_path:path});
+    report_verdict([
+        t_true(!create.ok, "Create refuses to overwrite an existing shader"),
+        t_true(!imported.ok, "Import refuses to overwrite an existing shader"),
+    ], "UI shader preservation", "UI_REVIEW");
+}
+
+fn ui_twin_collision(path, owner) {
+    let result = cmd("CreateTwin", #{path:path});
+    report_verdict([
+        t_true(!result.ok, "existing Twin manifest rejects terminally"),
+        t_true(query("InspectWorkbenchNavigation").twin_id == owner, "rejected creation retains the admitted Twin"),
+    ], "UI Twin rejection", "UI_REVIEW");
+}
 fn ui_valid_draft() {
     let editor = query("InspectBehaviourEditor");
     report_verdict([t_true(!editor.dirty && !editor.pending,
@@ -99,4 +128,36 @@ fn ui_sysml_large_inventory() {
         if requirement.element.kind == "RequirementUsage" { usages += 1; }
     }
     report_verdict([t_true(usages == 100, "large scrolling source set has all 100 requirement usages")], "UI large requirements", "UI_REVIEW");
+}
+
+fn ui_draft_close_blocked() {
+    let editor = query("InspectBehaviourEditor");
+    report_verdict([
+        t_true(editor.dirty && editor.source.contains("UI_DRAFT_SENTINEL"), "closing retains the unapplied editor draft"),
+        t_true(query("GetReadiness").application_available, "normal Exit waits for draft resolution"),
+    ], "UI draft close protection", "UI_REVIEW");
+}
+
+fn ui_document_close_blocked() {
+    let dirty = false;
+    for doc in query("ListOpenDocuments").open_documents {
+        if doc.kind == "usd" && doc.dirty { dirty = true; }
+    }
+    report_verdict([
+        t_true(dirty, "normal Exit preserves dirty USD without a model-view close target"),
+        t_true(query("GetReadiness").application_available, "unsaved document keeps the application available"),
+    ], "UI document close protection", "UI_REVIEW");
+}
+
+fn ui_modelica_save_rejected(doc_id, path) {
+    let result = cmd("SaveAsDocument", #{doc_id:doc_id, path:path});
+    let untitled = false;
+    for doc in query("ListOpenDocuments").open_documents {
+        if doc.doc_id == doc_id { untitled = doc.origin.kind == "untitled"; }
+    }
+    report_verdict([
+        t_true(!result.ok, "failed model save rejects terminally"),
+        t_true(untitled, "failed model save preserves the unsaved document origin"),
+        t_true(query("GetReadiness").application_available, "save failure keeps the application available"),
+    ], "UI model save rejection", "UI_REVIEW");
 }

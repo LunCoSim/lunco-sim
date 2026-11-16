@@ -51,7 +51,11 @@ impl Plugin for ModelicaCommandsPlugin {
             .init_resource::<PendingCloseAfterSave>()
             .init_resource::<PendingTabCloseScopes>()
             .init_resource::<lifecycle::AppCloseFlow>()
+            .init_resource::<lunco_workbench_core::app_close::AppCloseGuards>()
             .add_observer(lifecycle::finish_close_after_save)
+            .add_observer(lifecycle::on_close_save_failed)
+            .add_observer(lifecycle::on_close_picker_cancelled)
+            .add_observer(lifecycle::on_close_picker_unsupported)
             .add_observer(lifecycle::on_document_closed_cleanup)
             .add_observer(super::panels::canvas_diagram::loads::retire_twin_duplicates)
             .add_observer(super::panels::canvas_diagram::loads::retire_remote_duplicates)
@@ -70,7 +74,6 @@ impl Plugin for ModelicaCommandsPlugin {
                     )
                         .chain(),
                     status::update_status_bar,
-                    status::publish_unsaved_modelica_docs,
                     lifecycle::on_window_close_requested,
                     lifecycle::finalize_app_close,
                     lifecycle::drain_file_diagnostics,
@@ -81,6 +84,9 @@ impl Plugin for ModelicaCommandsPlugin {
                 lifecycle::render_close_dialogs
                     .in_set(lunco_workbench_core::ApplicationOverlayRenderSet),
             );
+        app.world_mut()
+            .resource_mut::<lunco_workbench_core::app_close::AppCloseGuards>()
+            .register("workspace-documents", lifecycle::workspace_close_guard);
 
         #[cfg(all(feature = "api", feature = "ui"))]
         {

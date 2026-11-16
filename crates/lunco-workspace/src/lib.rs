@@ -457,6 +457,15 @@ pub struct DocumentEntry {
     pub dirty: bool,
 }
 
+impl DocumentEntry {
+    /// Writable edits and untitled sources require an explicit save/discard
+    /// decision. Read-only projections do not acquire file-save obligations.
+    pub fn has_unsaved_changes(&self) -> bool {
+        (self.dirty || self.origin.is_untitled())
+            && (self.origin.is_writable() || self.origin.is_untitled())
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Workspace
 // ─────────────────────────────────────────────────────────────────────────────

@@ -36,5 +36,9 @@ impl Plugin for SysmlUiPlugin {
             .add_observer(verification::clear_sysml_verification_results)
             .add_observer(view_model::capture_verification_evidence)
             .add_observer(view_model::clear_verification_evidence_on_twin_closed);
+        app.init_resource::<lunco_workbench_core::app_close::AppCloseGuards>();
+        app.world_mut()
+            .resource_mut::<lunco_workbench_core::app_close::AppCloseGuards>()
+            .register("sysml-source-editor", panel::close_guard);
     }
 }

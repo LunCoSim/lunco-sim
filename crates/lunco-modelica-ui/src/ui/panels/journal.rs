@@ -118,10 +118,11 @@ impl Panel for JournalPanel {
         ui.horizontal(|ui| {
             let label = match active_doc {
                 Some(_) => {
+                    let noun = if total == 1 { "entry" } else { "entries" };
                     if total > max_rows {
-                        format!("{total} entries (showing last {max_rows})")
+                        format!("{total} {noun} (showing last {max_rows})")
                     } else {
-                        format!("{total} entries")
+                        format!("{total} {noun}")
                     }
                 }
                 None => "(no active document)".to_string(),

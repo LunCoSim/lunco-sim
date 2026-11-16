@@ -379,7 +379,11 @@ tools are not mistaken for defaults.
 Behaviour Editor has separate Run draft and Apply running source to document
 actions. File → Save writes the USD document. `InspectBehaviourEditor` exposes
 selected document, retained draft count, source, dirty/pending state and admission
-errors. Verify edit/select/return, failed compilation, and scene retirement.
+errors. Its `applying` field stays true until the USD owner completes the Apply;
+repeat submission is disabled during that lease. Verify edit/select/return,
+failed compilation, terminal Apply rejection and scene retirement. The
+`test_ui_review_followup.py` driver checks shader failures/file collisions and
+actual scenario-apply acknowledgements, then requires clean rapid process exits.
 Source Viewer must permit copying while rejecting typing. Test authored controls
 with Tab, Enter/Space and the Controls menu, including disabled, hidden and
 retired targets; these share the pointer callback's exact lease.

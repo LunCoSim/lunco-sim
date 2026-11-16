@@ -598,6 +598,10 @@ closes every editor document before `TwinAdded`; unfinished UI preparations are
 canceled and file-read completions are fenced by their admitted runtime owner.
 Individual document closure also cancels parse preparation, save-close
 continuations, and document-owned modals before retiring the editor state.
+Normal application close prompts once per dirty document and retires all its
+views after Save or Don't save. Cancel, save failure (`DocumentSaveFailed`),
+or a cancelled/unsupported Save-As picker cancels the remaining close request.
+The finalizer waits for exact document retirement in Workspace.
 Reopening the same Twin starts a new workspace/mount lifetime. `RestartScene`
 reloads its source while retaining the Twin and editable documents;
 `ResetSceneRuntime` rebuilds scene-owned execution from the mounted stage.

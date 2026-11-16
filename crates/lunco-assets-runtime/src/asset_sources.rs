@@ -209,6 +209,50 @@ pub fn register_lunco_asset_sources(app: &mut App) -> std::io::Result<TwinRoots>
     Ok(twin_roots)
 }
 
+/// Run the application while retaining native asset-event receivers through
+/// watcher retirement. A native watcher stops asynchronously when its source
+/// drops; its last callback must still have a live receiver after App teardown.
+/// Draining happens after the runner has ended, when no UI frame is waiting.
+pub fn run_asset_app(app: &mut App) -> AppExit {
+    #[cfg(not(target_arch = "wasm32"))]
+    let receivers = {
+        use bevy::asset::io::AssetSourceId;
+        let schemes = match app
+            .world()
+            .resource::<lunco_assets_core::SchemeRegistry>()
+            .schemes()
+        {
+            Ok(schemes) => schemes,
+            Err(error) => {
+                error!("Cannot retain asset watcher lifetime: {error}");
+                return AppExit::error();
+            }
+        };
+        let server = app.world().resource::<AssetServer>();
+        let mut receivers = Vec::new();
+        for id in std::iter::once(AssetSourceId::Default)
+            .chain(schemes.into_iter().map(AssetSourceId::from))
+        {
+            let source = match server.get_source(id) {
+                Ok(source) => source,
+                Err(error) => {
+                    error!("Registered asset source is unavailable at runner admission: {error}");
+                    return AppExit::error();
+                }
+            };
+            receivers.extend(source.event_receiver().cloned());
+            receivers.extend(source.processed_event_receiver().cloned());
+        }
+        receivers
+    };
+    let exit = app.run();
+    #[cfg(not(target_arch = "wasm32"))]
+    for receiver in receivers {
+        while receiver.recv_blocking().is_ok() {}
+    }
+    exit
+}
+
 /// Register the generic text asset type after Bevy's [`AssetPlugin`] has been
 /// installed by the composition root.
 pub fn register_lunco_asset_types(app: &mut App) {
@@ -222,6 +266,67 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct MountedAuthorities(Vec<(lunco_workspace::TwinId, String)>);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn runner_retains_receivers_until_watcher_callbacks_retire() {
+        use bevy::asset::io::{
+            AssetSourceBuilder, AssetSourceBuilders, AssetSourceEvent, AssetSourceId, AssetWatcher,
+        };
+        use std::sync::{
+            Arc, Barrier,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Watch(Option<Box<dyn FnOnce() + Send + Sync>>);
+        impl AssetWatcher for Watch {}
+        impl Drop for Watch {
+            fn drop(&mut self) {
+                std::thread::spawn(self.0.take().unwrap());
+            }
+        }
+        let barrier = Arc::new(Barrier::new(2));
+        let delivered = Arc::new(AtomicBool::new(false));
+        let wait = barrier.clone();
+        let sent = delivered.clone();
+        let mut builders = AssetSourceBuilders::default();
+        builders.insert(
+            AssetSourceId::Default,
+            AssetSourceBuilder::new(|| {
+                Box::new(bevy::asset::io::file::FileAssetReader::new("unused"))
+            })
+            .with_watcher(move |sender| {
+                let wait = wait.clone();
+                let sent = sent.clone();
+                Some(Box::new(Watch(Some(Box::new(move || {
+                    wait.wait();
+                    sent.store(
+                        sender
+                            .send_blocking(AssetSourceEvent::ModifiedAsset("changed.rhai".into()))
+                            .is_ok(),
+                        Ordering::Release,
+                    );
+                })))))
+            }),
+        );
+        let mut app = App::new();
+        app.init_resource::<lunco_assets_core::SchemeRegistry>();
+        app.insert_resource(AssetServer::new(
+            Arc::new(builders.build_sources(true, false)),
+            bevy::asset::AssetServerMode::Unprocessed,
+            true,
+            Default::default(),
+        ));
+        app.set_runner(move |app| {
+            drop(app);
+            barrier.wait();
+            AppExit::Success
+        });
+        assert!(matches!(run_asset_app(&mut app), AppExit::Success));
+        assert!(
+            delivered.load(Ordering::Acquire),
+            "the callback can finish after its App and source drop"
+        );
+    }
 
     #[test]
     fn twin_root_follows_workspace_lifecycle_without_usd() {

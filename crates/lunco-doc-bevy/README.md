@@ -6,7 +6,7 @@ Bevy integration for the LunCoSim Document System.
 
 This crate provides the ECS-facing half of the Document System, adding generic document-lifecycle events and the **TwinJournal** (session-wide change log).
 
-- **Document Lifecycle Events** — Fires `DocumentOpened`, `DocumentChanged`, `DocumentSaved`, and `DocumentClosed` triggers.
+- **Document Lifecycle Events** — Fires `DocumentOpened`, `DocumentChanged`, `DocumentSaved`, and `DocumentClosed` triggers. A save owner emits document-scoped `DocumentSaveFailed` on failure so a close coordinator can release its pending save without discarding the document.
 - **TwinJournal** — An append-only log of every document event in the session, useful for audit, replay, and diagnostics.
 - **Command-Based Mutation** — Standardizes document edits via Bevy `Command` observers (Undo, Redo, Save, Close).
 - **Intent-to-Command Resolution** — Maps abstract `EditorIntent` (e.g., `Undo`) to concrete document actions based on the active domain.

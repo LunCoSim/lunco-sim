@@ -193,7 +193,7 @@ class ProductionSession:
         if not BINARY.is_file():
             raise RuntimeErrorWithLog(
                 f"missing production binary {BINARY}; build it first with "
-                "`RUSTC_WRAPPER= cargo build -p lunco-luncosim --bin luncosim`"
+                "`cargo build -p lunco-luncosim --bin luncosim -j 4`"
             )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log = self.log_path.open("wb")
@@ -255,6 +255,8 @@ class ProductionSession:
                 self.process.wait(timeout=EXIT_TIMEOUT_S)
             if self.process.poll() is None:
                 raise RuntimeError(f"process did not exit within {EXIT_TIMEOUT_S:g}s")
+            if self.process.returncode != 0:
+                raise RuntimeError(f"production process exited with code {self.process.returncode}")
             deadline = time.monotonic() + EXIT_TIMEOUT_S
             while port_is_open(self.port) and time.monotonic() < deadline:
                 time.sleep(POLL_INTERVAL_S)

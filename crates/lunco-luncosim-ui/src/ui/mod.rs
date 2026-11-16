@@ -592,6 +592,10 @@ impl Plugin for LunCoSimUiPlugin {
                 // produced each frame from the selection + ScriptRegistry.
                 app.register_panel(rhai_editor_panel::RhaiEditorPanel);
                 app.init_scene_resource::<rhai_editor_panel::RhaiEditorVm>();
+                app.init_resource::<lunco_workbench_core::app_close::AppCloseGuards>();
+                app.world_mut()
+                    .resource_mut::<lunco_workbench_core::app_close::AppCloseGuards>()
+                    .register("behaviour-editor", rhai_editor_panel::close_guard);
                 app.add_observer(rhai_editor_panel::apply_editor_action);
                 rhai_editor_panel::register_inspection(app);
                 app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);

@@ -156,6 +156,7 @@ pub fn sync_editor_buffer_to_source(
 }
 
 fn finish_modelica_save(
+    doc: DocumentId,
     command_id: Option<u64>,
     result: Result<Ack, String>,
     results: &mut lunco_core::CommandResults,
@@ -163,6 +164,10 @@ fn finish_modelica_save(
     commands: &mut Commands,
 ) {
     if let Err(message) = &result {
+        commands.trigger(lunco_doc_bevy::DocumentSaveFailed {
+            doc,
+            message: message.clone(),
+        });
         warn!("[Modelica save] {message}");
         console.error(message.clone());
         commands.trigger(lunco_core::RuntimeError {
@@ -326,6 +331,7 @@ pub fn on_save_document(
         Ok(Ack::new(OpId::new()))
     })();
     finish_modelica_save(
+        doc,
         active.get(),
         result,
         &mut results,
@@ -404,6 +410,7 @@ pub fn on_save_as_document(
         Ok(Ack::new(OpId::new()))
     })();
     finish_modelica_save(
+        doc,
         active.get(),
         result,
         &mut results,
@@ -504,15 +511,20 @@ fn queue_active_document_save(
         });
         match admission {
             Ok(doc) => {
-                let previous = std::mem::replace(
-                    &mut *world.resource_mut::<lunco_core::ActiveCommandId>(),
-                    context,
-                );
                 match path {
-                    Some(path) => world.trigger(SaveAsDocument { doc_id: doc, path }),
-                    None => world.trigger(SaveDocument { doc_id: doc }),
+                    Some(path) => lunco_api::executor::trigger_command_with_context(
+                        world,
+                        SaveAsDocument { doc_id: doc, path },
+                        context,
+                        None,
+                    ),
+                    None => lunco_api::executor::trigger_command_with_context(
+                        world,
+                        SaveDocument { doc_id: doc },
+                        context,
+                        None,
+                    ),
                 }
-                *world.resource_mut::<lunco_core::ActiveCommandId>() = previous;
                 #[cfg(feature = "api")]
                 if let Some(id) = command_id {
                     world.commands().queue(move |world: &mut World| {
@@ -624,6 +636,7 @@ mod save_context_tests {
         app.insert_resource(documents)
             .insert_resource(lunco_workspace::WorkspaceResource(workspace))
             .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>()
             .init_resource::<lunco_core::CommandResults>();
         (app, target, other)
     }

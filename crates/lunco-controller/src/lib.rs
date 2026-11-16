@@ -43,7 +43,7 @@ use bevy::input::{
     touch::TouchPhase,
 };
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
+use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent, WindowFocused};
 use leafwing_input_manager::prelude::{ActionState, InputMap};
 use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_control_core::ControlLink;
@@ -393,6 +393,9 @@ mod physical_intent_frame_tests {
 #[derive(Reflect, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[reflect(Clone, PartialEq)]
 pub enum WindowInputEvent {
+    /// Deliver logical native-window focus to the input consumers. This mirrors
+    /// Winit's focus event and window state; it does not activate the OS window.
+    Focus { focused: bool },
     /// A physical key transition. `key` accepts a Bevy `KeyCode` name such as
     /// `KeyW` or `AltLeft`, plus the active keymap's compact label such as `W`.
     Key {
@@ -511,6 +514,7 @@ fn validate_window_input(
     event: &WindowInputEvent,
 ) -> Result<(), String> {
     match event {
+        WindowInputEvent::Focus { .. } => {}
         WindowInputEvent::Key { key, .. } => {
             resolve_window_key(settings, key)?;
         }
@@ -573,6 +577,7 @@ fn emit_pending_window_input(
     settings: Res<lunco_input_core::ActiveInputBindings>,
     mut window_events: MessageWriter<WindowEvent>,
     mut cursor_moved: MessageWriter<CursorMoved>,
+    mut focus_changed: MessageWriter<WindowFocused>,
     mut keyboard_input: MessageWriter<KeyboardInput>,
     mut mouse_button_input: MessageWriter<MouseButtonInput>,
     mut mouse_wheel: MessageWriter<MouseWheel>,
@@ -584,6 +589,15 @@ fn emit_pending_window_input(
     };
     for PendingWindowInput(event) in pending.read() {
         match event {
+            WindowInputEvent::Focus { focused } => {
+                primary.focused = *focused;
+                let event = WindowFocused {
+                    window,
+                    focused: *focused,
+                };
+                window_events.write(WindowEvent::WindowFocused(event.clone()));
+                focus_changed.write(event);
+            }
             WindowInputEvent::Key {
                 key,
                 state,
@@ -2136,6 +2150,7 @@ mod tests {
         scroll: Vec<MouseWheel>,
         motion: Vec<MouseMotion>,
         pinch: Vec<PinchGesture>,
+        focus: Vec<WindowFocused>,
     }
 
     fn collect_window_input(
@@ -2146,6 +2161,7 @@ mod tests {
         mut scroll: MessageReader<MouseWheel>,
         mut motion: MessageReader<MouseMotion>,
         mut pinch: MessageReader<PinchGesture>,
+        mut focus: MessageReader<WindowFocused>,
         mut observed: ResMut<WindowInputObserved>,
     ) {
         observed.aggregate.extend(aggregate.read().cloned());
@@ -2155,6 +2171,7 @@ mod tests {
         observed.scroll.extend(scroll.read().cloned());
         observed.motion.extend(motion.read().cloned());
         observed.pinch.extend(pinch.read().cloned());
+        observed.focus.extend(focus.read().cloned());
     }
 
     #[test]
@@ -2168,6 +2185,7 @@ mod tests {
             .add_message::<MouseWheel>()
             .add_message::<MouseMotion>()
             .add_message::<PinchGesture>()
+            .add_message::<WindowFocused>()
             .init_resource::<lunco_input_core::ActiveInputBindings>()
             .init_resource::<WindowInputObserved>()
             .add_systems(
@@ -2211,7 +2229,11 @@ mod tests {
         app.world_mut()
             .resource_mut::<Messages<PendingWindowInput>>()
             .write(PendingWindowInput(WindowInputEvent::Pinch { delta: 0.2 }));
-
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::Focus {
+                focused: true,
+            }));
         app.update();
 
         let observed = app.world().resource::<WindowInputObserved>();
@@ -2222,7 +2244,7 @@ mod tests {
         assert_eq!(observed.cursors.len(), 1);
         assert_eq!(observed.cursors[0].position, Vec2::new(12.0, 34.0));
         assert_eq!(observed.scroll.len(), 1);
-        assert_eq!(observed.aggregate.len(), 6);
+        assert_eq!(observed.aggregate.len(), 7);
         assert_eq!(observed.pinch.len(), 1);
         assert_eq!(observed.pinch[0].0, 0.2);
         assert_eq!(observed.motion.len(), 1);
@@ -2249,6 +2271,21 @@ mod tests {
             observed.aggregate[5],
             WindowEvent::PinchGesture(_)
         ));
+        assert!(matches!(
+            observed.aggregate[6],
+            WindowEvent::WindowFocused(_)
+        ));
+        assert_eq!(observed.focus.len(), 1);
+        assert!(observed.focus[0].focused);
+        assert!(app.world().get::<Window>(window).unwrap().focused);
+        app.world_mut()
+            .resource_mut::<Messages<PendingWindowInput>>()
+            .write(PendingWindowInput(WindowInputEvent::Focus {
+                focused: false,
+            }));
+        app.update();
+        assert!(!app.world().get::<Window>(window).unwrap().focused);
+        assert!(!app.world().resource::<WindowInputObserved>().focus[1].focused);
     }
 
     #[test]

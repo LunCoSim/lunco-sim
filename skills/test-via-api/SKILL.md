@@ -45,6 +45,14 @@ Its `--check-modelica-hud` option runs ten authored checks for live completion
 FPS, pause and the negative cleared-scene case, with running/cleared screenshots.
 This checks actual completed-step throughput independently of requested cadence.
 
+The shared `ProductionSession` lifecycle checks the actual process exit code
+as well as API Exit and port release. Native crashes fail acceptance even when
+the preceding command assertions passed. `test_runtime_lifecycle.py` covers the
+harness boundary; `test_ui_review_followup.py --port <free-port>` covers terminal
+shader/scene editing results, preserved shader files, and rapid GPU/watcher shutdown.
+Require a clean render log as well as exit code zero: a background watcher panic
+can occur during teardown without changing the process exit code.
+
 ## Live shader iteration
 
 Shader source edits are a live-test path. Keep the production luncosim running, edit the
@@ -767,6 +775,17 @@ rather than asking the user:
   unless API verification is genuinely impossible.
 
 ### Native mouse look
+
+Before synthetic keyboard editing, compose `InjectWindowInput` with
+`Focus { focused: true }` and the pointer click. This delivers logical focus to
+Bevy/egui through `WindowFocused` and the Window state, mirroring Winit's event
+fan-out; it does not activate the operating-system window. Focus loss uses
+`focused: false`. This makes keyboard tests independent of desktop activation
+policy; the AT-SPI driver separately checks the actual OS accessibility route.
+Physical-key `text` is printable input, not a paste operation: bevy_egui ignores
+character strings containing control characters. Compose Enter/Tab key events
+separately rather than putting a newline or tab into the character string.
+
 
 `InjectWindowInput` distinguishes absolute `PointerMove { x, y }` from raw
 relative `MouseMotion { delta_x, delta_y }`. Cursor coordinates drive picking

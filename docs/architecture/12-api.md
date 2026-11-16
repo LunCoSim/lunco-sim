@@ -1098,3 +1098,21 @@ Shader document and undo/recorder state is owned by its admitted Twin root and
 retires on `TwinClosed`, including reopening the same stable source. Engine shader
 documents have explicit application lifetime. Replay validates the current source
 owner before creating or modifying a shader document.
+
+
+### Captured command contexts
+
+`executor::trigger_command_with_context` dispatches an internal typed command
+under its exact `ActiveCommandId` and optional transport correlation, then
+restores its caller's context. Reflected dispatch uses the same scope owner.
+The dispatcher's required context resources remain installed throughout nested
+observer and queued-command delivery; scoping swaps their values in place.
+Native UI actions pass no transport correlation; a deferred delegating owner
+captures and forwards the original context before queueing work. `SaveScenario`
+uses this boundary to return the actual `ApplyUsdOps` terminal acknowledgement.
+
+
+`InjectWindowInput` also accepts `Focus { focused: bool }`. Its native input
+adapter updates Window focus state and emits both aggregate `WindowFocused` and
+typed Bevy focus messages. Synthetic typing composes focus, pointer and key
+events; this contract is distinct from requesting OS window activation.

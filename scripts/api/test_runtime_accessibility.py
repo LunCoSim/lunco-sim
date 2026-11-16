@@ -55,6 +55,7 @@ def main():
             if Path(f"/proc/{pid}/cwd").resolve() != ROOT or Path(f"/proc/{pid}/exe").resolve() != BINARY.resolve():
                 raise RuntimeError("runtime does not belong to this checkout")
             print(f"OWNED pid={pid} port={args.port}; evidence={area}", flush=True)
+            execute(session, "InjectWindowInput", event={"Focus": {"focused": True}})
 
             def application():
                 children = call("org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root", "org.a11y.atspi.Accessible", "GetChildren")[0]
@@ -69,25 +70,47 @@ def main():
 
             destination, root = wait_for(session, application, "owned AT-SPI application", timeout=30)
 
+            def retired(error):
+                return error.matches(Gio.dbus_error_quark(), Gio.DBusError.UNKNOWN_OBJECT)
+
             def tree():
-                result = []
-                pending = [root]
-                visited = set()
-                while pending and len(visited) < 1024:
-                    path = pending.pop()
-                    if path in visited:
-                        continue
-                    visited.add(path)
-                    name = call(destination, path, "org.freedesktop.DBus.Properties", "Get", GLib.Variant("(ss)", ("org.a11y.atspi.Accessible", "Name")))[0]
-                    result.append((path, name))
-                    pending.extend(child for owner, child in call(destination, path, "org.a11y.atspi.Accessible", "GetChildren")[0] if owner == destination)
-                return result
+                def snapshot():
+                    result = []
+                    pending = [root]
+                    visited = set()
+                    try:
+                        while pending and len(visited) < 1024:
+                            path = pending.pop()
+                            if path in visited:
+                                continue
+                            visited.add(path)
+                            name = call(destination, path, "org.freedesktop.DBus.Properties", "Get", GLib.Variant("(ss)", ("org.a11y.atspi.Accessible", "Name")))[0]
+                            result.append((path, name))
+                            pending.extend(child for owner, child in call(destination, path, "org.a11y.atspi.Accessible", "GetChildren")[0] if owner == destination)
+                    except GLib.Error as error:
+                        if retired(error):
+                            # A modal replaced this tree revision. Discard the
+                            # whole partial snapshot and acquire current leases.
+                            return None
+                        raise
+                    return result
+                return wait_for(session, snapshot, "current AT-SPI tree revision", timeout=15)
 
             def press_named(label):
-                node = wait_for(session, lambda: next((path for path, name in tree() if name == label), None), "accessible " + label)
-                accepted = call(destination, node, "org.a11y.atspi.Action", "DoAction", GLib.Variant("(i)", (0,)))[0]
-                if not accepted:
-                    raise RuntimeError("AT-SPI rejected action " + label)
+                def activate():
+                    node = next((path for path, name in tree() if name == label), None)
+                    if node is None:
+                        return None
+                    try:
+                        accepted = call(destination, node, "org.a11y.atspi.Action", "DoAction", GLib.Variant("(i)", (0,)))[0]
+                    except GLib.Error as error:
+                        if retired(error):
+                            return None  # UnknownObject guarantees no action ran.
+                        raise
+                    if not accepted:
+                        raise RuntimeError("AT-SPI rejected action " + label)
+                    return True
+                wait_for(session, activate, "accessible action " + label)
 
             press_named("Controls")
             camera = wait_for(session, lambda: next((name for _, name in tree() if name.startswith("CAMERA")), None), "labelled authored control")
@@ -104,6 +127,28 @@ def main():
             wait_for(session, lambda: any(name == "No authored controls are visible." for _, name in tree()), "hidden-control withdrawal")
             session.capture_screenshot(area / "hidden-controls.png")
             print("PASS: hidden authored controls are withdrawn from the accessible menu", flush=True)
+            for state in ("Pressed", "Released"):
+                execute(session, "InjectWindowInput", event={"Key": {"key": "Escape", "state": state, "text": None, "repeat": False}})
+            created = execute(session, "CreateNewScratchModel", name="CloseProbe", source="model CloseProbe end CloseProbe;")
+            doc_id = created["doc_id"]
+            wait_for(session, lambda: any(panel["id"] == "modelica_model_view" for panel in execute(session, "InspectWorkbench")["rendered_panels"]), "owned model view")
+            execute(session, "OpenInNewView", doc_id=doc_id)
+            execute(session, "Exit")
+            press_named("Cancel")
+            wait_for(session, lambda: not any(name == "Don't save" for _, name in tree()), "close cancellation")
+            session.capture_screenshot(area / "close-cancelled.png")
+            if not any(doc["doc_id"] == doc_id for doc in execute(session, "ListOpenDocuments")["open_documents"]):
+                raise RuntimeError("Cancel discarded the model")
+            print("PASS: native close Cancel preserves the unsaved model", flush=True)
+            output = execute(session, "RunRhai", code=(ROOT / "assets/scripting/tests/test_ui_review.rhai").read_text()
+                + f"\nui_modelica_save_rejected({doc_id}, {json.dumps(str(area))});")["stdout"].strip()
+            if "TESTS_FAIL" in output or ": PASS" not in output:
+                raise RuntimeError(output)
+            print(output, flush=True)
+            execute(session, "Exit")
+            press_named("Don't save")
+            session.process.wait(timeout=15)
+            print("PASS: native Don't save resolves the document and exits", flush=True)
     finally:
         enabled(initial)
     print("PASS: owned process exited; desktop accessibility preference restored", flush=True)

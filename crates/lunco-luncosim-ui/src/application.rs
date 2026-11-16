@@ -551,10 +551,11 @@ pub fn run_gui() -> AppExit {
     }
 
     apply_render_quality_override(&mut app, render_quality);
+    crate::render_shutdown::install(&mut app);
 
     // Return the AppExit so a non-zero exit (e.g. the startup-scene fail-loud
     // guard's `AppExit::error()`) propagates to the process exit code.
-    app.run()
+    lunco_assets_runtime::run_asset_app(&mut app)
 }
 
 /// Queue a process-level quality choice until the authored profile policy has

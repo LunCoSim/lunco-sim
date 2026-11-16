@@ -1580,6 +1580,42 @@ compile retains the draft. Apply running source to document is an explicit
 USD journal action; File → Save owns disk persistence. Source Viewer uses an
 immutable text buffer that supports selection and copying.
 
+`lunco-workbench-core::app_close::AppCloseGuards` admits normal application close
+against unapplied editor state before the shared dirty-document flow starts,
+and again before its final exit. Application-scoped registrations capture no
+Twin data: Behaviour and SysML owners inspect their current exact document/entity
+leases and return a typed blocker with an editor-reveal callback. A blocker
+surfaces a warning, reveals the draft and cancels close admission. Resolve the
+local draft with Run/Revert or Save/Discard, then close again. A temporarily
+unavailable registered owner holds close visibly; retired source leases do not
+block another Twin. Canonical document changes use `DocumentEntry::has_unsaved_changes` from
+Workspace, including untitled sources. Owned model views retain their Save /
+Don't save / Cancel prompts. Dirty documents without such a close target hold
+Exit with their filename and reveal Twin files for an explicit Save or Close;
+no view identity is fabricated. The final boundary rechecks the same ledger
+and registered guards after modal/save completion. An application-close request
+captures exact document IDs and prompts once per document, even with multiple
+views. Save and Don't save retire that document and all its views. The finalizer
+waits for retirement in Workspace instead of a frame delay. Cancel, an exact
+Save-As picker cancellation/unsupported result, or `DocumentSaveFailed` releases
+the pending close and cancels the remaining prompts for that request. Completed
+saves remain saved; cancellation never fabricates a successful write.
+
+Twin files projects `UnsavedDocs` from the shared workspace ledger, so dirty
+markers cover every registered document domain through one change-gated writer.
+
+
+`SaveScenario` retains the original command and transport context through
+`ApplyUsdOps`. Its terminal result is the USD owner's acknowledgement or
+rejection. Behaviour Editor disables repeat Apply while that result is pending
+and reports a failed application without discarding the source.
+
+Shader Create/Import validates the source and explicit target before creating a
+file. Creation is exclusive: an existing destination rejects without replacing
+its bytes. The successful acknowledgement carries `source_uri`; the Inspector
+resolves that stable identity through the asset owner before applying it. It
+does not predict a filename or infer success from an older catalog entry.
+
 `lunco-workbench-file-ops::ExportText` admits an application-owned immutable
 UTF-8 snapshot. Its acknowledgement is admission, not completed I/O. The shared
 asynchronous picker and I/O task own destination selection, writing, and a
@@ -1618,3 +1654,6 @@ window. The editor retains one buffer and the existing typed SysML apply/save
 commands; it reserves space for save/revert controls and supports horizontal
 source scrolling. `SysmlRequirementsState` owns retained browser/draft state.
 Its `TwinClosed` observer retires closed-Twin drafts even while the panel is hidden.
+
+Close editor is disabled while a local draft needs saving or discarding, with
+an explanation on the disabled control.

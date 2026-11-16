@@ -1001,24 +1001,6 @@ pub fn on_set_shader_source(
 // shaders (see [`lunco_materials::shader_template`]).
 // ─────────────────────────────────────────────────────────────────────────
 
-/// The asset path a shader named `stem` would be installed at: under the
-/// primary open Twin (`twin://<authority>/shaders/<stem>.wesl`) or the engine library
-/// (`shaders/<stem>.wesl`) when no Twin is open. Mirrors [`install_shader`]'s
-/// destination logic so callers (e.g. the Inspector) can predict the path.
-pub fn shader_asset_path_for(
-    twin_roots: Option<&lunco_assets_core::twin_source::TwinRoots>,
-    stem: &str,
-) -> Result<String, lunco_assets_core::TwinRootsError> {
-    Ok(
-        match twin_roots.map(|t| t.primary()).transpose()?.flatten() {
-            Some((name, _)) => {
-                lunco_assets_core::twin_uri(&name, lunco_assets_core::engine_shader_asset_rel(stem))
-            }
-            None => lunco_assets_core::engine_shader_asset_rel(stem),
-        },
-    )
-}
-
 /// Sanitise a free-text name into a safe lowercase file stem (`[a-z0-9_]`,
 /// trimmed of leading/trailing `_`). Empty input → `"shader"`.
 pub fn sanitize_stem(s: &str) -> String {
@@ -1042,10 +1024,10 @@ pub fn sanitize_stem(s: &str) -> String {
 }
 
 /// Core of [`CreateShader`]/[`ImportShader`]: validate the WESL is a
-/// prop-pickable dynamic shader, persist it into the open Twin (fallback
-/// `assets/shaders/`), insert it live into [`Assets<Shader>`] so it renders
-/// this frame, register it in the picker [`ShaderCatalog`], and optionally bind
-/// it to `target` (API id; 0 = none). Returns the asset path on success.
+/// prop-pickable dynamic shader, create a new file in the open Twin (or engine
+/// asset root when no Twin is open), register it with the native asset loader
+/// and picker, and optionally bind it to `target` (API id; 0 = none).
+/// Existing destinations reject. Success returns the stable source URI.
 #[allow(clippy::too_many_arguments)]
 fn install_shader(
     stem: &str,
@@ -1056,114 +1038,102 @@ fn install_shader(
     pending: &mut crate::shader_sources::PendingShaderSources,
     catalog: &mut lunco_materials::ShaderCatalog,
     registry: &lunco_api::registry::ApiEntityRegistry,
-    q_look: &Query<&ShaderLook>,
+    q_look: &Query<Option<&ShaderLook>>,
     commands: &mut Commands,
-) -> Option<String> {
-    if let Err(error) = lunco_assets_path::validate_portable_file_name(&format!("{stem}.wesl")) {
-        warn!("INSTALL_SHADER: invalid filename: {error}");
-        return None;
-    }
-    if let Err(error) = lunco_materials::validate_shader_syntax(source) {
-        warn!("INSTALL_SHADER: invalid WESL: {error}");
-        return None;
-    }
-    // Gate: must be a self-describing `Material` shader, and every `//!@engine`
-    // field it declares must be one a plain prop entity actually receives —
-    // `prop_fillable` in the engine-param registry. Otherwise it would render
-    // black (e.g. terrain-only inputs) / can't be driven.
-    if !lunco_materials::is_prop_pickable_source(source) {
-        warn!(
-            "INSTALL_SHADER: '{stem}' is not a prop-pickable dynamic shader \
-             (needs a `Material` struct; every `//!@engine` field must be \
-             prop-fillable per the engine-param registry) — skipped"
-        );
-        return None;
-    }
-
-    // Destination: the primary open Twin's `shaders/` dir (portable, persists
-    // with the Twin under a `twin://` asset path), else the engine library.
-    let primary = match twin_roots
-        .map(|t| t.primary())
-        .transpose()
-        .map(|primary| primary.flatten())
+) -> Result<String, String> {
+    #[cfg(target_arch = "wasm32")]
     {
-        Ok(primary) => primary,
-        Err(error) => {
-            error!("INSTALL_SHADER: Twin registry unavailable: {error}");
-            return None;
-        }
-    };
-    let (asset_path, disk_path): (String, std::path::PathBuf) = match primary {
-        Some((name, root)) => (
-            lunco_assets_core::twin_uri(&name, lunco_assets_core::engine_shader_asset_rel(stem)),
-            root.join(lunco_assets_core::engine_shader_asset_rel(stem)),
-        ),
-        None => (
-            lunco_assets_core::engine_shader_asset_rel(stem),
-            match lunco_assets_core::engine_shader_path(stem) {
-                Ok(path) => path,
-                Err(error) => {
-                    error!("INSTALL_SHADER: engine asset root failed: {error}");
-                    return None;
-                }
-            },
-        ),
-    };
-
-    let load_path =
-        match lunco_assets_core::asset_path::load_asset_path(&asset_path, None, None, None) {
-            Ok(path) => path,
-            Err(error) => {
-                warn!("INSTALL_SHADER: invalid asset address: {error}");
-                return None;
-            }
-        };
-    // The native loader owns dependency discovery for the persisted source.
+        let _ = (
+            stem,
+            source,
+            target,
+            twin_roots,
+            asset_server,
+            pending,
+            catalog,
+            registry,
+            q_look,
+            commands,
+        );
+        Err("Creating shader files requires a native filesystem".into())
+    }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        match lunco_storage::write_file_sync(&disk_path, source.as_bytes()) {
-            Ok(()) => info!("INSTALL_SHADER: wrote {}", disk_path.display()),
-            Err(e) => {
-                warn!("INSTALL_SHADER: write {} failed: {e}", disk_path.display());
-                return None;
-            }
+        lunco_assets_path::validate_portable_file_name(&format!("{stem}.wesl"))
+            .map_err(|error| format!("Invalid shader filename: {error}"))?;
+        lunco_materials::validate_shader_syntax(source)?;
+        if !lunco_materials::is_prop_pickable_source(source) {
+            return Err(
+                "Shader must declare a Material struct with only prop-fillable engine fields"
+                    .into(),
+            );
         }
-    }
-    #[cfg(target_arch = "wasm32")]
-    let _ = &disk_path;
-
-    pending.cancel(&[crate::shader_doc::canonical_shader_path(&asset_path)]);
-    // Keep loading and dependency retention on Bevy's native asset path.
-    let _shader_handle = asset_server.load::<bevy::shader::Shader>(load_path);
-    asset_server.reload(asset_path.clone());
-
-    // Make it pickable.
-    catalog.add(crate::shader_doc::canonical_shader_path(&asset_path));
-
-    // Optionally apply to a target entity (preserve any existing shader params).
-    if target != 0 {
-        let gid = lunco_core::GlobalEntityId::from_raw(target);
-        match registry.resolve(&gid) {
-            Some(ent) => {
-                // The binder loads the persisted source through the same asset identity.
-                author_shader_look(commands, ent, q_look.get(ent).ok(), &asset_path);
-                info!("INSTALL_SHADER: applied shader to entity {target}");
-            }
-            None => warn!("INSTALL_SHADER: target id {target} not in registry"),
+        let target = if target == 0 {
+            None
+        } else {
+            let entity = registry
+                .resolve(&lunco_core::GlobalEntityId::from_raw(target))
+                .ok_or_else(|| format!("Shader target {target} is not a live entity"))?;
+            q_look
+                .get(entity)
+                .map_err(|_| format!("Shader target {target} is no longer live"))?;
+            Some(entity)
+        };
+        let primary = twin_roots
+            .map(|roots| roots.primary())
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .flatten();
+        let (load_address, disk_path) = match primary {
+            Some((mount, root)) => (
+                lunco_assets_core::twin_uri(
+                    &mount,
+                    lunco_assets_core::engine_shader_asset_rel(stem),
+                ),
+                root.join(lunco_assets_core::engine_shader_asset_rel(stem)),
+            ),
+            None => (
+                lunco_assets_core::engine_asset_uri(&lunco_assets_core::engine_shader_asset_rel(
+                    stem,
+                )),
+                lunco_assets_core::engine_shader_path(stem).map_err(|error| error.to_string())?,
+            ),
+        };
+        let source_uri =
+            lunco_assets_core::asset_path::source_uri_for_address(&load_address, twin_roots)
+                .map_err(|error| error.to_string())?;
+        let load_path =
+            lunco_assets_core::asset_path::load_asset_path(&load_address, None, None, None)
+                .map_err(|error| error.to_string())?;
+        {
+            use lunco_storage::Storage;
+            lunco_storage::FileStorage::new()
+            .write_new_sync(&lunco_storage::StorageHandle::File(disk_path), source.as_bytes())
+            .map_err(|error| format!("Cannot create shader {source_uri}: {error}. Choose a new name or edit the existing file."))?;
         }
+        pending.cancel(&[load_address.clone()]);
+        let _shader_handle = asset_server.load::<bevy::shader::Shader>(load_path);
+        asset_server.reload(load_address.clone());
+        catalog.add(load_address.clone());
+        if let Some(target) = target {
+            author_shader_look(
+                commands,
+                target,
+                q_look.get(target).ok().flatten(),
+                &load_address,
+            );
+        }
+        info!("INSTALL_SHADER: registered {source_uri}");
+        Ok(source_uri)
     }
-
-    info!(
-        "INSTALL_SHADER: registered {}",
-        lunco_assets_core::asset_path::display_source_path(&asset_path, twin_roots)
-    );
-    Some(asset_path)
 }
 
 /// Create a new dynamic shader from a built-in template (or supplied WESL),
 /// persist it into the open Twin (`<twin>/shaders/<name>.wesl`, or
 /// `assets/shaders/` when no Twin is open), register it in the picker, and
 /// optionally bind it to a target entity — all live, no restart.
+/// Existing destination files reject without replacement. Success returns
+/// `source_uri`, the stable identity of the newly installed source.
 ///
 /// ```json
 /// {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
@@ -1191,9 +1161,9 @@ pub fn on_create_shader(
     mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    q_look: Query<&ShaderLook>,
+    q_look: Query<Option<&ShaderLook>>,
     mut commands: Commands,
-) {
+) -> Result<lunco_command_contracts::Ack, String> {
     let ev = trigger.event();
     let stem = sanitize_stem(&ev.name);
     let source = if ev.source.trim().is_empty() {
@@ -1201,7 +1171,7 @@ pub fn on_create_shader(
     } else {
         ev.source.clone()
     };
-    install_shader(
+    let source_uri = install_shader(
         &stem,
         &source,
         ev.target,
@@ -1212,14 +1182,20 @@ pub fn on_create_shader(
         &registry,
         &q_look,
         &mut commands,
-    );
+    )
+    .inspect_err(|error| warn!("CREATE_SHADER: {error}"))?;
+    Ok(lunco_api::executor::ack_with_string_field(
+        lunco_command_contracts::OpId::new(),
+        "source_uri",
+        source_uri,
+    ))
 }
-
 /// Import an existing `.wesl` file from anywhere on disk INTO the open Twin
 /// (copies it to `<twin>/shaders/<name>.wesl`), registers it in the picker, and
 /// optionally binds it to a target entity. The file must be a prop-pickable
 /// dynamic shader: a `Material` struct, and every `//!@engine` field it declares
-/// must be prop-fillable per the engine-param registry.
+/// must be prop-fillable per the engine-param registry. Existing destination
+/// files reject without replacement. Success returns the stable `source_uri`.
 ///
 /// ```json
 /// {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wesl","name":"cool","target":42}}
@@ -1248,35 +1224,29 @@ pub fn on_import_shader(
     >,
     #[cfg(not(target_arch = "wasm32"))] mut catalog: ResMut<lunco_materials::ShaderCatalog>,
     #[cfg(not(target_arch = "wasm32"))] registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    #[cfg(not(target_arch = "wasm32"))] q_look: Query<&ShaderLook>,
+    #[cfg(not(target_arch = "wasm32"))] q_look: Query<Option<&ShaderLook>>,
     #[cfg(not(target_arch = "wasm32"))] mut commands: Commands,
-) {
-    let ev = trigger.event();
+) -> Result<lunco_command_contracts::Ack, String> {
     #[cfg(target_arch = "wasm32")]
     {
-        warn!("IMPORT_SHADER: importing from a local file is native-only");
+        let _ = trigger;
+        return Err("Importing shader files requires a native filesystem".into());
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let src = match lunco_assets_core::read_asset_file_string(std::path::Path::new(
-            &ev.source_path,
-        )) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("IMPORT_SHADER: read '{}' failed: {e}", ev.source_path);
-                return;
-            }
-        };
+        let ev = trigger.event();
+        let src = lunco_assets_core::read_asset_file_string(std::path::Path::new(&ev.source_path))
+            .map_err(|error| format!("Cannot import shader {}: {error}", ev.source_path))?;
         let stem = if ev.name.trim().is_empty() {
-            std::path::Path::new(&ev.source_path)
+            let stem = std::path::Path::new(&ev.source_path)
                 .file_stem()
-                .and_then(|s| s.to_str())
-                .map(sanitize_stem)
-                .unwrap_or_else(|| "shader".to_string())
+                .and_then(|stem| stem.to_str())
+                .ok_or("Imported shader path has no filename")?;
+            sanitize_stem(stem)
         } else {
             sanitize_stem(&ev.name)
         };
-        install_shader(
+        let source_uri = install_shader(
             &stem,
             &src,
             ev.target,
@@ -1287,7 +1257,13 @@ pub fn on_import_shader(
             &registry,
             &q_look,
             &mut commands,
-        );
+        )
+        .inspect_err(|error| warn!("IMPORT_SHADER: {error}"))?;
+        Ok(lunco_api::executor::ack_with_string_field(
+            lunco_command_contracts::OpId::new(),
+            "source_uri",
+            source_uri,
+        ))
     }
 }
 

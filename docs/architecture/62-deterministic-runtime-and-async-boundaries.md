@@ -1907,3 +1907,28 @@ for simulation admission. A waiting or faulted simulation does not disable API
 commands or diagnostics. Required owner dependencies release only their own
 holds. Completion does not change requested transport state or accumulate wall
 waiting time into simulation catch-up ticks.
+
+
+## GPU application shutdown
+
+`lunco-luncosim-ui::render_shutdown` owns the GPU-backed process lifetime.
+A tail schedule holds `AppExit`, pauses simulation through `SetTimeTransport`,
+and closes extraction/render admission. A wrapper around Bevy's public render
+sub-app schedule polls admitted `PipelineCache` compilation tasks until they
+finish, retaining the window handles and render world throughout. Closing hides
+the windows and sends native wake events while pending, allowing the native
+runner to advance without another presented frame. The main schedule
+publishes the held exit only after render idle is observed; an error exit takes
+precedence over success. This boundary does not block the UI thread, change
+pipeline compilation mode, or let GPU completion choose simulation ticks.
+The production follow-up UI driver exercises immediate scene-load/exit cycles;
+the shared `ProductionSession` harness requires exit code zero and port release.
+
+Native asset-backed entry points use `lunco-assets-runtime::run_asset_app`.
+It retains the canonical registered sources' event receivers outside `App::run`.
+After the runner and App retire, it drains them until their watcher producers
+close. Bevy's native watcher destructor requests asynchronous shutdown, so the
+final callback must retain a receiving endpoint through that edge. This cleanup
+runs after the UI runner ends, uses the public source/receiver APIs, and adds no
+new event transport, timer delay, or dependency patch. Browser runners retain
+their existing asynchronous lifecycle.

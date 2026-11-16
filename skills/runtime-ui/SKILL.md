@@ -481,6 +481,13 @@ explicit all-perspectives scope. Register the generic `hud_binding_probe.rhai` t
 only in an isolated test Twin when exercising real pointer callbacks and Twin
 replacement; never persist test tools into a user's Twin.
 
+Press activation uses one exact-entity admission owner for pointer, keyboard,
+Controls menu and native assistive actions. Reparenting outside a live interactive
+surface or removing callbacks retires accessibility/menu/tab membership. Labels
+track current hierarchy/text/tags, and `tag:ui_tab_index` survives disable/enable.
+Use the generic callback-lease test plus the Linux native accessibility driver
+when changing this boundary.
+
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime adds `Pickable` to those visible
 controls and feeds each computed Bevy UI rectangle into the existing

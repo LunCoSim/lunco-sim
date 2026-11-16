@@ -91,6 +91,12 @@ Each format adapter implements only what is format-specific:
 | Rhai | script document source, UTF-8 edits and hook lifecycle | authored scenario/tool policy and test verdicts |
 | Shaders/other text domains | existing parser/compiler and resource owner (WESL currently `CreateShader`/`ImportShader`) | add a source-edit facade only after a document adapter; never write shader files from a generic tool |
 
+WESL Create/Import uses exclusive file creation and validates an explicit live
+target before writing. Consume its successful stable `source_uri` acknowledgement;
+an existing catalog row or predicted destination is not an installation result.
+Use the document source-edit path to change an existing shader instead of
+re-importing over it.
+
 The dynamic tool boundary is `assets/scripting/tools/*.rhai`. A tool is
 discoverable and hot-reloadable by name; it may call only the public `cmd` /
 `query` surface and reusable prelude helpers. New format support should add a

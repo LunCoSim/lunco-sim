@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**317 commands** across **59** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**317 commands** across **59** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -1270,7 +1270,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetCommandKeyBinding`
 
-*(no description — add a `///` doc on the struct)*
+ Set a named application command shortcut, including its typed arguments and
+ text-editing eligibility. Empty keys explicitly unbind the shortcut.
 
 - *defined in:* `crates/lunco-workbench/src/keybindings.rs`
 
@@ -1284,7 +1285,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetInputIntentBinding`
 
-*(no description — add a `///` doc on the struct)*
+ Set an application input intent's physical key alternatives. Empty keys
+ explicitly unbind the intent; restore defaults through the settings owner.
 
 - *defined in:* `crates/lunco-workbench/src/keybindings.rs`
 
@@ -2544,7 +2546,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `DismissDatasetProvisioning`
 
-*(no description — add a `///` doc on the struct)*
+ Dismiss the current dataset provisioning notice for the named presentation
+ scope. The provisioning owner retains the underlying work and status.
 
 - *defined in:* `crates/lunco-luncosim-ui/src/ui/dataset_provisioning.rs`
 
@@ -2575,9 +2578,9 @@ actually call, with the fields the deserializer actually accepts. See the
  several programs, and a source written onto the vessel would sit on a prim
  that runs nothing.
 
- Only doc-backed Twin scenes have an editable document; a raw-file scene is
- refused (logged, not silently dropped), matching the rule that the builder
- must only edit doc-backed scenes or it eats work on the next reload.
+ Only doc-backed Twin scenes have an editable document. A raw-file scene is
+ rejected terminally. Completion returns the USD owner's applied document and
+ generation, or its authoring error; `SaveDocument` owns disk persistence.
 
 - *defined in:* `crates/lunco-luncosim-ui/src/save_scenario.rs`
 
@@ -2873,6 +2876,8 @@ actually call, with the fields the deserializer actually accepts. See the
  persist it into the open Twin (`<twin>/shaders/<name>.wesl`, or
  `assets/shaders/` when no Twin is open), register it in the picker, and
  optionally bind it to a target entity — all live, no restart.
+ Existing destination files reject without replacement. Success returns
+ `source_uri`, the stable identity of the newly installed source.
 
  ```json
  {"type":"ExecuteCommand","command":"CreateShader","params":{"name":"my_panel","template":"checker","target":42}}
@@ -2910,7 +2915,8 @@ actually call, with the fields the deserializer actually accepts. See the
  (copies it to `<twin>/shaders/<name>.wesl`), registers it in the picker, and
  optionally binds it to a target entity. The file must be a prop-pickable
  dynamic shader: a `Material` struct, and every `//!@engine` field it declares
- must be prop-fillable per the engine-param registry.
+ must be prop-fillable per the engine-param registry. Existing destination
+ files reject without replacement. Success returns the stable `source_uri`.
 
  ```json
  {"type":"ExecuteCommand","command":"ImportShader","params":{"source_path":"/home/me/cool.wesl","name":"cool","target":42}}
@@ -4588,6 +4594,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Create a new Twin folder and asynchronously add it to the workspace.
  Empty `path` means "ask the windowed workbench for a folder".
+ Manifest creation failures return terminal errors and preserve the active
+ Twin. Success admits the new folder to the asynchronous workspace scan.
 
 - *defined in:* `crates/lunco-workspace/src/open.rs`
 
@@ -4701,7 +4709,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 317 commands from the runtime schema; scanned 1101 .rs files for docs (0 parse failure(s) skipped).
+<!-- 317 commands from the runtime schema; scanned 1103 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

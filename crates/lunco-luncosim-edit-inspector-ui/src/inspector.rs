@@ -47,7 +47,10 @@ use lunco_usd_core::edit_session::{UsdEditScope, UsdProposalId, UsdProposalState
 use lunco_usd_document::document::{LayerId, UsdOp};
 
 fn report_inspector_error(world: &mut World, message: impl Into<String>) {
-    let message = message.into();
+    let message = lunco_assets_core::asset_path::display_source_text(
+        &message.into(),
+        world.get_resource::<lunco_assets_core::TwinRoots>(),
+    );
     warn!("[inspector] {message}");
     world.trigger(lunco_telemetry_core::TelemetryEvent {
         name: "inspector-edit-failed".to_string(),
@@ -3225,59 +3228,72 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
         });
 }
 
-/// Create a shader from `template` (registers it), then bind it to `part`.
+/// Install through the typed command owner and bind only its successful source.
+fn install_and_apply<E>(world: &mut World, part: Entity, command: E)
+where
+    E: bevy::ecs::event::Event,
+    for<'a> E::Trigger<'a>: Default,
+{
+    let id = world
+        .resource_mut::<lunco_api::executor::ApiIdCounter>()
+        .next_id();
+    let mut context = lunco_core::ActiveCommandId::default();
+    context.set_with_origin(
+        id,
+        Some(lunco_core::CommandOrigin::LocalUser {
+            session_id: lunco_command_contracts::SessionId::LOCAL,
+        }),
+    );
+    lunco_api::executor::trigger_command_with_context(world, command, context, None);
+    let source = match world.resource::<lunco_core::CommandResults>().get(id) {
+        Some(lunco_core::CommandOutcome::Succeeded(ack)) => ack
+            .data
+            .as_ref()
+            .and_then(|data| data.get("source_uri"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| "Shader installation omitted its source identity".to_owned()),
+        Some(lunco_core::CommandOutcome::Failed(message)) => Err(message.clone()),
+        Some(lunco_core::CommandOutcome::Rejected(reason)) => Err(reason.to_string()),
+        _ => Err("Shader installation did not report completion".into()),
+    };
+    let path = source.and_then(|source| {
+        lunco_assets_core::asset_path::load_source_uri(
+            &source,
+            world.get_resource::<lunco_assets_core::TwinRoots>(),
+        )
+        .map(|path| path.to_string())
+        .map_err(|error| error.to_string())
+    });
+    match path {
+        Ok(path) => swap_shader_on_entity(world, part, &path),
+        Err(error) => report_inspector_error(world, error),
+    }
+}
+
 fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str) {
-    world.trigger(lunco_scene_authoring::properties::CreateShader {
-        name: name.to_string(),
-        template: template.to_string(),
-        source: String::new(),
-        target: 0,
-    });
-    let stem = lunco_scene_authoring::properties::sanitize_stem(name);
-    apply_if_registered(world, part, &stem);
+    install_and_apply(
+        world,
+        part,
+        lunco_scene_authoring::properties::CreateShader {
+            name: name.to_owned(),
+            template: template.to_owned(),
+            source: String::new(),
+            target: 0,
+        },
+    );
 }
 
-/// Import an external `.wesl` (registers it), then bind it to `part`.
-fn import_and_apply(world: &mut World, part: Entity, src_path: &str) {
-    world.trigger(lunco_scene_authoring::properties::ImportShader {
-        source_path: src_path.to_string(),
-        name: String::new(),
-        target: 0,
-    });
-    let stem = std::path::Path::new(src_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(lunco_scene_authoring::properties::sanitize_stem)
-        .unwrap_or_default();
-    if !stem.is_empty() {
-        apply_if_registered(world, part, &stem);
-    }
-}
-
-/// If a shader for `stem` is now registered, swap `part` onto it.
-fn apply_if_registered(world: &mut World, part: Entity, stem: &str) {
-    let shader_path = {
-        let tr = world.get_resource::<lunco_assets_core::twin_source::TwinRoots>();
-        lunco_scene_authoring::properties::shader_asset_path_for(tr, stem)
-    };
-    let path = match shader_path {
-        Ok(path) => path,
-        Err(error) => {
-            report_inspector_error(
-                world,
-                format!("Twin asset registry unavailable for shader `{stem}`: {error}"),
-            );
-            return;
-        }
-    };
-    let registered = world
-        .resource::<lunco_materials::ShaderCatalog>()
-        .entries
-        .iter()
-        .any(|e| e.path == path);
-    if registered {
-        swap_shader_on_entity(world, part, &path);
-    }
+fn import_and_apply(world: &mut World, part: Entity, source: &str) {
+    install_and_apply(
+        world,
+        part,
+        lunco_scene_authoring::properties::ImportShader {
+            source_path: source.to_owned(),
+            name: String::new(),
+            target: 0,
+        },
+    );
 }
 
 /// Editable PBR controls for the selected object's surfaces.

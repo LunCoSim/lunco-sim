@@ -3868,23 +3868,14 @@ struct RuntimeUiPressCallbacks(Vec<String>);
 
 fn dispatch_runtime_ui_press(
     mut press: On<bevy::picking::events::PointerPress>,
-    callbacks: Query<(&RuntimeUiPressCallbacks, Has<bevy::ui::InteractionDisabled>)>,
-    bindings: Res<FunctionBindings>,
+    callbacks: Query<(), With<RuntimeUiPressCallbacks>>,
     mut commands: Commands,
 ) {
-    if press.button != PointerButton::Primary {
+    if press.button != PointerButton::Primary || !callbacks.contains(press.entity) {
         return;
     }
-    let Ok((callbacks, disabled)) = callbacks.get(press.entity) else {
-        return;
-    };
     press.propagate(false);
-    if disabled {
-        return;
-    }
-    for callback in &callbacks.0 {
-        bindings.maybe_run(callback, press.entity, &mut commands);
-    }
+    commands.trigger(accessibility::ActivateControl(press.entity));
 }
 
 /// Add the visible interactive runtime controls to the existing workbench
@@ -3980,10 +3971,7 @@ fn register_runtime_ui_input_regions(
             // cannot dispatch a second invocation for a held press.
             commands
                 .entity(entity)
-                .try_insert((
-                    RuntimeUiPressCallbacks(press.0.clone()),
-                    bevy::input_focus::tab_navigation::TabIndex(0),
-                ))
+                .try_insert(RuntimeUiPressCallbacks(press.0.clone()))
                 .try_remove::<OnUiPress>();
         }
         let surface_gesture_content =

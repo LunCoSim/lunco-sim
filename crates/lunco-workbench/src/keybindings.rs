@@ -10,6 +10,8 @@ use lunco_input_core::{
 
 const PANEL: PanelId = PanelId("input_keybindings");
 
+/// Set an application input intent's physical key alternatives. Empty keys
+/// explicitly unbind the intent; restore defaults through the settings owner.
 #[lunco_core::Command(default)]
 pub struct SetInputIntentBinding {
     pub intent: String,
@@ -17,6 +19,8 @@ pub struct SetInputIntentBinding {
     pub keys: Vec<KeyCode>,
 }
 
+/// Set a named application command shortcut, including its typed arguments and
+/// text-editing eligibility. Empty keys explicitly unbind the shortcut.
 #[lunco_core::Command(default)]
 pub struct SetCommandKeyBinding {
     pub id: String,

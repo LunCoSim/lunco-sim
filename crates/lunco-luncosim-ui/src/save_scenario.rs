@@ -15,9 +15,9 @@ use bevy::prelude::*;
 /// several programs, and a source written onto the vessel would sit on a prim
 /// that runs nothing.
 ///
-/// Only doc-backed Twin scenes have an editable document; a raw-file scene is
-/// refused (logged, not silently dropped), matching the rule that the builder
-/// must only edit doc-backed scenes or it eats work on the next reload.
+/// Only doc-backed Twin scenes have an editable document. A raw-file scene is
+/// rejected terminally. Completion returns the USD owner's applied document and
+/// generation, or its authoring error; `SaveDocument` owns disk persistence.
 #[lunco_core::Command]
 pub struct SaveScenario {
     /// The scripted entity whose live scenario source to persist onto its prim.
@@ -45,7 +45,9 @@ fn on_save_scenario(
     registry: Res<lunco_scripting::ScriptRegistry>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut commands: Commands,
-) -> Result<lunco_command_contracts::Ack, String> {
+    active: Res<lunco_core::ActiveCommandId>,
+    pending: Option<Res<lunco_api::executor::PendingApiRequest>>,
+) -> Result<lunco_core::CommandOutcome, String> {
     let target = trigger.event().target;
 
     // 1. The live source the runtime is currently running for this entity.
@@ -70,7 +72,7 @@ fn on_save_scenario(
     let program = q_program
         .get(target)
         .map_err(|_| "Selected scenario has no authored program prim".to_owned())?;
-    commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
+    let apply = lunco_usd_core::commands::ApplyUsdOps {
         doc_id: scene_doc,
         parent_gen: None,
         label: "Save scenario source".into(),
@@ -79,10 +81,15 @@ fn on_save_scenario(
             program.0.clone(),
             source,
         ),
+    };
+    let active = active.as_ref().clone();
+    let correlation = pending
+        .map(|pending| pending.correlation_id)
+        .filter(|id| *id != 0);
+    commands.queue(move |world: &mut World| {
+        lunco_api::executor::trigger_command_with_context(world, apply, active, correlation);
     });
-    Ok(lunco_command_contracts::Ack::new(
-        lunco_command_contracts::OpId::new(),
-    ))
+    Ok(lunco_core::CommandOutcome::Pending)
 }
 
 lunco_core::register_commands!(on_save_scenario);

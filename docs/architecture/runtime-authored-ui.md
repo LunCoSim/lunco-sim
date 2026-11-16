@@ -1052,6 +1052,13 @@ invent a label from a callback identity. Focus has a theme-owned visible outline
 Scene-owned catalog entries retain exact entity generations and retire on scene
 teardown. Hidden controls are withdrawn from the Controls menu.
 
+Pointer, keyboard, Controls menu and native assistive clicks all dispatch the
+same `ActivateControl` admission observer. It checks the current exact entity,
+surface ancestry, visibility and disabled state at delivery. Reparenting outside
+an interactive surface or removing callbacks retires the menu entry, native node
+and tab stop. Authored `tag:ui_tab_index` is preserved when a control is enabled
+again; omitted button indices use the shared zero-order navigation group.
+
 The workbench enables egui's maintained AccessKit integration; the GUI host
 also enables Bevy's Unix platform adapter (`accesskit_unix`). Its adapter owns
 the platform tree while egui is active; Bevy and egui trees are not merged by

@@ -1,37 +1,9 @@
-//! Periodic update/sync systems: StatusBar and UnsavedDocs.
+//! Change-driven Modelica status projection.
 
 use crate::ui::document_context::ModelicaDocuments;
 use crate::ui::workbench_state::WorkbenchState;
 use bevy::prelude::*;
 use lunco_doc_bevy::DocumentDiagnostics;
-
-pub fn publish_unsaved_modelica_docs(
-    registry: Res<ModelicaDocuments>,
-    unsaved: Option<ResMut<lunco_workbench_browser::UnsavedDocs>>,
-) {
-    let Some(mut unsaved) = unsaved else { return };
-    if !registry.is_changed() && !unsaved.is_added() {
-        return;
-    }
-    unsaved.entries = registry
-        .iter()
-        .filter(|(_, host)| {
-            let o = host.document().origin();
-            o.is_writable() || o.is_untitled()
-        })
-        .map(|(id, host)| {
-            let document = host.document();
-            let origin = document.origin();
-            let is_unsaved = origin.is_untitled() || document.is_dirty();
-            lunco_workbench_browser::UnsavedDocEntry {
-                id,
-                display_name: origin.display_name(),
-                kind: "Modelica".into(),
-                is_unsaved,
-            }
-        })
-        .collect();
-}
 
 pub fn update_status_bar(
     workbench: Res<WorkbenchState>,

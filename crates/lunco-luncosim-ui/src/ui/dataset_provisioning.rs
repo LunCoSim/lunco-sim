@@ -725,6 +725,8 @@ pub(crate) fn publish_dataset_provisioning_surface(
     state.last_simulation = Some(simulation);
 }
 
+/// Dismiss the current dataset provisioning notice for the named presentation
+/// scope. The provisioning owner retains the underlying work and status.
 #[Command(default)]
 pub(crate) struct DismissDatasetProvisioning {
     pub(crate) scope: String,

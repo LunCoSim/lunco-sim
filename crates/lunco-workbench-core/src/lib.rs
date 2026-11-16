@@ -5,6 +5,7 @@
 //! does not depend on `bevy_egui`, `egui_dock`, a renderer, a window, storage,
 //! or application services.
 
+pub mod app_close;
 mod menu;
 pub mod navigation;
 mod panel;

@@ -324,6 +324,44 @@ pub fn finish_command_result(
     }
 }
 
+/// Trigger a typed command with the exact captured request context. Deferred
+/// observers copy the context before it is restored; nested local commands never
+/// inherit an unrelated transport correlation.
+/// Requires the command dispatcher's initialized context resources, which stay
+/// present throughout nested observer and deferred-command delivery.
+pub fn trigger_command_with_context<E>(
+    world: &mut World,
+    event: E,
+    active: lunco_core::ActiveCommandId,
+    correlation_id: Option<u64>,
+) where
+    E: bevy::ecs::event::Event,
+    for<'a> E::Trigger<'a>: Default,
+{
+    with_command_context(world, active, correlation_id, |world| world.trigger(event));
+}
+
+fn with_command_context(
+    world: &mut World,
+    active: lunco_core::ActiveCommandId,
+    correlation_id: Option<u64>,
+    dispatch: impl FnOnce(&mut World),
+) {
+    let previous_active = std::mem::replace(
+        &mut *world.resource_mut::<lunco_core::ActiveCommandId>(),
+        active,
+    );
+    let previous_pending = std::mem::replace(
+        &mut *world.resource_mut::<PendingApiRequest>(),
+        PendingApiRequest {
+            correlation_id: correlation_id.unwrap_or(0),
+        },
+    );
+    dispatch(world);
+    *world.resource_mut::<lunco_core::ActiveCommandId>() = previous_active;
+    *world.resource_mut::<PendingApiRequest>() = previous_pending;
+}
+
 /// Build a successful acknowledgement with a typed string field.
 pub fn ack_with_string_field(
     op_id: lunco_command_contracts::OpId,
@@ -459,34 +497,19 @@ pub fn api_command_dispatcher(
                     }
                 };
                 {
-                    // Scope the command id and producer origin around the
-                    // reflected trigger so result and occurrence observers can
-                    // retain those facts. Observers run synchronously inside
-                    // `trigger`, so set-before / clear-after is sound.
-                    world
-                        .resource_mut::<lunco_core::ActiveCommandId>()
-                        .set_with_origin(cmd_id, origin);
+                    let mut active = lunco_core::ActiveCommandId::default();
+                    active.set_with_origin(cmd_id, origin);
                     let deferred = world
                         .get_resource::<DeferredCommands>()
                         .is_some_and(|commands| commands.contains(registration.type_id()));
-                    if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
-                        pending.correlation_id = if deferred {
-                            correlation_id.unwrap_or(0)
-                        } else {
-                            0
-                        };
-                    }
-                    reflect_event.trigger(world, reflected.as_ref(), &type_reg);
-                    world
-                        .resource_mut::<lunco_core::ActiveCommandId>()
-                        .set(None);
-                    // The pending correlation is a per-dispatch handoff to a
-                    // deferred command handler. Clear it immediately after
-                    // the reflected event so a later in-process trigger cannot
-                    // inherit an old transport request.
-                    if let Some(mut pending) = world.get_resource_mut::<PendingApiRequest>() {
-                        pending.correlation_id = 0;
-                    }
+                    with_command_context(
+                        world,
+                        active,
+                        if deferred { correlation_id } else { None },
+                        |world| {
+                            reflect_event.trigger(world, reflected.as_ref(), &type_reg);
+                        },
+                    );
                     let admission_failed = world
                         .get_resource::<lunco_core::CommandResults>()
                         .and_then(|results| results.get(cmd_id))
@@ -1289,6 +1312,57 @@ mod tests {
         assert_eq!(counter.next_id(), 0);
         assert_eq!(counter.next_id(), 1);
         assert_eq!(counter.next_id(), 2);
+    }
+
+    #[test]
+    fn typed_command_context_isolated_and_restored() {
+        #[derive(Event)]
+        struct Capture;
+        #[derive(Resource, Default)]
+        struct Seen(Vec<(Option<u64>, u64)>);
+        let mut app = App::new();
+        app.init_resource::<Seen>().add_observer(
+            |_: On<Capture>,
+             active: Res<ActiveCommandId>,
+             pending: Res<PendingApiRequest>,
+             mut seen: ResMut<Seen>| {
+                seen.0.push((active.get(), pending.correlation_id));
+            },
+        );
+        let mut outer = ActiveCommandId::default();
+        outer.set(Some(41));
+        app.insert_resource(outer)
+            .insert_resource(PendingApiRequest { correlation_id: 99 });
+        let mut inner = ActiveCommandId::default();
+        inner.set(Some(42));
+        trigger_command_with_context(app.world_mut(), Capture, inner.clone(), None);
+        trigger_command_with_context(app.world_mut(), Capture, inner, Some(100));
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            [(Some(42), 0), (Some(42), 100)]
+        );
+        assert_eq!(app.world().resource::<ActiveCommandId>().get(), Some(41));
+        assert_eq!(
+            app.world().resource::<PendingApiRequest>().correlation_id,
+            99
+        );
+        #[derive(Event)]
+        struct QueueCapture;
+        app.add_observer(|_: On<QueueCapture>, mut commands: Commands| {
+            commands.trigger(Capture);
+        });
+        trigger_command_with_context(
+            app.world_mut(),
+            QueueCapture,
+            ActiveCommandId::default(),
+            None,
+        );
+        app.world_mut().flush();
+        assert_eq!(
+            app.world().resource::<Seen>().0.last(),
+            Some(&(Some(41), 99)),
+            "queued observers retain access to mandatory context resources after scope restoration"
+        );
     }
 
     // A result-reporting command fixture: `Ok` → Succeeded, `Err` → Failed. It is a

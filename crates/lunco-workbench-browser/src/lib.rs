@@ -34,7 +34,7 @@ impl Plugin for TwinBrowserPlugin {
             .register_type::<BrowserQuery>()
             .init_resource::<UnsavedDocs>()
             .add_observer(twin_browser::clear_browser_state_on_twin_closed)
-            .add_systems(Update, drain_browser_actions);
+            .add_systems(Update, (drain_browser_actions, publish_unsaved_documents));
         app.init_resource::<twin_browser::files_section::FileTreeView>()
             .add_systems(Update, twin_browser::files_section::prepare_file_tree)
             .add_observer(twin_browser::files_section::retire_file_tree);
@@ -45,6 +45,31 @@ impl Plugin for TwinBrowserPlugin {
         sections.register(FilesSection::default());
         sections.register(LuncoLibrarySection::default());
     }
+}
+
+/// Project all document domains from the canonical workspace ledger.
+fn publish_unsaved_documents(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut unsaved: ResMut<UnsavedDocs>,
+) {
+    let Some(workspace) = workspace else {
+        unsaved.entries.clear();
+        return;
+    };
+    if !workspace.is_changed() && !unsaved.is_added() {
+        return;
+    }
+    unsaved.entries = workspace
+        .documents()
+        .iter()
+        .filter(|entry| entry.origin.is_writable() || entry.origin.is_untitled())
+        .map(|entry| UnsavedDocEntry {
+            id: entry.id,
+            display_name: entry.origin.display_name(),
+            kind: entry.kind.to_string(),
+            is_unsaved: entry.has_unsaved_changes(),
+        })
+        .collect();
 }
 
 /// Dispatch browser-owned actions after the UI render pass.

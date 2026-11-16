@@ -343,6 +343,8 @@ pub fn create_twin(path: &std::path::Path, name: &str) -> Result<TwinMode, TwinE
 
 /// Create a new Twin folder and asynchronously add it to the workspace.
 /// Empty `path` means "ask the windowed workbench for a folder".
+/// Manifest creation failures return terminal errors and preserve the active
+/// Twin. Success admits the new folder to the asynchronous workspace scan.
 #[Command(default)]
 pub struct CreateTwin {
     /// Target Twin folder. The manifest is created here; missing ancestors are
@@ -359,18 +361,22 @@ fn on_create_twin(
     trigger: On<CreateTwin>,
     mut pending: ResMut<PendingTwinOpens>,
     mut commands: Commands,
-) {
+) -> Result<lunco_command_contracts::Ack, String> {
     let event = trigger.event();
     if event.path.is_empty() {
-        return;
+        return Ok(lunco_command_contracts::Ack::default());
     }
     let path = std::path::PathBuf::from(&event.path);
     match write_new_twin_manifest(&path, &event.name, &event.default_scene) {
-        Ok(()) => spawn_twin_from_path(&path, &mut pending, "CreateTwin", TwinOpenMode::Replace),
+        Ok(()) => {
+            spawn_twin_from_path(&path, &mut pending, "CreateTwin", TwinOpenMode::Replace);
+            Ok(lunco_command_contracts::Ack::default())
+        }
         Err(error) => {
             let detail = format!("CreateTwin failed at `{}`: {error}", path.display());
             warn!("{detail}");
-            commands.trigger(twin_open_failed(detail));
+            commands.trigger(twin_open_failed(detail.clone()));
+            Err(detail)
         }
     }
 }

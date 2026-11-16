@@ -25,6 +25,7 @@ pub mod ui_loader;
 pub use asset_read::read_asset_text;
 pub use asset_sources::{
     TwinAssetMounted, TwinRootsPlugin, register_lunco_asset_sources, register_lunco_asset_types,
+    run_asset_app,
 };
 pub use dataset_artifact::{
     DatasetArtifactPlugin, DatasetTextArtifactReady, ReadDatasetTextArtifact,

@@ -16,6 +16,7 @@ mod native_simulation_host;
 #[cfg(feature = "api-transport")]
 mod offscreen;
 mod render_settings;
+mod render_shutdown;
 mod save_scenario;
 mod ui;
 #[cfg(all(feature = "networking", not(target_family = "wasm")))]
@@ -38,5 +39,7 @@ pub fn window_icon_bytes() -> &'static [u8] {
 }
 
 pub(crate) fn register_save_scenario_command(app: &mut bevy::prelude::App) {
+    use lunco_api::executor::DeferredCommandAppExt;
     save_scenario::register_all_commands(app);
+    app.register_deferred_command::<SaveScenario>();
 }

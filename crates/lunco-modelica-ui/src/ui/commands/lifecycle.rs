@@ -131,23 +131,56 @@ impl PendingTabCloseScopes {
 #[derive(Resource, Default)]
 pub struct AppCloseFlow {
     pub armed: bool,
-    /// Frames to wait after arming before the finalizer may fire.
-    /// Bridges the gap between `request_app_close` pushing tabs into
-    /// `PendingTabCloses` and `render_close_dialogs` actually
-    /// enqueueing the per-tab modals (which only happens in the egui
-    /// pass after the Update schedule). Without this the finalizer
-    /// sees "no pending modals" before any modal exists and concludes
-    /// "user cancelled" prematurely.
-    pub cooldown_frames: u8,
+    /// Exact documents whose save/discard decisions belong to this request.
+    pub documents: std::collections::BTreeSet<DocumentId>,
+    pub cancelled: bool,
 }
 
-/// Entry point invoked by the `Exit` command and by the window-X
-/// interceptor. If no Modelica docs are dirty, fires `AppExit`
-/// immediately. Otherwise, arms the close flow and pushes every dirty
-/// doc's open tabs into the existing per-tab close pipeline — the
-/// `render_close_dialogs` system pops one Save / Don't save / Cancel
-/// modal per tab, just like Dymola.
+fn dirty_documents(world: &World) -> Result<Vec<(DocumentId, String)>, String> {
+    let workspace = world
+        .get_resource::<lunco_workspace::WorkspaceResource>()
+        .ok_or("Workspace document state is unavailable; normal close is held to preserve edits")?;
+    Ok(workspace
+        .documents()
+        .iter()
+        .filter(|entry| entry.has_unsaved_changes())
+        .map(|entry| (entry.id, entry.origin.display_name()))
+        .collect())
+}
+
+pub(super) fn workspace_close_guard(
+    world: &World,
+) -> Option<lunco_workbench_core::app_close::AppCloseBlocker> {
+    let tabs = world.get_resource::<ModelTabs>();
+    let message = match dirty_documents(world) {
+        Err(error) => error,
+        Ok(documents) => {
+            let (_, title) = documents.iter().find(|(doc, _)| {
+                !tabs.is_some_and(|tabs| tabs.iter().any(|(_, view)| view.doc == *doc))
+            })?;
+            format!(
+                "Save or explicitly close unsaved document '{title}' in Twin files before exiting."
+            )
+        }
+    };
+    Some(lunco_workbench_core::app_close::AppCloseBlocker {
+        message,
+        reveal: |world| {
+            world.trigger(lunco_workbench_core::commands::FocusPanel {
+                id: lunco_workbench_browser::TWIN_BROWSER_PANEL_ID
+                    .as_str()
+                    .into(),
+            })
+        },
+    })
+}
+
+/// Admit normal application close after registered guards, then use the owned
+/// model-view close prompts. The final boundary rechecks all document domains.
 pub fn request_app_close(world: &mut World) {
+    if block_app_close(world) {
+        return;
+    }
     if world
         .get_resource::<AppCloseFlow>()
         .map(|f| f.armed)
@@ -157,51 +190,27 @@ pub fn request_app_close(world: &mut World) {
         // sequential prompt continue. Avoid re-queueing tabs.
         return;
     }
-    // Cross-domain dirty list — `UnsavedDocs` is the shared bus every
-    // domain registry pushes into (Modelica today; USD/Python/etc.
-    // when they land). Reading from it instead of
-    // `ModelicaDocuments` directly means future domains' dirty
-    // docs are automatically picked up by the close prompt with no
-    // change here.
-    let dirty_tabs: Vec<(DocumentId, u64)> = {
-        let Some(unsaved) = world.get_resource::<lunco_workbench_browser::UnsavedDocs>() else {
-            fire_app_exit(world);
-            return;
-        };
-        let dirty_ids: Vec<DocumentId> = unsaved
-            .entries
-            .iter()
-            .filter(|e| e.is_unsaved)
-            .map(|e| e.id)
-            .collect();
-        if dirty_ids.is_empty() {
-            fire_app_exit(world);
+    let dirty = match dirty_documents(world) {
+        Ok(documents) => documents,
+        Err(error) => {
+            bevy::log::warn!("[AppClose] {error}");
             return;
         }
-        // Find each dirty doc's open tab(s). ModelTabs is Modelica's
-        // tab table — when other domains add their own InstancePanel
-        // tab tables, extend this to consult them too (or generalise
-        // to a workbench-level "find tab(s) for doc id" registry).
-        // Synthetic instance=0 is the fallback when no tab is open
-        // for the dirty doc (registry-only edits).
-        let tabs = world.get_resource::<crate::model_tabs::ModelTabs>();
-        let mut out = Vec::new();
-        for doc_id in dirty_ids {
-            let mut any = false;
-            if let Some(tabs) = tabs {
-                for (tab_id, state) in tabs.iter() {
-                    if state.doc == doc_id {
-                        out.push((state.doc, tab_id));
-                        any = true;
-                    }
-                }
-            }
-            if !any {
-                out.push((doc_id, 0));
-            }
-        }
-        out
     };
+    let dirty_tabs: Vec<(DocumentId, u64)> = world
+        .get_resource::<ModelTabs>()
+        .map(|tabs| {
+            dirty
+                .iter()
+                .filter_map(|(doc, _)| {
+                    tabs.iter()
+                        .filter(|(_, view)| view.doc == *doc)
+                        .min_by_key(|(tab, _)| *tab)
+                        .map(|(tab, _)| (*doc, tab))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     if dirty_tabs.is_empty() {
         fire_app_exit(world);
         return;
@@ -212,7 +221,8 @@ pub fn request_app_close(world: &mut World) {
     );
     if let Some(mut flow) = world.get_resource_mut::<AppCloseFlow>() {
         flow.armed = true;
-        flow.cooldown_frames = 4;
+        flow.cancelled = false;
+        flow.documents = dirty_tabs.iter().map(|(doc, _)| *doc).collect();
     }
     // Push tabs into the workbench's per-tab close queue. The existing
     // `drain_pending_tab_closes` system will detect dirty docs and
@@ -229,7 +239,47 @@ pub fn request_app_close(world: &mut World) {
     }
 }
 
+fn block_app_close(world: &mut World) -> bool {
+    if let Some(blocker) = world
+        .get_resource::<lunco_workbench_core::app_close::AppCloseGuards>()
+        .and_then(|guards| guards.check(world))
+    {
+        bevy::log::warn!("[AppClose] unapplied editor changes: {}", blocker.message);
+        world.trigger(lunco_telemetry_core::TelemetryEvent {
+            name: "app-close-draft-blocked".into(),
+            source: 0,
+            severity: lunco_telemetry_core::Severity::Warning,
+            data: lunco_telemetry_core::TelemetryValue::String(blocker.message),
+            timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
+        });
+        (blocker.reveal)(world);
+        if let Some(mut flow) = world.get_resource_mut::<AppCloseFlow>()
+            && flow.armed
+        {
+            flow.cancelled = true;
+        }
+        return true;
+    }
+    false
+}
+
 fn fire_app_exit(world: &mut World) {
+    if block_app_close(world) {
+        return;
+    }
+    match dirty_documents(world) {
+        Ok(documents) if documents.is_empty() => {}
+        Ok(_) => {
+            request_app_close(world);
+            return;
+        }
+        Err(error) => {
+            bevy::log::warn!("[AppClose] {error}");
+            return;
+        }
+    }
     cancel_inflight_runs(world);
     if let Some(mut messages) =
         world.get_resource_mut::<bevy::ecs::message::Messages<bevy::app::AppExit>>()
@@ -275,30 +325,48 @@ pub fn on_window_close_requested(
     });
 }
 
-/// Finalizer: when the close flow is armed and every per-tab modal
-/// has resolved (either Save completed or Don't-save closed the tab),
-/// fires `AppExit`. If the user picked Cancel anywhere (dirty docs
-/// still exist after all modals settle), disarms and stays open.
+/// Finalizer: after every captured document's Save/Don't-save decision,
+/// wait for exact document retirement before `AppExit`. Explicit cancellation
+/// or a failed save disarms the request and keeps its remaining documents open.
 pub fn finalize_app_close(
     flow: Option<ResMut<AppCloseFlow>>,
-    close_dialogs: Option<Res<CloseDialogState>>,
-    pending_save_close: Option<Res<PendingCloseAfterSave>>,
+    close_dialogs: Option<ResMut<CloseDialogState>>,
+    pending_save_close: Option<ResMut<PendingCloseAfterSave>>,
+    modals: Option<ResMut<lunco_ui::modal::ModalQueue>>,
     pending_tab_closes: Option<Res<lunco_workbench_core::tabs::PendingTabCloses>>,
-    registry: Option<Res<ModelicaDocuments>>,
-    pending_runs: Option<Res<lunco_modelica_runner::PendingHandles>>,
-    mut exit_events: bevy::ecs::message::MessageWriter<bevy::app::AppExit>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut commands: Commands,
 ) {
     let Some(mut flow) = flow else { return };
     if !flow.armed {
         return;
     }
-    // Cooldown: the modals don't exist yet on the frame the flow is
-    // armed (request_app_close → PendingTabCloses → drained next frame
-    // → render_close_dialogs enqueues modal in egui pass). Decrement
-    // and skip until expired so we don't conclude "no pending modals
-    // ⇒ user cancelled" before any modal renders.
-    if flow.cooldown_frames > 0 {
-        flow.cooldown_frames -= 1;
+    if flow.cancelled {
+        let mut modals = modals;
+        if let Some(mut dialogs) = close_dialogs {
+            dialogs
+                .pending
+                .retain(|(doc, _)| !flow.documents.contains(doc));
+            let cancelled: Vec<_> = dialogs
+                .requested
+                .keys()
+                .filter(|(doc, _)| flow.documents.contains(doc))
+                .copied()
+                .collect();
+            for key in cancelled {
+                if let Some(id) = dialogs.requested.remove(&key)
+                    && let Some(modals) = modals.as_mut()
+                {
+                    modals.cancel(id);
+                }
+            }
+        }
+        if let Some(mut pending) = pending_save_close {
+            pending.docs.retain(|doc, _| !flow.documents.contains(doc));
+        }
+        flow.armed = false;
+        flow.documents.clear();
+        bevy::log::info!("[AppClose] cancelled — staying open");
         return;
     }
     // Wait for the full pipeline to drain:
@@ -318,36 +386,23 @@ pub fn finalize_app_close(
     if tabs_pending || !modals_settled || !saves_done {
         return;
     }
-    // All prompts processed. Anything still dirty means the user
-    // cancelled at least one — abort the close.
-    let any_dirty = registry
-        .as_ref()
-        .map(|r| {
-            r.iter().any(|(_, host)| {
-                let d = host.document();
-                d.is_dirty() && !d.is_read_only()
-            })
-        })
-        .unwrap_or(false);
-    if any_dirty {
-        bevy::log::info!("[AppClose] cancelled — staying open");
-        flow.armed = false;
+    let Some(workspace) = workspace else {
+        bevy::log::warn!("[AppClose] workspace document state is unavailable; close held");
+        return;
+    };
+    // A decision is complete only when its document's close has committed.
+    // Modal disappearance and a save acknowledgement are not retirement.
+    if flow
+        .documents
+        .iter()
+        .any(|doc| workspace.document(*doc).is_some())
+    {
         return;
     }
     bevy::log::info!("[AppClose] all prompts resolved — exiting");
     flow.armed = false;
-    if let Some(pending) = pending_runs.as_ref() {
-        if !pending.0.is_empty() {
-            bevy::log::info!(
-                "[AppClose] cancelling {} in-flight run(s) before exit",
-                pending.0.len()
-            );
-            for handle in &pending.0 {
-                handle.cancel();
-            }
-        }
-    }
-    exit_events.write(bevy::app::AppExit::Success);
+    flow.documents.clear();
+    commands.queue(|world: &mut World| fire_app_exit(world));
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1394,15 +1449,70 @@ fn retire_editor_document_work(
     });
 }
 
+fn cancel_pending_save_close(
+    doc: DocumentId,
+    pending: &mut PendingCloseAfterSave,
+    flow: &mut AppCloseFlow,
+) {
+    if !pending.take(doc).is_empty() && flow.armed && flow.documents.contains(&doc) {
+        flow.cancelled = true;
+    }
+}
+
+pub(super) fn on_close_save_failed(
+    event: On<lunco_doc_bevy::DocumentSaveFailed>,
+    mut pending: ResMut<PendingCloseAfterSave>,
+    mut flow: ResMut<AppCloseFlow>,
+) {
+    cancel_pending_save_close(event.doc, &mut pending, &mut flow);
+}
+
+pub(super) fn on_close_picker_cancelled(
+    event: On<lunco_workbench_file_dialog::PickCancelled>,
+    mut pending: ResMut<PendingCloseAfterSave>,
+    mut flow: ResMut<AppCloseFlow>,
+) {
+    if let lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc) = event.follow_up {
+        cancel_pending_save_close(doc, &mut pending, &mut flow);
+    }
+}
+
+pub(super) fn on_close_picker_unsupported(
+    event: On<lunco_workbench_file_dialog::PickUnsupported>,
+    pickers: Query<&lunco_workbench_file_dialog::PickInFlight>,
+    mut pending: ResMut<PendingCloseAfterSave>,
+    mut flow: ResMut<AppCloseFlow>,
+) {
+    if let Ok(picker) = pickers.get(event.request)
+        && let lunco_workbench_file_dialog::PickFollowUp::SaveAs(doc) = picker.follow_up
+    {
+        cancel_pending_save_close(doc, &mut pending, &mut flow);
+    }
+}
+
 pub fn finish_close_after_save(
     trigger: On<DocumentSaved>,
     pending: Option<ResMut<PendingCloseAfterSave>>,
+    flow: Option<Res<AppCloseFlow>>,
     mut commands: Commands,
 ) {
     let Some(mut pending) = pending else { return };
     let doc = trigger.event().doc;
     let tab_ids = pending.take(doc);
     if tab_ids.is_empty() {
+        return;
+    }
+    if flow
+        .as_ref()
+        .is_some_and(|flow| flow.cancelled && flow.documents.contains(&doc))
+    {
+        return;
+    }
+    if flow
+        .as_ref()
+        .is_some_and(|flow| flow.armed && flow.documents.contains(&doc))
+    {
+        commands.trigger(CloseDocument { doc_id: doc });
         return;
     }
     commands.queue(move |world: &mut World| {
@@ -1552,6 +1662,7 @@ const CANCEL_LABEL: &str = "Cancel";
 
 pub fn render_close_dialogs(
     registry: Res<ModelicaDocuments>,
+    mut flow: ResMut<AppCloseFlow>,
     mut dialogs: ResMut<CloseDialogState>,
     mut modals: ResMut<lunco_ui::modal::ModalQueue>,
     mut pending_save_close: Option<ResMut<PendingCloseAfterSave>>,
@@ -1644,6 +1755,10 @@ pub fn render_close_dialogs(
                 commands.trigger(lunco_doc_bevy::SaveDocument { doc_id: doc });
             }
             DialogAction::DontSave => {
+                if flow.armed && flow.documents.contains(&doc) {
+                    commands.trigger(CloseDocument { doc_id: doc });
+                    continue;
+                }
                 let tab = originating_tab;
                 commands.queue(move |world: &mut World| {
                     close_model_tab(world, tab);
@@ -1653,7 +1768,11 @@ pub fn render_close_dialogs(
                     }
                 });
             }
-            DialogAction::Cancel => {}
+            DialogAction::Cancel => {
+                if flow.armed && flow.documents.contains(&doc) {
+                    flow.cancelled = true;
+                }
+            }
         }
     }
     let alive: std::collections::HashSet<(DocumentId, u64)> = survivors.iter().copied().collect();
@@ -1925,6 +2044,105 @@ mod lifecycle_retirement_tests {
     use super::*;
 
     #[test]
+    fn save_close_cancellation_is_document_scoped() {
+        use lunco_workbench_file_dialog::{
+            PickCancelled, PickFollowUp, PickInFlight, PickUnsupported,
+        };
+        #[derive(Resource, Default)]
+        struct Closed(Vec<DocumentId>);
+        let mut app = App::new();
+        let doc = DocumentId::fresh();
+        let other = DocumentId::fresh();
+        app.init_resource::<Closed>()
+            .init_resource::<PendingCloseAfterSave>()
+            .insert_resource(AppCloseFlow {
+                armed: true,
+                documents: [doc].into(),
+                cancelled: false,
+            })
+            .add_observer(on_close_save_failed)
+            .add_observer(on_close_picker_cancelled)
+            .add_observer(on_close_picker_unsupported)
+            .add_observer(finish_close_after_save)
+            .add_observer(|event: On<CloseDocument>, mut closed: ResMut<Closed>| {
+                closed.0.push(event.doc_id)
+            });
+        for action in 0..3 {
+            app.world_mut().resource_mut::<AppCloseFlow>().cancelled = false;
+            app.world_mut()
+                .resource_mut::<PendingCloseAfterSave>()
+                .queue(doc, 1);
+            app.world_mut()
+                .resource_mut::<PendingCloseAfterSave>()
+                .queue(other, 2);
+            let request = app
+                .world_mut()
+                .spawn(PickInFlight {
+                    follow_up: PickFollowUp::SaveAs(doc),
+                })
+                .id();
+            app.world_mut().trigger(PickCancelled {
+                request,
+                follow_up: PickFollowUp::SaveAs(other),
+            });
+            assert!(!app.world().resource::<AppCloseFlow>().cancelled);
+            assert!(
+                app.world_mut()
+                    .resource_mut::<PendingCloseAfterSave>()
+                    .take(other)
+                    .is_empty()
+            );
+            app.world_mut()
+                .resource_mut::<PendingCloseAfterSave>()
+                .queue(other, 2);
+            match action {
+                0 => app.world_mut().trigger(lunco_doc_bevy::DocumentSaveFailed {
+                    doc,
+                    message: "write failed".into(),
+                }),
+                1 => app.world_mut().trigger(PickCancelled {
+                    request,
+                    follow_up: PickFollowUp::SaveAs(doc),
+                }),
+                _ => app.world_mut().trigger(PickUnsupported {
+                    request,
+                    reason: "unavailable".into(),
+                }),
+            }
+            assert!(app.world().resource::<AppCloseFlow>().cancelled);
+            assert!(
+                app.world_mut()
+                    .resource_mut::<PendingCloseAfterSave>()
+                    .take(doc)
+                    .is_empty()
+            );
+            assert_eq!(
+                app.world_mut()
+                    .resource_mut::<PendingCloseAfterSave>()
+                    .take(other),
+                vec![2]
+            );
+            app.world_mut().despawn(request);
+        }
+        app.world_mut()
+            .resource_mut::<PendingCloseAfterSave>()
+            .queue(doc, 1);
+        app.world_mut().trigger(DocumentSaved::local(doc));
+        app.world_mut().flush();
+        assert!(
+            app.world().resource::<Closed>().0.is_empty(),
+            "a save completing after Cancel cannot close its document"
+        );
+        app.world_mut().resource_mut::<AppCloseFlow>().cancelled = false;
+        app.world_mut()
+            .resource_mut::<PendingCloseAfterSave>()
+            .queue(doc, 1);
+        app.world_mut().trigger(DocumentSaved::local(doc));
+        app.world_mut().flush();
+        assert_eq!(app.world().resource::<Closed>().0, vec![doc]);
+    }
+
+    #[test]
     fn lifecycle_retirement_cancels_preparation_and_modal_owners() {
         use crate::ui::document_openings::{DocumentOpenings, OpeningState};
         use lunco_status_core::status_bus::{BusyScope, StatusBus};
@@ -1981,6 +2199,7 @@ mod lifecycle_retirement_tests {
         app.init_resource::<ModelicaDocuments>()
             .insert_resource(dialogs)
             .insert_resource(modals)
+            .init_resource::<AppCloseFlow>()
             .add_systems(Update, render_close_dialogs);
         app.update();
         assert!(!app.world().resource::<ModalQueue>().is_active());

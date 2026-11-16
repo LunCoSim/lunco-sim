@@ -207,6 +207,14 @@ impl DocumentSaved {
     }
 }
 
+/// A document save attempt failed without committing a new persisted origin.
+/// Close coordinators retain the document and release their exact pending save.
+#[derive(Event, Clone, Debug)]
+pub struct DocumentSaveFailed {
+    pub doc: DocumentId,
+    pub message: String,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Commands — generic document operations
 // ─────────────────────────────────────────────────────────────────────────────

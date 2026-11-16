@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 lunco-assets-core = { path = "../lunco-assets-core" }
+lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 openusd = { workspace = true }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }

@@ -13,7 +13,7 @@ struct AccessibleControls(std::collections::HashMap<Entity, (String, bool)>);
 impl lunco_core::SceneResource for AccessibleControls {}
 
 #[derive(Event)]
-struct ActivateControl(Entity);
+pub(super) struct ActivateControl(pub(super) Entity);
 
 fn surface_active(
     entity: Entity,
@@ -32,7 +32,7 @@ fn surface_active(
     }
 }
 
-fn menu_activate(
+fn activate_control(
     event: On<ActivateControl>,
     controls: Query<(
         &RuntimeUiPressCallbacks,
@@ -58,14 +58,7 @@ fn menu_activate(
 fn key_activate(
     mut event: On<FocusedInput<KeyboardInput>>,
     mut contexts: bevy_egui::EguiContexts,
-    controls: Query<(
-        &RuntimeUiPressCallbacks,
-        &InheritedVisibility,
-        Has<bevy::ui::InteractionDisabled>,
-    )>,
-    roots: Query<(&RuntimeUiSurface, &Visibility)>,
-    parents: Query<&ChildOf>,
-    bindings: Res<FunctionBindings>,
+    controls: Query<(), With<RuntimeUiPressCallbacks>>,
     mut commands: Commands,
 ) {
     let input = &event.input;
@@ -78,19 +71,12 @@ fn key_activate(
     if input.repeat
         || input.state != ButtonState::Pressed
         || !matches!(input.key_code, KeyCode::Enter | KeyCode::Space)
+        || !controls.contains(event.focused_entity)
     {
         return;
     }
-    let Ok((callbacks, visible, disabled)) = controls.get(event.focused_entity) else {
-        return;
-    };
-    if disabled || !visible.get() || !surface_active(event.focused_entity, &roots, &parents) {
-        return;
-    }
     event.propagate(false);
-    for callback in &callbacks.0 {
-        bindings.maybe_run(callback, event.focused_entity, &mut commands);
-    }
+    commands.trigger(ActivateControl(event.focused_entity));
 }
 
 fn assistive_activate(
@@ -103,7 +89,6 @@ fn assistive_activate(
     )>,
     roots: Query<(&RuntimeUiSurface, &Visibility)>,
     parents: Query<&ChildOf>,
-    bindings: Res<FunctionBindings>,
     mut focus: ResMut<InputFocus>,
     mut commands: Commands,
 ) {
@@ -115,7 +100,7 @@ fn assistive_activate(
         let Some(entity) = Entity::try_from_bits(event.target_node.0) else {
             continue;
         };
-        let Ok((callbacks, visible, disabled)) = controls.get(entity) else {
+        let Ok((_callbacks, visible, disabled)) = controls.get(entity) else {
             continue;
         };
         if disabled || !visible.get() || !surface_active(entity, &roots, &parents) {
@@ -123,11 +108,7 @@ fn assistive_activate(
         }
         match event.action {
             accesskit::Action::Focus => focus.set(entity, FocusCause::Navigated),
-            accesskit::Action::Click => {
-                for callback in &callbacks.0 {
-                    bindings.maybe_run(callback, entity, &mut commands);
-                }
-            }
+            accesskit::Action::Click => commands.trigger(ActivateControl(entity)),
             _ => {}
         }
     }
@@ -165,29 +146,64 @@ fn sync_nodes(
             Added<bevy::ui::InteractionDisabled>,
         ),
     >,
-    mut removed_disabled: RemovedComponents<bevy::ui::InteractionDisabled>,
+    changed_hierarchy: Query<(), Or<(Changed<Children>, Changed<ChildOf>)>>,
+    removed: (
+        RemovedComponents<bevy::ui::InteractionDisabled>,
+        RemovedComponents<RuntimeUiPressCallbacks>,
+        RemovedComponents<Tags>,
+        RemovedComponents<Children>,
+    ),
 ) {
+    let (mut removed_disabled, mut removed_callbacks, mut removed_tags, mut removed_children) =
+        removed;
     for root in &new_roots {
         commands
             .entity(root)
             .try_insert(bevy::input_focus::tab_navigation::TabGroup::default());
     }
+    for entity in removed_callbacks.read() {
+        commands
+            .entity(entity)
+            .try_remove::<AccessibilityNode>()
+            .try_remove::<bevy::input_focus::tab_navigation::TabIndex>();
+        catalogue.0.remove(&entity);
+    }
     catalogue
         .0
         .retain(|entity, _| controls.get(*entity).is_ok());
+    let disabled_removed = removed_disabled.read().count() != 0;
+    let tags_removed = removed_tags.read().count() != 0;
+    let children_removed = removed_children.read().count() != 0;
     let content_changed = !changed_surfaces.is_empty()
         || !changed_text.is_empty()
         || !changed_tags.is_empty()
         || !changed_disabled.is_empty()
-        || removed_disabled.read().next().is_some();
+        || !changed_hierarchy.is_empty()
+        || disabled_removed
+        || tags_removed
+        || children_removed;
     for (entity, callbacks, tags, node, visible, disabled) in &controls {
         let active = visible.get() && surface_active(entity, &roots, &parents);
         if node.is_some()
-            && (!active || catalogue.0.contains_key(&entity))
+            && active
+            && catalogue
+                .0
+                .get(&entity)
+                .is_some_and(|(_, enabled)| *enabled == !disabled)
             && !callbacks.is_changed()
             && !visible.is_changed()
             && !content_changed
         {
+            continue;
+        }
+        if !active {
+            catalogue.0.remove(&entity);
+            if node.is_some() {
+                commands
+                    .entity(entity)
+                    .try_remove::<AccessibilityNode>()
+                    .try_remove::<bevy::input_focus::tab_navigation::TabIndex>();
+            }
             continue;
         }
         let label = tags
@@ -232,7 +248,11 @@ fn sync_nodes(
         if enabled {
             commands
                 .entity(entity)
-                .try_insert(bevy::input_focus::tab_navigation::TabIndex(0));
+                .try_insert(bevy::input_focus::tab_navigation::TabIndex(
+                    tags.and_then(|tags| tags.get("ui_tab_index"))
+                        .and_then(|value| value.parse::<i32>().ok())
+                        .unwrap_or(0),
+                ));
         } else {
             commands
                 .entity(entity)
@@ -287,7 +307,7 @@ fn show_focus(
 
 pub(super) fn install(app: &mut App) {
     app.init_scene_resource::<AccessibleControls>()
-        .add_observer(menu_activate)
+        .add_observer(activate_control)
         .init_resource::<lunco_workbench_core::WorkbenchMenuRegistry>();
     app.world_mut()
         .resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
@@ -342,7 +362,7 @@ mod tests {
         app.init_resource::<FunctionBindings>()
             .init_resource::<Invocations>()
             .init_resource::<AccessibleControls>()
-            .add_observer(menu_activate)
+            .add_observer(activate_control)
             .add_systems(Update, sync_nodes);
         let callback = app.world_mut().register_system(
             |In(entity): In<Entity>, mut calls: ResMut<Invocations>| {
@@ -416,6 +436,87 @@ mod tests {
             .interactive = false;
         app.world_mut().trigger(ActivateControl(control));
         app.world_mut().flush();
+        app.world_mut()
+            .get_mut::<RuntimeUiSurface>(root)
+            .unwrap()
+            .interactive = true;
+        let mut tags = Tags::default();
+        tags.insert("ui_tab_index".into(), "7".into());
+        tags.insert("aria_label".into(), "Action".into());
+        app.world_mut().entity_mut(control).insert(tags);
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(control)
+                .unwrap()
+                .0,
+            7
+        );
+        assert_eq!(
+            app.world().resource::<AccessibleControls>().0[&control].0,
+            "Action"
+        );
+        app.world_mut().entity_mut(control).remove::<Tags>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<AccessibleControls>().0[&control].0,
+            ""
+        );
+        let label = app
+            .world_mut()
+            .spawn((Text::new("Child label"), ChildOf(control)))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<AccessibleControls>().0[&control].0,
+            "Child label"
+        );
+        app.world_mut().entity_mut(label).remove::<ChildOf>();
+        app.update();
+        assert_eq!(
+            app.world().resource::<AccessibleControls>().0[&control].0,
+            ""
+        );
+        app.world_mut().entity_mut(control).remove::<ChildOf>();
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<AccessibleControls>()
+                .0
+                .contains_key(&control)
+        );
+        assert!(app.world().get::<AccessibilityNode>(control).is_none());
+        assert!(
+            app.world()
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(control)
+                .is_none()
+        );
+        app.world_mut().trigger(ActivateControl(control));
+        app.world_mut().flush();
+        app.world_mut().entity_mut(control).insert(ChildOf(root));
+        app.update();
+        assert!(
+            app.world()
+                .resource::<AccessibleControls>()
+                .0
+                .contains_key(&control)
+        );
+        app.world_mut()
+            .entity_mut(control)
+            .remove::<RuntimeUiPressCallbacks>();
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<AccessibleControls>()
+                .0
+                .contains_key(&control)
+        );
+        assert!(app.world().get::<AccessibilityNode>(control).is_none());
+        assert!(
+            app.world()
+                .get::<bevy::input_focus::tab_navigation::TabIndex>(control)
+                .is_none()
+        );
         app.world_mut().entity_mut(control).despawn();
         app.world_mut().trigger(ActivateControl(control));
         app.world_mut().flush();

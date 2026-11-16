@@ -49,6 +49,13 @@ README defines the stable taxonomy.
 
 ## Architecture boundary
 
+Native asset-backed entry points use `lunco-assets-runtime::run_asset_app`.
+The asset owner retains source-event receivers through App teardown and drains
+them until native watcher producers retire. Keep this lifetime outside the
+runner; do not disable hot reload, add a timed shutdown delay, or copy a watcher
+implementation into the application. Browser runner lifetime stays asynchronous.
+
+
 Keep native filesystem paths in their platform spelling. Use the storage
 owner's `file_path_to_uri` for URI transport, and slash-normalize only logical
 asset paths after stripping their native root. See the

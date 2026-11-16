@@ -183,7 +183,7 @@ fn main() {
             .add_systems(Update, setup_web_workbench);
     }
 
-    app.run();
+    lunco_assets_runtime::run_asset_app(&mut app);
 }
 
 /// Base [`DefaultPlugins`] for the chosen mode. The window / render / winit

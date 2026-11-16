@@ -283,6 +283,41 @@ pub(crate) struct SysmlRequirementsState {
     editor: Option<SourceEditor>,
 }
 
+pub(crate) fn close_guard(
+    world: &bevy::prelude::World,
+) -> Option<lunco_workbench_core::app_close::AppCloseBlocker> {
+    let reveal = |world: &mut bevy::prelude::World| {
+        world.trigger(FocusPanel {
+            id: SYSML_REQUIREMENTS_PANEL_ID.as_str().into(),
+        })
+    };
+    let Some(state) = world.get_resource::<SysmlRequirementsState>() else {
+        return Some(lunco_workbench_core::app_close::AppCloseBlocker {
+            message: "SysML editor state is unavailable; normal close is held to preserve drafts."
+                .into(),
+            reveal,
+        });
+    };
+    let editor = state.editor.as_ref()?;
+    if !editor.has_local_draft() {
+        return None;
+    }
+    let Some(documents) = world.get_resource::<DocumentRegistry<SysmlDocument>>() else {
+        return Some(lunco_workbench_core::app_close::AppCloseBlocker {
+            message:
+                "SysML document state is unavailable; normal close is held to preserve drafts."
+                    .into(),
+            reveal,
+        });
+    };
+    documents.host(editor.doc_id?)?;
+    Some(lunco_workbench_core::app_close::AppCloseBlocker {
+        message: "SysML source has unsaved draft edits. Save or discard the draft before closing."
+            .into(),
+        reveal,
+    })
+}
+
 const SYSML_REQUIREMENTS_PANEL_ID: PanelId = PanelId("sysml_requirements");
 
 impl Panel for SysmlRequirementsPanel {
@@ -2985,7 +3020,11 @@ impl SysmlRequirementsState {
             if editor.twin_id != view_model.twin_id {
                 ui.colored_label(theme.tokens.warning, "from another open Twin");
             }
-            if ui.button("Close editor").clicked() && !editor.has_local_draft() {
+            if ui
+                .add_enabled(!editor.has_local_draft(), egui::Button::new("Close editor"))
+                .on_disabled_hover_text("Save or discard this draft before closing the editor")
+                .clicked()
+            {
                 close = true;
             }
         });

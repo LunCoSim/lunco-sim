@@ -371,7 +371,7 @@ pub fn run_headless() -> lunco_luncosim_core::AppExit {
     }
 
     app.add_plugins(lunco_luncosim_simulation::LunCoSimHeadlessPlugin { execution_mode });
-    app.run()
+    lunco_assets_runtime::run_asset_app(&mut app)
 }
 
 /// The USD type name of a policy prim.

@@ -1054,3 +1054,27 @@ full table. Verify the source action opens the indexed SysML document.
 SysML source navigation reuses its canonical editor in a resizable window. Keep
 retained source drafts in `SysmlRequirementsState` and retire them on `TwinClosed`,
 including hidden panels. Preserve the canonical typed apply/save path.
+
+Shader Create/Import returns a terminal result with a stable `source_uri`; use
+that result before applying it. Existing shader files reject creation/import
+without replacement. Behaviour Editor keeps Apply pending until the USD owner
+completes `SaveScenario`. Test these negative and successful results with
+`scripts/api/test_ui_review_followup.py --port <free-port>`; its rapid exits also
+require a clean process exit. A dirty SysML source draft disables Close editor
+until Save or Discard resolves it. Runtime press admission is shared across
+pointer, keyboard, menu and assistive clicks; preserve authored tab order and
+retire nodes/tab stops when their callback or surface lease ends.
+
+Unapplied editor buffers register application close checks through
+`lunco-workbench-core::app_close::AppCloseGuards`. Read current owner resources
+and exact source leases at admission; do not copy draft text into a second dirty
+registry. Return a warning and typed reveal callback until Run/Revert or
+Save/Discard resolves the draft. Normal close and final dirty-document exit use
+the same guard consumer. Retired scene/Twin leases must not block closing.
+
+Application close captures exact dirty document IDs and prompts once per
+document. Wait for document retirement, not a fixed number of frames. Save
+failure and Save-As picker cancellation must release that document's pending
+close; Cancel cancels the remaining request. Test the native Cancel and Don't
+save actions through `scripts/api/test_runtime_accessibility.py --port <free-port>`.
+The Twin files dirty projection reads all document kinds from Workspace.

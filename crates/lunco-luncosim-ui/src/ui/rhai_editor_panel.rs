@@ -23,6 +23,7 @@ struct BehaviourDraft {
     loaded_key: Option<(u64, u64)>,
     dirty: bool,
     pending: Option<(u64, String)>,
+    pending_apply: Option<u64>,
     error: Option<String>,
 }
 
@@ -51,31 +52,44 @@ pub(crate) fn apply_editor_action(action: On<BehaviourEditorAction>, mut command
         let id = world
             .resource_mut::<lunco_api::executor::ApiIdCounter>()
             .next_id();
-        let previous = world.resource::<lunco_core::ActiveCommandId>().clone();
-        world
-            .resource_mut::<lunco_core::ActiveCommandId>()
-            .set_with_origin(
-                id,
-                Some(lunco_core::CommandOrigin::LocalUser {
-                    session_id: lunco_command_contracts::SessionId::LOCAL,
-                }),
-            );
+        let mut active = lunco_core::ActiveCommandId::default();
+        active.set_with_origin(
+            id,
+            Some(lunco_core::CommandOrigin::LocalUser {
+                session_id: lunco_command_contracts::SessionId::LOCAL,
+            }),
+        );
         let submitted = source.clone();
         if let Some(source) = source {
-            world.trigger(RunScenario {
-                target,
-                source,
-                params: Default::default(),
-                reload_policy: ScenarioReloadPolicy::Retain,
-            });
+            lunco_api::executor::trigger_command_with_context(
+                world,
+                RunScenario {
+                    target,
+                    source,
+                    params: Default::default(),
+                    reload_policy: ScenarioReloadPolicy::Retain,
+                },
+                active,
+                None,
+            );
         } else {
-            world.trigger(SaveScenario { target });
+            lunco_api::executor::trigger_command_with_context(
+                world,
+                SaveScenario { target },
+                active,
+                None,
+            );
         }
-        world.insert_resource(previous);
+        let applying = submitted.is_none()
+            && matches!(
+                world.resource::<lunco_core::CommandResults>().get(id),
+                Some(lunco_core::CommandOutcome::Pending)
+            );
         let error = match world.resource::<lunco_core::CommandResults>().get(id) {
             Some(lunco_core::CommandOutcome::Failed(message)) => Some(message.clone()),
             Some(lunco_core::CommandOutcome::Rejected(reason)) => Some(reason.to_string()),
             Some(lunco_core::CommandOutcome::Succeeded(_)) => None,
+            Some(lunco_core::CommandOutcome::Pending) if applying => None,
             _ => Some("Behaviour command did not report its admission result".into()),
         };
         if let Some(draft) = world
@@ -84,6 +98,9 @@ pub(crate) fn apply_editor_action(action: On<BehaviourEditorAction>, mut command
             .get_mut(&(target, document))
         {
             draft.error = error;
+            if applying {
+                draft.pending_apply = Some(id);
+            }
             if let Some(source) = submitted.filter(|_| draft.error.is_none()) {
                 draft.pending = Some((revision, source));
             }
@@ -104,22 +121,83 @@ pub(crate) struct RhaiEditorVm {
 
 impl lunco_core::SceneResource for RhaiEditorVm {}
 
+fn live_draft_lease(
+    model: Option<&ScriptedModel>,
+    doc: u64,
+    registry: Option<&ScriptRegistry>,
+) -> bool {
+    model.is_some_and(|model| model.document_id == Some(doc))
+        && registry.is_some_and(|registry| registry.documents.contains_key(&DocumentId::new(doc)))
+}
+
+fn pending_draft_entity(world: &World) -> Option<Entity> {
+    world
+        .get_resource::<RhaiEditorVm>()?
+        .drafts
+        .iter()
+        .find_map(|((entity, doc), draft)| {
+            ((draft.dirty || draft.pending_apply.is_some())
+                && live_draft_lease(
+                    world.get::<ScriptedModel>(*entity),
+                    *doc,
+                    world.get_resource::<ScriptRegistry>(),
+                ))
+            .then_some(*entity)
+        })
+}
+
+pub(crate) fn close_guard(
+    world: &World,
+) -> Option<lunco_workbench_core::app_close::AppCloseBlocker> {
+    let unavailable =
+        !world.contains_resource::<RhaiEditorVm>() || !world.contains_resource::<ScriptRegistry>();
+    if !unavailable {
+        pending_draft_entity(world)?;
+    }
+    Some(lunco_workbench_core::app_close::AppCloseBlocker {
+        message: if unavailable {
+            "Behaviour Editor state is unavailable; normal close is held to preserve drafts."
+        } else {
+            "Behaviour Editor has an unapplied draft or pending Apply. Run, revert, or finish applying it before closing."
+        }.into(),
+        reveal: |world| {
+            if let Some(target) = pending_draft_entity(world) {
+                world.trigger(lunco_scene_selection::SelectEntityTarget {
+                    target, intent: lunco_scene_selection::SelectionIntent::Replace,
+                });
+            }
+            world.trigger(lunco_workbench_core::commands::FocusPanel { id: "rhai_editor".into() });
+        },
+    })
+}
+
 /// Refresh from the owning script/diagnostics registries without discarding local drafts.
 pub(crate) fn produce_rhai_editor_vm(
     selected: Option<Res<SelectedEntities>>,
     scripted: Query<&ScriptedModel>,
     registry: Option<Res<ScriptRegistry>>,
     diagnostics: Option<Res<DocumentDiagnostics>>,
+    results: Res<lunco_core::CommandResults>,
     mut vm: ResMut<RhaiEditorVm>,
 ) {
     vm.drafts.retain(|(entity, doc), _| {
-        scripted
-            .get(*entity)
-            .is_ok_and(|model| model.document_id == Some(*doc))
-            && registry
-                .as_deref()
-                .is_some_and(|registry| registry.documents.contains_key(&DocumentId::new(*doc)))
+        live_draft_lease(scripted.get(*entity).ok(), *doc, registry.as_deref())
     });
+    for draft in vm.drafts.values_mut() {
+        if let Some(id) = draft.pending_apply {
+            let error = match results.get(id) {
+                Some(lunco_core::CommandOutcome::Pending) => continue,
+                Some(lunco_core::CommandOutcome::Succeeded(_)) => None,
+                Some(lunco_core::CommandOutcome::Failed(message)) => Some(message.clone()),
+                Some(lunco_core::CommandOutcome::Rejected(reason)) => Some(reason.to_string()),
+                None => Some(
+                    "The document apply result is no longer available. Check Recent events.".into(),
+                ),
+            };
+            draft.pending_apply = None;
+            draft.error = error;
+        }
+    }
     let entity = selected
         .as_deref()
         .and_then(|selection| selection.primary());
@@ -217,7 +295,7 @@ impl Panel for RhaiEditorPanel {
 
             // ── Toolbar: run / revert + compile status ──────────────────────
             ui.horizontal_wrapped(|ui| {
-                ui.add_enabled_ui(draft.dirty && draft.pending.is_none(), |ui| {
+                ui.add_enabled_ui(draft.dirty && draft.pending.is_none() && draft.pending_apply.is_none(), |ui| {
                     if ui
                         .button("Run draft")
                         .on_hover_text("Compile and run this draft. The scene document and saved file are unchanged.")
@@ -244,7 +322,8 @@ impl Panel for RhaiEditorPanel {
             });
             if let Some(error) = &draft.error { ui.colored_label(theme.tokens.error, error); }
             if draft.pending.is_some() { ui.spinner(); ui.label("Compiling draft…"); }
-            if ui.add_enabled(!draft.dirty && draft.pending.is_none() && state == CompileState::Ready,
+            if draft.pending_apply.is_some() { ui.spinner(); ui.label("Applying source to document…"); }
+            if ui.add_enabled(!draft.dirty && draft.pending.is_none() && draft.pending_apply.is_none() && state == CompileState::Ready,
                 egui::Button::new("Apply running source to document"))
                 .on_hover_text("Copy the compiled source into the scene document. Use File → Save to save the document to disk.")
                 .clicked() {
@@ -448,7 +527,8 @@ impl lunco_api::ApiQueryProvider for InspectBehaviourEditor {
             "draft_count": vm.drafts.len(),
             "source": draft.map(|draft| draft.buffer.clone()),
             "dirty": draft.is_some_and(|draft| draft.dirty),
-            "pending": draft.is_some_and(|draft| draft.pending.is_some()),
+            "pending": draft.is_some_and(|draft| draft.pending.is_some() || draft.pending_apply.is_some()),
+            "applying": draft.is_some_and(|draft| draft.pending_apply.is_some()),
             "error": draft.and_then(|draft| draft.error.clone()),
         })))
     }

@@ -95,20 +95,17 @@ pub struct UnsavedDocEntry {
     pub display_name: String,
     /// Domain hint shown as a small badge ("Modelica", "USD"…).
     pub kind: String,
-    /// True when the doc has never been written to disk in this
-    /// session — drives the dirty-dot prefix in the Files
-    /// section. False once the doc has a writable file path
-    /// bound (post-Save / opened from disk).
+    /// True for writable unsaved edits or an untitled source. Drives the Files
+    /// dirty marker from the canonical workspace document ledger.
     pub is_unsaved: bool,
 }
 
 /// Cross-domain list of workspace documents (saved + unsaved).
-/// Domain plugins **overwrite** this resource when their registry
-/// changes; the Files section reads it to render the workspace
-/// list with per-row dirty markers.
+/// The browser projects this from Workspace when its document ledger changes;
+/// the Files section renders one cross-domain list with per-row dirty markers.
 #[derive(Resource, Default, Debug, Clone)]
 pub struct UnsavedDocs {
-    /// One entry per dirty document the Files section should mark.
+    /// One entry per writable workspace document, with its current dirty marker.
     pub entries: Vec<UnsavedDocEntry>,
 }
 

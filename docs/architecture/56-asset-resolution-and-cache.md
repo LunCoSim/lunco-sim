@@ -816,3 +816,10 @@ honors the shared download concurrency setting, and the simulation progress
 owner keeps scene requirements held through queueing, failure and cancellation.
 See [artifact processing](asset-processing.md) for owner/lifecycle details and
 [geo-assets](../../skills/geo-assets/SKILL.md) for production verification.
+
+Native asset-backed application entry points run through
+`lunco-assets-runtime::run_asset_app`. This owner retains source-event receivers
+through native watcher retirement after `App::run` ends. Source identities and
+registration still come from the canonical scheme registry; the nameless Bevy
+source is included explicitly. See the shutdown contract in
+[deterministic runtime boundaries](62-deterministic-runtime-and-async-boundaries.md#gpu-application-shutdown).
