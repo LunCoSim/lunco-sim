@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allocate dev and nightly releases with monotonic Windows MSI versions."""
+"""Allocate development releases with monotonic Windows MSI versions."""
 
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ _WINDOWS_PACKAGE = re.compile(
 
 
 def windows_installer_version(version: str) -> str:
-    """Map app SemVer or a legacy nightly version to its MSI version."""
+    """Map app SemVer to its Windows Installer version."""
     match = _SEMVER.fullmatch(version)
     if match is None:
-        return ".".join(map(str, _legacy_nightly_msi_identity(version)))
+        raise ValueError(f"unsupported release version: {version}")
     major, minor, patch = map(int, match.groups()[:3])
     development = int(match.group(4)) if match.group(4) is not None else 999
 
@@ -62,22 +62,6 @@ def _package_versions(asset_names: list[str]) -> list[str]:
         if match is not None:
             versions.append(match.group(1))
     return versions
-
-
-def next_nightly_run_number(asset_names: list[str]) -> int:
-    """Continue the nightly run sequence published in Windows update packages."""
-    latest_run_number = 0
-    for asset_name in asset_names:
-        if "-win-x64-" not in asset_name.lower():
-            continue
-        for version in _package_versions([asset_name]):
-            if "-nightly." not in version:
-                continue
-            match = _LEGACY_NIGHTLY.fullmatch(version)
-            if match is None:
-                raise ValueError(f"unsupported legacy nightly version: {version}")
-            latest_run_number = max(latest_run_number, int(match.group(4)))
-    return latest_run_number + 1
 
 
 def next_development_version(base_version: str, asset_names: list[str]) -> str:
@@ -161,19 +145,16 @@ def main() -> None:
     parser.add_argument("--version", help="print the MSI version mapped from app SemVer")
     parser.add_argument("--next-version", metavar="BASE", help="print the next base-dev.N version")
     parser.add_argument("--check-published", metavar="VERSION")
-    parser.add_argument(
-        "--next-run", action="store_true", help="print the next nightly run number"
-    )
     args = parser.parse_args()
 
     modes = sum(
         value is not None
         for value in (args.version, args.next_version, args.check_published)
-    ) + args.next_run
+    )
     if modes != 1:
         parser.error(
             "specify exactly one of --version, --next-version, "
-            "--check-published, or --next-run"
+            "or --check-published"
         )
 
     try:
@@ -181,8 +162,6 @@ def main() -> None:
             print(windows_installer_version(args.version))
         elif args.next_version is not None:
             print(next_development_version(args.next_version, sys.stdin.read().splitlines()))
-        elif args.next_run:
-            print(next_nightly_run_number(sys.stdin.read().splitlines()))
         else:
             check_published_versions(args.check_published, sys.stdin.read().splitlines())
     except ValueError as error:

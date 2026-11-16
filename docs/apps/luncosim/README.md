@@ -177,7 +177,8 @@ update-managed.
 
 The application reads update feeds and downloads update packages from
 `LunCoSim/lunco-sim-updates`. Unsigned nightly installers are published in that
-repository's nightly releases. Production-signed Dev and stable installers are
+repository's nightly releases, and their `dev.N` package versions share the
+same sequence as Dev Builds. Production-signed Dev and stable installers are
 published in the `LunCoSim/lunco-sim` releases; Windows test-signed builds
 appear there as prereleases. See the
 [code-signing policy](../../code-signing-policy.md) for Windows release signing.
@@ -191,7 +192,8 @@ compares only the three MSI version fields.
 
 The first `0.6.0-dev.1` release sorts before existing `0.6.0-nightly.*` builds
 under SemVer. Install its MSI manually to move an existing nightly installation
-to the Dev update sequence; later Dev builds can update through Velopack.
+to the shared Dev update sequence; automatic updates from Dev and nightly
+builds then resume through Velopack.
 
 The native package build enables the updater explicitly. Ordinary source and
 headless builds omit the updater closure and are not update-managed.
