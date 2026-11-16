@@ -102,6 +102,20 @@ fn inspect_empty_editor(me) {
     this = record(this, !state.docked_panels.contains("usd_connection_canvas") && !state.docked_panels.contains("rhai_editor") && !state.docked_panels.contains("usd::viewport"), "Editor starts without content tabs");
     print("PERSPECTIVES_CAPTURE:editor-empty");
 }
+fn reveal_requirements(me) {
+    must_cmd("FocusPanel", #{id: "sysml_requirements"});
+    this.waiting_for = "Requirements in the empty Editor";
+}
+fn requirements_visible(me) { rendered(workbench(), "sysml_requirements") != () }
+fn inspect_requirements(me) {
+    this = record(this, rendered(workbench(), "sysml_requirements") != (), "Editor reveals side tabs before any central document is open");
+    must_cmd("FocusPanel", #{id: "sysml_requirement_details"});
+    this.waiting_for = "Requirement details in the empty Editor";
+}
+fn requirement_details_visible(me) { rendered(workbench(), "sysml_requirement_details") != () }
+fn inspect_requirement_details(me) {
+    this = record(this, rendered(workbench(), "sysml_requirement_details") != (), "Editor foregrounds requested property tabs without a center tool");
+}
 fn focus_connections(me) {
     must_cmd("FocusPanel", #{id: "usd_connection_canvas"});
     this.waiting_for = "Connections opening in Editor";
@@ -338,6 +352,8 @@ fn task(me, ctx) {
             once(Fn("inspect_graph_dock")), check(Fn("valid")), wait_until(Fn("graph_closed")),
             once(Fn("verify_graph_closed")), check(Fn("valid")), wait_until(Fn("editor_ready")),
             once(Fn("inspect_empty_editor")), check(Fn("valid")), wait(1.5),
+            once(Fn("reveal_requirements")), wait_until(Fn("requirements_visible")), once(Fn("inspect_requirements")), check(Fn("valid")),
+            wait_until(Fn("requirement_details_visible")), once(Fn("inspect_requirement_details")), check(Fn("valid")),
             once(Fn("focus_connections")), wait_until(Fn("connections_visible")), once(Fn("inspect_connections")), check(Fn("valid")),
             wait_until(Fn("connections_closed")), once(Fn("verify_editor_reset")), check(Fn("valid")), wait_until(Fn("build_ready")),
             once(Fn("inspect_build")), check(Fn("valid")), wait(1.5), once(Fn("activate_analysis")), wait_until(Fn("analysis_ready")),

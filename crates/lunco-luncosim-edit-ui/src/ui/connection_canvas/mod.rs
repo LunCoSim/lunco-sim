@@ -1105,7 +1105,15 @@ impl Panel for UsdCanvasPanel {
                 let Some(state) = views.sessions.get_mut(&preview) else { ui.label("The document is being projected."); return; };
                 state
             };
-            if !state.built { toolbar::source_picker(ui, &mut views.show_scene); ui.label("The loaded USD scene is being projected."); return; }
+            if !state.built {
+                toolbar::source_picker(ui, &mut views.show_scene);
+                if ctx.resource::<lunco_core::SceneMountState>().and_then(|scene| scene.active_root()).is_none() {
+                    ui.label("No scene is open. Open a USD document or load a scene to inspect connections.");
+                } else {
+                    ui.label("The loaded USD scene is being projected.");
+                }
+                return;
+            }
             let show_controls = ctx.resource::<lunco_theme::DiagramPresentationSettings>()
                 .is_none_or(|settings| settings.show_controls);
             let requested_source = if show_controls { toolbar::render(ui, ctx, state, show_scene) } else { None };

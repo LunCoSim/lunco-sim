@@ -19,6 +19,8 @@ pub struct CommandDeckView {
     pub selected: Option<Entity>,
     pub selected_label: String,
     pub driving: bool,
+    pub control_label: String,
+    pub can_request: bool,
 }
 
 impl lunco_core::SceneResource for CommandDeckView {}
@@ -36,6 +38,13 @@ pub fn populate_command_deck_view(
     q_callsign: Query<&lunco_core::markers::Callsign>,
     q_catalog_id: Query<&lunco_core::CatalogEntryId>,
     q_gid: Query<&GlobalEntityId>,
+    q_inputs: Query<
+        &lunco_port_core::InputPorts,
+        Without<lunco_embodiment_core::roles::Embodiment>,
+    >,
+    q_parents: Query<&ChildOf>,
+    q_preview: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+    sessions: Res<lunco_core_session::SessionRegistry>,
 ) {
     let selection = selected.primary();
     view.selected = selection;
@@ -57,6 +66,27 @@ pub fn populate_command_deck_view(
     view.driving = match (selection, local_avatar.0) {
         (Some(target), Some(avatar)) => q_link.get(avatar).is_ok_and(|link| link.target == target),
         _ => false,
+    };
+    view.can_request = selection.is_some_and(|target| {
+        q_inputs
+            .get(target)
+            .is_ok_and(|ports| !ports.values.is_empty())
+            && !lunco_usd_bevy_scene::is_preview_only(target, &q_parents, &q_preview)
+    });
+    view.control_label = if view.driving {
+        "Controlled by you".into()
+    } else if !view.can_request {
+        "No live writable control endpoint".into()
+    } else if let Some(owner) = selection
+        .and_then(|target| q_gid.get(target).ok())
+        .and_then(|id| sessions.owner_of(id.get()))
+    {
+        format!(
+            "Owned by session {} · request subject to authority",
+            owner.0
+        )
+    } else {
+        "Not controlled locally · request subject to authority".into()
     };
 }
 
@@ -92,7 +122,7 @@ impl Panel for CommandDeck {
             return;
         };
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Selected:");
             ui.strong(if view.selected_label.is_empty() {
                 "(unnamed)"
@@ -100,13 +130,9 @@ impl Panel for CommandDeck {
                 &view.selected_label
             });
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Control:");
-            if view.driving {
-                ui.label("Local avatar");
-            } else {
-                ui.weak("Available");
-            }
+            ui.label(&view.control_label);
         });
 
         ui.separator();
@@ -119,13 +145,14 @@ impl Panel for CommandDeck {
                     ctx.trigger(lunco_control_core::ReleaseControlSource { source: avatar });
                 }
             }
-        } else if ui.button("Take control").clicked() {
+        } else if ui.add_enabled(view.can_request, egui::Button::new("Request control"))
+            .on_hover_text("The control authority checks ownership and permissions. A rejected request is reported in Recent events.")
+            .clicked() {
             ctx.trigger(lunco_control_core::commands::AcquireControl {
                 source: None,
                 target,
                 bind_camera: true,
             });
         }
-        ui.label("Programs and route policy are authored by the active Twin.");
     }
 }

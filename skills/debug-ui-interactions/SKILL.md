@@ -365,3 +365,36 @@ The optional exact `signal` path returns descriptors for all owners. Run
 source port, and free API port. It owns its windowed production session and invokes the authored
 Rhai verdict, including the missing-channel negative case; inspect its admission and settled
 screenshots and confirm its session closes.
+
+## Workbench editing and accessibility regression
+
+Editor side tabs must render before any center tool or document is open.
+Use `InspectWorkbench.rendered_panels`, not checked menu state or command
+admission, to prove the requested panel is visible. Run the maintained
+`test_workbench_perspectives.py` driver after shell routing changes; its Rhai
+verdict includes empty-Editor Requirements/details and rejected panel admission.
+Capture compact layouts after ResetWorkspaceLayout so manually opened audit
+tools are not mistaken for defaults.
+
+Behaviour Editor has separate Run draft and Apply running source to document
+actions. File → Save writes the USD document. `InspectBehaviourEditor` exposes
+selected document, retained draft count, source, dirty/pending state and admission
+errors. Verify edit/select/return, failed compilation, and scene retirement.
+Source Viewer must permit copying while rejecting typing. Test authored controls
+with Tab, Enter/Space and the Controls menu, including disabled, hidden and
+retired targets; these share the pointer callback's exact lease.
+
+Shortcut validation includes Record, Apply, Unbind and Restore default. Restore
+uses the currently admitted `ApplicationInputBindings` asset snapshot. Check
+conflict previews before Apply and effective Twin overrides afterward.
+
+On Linux, `scripts/api/test_runtime_accessibility.py --port <free-port>` verifies
+actual AT-SPI menu activation and hidden-control withdrawal. It uses an owned
+GUI, temporarily enables the accessibility bus, and restores the prior desktop
+setting in a finally block. This requires the system Python Gio bindings.
+
+For mount/reference regressions, run
+`python3 scripts/api/test_stable_asset_references.py --port <owned-free-port>`.
+It remounts script and spawn sources and checks the direct HTTP metadata boundary
+and catalog IDs. Public and persisted source references use stable source IDs;
+private mount addresses belong only to exact asset-loading leases.

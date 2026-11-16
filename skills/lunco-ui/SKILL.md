@@ -51,11 +51,11 @@ cannot hide the empty live state. Verify its buttons with
 ## Graph readability
 
 Analyze places the live viewport in the center and Graphs in the bottom dock,
-with Telemetry and Ports alongside. Lunica keeps the model workspace central;
+with Signals and Ports alongside. Lunica keeps the model workspace central;
 the Modelica view's **Graphs** toolbar button opens the canonical plot in a
 resizable bottom dock on demand, and **View → Lunica → Graphs** provides the
 same entry point. The plot's Variables and Runs pickers select result curves;
-live channels can also be chosen in Telemetry. Empty plots explain how to add
+live channels can also be chosen in Signals. Empty plots explain how to add
 data, and mixed-unit plots explain that they share one vertical axis. Author
 default placement through `assets/scripting/policy/workbench_perspectives.rhai`;
 increment the perspective revision when changing default placement so saved
@@ -1029,3 +1029,28 @@ Use `InspectInputBindings` plus native injected key events in authored behavior
 trees to verify override, rejection, notification and restoration. Run
 `scripts/api/test_command_keybindings.py --port <owned-free-port>` and inspect
 the settings capture.
+
+## Editing, compact layouts, and control access
+
+Use the [workbench editing contract](../../docs/architecture/11-workbench.md#panel-visibility-drafts-and-export-snapshots)
+for panel visibility, draft ownership, and immutable CSV export semantics.
+`InspectBehaviourEditor` supports production observation of draft retention,
+compile completion and retirement. Panel names distinguish Signals, Camera &
+Control, Scene Properties, Component Properties, Model State, Source Viewer,
+Programs, Component Library, Behaviour Editor and Rhai Console; keep canonical
+panel IDs in commands. Verify wrapped toolbars at 1280×800 and 960×540.
+
+Authored press controls expose native keyboard navigation and an accessible
+Controls-menu route. Follow the
+[runtime UI accessibility contract](../../docs/architecture/runtime-authored-ui.md#keyboard-and-assistive-control-access)
+and inspect labels, hidden/disabled admission, focus outline and scene retirement.
+
+Keep source identity separate from asset-loading lifetime: use
+`AssetFile.source_uri` for catalog IDs, authored program/shader references and
+persisted source tabs; use its `asset_path` only for native loading/cache leases.
+Narrow Requirements docks use readable selectable cards; All columns exposes the
+full table. Verify the source action opens the indexed SysML document.
+
+SysML source navigation reuses its canonical editor in a resizable window. Keep
+retained source drafts in `SysmlRequirementsState` and retire them on `TwinClosed`,
+including hidden panels. Preserve the canonical typed apply/save path.

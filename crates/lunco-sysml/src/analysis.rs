@@ -154,22 +154,6 @@ impl TwinSysmlAnalyses {
         )?;
         self.state(authority)
     }
-
-    /// Read a snapshot only when its mount still names the same Twin and root.
-    pub fn state_for(
-        &self,
-        authority: &str,
-        twin_id: lunco_workspace::TwinId,
-        root: &Path,
-    ) -> Option<TwinSysmlAnalysisState> {
-        self.owners
-            .get(authority)
-            .is_some_and(|(owner_id, owner_root, _)| {
-                *owner_id == twin_id.raw() && owner_root == root
-            })
-            .then(|| self.state(authority))
-            .flatten()
-    }
 }
 
 fn build_analysis_snapshot(
@@ -1007,32 +991,41 @@ mod tests {
     }
 
     #[test]
-    fn analysis_snapshot_lookup_requires_the_current_twin_identity_and_root() {
+    fn analysis_snapshot_lookup_requires_source_identity_and_current_lease() {
         let twin_id = lunco_workspace::TwinId::new(7);
         let root = std::path::PathBuf::from("/fixture/twin");
         let mut analyses = TwinSysmlAnalyses::default();
         analyses.owners.insert(
-            "analysis-fixture".into(),
+            "private-analysis-mount".into(),
             (twin_id.raw(), root.clone(), "analysis-fixture".into()),
         );
         analyses.states.insert(
-            "analysis-fixture".into(),
+            "private-analysis-mount".into(),
             TwinSysmlAnalysisState::Ready(build_analysis_snapshot("analysis-fixture", Vec::new())),
         );
 
         assert!(
             analyses
-                .state_for("analysis-fixture", twin_id, &root)
-                .is_some()
-        );
-        assert!(
-            analyses
-                .state_for("analysis-fixture", lunco_workspace::TwinId::new(8), &root)
+                .state_for_source_identity("private-analysis-mount", twin_id, &root)
                 .is_none()
         );
         assert!(
             analyses
-                .state_for("analysis-fixture", twin_id, Path::new("/fixture/other"))
+                .state_for_source_identity("analysis-fixture", twin_id, &root)
+                .is_some()
+        );
+        assert!(
+            analyses
+                .state_for_source_identity(
+                    "analysis-fixture",
+                    lunco_workspace::TwinId::new(8),
+                    &root
+                )
+                .is_none()
+        );
+        assert!(
+            analyses
+                .state_for_source_identity("analysis-fixture", twin_id, Path::new("/fixture/other"))
                 .is_none()
         );
     }

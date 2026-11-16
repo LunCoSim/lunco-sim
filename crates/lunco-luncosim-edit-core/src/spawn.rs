@@ -212,7 +212,9 @@ fn ensure_footprint(
     let Some(entry) = catalog.get(entry_id) else {
         return cache.resolve(entry_id);
     };
-    let SpawnSource::UsdFile(path) = &entry.source;
+    let SpawnSource::UsdFile {
+        load_address: path, ..
+    } = &entry.source;
     let path = match lunco_assets_core::asset_path::load_asset_path(path, None, None, None) {
         Ok(path) => path,
         Err(error) => {

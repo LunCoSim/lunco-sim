@@ -13,7 +13,7 @@ use lunco_workbench_core::source::OpenSourceView;
 
 /// Display-ready source entry retained between UI frames.
 struct LibraryEntry {
-    asset_path: String,
+    source_uri: String,
     rel: PathBuf,
     stem: String,
     file_name: String,
@@ -52,7 +52,7 @@ impl LuncoLibrarySection {
             (
                 path,
                 LibraryEntry {
-                    asset_path: asset.asset_path,
+                    source_uri: asset.source_uri,
                     rel,
                     stem: asset.stem,
                     file_name,
@@ -181,7 +181,7 @@ fn render_dir(
         }
         visible = true;
         let is_loaded = !loaded_name.is_empty()
-            && lunco_assets_core::engine_asset_uri(&asset.asset_path)
+            && lunco_assets_core::engine_asset_uri(&asset.source_uri)
                 == lunco_assets_core::engine_asset_uri(loaded_name);
         let label = if is_loaded {
             format!("● {}", asset.file_name)
@@ -195,10 +195,10 @@ fn render_dir(
         .inner
         .interact(egui::Sense::click_and_drag());
         response.dnd_set_drag_payload(lunco_workbench_core::source::SourceDragPayload::Registered(
-            lunco_assets_core::engine_asset_uri(&asset.asset_path),
+            lunco_assets_core::engine_asset_uri(&asset.source_uri),
         ));
         if response.clicked() {
-            *clicked = Some(asset.asset_path.clone());
+            *clicked = Some(asset.source_uri.clone());
         }
     }
     visible

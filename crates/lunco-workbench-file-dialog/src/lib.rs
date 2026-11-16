@@ -70,47 +70,6 @@ pub struct SaveHint {
     pub filters: Vec<OpenFilter>,
 }
 
-/// Blocking "save as" dialog. Returns the chosen path as a
-/// [`StorageHandle::File`], or `None` on cancel.
-///
-/// For UI panels that want a synchronous picker (the CSV/plot export flows in
-/// the Modelica IDE) rather than the event-driven [`PickHandle`] command. Native
-/// `rfd`; a no-op returning `None` on wasm (browsers have no blocking picker).
-/// This is the home of the file dialog — `lunco-storage` (the I/O trait)
-/// deliberately carries no `rfd`.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn pick_save_blocking(hint: &SaveHint) -> Option<StorageHandle> {
-    let mut dialog = rfd::FileDialog::new();
-    if let Some(name) = &hint.suggested_name {
-        dialog = dialog.set_file_name(name);
-    }
-    if let Some(StorageHandle::File(dir)) = &hint.start_dir {
-        let start: std::path::PathBuf = if dir.is_dir() {
-            dir.clone()
-        } else {
-            dir.parent()
-                .map(std::path::PathBuf::from)
-                .unwrap_or_default()
-        };
-        if !start.as_os_str().is_empty() {
-            dialog = dialog.set_directory(&start);
-        }
-    }
-    for f in &hint.filters {
-        let exts: Vec<&str> = f.extensions.iter().map(|s| s.as_str()).collect();
-        if !exts.is_empty() {
-            dialog = dialog.add_filter(&f.name, &exts);
-        }
-    }
-    dialog.save_file().map(StorageHandle::File)
-}
-
-/// wasm stub — browsers have no synchronous file picker.
-#[cfg(target_arch = "wasm32")]
-pub fn pick_save_blocking(_hint: &SaveHint) -> Option<StorageHandle> {
-    None
-}
-
 /// What kind of system dialog to show.
 #[derive(Clone, Debug)]
 pub enum PickMode {
@@ -133,6 +92,8 @@ pub enum PickMode {
 /// - the variant set is reviewable on every diff.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickFollowUp {
+    /// Write the immutable text export carried by this request.
+    ExportText,
     /// Resolve → trigger `OpenFile { path }`.
     OpenFile,
     /// Resolve → trigger `OpenFolder { path }` (folder may or may not

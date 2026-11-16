@@ -208,7 +208,7 @@ impl Panel for ComponentPalettePanel {
     }
 
     fn title(&self) -> String {
-        "Components".into()
+        "Component Library".into()
     }
 
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {

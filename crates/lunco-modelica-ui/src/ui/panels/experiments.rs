@@ -2219,13 +2219,12 @@ fn render_experiments_plot_inner(
 /// already, so no resampling is needed (unlike the live-cosim CSV
 /// export in the Graphs panel which has to merge per-signal histories).
 ///
-/// Routes through `lunco_storage::FileStorage` so the same call site
-/// will work when an OPFS / browser-download backend lands for wasm.
-/// Cancelling the picker is a silent no-op; errors land in Console.
+/// Captures the immutable result at admission. Encoding, destination selection,
+/// and storage run through the shared asynchronous export owners.
 fn export_experiment_csv(world: &mut World, id: ExperimentId) {
     use crate::ui::panels::csv_export;
 
-    let (file_stem, csv_text) = {
+    let (file_stem, result) = {
         let registry = match world.get_resource::<ExperimentRegistry>() {
             Some(r) => r,
             None => return,
@@ -2237,31 +2236,6 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
             }
             return;
         };
-        let mut text = String::new();
-        // Header row.
-        text.push_str("time");
-        let mut var_order: Vec<&String> = result.series.keys().collect();
-        var_order.sort();
-        for v in &var_order {
-            text.push(',');
-            // Quote names that contain commas / quotes; Modelica
-            // dotted paths normally don't, but be defensive.
-            csv_export::push_csv_field(&mut text, v);
-        }
-        text.push('\n');
-        // Data rows.
-        for (i, t) in result.times.iter().enumerate() {
-            text.push_str(&format!("{t}"));
-            for v in &var_order {
-                text.push(',');
-                let val = result.series.get(*v).and_then(|col| col.get(i));
-                match val {
-                    Some(x) if x.is_finite() => text.push_str(&format!("{x}")),
-                    _ => {} // empty cell for NaN / out-of-range
-                }
-            }
-            text.push('\n');
-        }
         // Filename suggestion: <model>_<run>_<unix_ts>. Unix seconds
         // is unambiguous across timezones and easy to glob; the run
         // name is included for readability when filing multiple
@@ -2287,18 +2261,42 @@ fn export_experiment_csv(world: &mut World, id: ExperimentId) {
                 }
             })
             .collect();
-        (safe_name, text)
+        (safe_name, result.clone())
     };
 
-    // Shared save dialog + write + error-console boilerplate (CQ-111).
-    // Emit the experiment-specific success line only when it actually wrote.
-    if csv_export::save_csv_via_dialog(world, &format!("{file_stem}.csv"), csv_text.as_bytes())
-        .is_some()
-    {
-        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
-            console.info(format!("Exported experiment to {file_stem}.csv"));
+    csv_export::export_snapshot(world, format!("{file_stem}.csv"), move || {
+        if result.times.iter().any(|time| !time.is_finite())
+            || result.times.windows(2).any(|pair| pair[0] > pair[1])
+        {
+            return Err("CSV export sample timestamps must be finite and ordered".into());
         }
-    }
+        let mut text = String::new();
+        // Header row.
+        text.push_str("time (s)");
+        let mut var_order: Vec<&String> = result.series.keys().collect();
+        var_order.sort();
+        for v in &var_order {
+            text.push(',');
+            // Quote names that contain commas / quotes; Modelica
+            // dotted paths normally don't, but be defensive.
+            csv_export::push_csv_field(&mut text, v);
+        }
+        text.push('\n');
+        // Data rows.
+        for (i, t) in result.times.iter().enumerate() {
+            text.push_str(&format!("{t}"));
+            for v in &var_order {
+                text.push(',');
+                let val = result.series.get(*v).and_then(|col| col.get(i));
+                match val {
+                    Some(x) if x.is_finite() => text.push_str(&format!("{x}")),
+                    _ => {} // empty cell for NaN / out-of-range
+                }
+            }
+            text.push('\n');
+        }
+        Ok(text)
+    });
 }
 
 fn reject_experiment_action(world: &mut World, name: &str, message: String) {

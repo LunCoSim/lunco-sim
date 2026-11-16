@@ -1175,7 +1175,7 @@ fn validate_dem_source(
             .ok_or_else(|| "DEM Twin registry is unavailable".to_owned())?
             .root_for(authority)
             .map_err(|error| error.to_string())?
-            .ok_or_else(|| format!("DEM source Twin `{authority}` was retired"))?;
+            .ok_or_else(|| "DEM source Twin mount was retired".to_owned())?;
     }
     Ok(())
 }

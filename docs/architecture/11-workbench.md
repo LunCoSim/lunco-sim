@@ -482,11 +482,10 @@ replica requires a live replication owner. Authored completion checks match the
 saved document's exact path against the active Twin index as well as its owner.
 
 Panel landmarks use the registered panel id as their canonical anchor:
-`panel.<id>`. The Workbench publishes that exact rect for both docked and
-explicit side-panel rendering. Generic slot anchors (`panel.center`,
-`panel.side_browser`, `panel.right_inspector`, and `panel.bottom`) identify the
-viewport or whole dock slot in both docked and viewport-only layouts; tutorial
-copy that names a panel must use the exact panel key.
+`panel.<id>`. The workbench publishes the exact painted dock rect.
+Generic slot anchors (`panel.center`, `panel.side_browser`,
+`panel.right_inspector`, and `panel.bottom`) identify the viewport or whole
+slot; tutorial copy that names a panel must use the exact panel key.
 
 The shell reuses its title-bar anchor buffer across UI passes. Stable menu,
 window, toolbar, slot, and model-view keys are borrowed static strings, and
@@ -1254,7 +1253,7 @@ values use `twin.toml`. Changes apply when the Twin is next opened. See
 
 When the active Twin has no live scene, the viewport replaces the welcome
 actions with the Twin's default scene, indexed scene choices and an Editor
-action. These choices use the mounted Twin authority and the same scene
+action. These choices use the stable Twin source identity and the same scene
 command as other Twin loads. The live `SceneMountState` decides whether this
 empty state is visible, so an isolated Editor preview does not hide it.
 
@@ -1288,6 +1287,13 @@ typed scalar arguments, and an explicit text-focus permission. Menu hints and
 Rhai `input_hint(...)` read the effective map. `SetCommandKeyBinding` validates
 command names and arguments before persisting through `lunco-settings`;
 `SetInputIntentBinding` edits semantic alternatives through the same owner.
+The admitted application asset also publishes `ApplicationInputBindings` before
+preferences are composed. Keybindings uses that current snapshot for explicit
+Restore default actions; it never reconstructs defaults from a compiled keymap.
+Record captures physical keys or a chord while suppressing command dispatch;
+unbind and conflict previews use the same authoritative settings resolver.
+The standard GUI retains the window owner's saved geometry. Explicit fast and
+portrait launch options select their requested startup sizes.
 
 Twin composition removes conflicting lower-priority physical bindings from the
 transient effective map. Global preferences remain stored and return on Twin
@@ -1554,3 +1560,61 @@ launches LunCoSim) is a later task — see task #90.
 - [`14-simulation-layers.md`](14-simulation-layers.md) — Twin/Run/Scenario control surface
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica-specific panels
 - `specs/008-developer-experience` — detail
+
+## Panel visibility, drafts, and export snapshots
+
+All populated slots use the same dock tree and active-tab contract, including
+Editor before its first document opens. An empty center remains a valid leaf
+and shows the active task's authored guidance. Editor interactions admit new
+center document instances without requiring a seeded instance. Scene-only
+perspectives keep parked document instances out of presentation. Reset and
+restoration validate every declared registered slot, including side-only plans.
+Only a rendered main scene viewport receives the global empty-scene card;
+document previews own their own empty states.
+
+Behaviour Editor retains drafts by exact entity and script-document lease in a
+registered scene resource. Selection changes preserve drafts; script retirement
+and scene teardown release them. Run draft waits for command admission and a
+fresh compile diagnostic before clearing local changes. A failed request or
+compile retains the draft. Apply running source to document is an explicit
+USD journal action; File → Save owns disk persistence. Source Viewer uses an
+immutable text buffer that supports selection and copying.
+
+`lunco-workbench-file-ops::ExportText` admits an application-owned immutable
+UTF-8 snapshot. Its acknowledgement is admission, not completed I/O. The shared
+asynchronous picker and I/O task own destination selection, writing, and a
+terminal Export status or structured runtime error. `ExportLimits` bounds each
+preparation and I/O stage (four pending jobs by default); a full queue rejects
+explicitly. An admitted snapshot can
+finish after its source document closes; it cannot read a replacement Twin's
+state. Plot and experiment CSV serialization runs on a worker. Plot export preserves exact native sample
+timestamps in seconds, and leaves missing samples empty. It does not interpolate,
+forward-fill, or extend a series past its last sample.
+
+Shortcut recording owns an exclusive UI lease. The capture text field owns
+keyboard focus and application command chords cannot execute during recording.
+Hidden panels release the lease. Normal editing uses human-readable action
+labels and recorded chords; parameterized command construction is Advanced.
+
+The workbench adds generic mechanisms, while authored perspective plans retain
+slot policy and the application input asset retains keymap defaults. No second
+placement policy, compiled default keymap, blocking picker path or resampling
+policy is installed. The UI reads terminal command/diagnostic facts at their
+existing owners. Native acceptance is in `scripts/api/test_ui_review.py`;
+`scripts/api/test_workbench_perspectives.py` runs the authored layout gate.
+
+SysML source navigation matches analysis facts using the stable logical Twin
+source identity. The analysis owner resolves the current lease from that identity; UI code does
+not receive the temporary mount token. Requirements keeps search visible and moves secondary
+filters/columns into an explicit expandable section, with active narrowing shown
+in its title. Coverage summary and source navigation remain separate tasks.
+
+Requirements uses virtualized selectable cards when its compact dock cannot fit useful table
+columns. Cards show bounded statement previews; details retain the complete text. Search stays visible; All columns restores the detailed resizable table.
+The details panel keeps source actions and the complete evidence/test breakdown.
+
+SysML source actions open the canonical document editor in a large resizable
+window. The editor retains one buffer and the existing typed SysML apply/save
+commands; it reserves space for save/revert controls and supports horizontal
+source scrolling. `SysmlRequirementsState` owns retained browser/draft state.
+Its `TwinClosed` observer retires closed-Twin drafts even while the panel is hidden.

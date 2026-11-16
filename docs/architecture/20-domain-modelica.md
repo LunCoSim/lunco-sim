@@ -1899,7 +1899,7 @@ The current workflow keeps Code Editor, Diagram, Telemetry, and Inspector on the
 same `ModelicaDocument`/operation pipeline:
 - Code Editor and Diagram edits share the document projection and reparse
   boundary (see § 11 Gaps for the remaining visual polish)
-- Parameter edits from both the Telemetry panel and the diagram Inspector use
+- Parameter edits from both Model State and Component Properties use
   `ModelicaOp::SetParameter`, so the source, journal, projection, and compiled
   model observe one authoritative change
 

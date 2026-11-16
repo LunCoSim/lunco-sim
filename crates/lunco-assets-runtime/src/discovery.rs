@@ -30,11 +30,13 @@ use lunco_assets_core::twin_source::TwinRoots;
 /// A file discovered somewhere in the project.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssetFile {
-    /// Loadable Bevy asset path. Engine-relative (`vessels/rovers/skid_rover.usda`,
-    /// served by the default source) or Twin-scoped (`twin://moonbase/structures/habitat_fsh.usda`).
+    /// Internal Bevy load address, pinned to the exact mount lifetime.
     pub asset_path: String,
+    /// Stable source reference for public APIs, authoring, persistence and IDs.
+    /// Engine-relative sources use the default library; Twin URIs use logical identity.
+    pub source_uri: String,
     /// File stem (`skid_rover`, `regolith`) — the default display/id stem for
-    /// catalogs. Catalog owners disambiguate collisions using `asset_path`.
+    /// catalogs. Catalog owners disambiguate collisions using `source_uri`.
     pub stem: String,
     /// Path relative to its own root (`vessels/rovers/skid_rover.usda`,
     /// `shaders/regolith.wesl`). Use for category heuristics, and as the URL
@@ -118,6 +120,7 @@ pub fn list_library_assets(
         .iter()
         .map(|rel| AssetFile {
             asset_path: rel.clone(),
+            source_uri: rel.clone(),
             stem: stem_of(rel),
             #[cfg(not(target_arch = "wasm32"))]
             abs_path: assets_dir.join(rel),
@@ -141,16 +144,18 @@ pub fn resolve_asset(
     roots: &TwinRoots,
     asset_path: &str,
 ) -> Result<Option<AssetFile>, lunco_assets_core::TwinRootsError> {
-    if let Some(asset) = list_library_assets(manifest)?
-        .into_iter()
-        .find(|asset| asset.asset_path == asset_path)
-    {
+    if let Some(asset) = list_library_assets(manifest)?.into_iter().find(|asset| {
+        lunco_assets_core::engine_asset_uri(&asset.source_uri)
+            == lunco_assets_core::engine_asset_uri(asset_path)
+    }) {
         return Ok(Some(asset));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let Some((name, rel)) = lunco_assets_core::twin_source::parse_twin_uri(asset_path) else {
+        let load = lunco_assets_core::asset_path::load_source_uri(asset_path, Some(roots))?;
+        let address = lunco_assets_core::asset_path::anchor_of(&load);
+        let Some((name, rel)) = lunco_assets_core::twin_source::parse_twin_uri(&address) else {
             return Ok(None);
         };
         let Some(rel_path) = lunco_assets_path::relative_path(rel) else {
@@ -160,7 +165,8 @@ pub fn resolve_asset(
             return Ok(None);
         };
         Ok(Some(AssetFile {
-            asset_path: asset_path.to_string(),
+            asset_path: address.clone(),
+            source_uri: asset_path.to_string(),
             stem: stem_of(rel),
             rel: rel.to_string(),
             abs_path,
@@ -571,6 +577,7 @@ pub fn list_assets_with_extensions(
     {
         out.push(AssetFile {
             asset_path: rel.clone(),
+            source_uri: rel.clone(),
             stem: stem_of(rel),
             #[cfg(not(target_arch = "wasm32"))]
             abs_path: assets_dir.join(rel),
@@ -593,6 +600,10 @@ pub fn list_assets_with_extensions(
             })? {
                 out.push(AssetFile {
                     asset_path: lunco_assets_core::twin_uri(&authority, &rel),
+                    source_uri: lunco_assets_core::twin_uri(
+                        roots.logical_identity_for_authority(&authority)?,
+                        &rel,
+                    ),
                     stem: stem_of(&rel),
                     abs_path: root.join(&rel),
                     twin_authority: Some(authority.clone()),
@@ -706,6 +717,10 @@ pub fn list_indexed_scene_assets(
             {
                 assets.push(AssetFile {
                     asset_path: lunco_assets_core::twin_uri(&authority, &file.relative_path),
+                    source_uri: lunco_assets_core::twin_uri(
+                        lunco_assets_core::logical_twin_source_identity(twin),
+                        &file.relative_path,
+                    ),
                     stem: stem_of(&rel),
                     abs_path: twin.root.join(&file.relative_path),
                     rel,

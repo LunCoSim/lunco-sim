@@ -445,6 +445,7 @@ pub struct ModelicaUiPlugin;
 
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
+        panels::csv_export::install(app);
         // Reserve this domain's canonical plot before any other native view
         // allocates user plots. Lazy first-paint seeding can otherwise adopt
         // an unrelated plot that already received the same numeric identity.

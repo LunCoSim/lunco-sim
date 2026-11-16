@@ -98,7 +98,7 @@ impl Panel for InspectorPanel {
     }
 
     fn title(&self) -> String {
-        "Inspector".into()
+        "Component Properties".into()
     }
 
     fn menu_group(&self) -> lunco_workbench_core::PanelMenuGroup {

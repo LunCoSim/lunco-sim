@@ -861,3 +861,14 @@ feed once, restoration clears current findings, and invalid values preserve the
 admitted setting. The driver owns its window/session and captures the high
 profile before restoring eight. `RunLint {domain: "physics"}` refreshes the same
 owner report; it does not change the solver setting.
+
+For UI editor regressions, use `InspectWorkbench.rendered_panels` to prove actual
+presentation and `InspectBehaviourEditor` for draft retention and compile/admission
+state. A draft-run acknowledgement does not prove compilation, document authoring,
+or disk save. `ExportText` likewise acknowledges an immutable export request;
+wait for its terminal Export status and read back the destination bytes.
+
+Use `scripts/api/test_stable_asset_references.py --port <owned-free-port>` for
+script metadata, catalog remount IDs and disposable-Twin shader source commands.
+Shader journal paths stay stable while their document/undo state retires with the
+exact Twin root. Native load addresses must not enter API responses or saved USD.

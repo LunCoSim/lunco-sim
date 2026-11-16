@@ -85,7 +85,7 @@ fn input_value(inputs, name) {
 fn camera_ui_properties(facts) {
     let result = #{};
     result.active_name = facts.active_name;
-    result.active_label = facts.active_label;
+    result.active_label = if facts.active_name == "" { "No active camera" } else { facts.active_label };
     // The HTML surface and the generic dropdown renderer consume the same
     // authored dimensions. A Twin can replace these values in its policy.
     result.dropdown_width = "380px";

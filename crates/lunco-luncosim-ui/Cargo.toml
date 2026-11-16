@@ -68,6 +68,7 @@ bevy = { workspace = true, features = [
     "bevy_winit",
     "bevy_picking",
     "bevy_input_focus",
+    "accesskit_unix",
     "mesh_picking",
     "bevy_ui_render",
     "bevy_post_process",
@@ -88,6 +89,7 @@ num_cpus = { workspace = true }
 
 lunco-api-contracts = { path = "../lunco-api-contracts" }
 lunco-api = { path = "../lunco-api" }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-api-transport = { path = "../lunco-api-transport", default-features = false, optional = true }
 lunco-updater = { path = "../lunco-updater", optional = true }
 lunco-assets-datasets = { path = "../lunco-assets-datasets" }

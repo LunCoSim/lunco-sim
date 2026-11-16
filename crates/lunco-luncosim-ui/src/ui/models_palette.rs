@@ -62,8 +62,10 @@ struct ProgramOutputContract {
 /// A discovered program source that can be offered by the palette.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ProgramChoice {
-    /// Asset-server address of the source.
+    /// Stable source reference used for authored attachment.
     pub asset_path: String,
+    /// Human-readable source location, separate from canonical identity.
+    pub display_path: String,
     /// Display label derived from the discovered path.
     pub label: String,
     /// Source extension without the dot.
@@ -187,13 +189,35 @@ pub(crate) fn drain_program_catalog(
                 .filter_map(|asset| {
                     let extension = asset.rel.rsplit_once('.')?.1.to_string();
                     Some(ProgramChoice {
-                        asset_path: asset.asset_path,
-                        label: asset.rel,
+                        asset_path: asset.source_uri,
+                        display_path: asset.twin_display_name.as_ref().map_or_else(
+                            || asset.rel.clone(),
+                            |name| format!("{name} / {}", asset.rel),
+                        ),
+                        label: asset
+                            .rel
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&asset.rel)
+                            .rsplit_once('.')
+                            .map_or_else(
+                                || asset.rel.clone(),
+                                |(stem, _)| lunco_core::humanize_identifier(stem),
+                            ),
                         extension,
                         contract: None,
                     })
                 })
                 .collect();
+            let mut counts = std::collections::HashMap::new();
+            for entry in &entries {
+                *counts.entry(entry.label.clone()).or_insert(0usize) += 1;
+            }
+            for entry in &mut entries {
+                if counts.get(&entry.label).is_some_and(|count| *count > 1) {
+                    entry.label = format!("{} · {}", entry.label, entry.display_path);
+                }
+            }
             entries.sort_by(|a, b| a.asset_path.cmp(&b.asset_path));
             catalog.entries = Arc::new(entries);
             apply_program_contracts(&mut catalog);
@@ -324,7 +348,7 @@ impl Panel for ModelsPalette {
         PanelId("rover_models")
     }
     fn title(&self) -> String {
-        "Models".into()
+        "Programs".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::SideBrowser
@@ -357,7 +381,7 @@ fn models_palette_content(
     tokens: &lunco_theme::DesignTokens,
     palette: &mut ModelsPalette,
 ) {
-    ui.heading("Models");
+    ui.heading("Programs");
 
     let pending = ctx.resource::<AttachState>().and_then(|state| match state {
         AttachState::Pending(choice) => Some(choice.clone()),
@@ -425,6 +449,7 @@ fn models_palette_content(
             .enumerate()
             .filter_map(|(i, choice)| {
                 (choice.label.to_lowercase().contains(&filter)
+                    || choice.display_path.to_lowercase().contains(&filter)
                     || choice.language_label().to_lowercase().contains(&filter))
                 .then_some(i)
             })
@@ -466,7 +491,7 @@ fn models_palette_content(
                     .min_size(egui::vec2(ui.available_width(), row_height));
                 let response = ui
                     .add_enabled(enabled, button)
-                    .on_hover_text(&choice.asset_path);
+                    .on_hover_text(&choice.display_path);
                 if enabled {
                     response.dnd_set_drag_payload(choice.attachment_spec("{host}"));
                 }

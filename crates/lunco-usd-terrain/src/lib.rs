@@ -2139,7 +2139,7 @@ fn bridge_dem_prim_read<R: UsdRead>(
                     lunco_core::trigger_runtime_error(
                         commands,
                         "usd-dem-twin-authority-retired",
-                        format!("DEM source uses retired Twin authority `{name}`."),
+                        "DEM source uses a retired Twin mount.".to_owned(),
                     );
                     return;
                 }

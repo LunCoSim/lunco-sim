@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument("--scene-free", action="store_true")
     args = parser.parse_args()
     title = "Scene-free workbench" if args.scene_free else "Workbench perspectives"
-    count = 8 if args.scene_free else 26
+    count = 8 if args.scene_free else 28
     scenario = "workbench_scene_free" if args.scene_free else "workbench_perspectives"
     extra = ("--no-throttle", "--no-vsync") if args.scene_free else ("--no-throttle", "--no-vsync", "--scene", "scenes/fixtures/usd_query_api/site.usda")
     output = ROOT / "target" / ("workbench-scene-free" if args.scene_free else "workbench-perspectives")

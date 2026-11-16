@@ -23,7 +23,8 @@ use crate::dyn_params::ParamSchema;
 /// One pickable shader: its asset path (`shaders/foo.wesl`) and display label.
 #[derive(Clone, Debug)]
 pub struct ShaderEntry {
-    /// Asset path passed to `SetObjectProperty { property: "shader", .. }`.
+    /// Private native load address used by the picker and renderer. Public
+    /// commands and authored USD convert it through the asset source owner.
     pub path: String,
     /// Title-cased label shown in the picker (`solar_panel` → `Solar Panel`).
     pub label: String,

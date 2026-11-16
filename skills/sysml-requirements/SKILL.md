@@ -44,8 +44,8 @@ prepared analysis, displays requirement documentation, formal `require`
 criteria, resolved `verify` cases, parser diagnostics, and source locations.
 Selecting **SysML Requirements** from another perspective opens its owning
 Editor perspective. The panel starts with applied requirement usages and a
-compact statement-led list. **Definitions** includes reusable declarations; **All columns** adds source,
-kind and overall status. The requirement column expands with its dock; resize
+compact statement-led list. **Filters and columns** contains secondary controls.
+**Definitions** includes reusable declarations; **All columns** restores the detailed table. The requirement column expands with its dock; resize
 the result columns to adjust the space available for statements. Search and
 independent status filters narrow the list.
 **Passed first** is the default ordering: current-revision passing requirement
@@ -53,11 +53,14 @@ evidence comes first, with column sorting within each group. **Column order**
 sorts the entire list by its selected column. Neither option changes evidence,
 execution, or coverage status. Summary cards use the selected usage/definition
 scope. The docked detail pane
-retains the complete statement, source and evidence. **Open at line** opens
+retains the complete statement, source and evidence. Source links such as **Open usage source** and **Open definition source** open
 the canonical `SysmlDocument` at the declaration or diagnostic location.
 **Save source** applies revision-checked `ApplySysmlOps` and
 `SaveDocument` commands. The text editor is read-only when the document is
-not writable or its source revision conflicts with the open draft.
+not writable or its source revision conflicts with the open draft. Source actions
+use a large resizable window with visible save controls and horizontal scrolling.
+`SysmlRequirementsState` owns retained drafts and retires them on `TwinClosed`,
+even when the panel is hidden.
 
 The presentation model rebuilds when Twin, analysis, source-document, or
 evidence inputs change. Empty lifecycle queues are read before a mutable
@@ -814,8 +817,8 @@ changes, not to unrelated document focus or USD editor tabs. Opening or closing
 USD editors must not rebuild the SysML model; source, evidence, manifest, and
 Twin lifecycle changes must still invalidate it.
 The detail pane initially selects a requirement with a Twin-mapped test when one is
-available. **Run selected tests** runs the distinct mapped cases
-for the selected requirement. **Run all mapped tests** runs each distinct case
+available. **Run selected** runs the distinct mapped cases
+for the selected requirement. **Run mapped** runs each distinct case
 linked from any requirement once, sequentially. The completed suite retains its
 source revision and outcome counts; **Show failures** filters the list to
 failed requirements and **Rerun failed** runs only failed cases. The active
@@ -843,12 +846,11 @@ The virtualized table sorts by visible ID, kind, source, evidence, Twin test,
 model coverage, or overall status, keeping those status dimensions in separate
 columns. Click a header to sort, drag its dotted handle to reorder it, and drag
 its divider to resize. Role cells say Definition or Usage, and source cells
-show the file name and line. The table uses the full center pane; the docked Requirement details
-panel follows the selected row in the lower-right Editor pane. It summarizes
+show the file name and line. Narrow docks use selectable cards; **All columns** opens the detailed table.
+The docked Requirement details panel follows the selected row in the right Editor pane. It summarizes
 the formal criterion, declared subjects, explicit `satisfy` links, verification
 mappings, and evidence. Use **Open full traceability** to move to the complete
-map. The action focuses or opens the center SysML Requirements panel before
-showing its Traceability tab, even when another center panel is active. When a
+map. The action focuses SysML Requirements before showing its Traceability tab. When a
 verification case has no Twin test mapping, **Open Twin test mapping** opens
 the active Twin's `twin.toml` in the source viewer. The missing-verify counter
 applies to usages; unmapped counts flag elements with at least one unmapped

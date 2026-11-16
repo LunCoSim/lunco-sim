@@ -141,8 +141,8 @@ unresolved-name, and package-collision diagnostics make the model visibly
 invalid, prevent a `VERIFIED` roll-up, and disable verification actions. The
 view keeps up to 64 detail records per requirement and retains separate
 pass/fail/inconclusive/error counts for larger result sets. A mapped case
-can run from its linked requirement. **Run selected tests** runs the
-distinct mapped cases for the selected requirement; **Run all mapped tests**
+can run from its linked requirement. **Run selected** runs the
+distinct mapped cases for the selected requirement; **Run mapped**
 runs each distinct mapped case once, sequentially, through the production
 headless scene-test runner. A completed suite keeps its source revision, case
 outcomes, and pass/fail/incomplete/cancelled counts. **Show failures** filters
@@ -151,10 +151,9 @@ cases. The suite can be stopped while it is active.
 
 The Requirements overview shows separate usage, definition, and source-file
 counts plus quick filters for missing criteria, missing `verify` links,
-unmapped Twin tests, and tests without a current result. Its sortable table
-uses the full center pane and keeps evidence, Twin test execution, model
-coverage, and overall status in separate columns. A docked Requirement details
-panel stays in the lower-right Editor pane, follows the selected row, and
+unmapped Twin tests, and tests without a current result. Narrow docks use selectable cards; **All columns** opens a sortable table with
+separate evidence, Twin test execution, model coverage, and overall status columns. A docked Requirement details
+panel stays in the right Editor pane, follows the selected row, and
 summarizes formal criteria, subjects, explicit `satisfy` links, verification
 mappings, and evidence. It links to the full Traceability view and can open the
 active Twin's `twin.toml` when a test mapping is missing. The ID sort follows
@@ -186,7 +185,7 @@ for readiness failures, runtime faults, or exhausted limits stay separate from
 authored check results. The UI builds check identities and explanations from
 typed report evidence instead of inferring status from log text. The bounded
 captured output remains available per case. Evidence check details can open the associated
-requirement declaration in the inline source editor. Requirements without a
+requirement declaration in the resizable canonical source editor. Requirements without a
 resolved `verify` link or a Twin test mapping remain visible as coverage gaps
 and are skipped. Tests read saved Twin files, so running is disabled while an
 indexed SysML document or local source draft has unsaved edits.
@@ -788,3 +787,8 @@ Explicit non-goals, to avoid scope creep:
 - [`20-domain-modelica.md`](20-domain-modelica.md) — Modelica as the behavior realization
 - [`21-domain-usd.md`](21-domain-usd.md) — USD as the geometric realization
 - `specs/013-sysml-integration` — detailed spec (when written)
+
+Source actions reuse the canonical SysML document editor in a resizable opaque
+window. The source area scrolls horizontally and reserves room for save/revert
+controls. `SysmlRequirementsState` owns retained view/draft data; its `TwinClosed`
+observer retires closed-Twin state independently of panel visibility.

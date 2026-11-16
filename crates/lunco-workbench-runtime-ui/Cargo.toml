@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reusable HUI/Flair runtime-authored surface presentation for LunCoSim hosts"
 
 [dependencies]
+accesskit = { workspace = true }
 bevy_ui_widgets = { workspace = true }
 lunco-command-contracts = { path = "../lunco-command-contracts" }
 lunco-assets-path = { path = "../lunco-assets-path" }

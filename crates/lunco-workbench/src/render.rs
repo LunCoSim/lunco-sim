@@ -2581,47 +2581,6 @@ fn render_net_chip(ui: &mut egui::Ui, world: &World, theme: &lunco_theme::Theme,
     ui.separator();
 }
 
-pub(crate) fn render_panel_solo(
-    ui: &mut egui::Ui,
-    id: &PanelId,
-    layout: &mut WorkbenchLayout,
-    world: &mut World,
-    surface: PanelSurfaceStyle,
-) {
-    if let Some(panel) = layout.panels.get(id) {
-        ui.label(egui::RichText::new(panel.title()).strong());
-        ui.separator();
-    }
-    match layout.panels.remove(id) {
-        Some(mut panel) => {
-            let scroll_policy = panel.scroll_policy();
-            let mut ctx = PanelCtx::with_surface(world, surface);
-            match scroll_policy {
-                PanelScrollPolicy::Vertical => {
-                    egui::ScrollArea::vertical()
-                        .id_salt(("workbench_solo_panel_body", id.as_str()))
-                        .auto_shrink([false; 2])
-                        .show(ui, |ui| panel.render(ui, &mut ctx));
-                }
-                PanelScrollPolicy::SelfManaged => panel.render(ui, &mut ctx),
-            }
-            let intents = ctx.take_intents();
-            layout.panels.insert(*id, panel);
-            intents.apply(world);
-        }
-        _ => {
-            let error_color = world
-                .get_resource::<lunco_theme::Theme>()
-                .map(|t| t.tokens.error)
-                .unwrap_or(egui::Color32::LIGHT_RED);
-            ui.colored_label(
-                error_color,
-                format!("Panel `{}` not registered", id.as_str()),
-            );
-        }
-    }
-}
-
 pub(crate) fn register_workbench_appearance_settings_menu(world: &mut World) {
     use bevy_egui::egui;
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {

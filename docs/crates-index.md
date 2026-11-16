@@ -205,8 +205,8 @@ The editor shell, visualization framework, generic 2D canvas, in-scene/luncosim 
 | **`lunco-workbench-help-ui`** | Optional perspective help popup, control-reference registry and live control sections. Task descriptions and titles come from the perspective owner; the shell builds Help navigation from the current registry. It keeps egui rendering outside `lunco-workbench-core`. |
 | **`lunco-workbench-guided-ui`** | Optional application-level adapter for scene-scoped guided presentation: Rhai-driven persistent HUDs, widget spotlights, coach-mark tours, and recoverable guided-target surfaces. Its registered scene resource resets after shutdown and entity-removal callbacks; objectives visibility is an application preference. It consumes the workbench core's generic anchors and render-set contracts but does not make the base shell depend on guided/tutorial behavior. |
 | **`lunco-workbench-file-dialog`** | Reusable native/wasm file-dialog capability: typed open/save/folder requests, backend resolution events, browser-picked text, and browser downloads. It owns dialog dependencies (`rfd`/wasm DOM) outside storage, document, and shell contracts. |
-| **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
-| **`lunco-workbench-runtime-ui`** | Reusable HUI/Flair runtime-authored surface mechanism: manifest loading, retained surface lifecycle, placement, styling, input regions, capture readiness, pointer-location-based collection scrolling, and generic semantic action transport. Hosts supply exposures, gates, Twin state, and recorder mode; application-specific actions stay outside this crate. |
+| **`lunco-workbench-file-ops`** | Reusable windowed file-workflow adapter: typed picker commands, picker-result routing, Twin/document save and rename coordination, and immutable ExportText snapshots with asynchronous destination/write completion. It reuses `lunco-storage`, `lunco-workbench-file-dialog`, `lunco-workspace`, and document contracts without making storage own UI policy. |
+| **`lunco-workbench-runtime-ui`** | Reusable HUI/Flair runtime-authored surface mechanism: manifest loading, retained surface lifecycle, placement, styling, input regions, capture readiness, pointer-location-based collection scrolling, keyboard/assistive control activation and labels, an accessible Controls menu, and generic semantic action transport. Hosts supply exposures, gates, Twin state, and recorder mode; application-specific actions stay outside this crate. |
 | **`lunco-workbench-text-editor`** | Reusable generic source editor: source-only text paths, asset/Twin/ephemeral source loading, async storage writes, tab lifecycle, and source-editor panel registration. It reuses the core source/tab contracts and shared text-editor widget without depending on the concrete docking shell. |
 | **`lunco-workbench-state`** | Reusable per-Twin session state: persisted document snapshots, domain codec registry, dock snapshot schema, runtime-surface layout state, storage-backed load/save, and the layout-provider contract used by concrete shells. |
 | **`lunco-workbench-window`** | Reusable OS-window capability: typed minimize/maximize/close commands, merged-titlebar construction, settings-backed geometry persistence, and explicit native placement. It depends on Bevy window APIs and `lunco-settings`, not the concrete Workbench shell. |
@@ -710,8 +710,9 @@ pointer-chord resolution, command-chord parsing/collision resolution and Leafwin
 displace the global effective chord and publish one warning per changed conflict
 snapshot, without overwriting persisted global preferences.
 `lunco-luncosim-simulation` admits application defaults and active-Twin overrides
-from `lunco.input-bindings.v1` documents through `JsonAssetScopeChanged`. The
-contract crate has no compiled-in asset path or product keymap.
+from `lunco.input-bindings.v1` documents through `JsonAssetScopeChanged` and
+publishes the admitted `ApplicationInputBindings` snapshot for Restore default.
+The contract crate has no compiled-in asset path or product keymap.
 
 **`lunco-input-ui`**
 Optional egui adapter for the shared input state. It owns the input overlay
@@ -1249,7 +1250,10 @@ Windowed file-workflow adapters. It owns picker-triggering seams and routes
 resolved picker handles into the existing document and workspace commands.
 Actual reads, writes, entry inspection, and renames use `lunco-storage`;
 folder/Twin admission remains in `lunco-workspace`; domain crates still own
-format-specific loading and serialization.
+format-specific loading and serialization. `ExportText` retains immutable text
+through asynchronous destination selection and writes; `ExportLimits` bounds
+pending preparation/I/O admission. Completion and errors use the shared status
+owner rather than blocking the UI.
 Generated promotion names and rename targets use the shared portable filename
 validator; Save All and Save As Twin validate every destination before dispatching
 saves or manifest creation. Invalid names reject visibly rather than acquiring a
@@ -1306,6 +1310,9 @@ browser task or on teardown. Native dialog retirement suppresses completion;
 Reusable HUI/Flair surface presentation. It owns the generic manifest asset
 loader, retained tree lifecycle, authored placement and styling bridge, input
 regions, render-readiness acknowledgement, and open semantic action transport.
+Labelled press controls join keyboard navigation and the accessible Controls menu;
+the workbench forwards platform requests through the active egui tree. Generic
+admission validates the exact live, visible, enabled callback lease.
 Semantic input carries the Twin and committed scene captured at emission, so
 deferred delivery cannot acquire a replacement scene or Twin.
 The `lunco-luncosim-ui` host supplies capture mode and named gates and handles
@@ -1701,3 +1708,14 @@ state containment remains unconditional.
 Scene download completeness is shared through `lunco-assets-datasets::SceneDatasetRequirements`;
 `lunco-usd-bevy-runtime-core` produces it from composed stage facts and owns its
 simulation admission hold. UI and scripting consume the same resource.
+
+Stable asset-reference boundaries: `lunco-assets-runtime::discovery::AssetFile`
+provides separate public `source_uri` and native `asset_path` fields.
+`lunco-scene-catalog::SpawnSource::UsdFile` retains both for stable catalog IDs
+and exact worker leases. `lunco-usd-commands` rejects private mount references
+before document writes; `lunco-scene-authoring` journals stable shader sources
+and retires Twin-owned shader documents on `TwinClosed`.
+
+`lunco-sysml-ui::SysmlRequirementsState` owns the requirements browser/source
+draft lifetime and clears closed-Twin state independently of panel visibility.
+The canonical SysML source editor renders in one resizable window.

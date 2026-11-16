@@ -307,43 +307,24 @@ fn publish_scene_catalog_facts(
                     let mut scenes = Vec::with_capacity(assets.len());
                     let mut error = None;
                     for asset in assets {
-                        let twin = match asset.twin_authority.as_deref() {
+                        let twin = match lunco_assets_core::parse_twin_uri(&asset.source_uri) {
                             None => None,
-                            Some(authority) => match roots
-                                .logical_identity_for_authority(authority)
-                                .ok()
-                                .and_then(|identity| {
-                                    facts
-                                        .twins
-                                        .iter()
-                                        .find(|twin| twin.source_identity == identity)
-                                }) {
+                            Some((identity, _)) => match facts
+                                .twins
+                                .iter()
+                                .find(|twin| twin.source_identity == identity)
+                            {
                                 Some(twin) => Some(twin.clone()),
                                 None => {
                                     error = Some(format!(
                                         "scene `{}` has no open workspace Twin owner",
-                                        asset.asset_path
+                                        asset.source_uri
                                     ));
                                     break;
                                 }
                             },
                         };
-                        let uri = lunco_assets_core::asset_path::load_asset_path(
-                            &lunco_assets_core::engine_asset_uri(&asset.asset_path),
-                            None,
-                            None,
-                            None,
-                        )
-                        .and_then(|path| {
-                            lunco_assets_core::asset_path::source_uri(&path, Some(roots))
-                        });
-                        let uri = match uri {
-                            Ok(uri) => uri,
-                            Err(detail) => {
-                                error = Some(detail.to_string());
-                                break;
-                            }
-                        };
+                        let uri = lunco_assets_core::engine_asset_uri(&asset.source_uri);
                         scenes.push(SceneCatalogEntry {
                             uri,
                             relative_path: asset.rel.clone(),
@@ -610,7 +591,9 @@ impl Plugin for LunCoSimUiPlugin {
                 // Rhai behaviour editor (Editor). Its view-model is
                 // produced each frame from the selection + ScriptRegistry.
                 app.register_panel(rhai_editor_panel::RhaiEditorPanel);
-                app.init_resource::<rhai_editor_panel::RhaiEditorVm>();
+                app.init_scene_resource::<rhai_editor_panel::RhaiEditorVm>();
+                app.add_observer(rhai_editor_panel::apply_editor_action);
+                rhai_editor_panel::register_inspection(app);
                 app.add_systems(Update, rhai_editor_panel::produce_rhai_editor_vm);
                 app.register_panel(models_palette::ModelsPalette::default());
                 app.init_resource::<models_palette::ProgramCatalog>();

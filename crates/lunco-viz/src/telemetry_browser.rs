@@ -2317,7 +2317,7 @@ impl Panel for TelemetryBrowserPanel {
     }
 
     fn title(&self) -> String {
-        "Telemetry".into()
+        "Signals".into()
     }
 
     fn default_slot(&self) -> PanelSlot {

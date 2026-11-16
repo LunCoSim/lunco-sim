@@ -280,7 +280,10 @@ impl InstancePanel for ModelViewPanel {
                 .fill(theme.tokens.alert_backdrop)
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Duplicate to edit").clicked() {
+                            banner_duplicate_clicked = true;
+                        }
                         ui.label(
                             egui::RichText::new(if generated_document {
                                 "Generated"
@@ -298,10 +301,7 @@ impl InstancePanel for ModelViewPanel {
                             })
                             .color(theme.tokens.warning)
                         );
-                        ui.add_space(ui.available_width() - 170.0);
-                        if ui.button("Duplicate to edit").clicked() {
-                            banner_duplicate_clicked = true;
-                        }
+
                     });
                 });
             if banner_duplicate_clicked {
@@ -504,12 +504,7 @@ fn render_unified_toolbar(
     let mut restart_clicked = false;
     let mut new_view_mode = view_mode;
 
-    ui.horizontal(|ui| {
-        if is_read_only {
-            ui.colored_label(tokens.warning, "Read-only");
-            ui.separator();
-        }
-
+    ui.horizontal_wrapped(|ui| {
         // Capture the rect spanning the four view-mode toggles so
         // the help-tour overlay can spotlight the exact strip instead
         // of the whole panel.
@@ -605,7 +600,8 @@ fn render_unified_toolbar(
                 .clicked();
         }
 
-        ui.separator();
+    });
+    ui.horizontal_wrapped(|ui| {
         let compile_busy_hint = if matches!(compile_state, CompileState::Compiling) {
             "Compiling — wait for the current build to finish"
         } else {

@@ -575,7 +575,7 @@ impl Panel for WelcomePanel {
                     .count();
                 ui.horizontal(|ui| {
                     ui.heading(
-                        egui::RichText::new("example paths")
+                        egui::RichText::new(if available_paths.is_empty() { "Examples" } else { "Learning paths" })
                             .text_style(lunco_theme::TypographyRole::Section.text_style()),
                     );
                     if total_steps > 0 {
@@ -594,7 +594,7 @@ impl Panel for WelcomePanel {
                 let description = if !library_index_available() {
                     "Learning paths appear when an installed Modelica library is indexed."
                 } else if available_paths.is_empty() {
-                    "No curated paths match the indexed libraries. Browse available examples below."
+                    "Browse bundled demos or installed library examples below."
                 } else {
                     "Curated paths match the installed libraries. Click to expand, then open a step read-only."
                 };

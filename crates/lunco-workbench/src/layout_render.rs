@@ -956,33 +956,22 @@ pub(super) fn render_layout(
             render_status_bar_inner(ui, world, theme);
         });
 
-    // ── Dock area / side panels ─────────────────────────────────────
-    // Two-mode rendering:
-    //   1. If the active perspective is centre-driven (non-empty centre
-    //      intent, e.g. the modelica workbench's Code/Diagram), render the
-    //      full DockArea.
-    //   2. Otherwise (viewport-only perspective like the luncosim's `View`),
-    //      render the side panels with plain SidePanel / TopBottomPanel and
-    //      leave the central area transparent for the 3D viewport.
-    //
-    // The gate is the centre *intent* (`layout.center`), not merely "does
-    // the dock hold any tab". A hybrid app (the rover luncosim embeds the
-    // Modelica workbench) can have document/model instance tabs parked in
-    // the dock while a viewport-only perspective is active — e.g. restored
-    // on boot before the user switches to a doc-capable perspective.
-    // Keying off the dock alone would flip the whole workbench into
-    // dock-mode and paint tab chrome over the 3D scene; keying off the
-    // perspective's centre intent keeps `View` pure-3D and leaves the
-    // parked docs hidden until the user switches to a centre-driven
-    // perspective (which re-attaches them via `rebuild_dock`).
+    // Every populated slot uses the same dock and active-tab contract.
+    // Parked document tabs do not make a scene-only perspective populated.
     let has_dock_tabs =
-        layout.has_central_content() && layout.dock.iter_all_tabs().next().is_some();
+        !viewport::layout_is_empty(layout) && layout.dock.iter_all_tabs().next().is_some();
     let presentation_bounds = viewport_ui.available_rect_before_wrap();
     let translucent_tab_content = world
         .resource::<WorkbenchAppearanceSettings>()
         .translucent_tab_content;
     let panel_surface = panel_content_surface_style(theme, translucent_tab_content);
 
+    let vacant_center = !layout.has_central_content();
+    let task_guidance = layout
+        .active_perspective
+        .as_ref()
+        .and_then(|active| layout.perspectives.iter().find(|task| task.id() == *active))
+        .map(|task| (task.title(), task.description().to_owned()));
     if has_dock_tabs {
         let WorkbenchLayout {
             panels,
@@ -1095,6 +1084,31 @@ pub(super) fn render_layout(
             DockArea::new(dock)
                 .style(style)
                 .show_inside(&mut viewport_ui, &mut viewer);
+            if vacant_center && let Some((title, description)) = &task_guidance {
+                let (left, right, bottom_rect) =
+                    dock_group_rects(dock, side_browser, right_inspector, bottom);
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(
+                        left.map_or(dock_rect.left(), |rect| rect.right()),
+                        dock_rect.top(),
+                    ),
+                    egui::pos2(
+                        right.map_or(dock_rect.right(), |rect| rect.left()),
+                        bottom_rect.map_or(dock_rect.bottom(), |rect| rect.top()),
+                    ),
+                )
+                .shrink(theme.spacing.window_padding);
+                if rect.is_positive() {
+                    egui::Area::new(egui::Id::new("empty_work_area"))
+                        .fixed_pos(rect.left_top())
+                        .interactable(false)
+                        .show(ctx, |ui| {
+                            ui.set_width(rect.width().min(560.0));
+                            ui.heading(title);
+                            ui.label(description);
+                        });
+                }
+            }
             // The scene viewport LEAF's rect, straight from egui_dock's post-layout
             // tree. `LeafNode::rect` persists even when the leaf is COLLAPSED or the
             // viewport sits behind another tab — cases where `ViewportPanel::render`
@@ -1114,11 +1128,8 @@ pub(super) fn render_layout(
                 })
             });
 
-            // Publish generic slot anchors from the laid-out dock tree. The
-            // alternate explicit-panel renderer below publishes these from
-            // egui::Panel responses; docked perspectives need the same
-            // contract or a guided would fail merely because its authored
-            // perspective uses egui_dock.
+            // Publish generic slot anchors from the laid-out dock tree so
+            // guided flows share the exact regions painted by every perspective.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
                 a.set_static("panel.center", screen);
                 let (side_rect, right_rect, bottom_rect) =
@@ -1138,92 +1149,6 @@ pub(super) fn render_layout(
                 g.set_scene_viewport_rect(scene_vp_rect);
             }
         }
-    } else {
-        // 3D-app mode — explicit side panels, transparent centre.
-        // Defaults are percentages of the current window so the layout
-        // looks right whether the user runs in 1280×720 or 4K. Targets
-        // mirror a 10/80/10 split: side panels 10% of window width each;
-        // bottom dock 20% of window height.
-        let screen = ctx.content_rect();
-        // Defaults are percentages of the current window so the layout
-        // looks right whether the user runs in 1280×720 or 4K. Targets
-        // mirror a 10/80/10 split: side panels 10% of window width each;
-        // bottom dock 20% of window height. egui then owns the live width
-        // in its own memory for the session (not persisted — luncosim-style
-        // perspectives keep their sizes in the dock tree via 5a instead).
-        let side_default = (screen.width() * 0.10).max(140.0);
-        let right_default = (screen.width() * 0.10).max(140.0);
-        let bottom_default = (screen.height() * 0.20).max(120.0);
-
-        let side_panel_fill = panel_surface_fill(
-            theme,
-            world
-                .resource::<WorkbenchAppearanceSettings>()
-                .translucent_tab_content,
-        );
-
-        if let Some(id) = layout.side_browser.first().copied() {
-            let r = egui::Panel::left("lunco_workbench_side_panel_left")
-                .resizable(true)
-                .default_size(side_default)
-                .min_size(120.0)
-                .max_size(screen.width() * 0.3)
-                .frame(
-                    egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
-                )
-                .show(&mut viewport_ui, |ui| {
-                    render_panel_solo(ui, &id, layout, world, panel_surface);
-                });
-            publish_panel_anchor(world, id, r.response.rect);
-            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set_static("panel.side_browser", r.response.rect);
-            }
-        }
-        if let Some(id) = layout.right_inspector.first().copied() {
-            let r = egui::Panel::right("lunco_workbench_side_panel_right")
-                .resizable(true)
-                .default_size(right_default)
-                .min_size(140.0)
-                .max_size(screen.width() * 0.3)
-                .frame(
-                    egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
-                )
-                .show(&mut viewport_ui, |ui| {
-                    render_panel_solo(ui, &id, layout, world, panel_surface);
-                });
-            publish_panel_anchor(world, id, r.response.rect);
-            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set_static("panel.right_inspector", r.response.rect);
-            }
-        }
-        if let Some(id) = layout.bottom.first().copied() {
-            let r = egui::Panel::bottom("lunco_workbench_bottom_panel")
-                .resizable(true)
-                .default_size(bottom_default)
-                .min_size(60.0)
-                .frame(
-                    egui::Frame::side_top_panel(viewport_ui.style().as_ref()).fill(side_panel_fill),
-                )
-                .show(&mut viewport_ui, |ui| {
-                    render_panel_solo(ui, &id, layout, world, panel_surface);
-                });
-            publish_panel_anchor(world, id, r.response.rect);
-            if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set_static("panel.bottom", r.response.rect);
-            }
-        }
-        let center = viewport_ui.available_rect_before_wrap();
-        if center.width() > 4.0 && center.height() > 4.0 {
-            if let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>() {
-                anchors.set_static("panel.center", center);
-            }
-        }
-        // Central area: do NOT call CentralPanel — egui's bottom/side
-        // panels reserve their space and the remaining region stays
-        // free for the 3D scene that Bevy renders to the full window.
-        // Scene-vs-chrome picking is handled by bevy_picking (egui occlusion via
-        // bevy_egui's picking backend), so there's no pointer gate to compute
-        // here anymore.
     }
 
     render_floating_panels(ctx, layout, world, theme, presentation_bounds);
@@ -1243,7 +1168,9 @@ pub(super) fn render_layout(
     });
     if let Some((message, guidance, actions)) = placeholder {
         let viewport_visible = viewport::layout_is_empty(layout)
-            || viewport::layout_contains_panel(layout, VIEWPORT_PANEL_ID);
+            || world
+                .get_resource::<PanelRects>()
+                .is_some_and(|rects| rects.get(VIEWPORT_PANEL_ID).is_some());
         if viewport_visible {
             let mut activate = None;
             let card_width = (ctx.viewport_rect().width() - theme.spacing.window_padding * 4.0)

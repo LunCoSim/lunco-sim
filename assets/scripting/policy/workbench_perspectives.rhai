@@ -29,7 +29,7 @@ fn assemble(facts) {
         let analysis = #{
             id: "analysis", title: "↗ Analyze", interaction: "editor", revision: 1,
             scene_visible: true,
-            description: "Compare signals in Graphs. Check or drag channels from Telemetry into the active plot. Select an entity to narrow the signal list; use Ports for current values and manual inputs. View → Analyze exposes the additional analysis tools.",
+            description: "Compare signals in Graphs. Check or drag channels from Signals into the active plot. Select an entity to narrow the signal list; use Ports for current values and manual inputs. View → Analyze exposes the additional analysis tools.",
             left: ["telemetry_browser"], instances: plots,
         };
         if live_scene { analysis.center = ["workbench::viewport"]; }
@@ -42,7 +42,7 @@ fn assemble(facts) {
         && has_panel(facts, "sandbox_environment") && has_panel(facts, "workbench::viewport") {
         result.push(#{
             id: "rover_build", title: "⚒ Build", interaction: "editor", revision: 4,
-            description: "Compose the live scene from reusable assemblies. Browse Entities and Twin files, place objects with Spawn and edit their properties in Inspector. Use Editor for internal assembly parts and Analyze for live signals.",
+            description: "Compose the live scene from reusable assemblies. Browse Entities and Twin files, place objects with Spawn and edit their properties in Scene Properties. Use Editor for internal assembly parts and Analyze for live signals.",
             left: ["entity_list"], left_bottom: ["lunco.workbench.twin_browser"],
             center: ["workbench::viewport"],
             right: ["sandbox_inspector", "sandbox_environment"], right_bottom: ["spawn_palette"],
@@ -51,14 +51,14 @@ fn assemble(facts) {
     if has_panel(facts, "usd_prim_tree") && has_panel(facts, "usd::viewport")
         && has_panel(facts, "lunco.workbench.twin_browser") && has_panel(facts, "sandbox_inspector") {
         let editor = #{
-            id: "editor", title: "✎ Editor", interaction: "editor", revision: 6,
-            description: "Choose a file in Twin or a prim in Prims. Edit the document in the center, inspect properties on the right, and review changes in History. Save and Undo apply to the active document.",
+            id: "editor", title: "✎ Editor", interaction: "editor", revision: 7,
+            description: "Choose a file in Twin or a prim in Prims. Edit the document in the center, inspect properties on the right, and review changes in Change history. Save and Undo apply to the active document.",
             left: ["lunco.workbench.twin_browser", "usd_prim_tree"],
             right: ["sandbox_inspector"],
         };
-        if has_panel(facts, "sysml_requirements") { editor.right.push("sysml_requirements"); }
+        if has_panel(facts, "sysml_requirements") { editor.left.push("sysml_requirements"); }
         if has_panel(facts, "sysml_requirement_details") { editor.right.push("sysml_requirement_details"); }
-        if has_panel(facts, "modelica_journal") { editor.right_bottom = ["modelica_journal"]; }
+        if has_panel(facts, "modelica_journal") { editor.bottom = ["modelica_journal"]; }
         if has_panel(facts, "authoring_review") { editor.right.push("authoring_review"); }
         if has_panel(facts, "sandbox_environment") { editor.right.push("sandbox_environment"); }
         result.push(editor);

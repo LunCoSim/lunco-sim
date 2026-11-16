@@ -158,8 +158,22 @@ fn report_outcomes(
     });
 }
 
+/// Exclusive UI recording lease; command shortcuts cannot execute recorded chords.
+#[derive(Resource, Default)]
+struct ShortcutRecording(bool);
+
+fn release_hidden_recording(
+    snapshot: Res<WorkbenchSnapshot>,
+    mut recording: ResMut<ShortcutRecording>,
+) {
+    if !snapshot.is_panel_visible(PANEL) {
+        recording.0 = false;
+    }
+}
+
 /// Typed API dispatch retains the existing reflection, ownership and outcome gates.
 fn dispatch_bindings(
+    recording: Res<ShortcutRecording>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<ActiveInputBindings>,
     mut contexts: EguiContexts,
@@ -167,6 +181,9 @@ fn dispatch_bindings(
     mut pending: ResMut<PendingBindings>,
     mut commands: Commands,
 ) {
+    if recording.0 {
+        return;
+    }
     let in_text = contexts
         .ctx_mut()
         .ok()
@@ -200,6 +217,8 @@ struct KeybindingsPanel {
     arguments: Vec<CommandBindingArgument>,
     allow_in_text: bool,
     error: Option<String>,
+    recording_intent: Option<String>,
+    recording_command: bool,
 }
 
 impl Panel for KeybindingsPanel {
@@ -220,6 +239,9 @@ impl Panel for KeybindingsPanel {
             .resource::<InputBindingsSettings>()
             .cloned()
             .unwrap_or_default();
+        let defaults = ctx
+            .resource::<lunco_input_core::ApplicationInputBindings>()
+            .and_then(|defaults| defaults.0.clone());
         let active = ctx
             .resource::<ActiveInputBindings>()
             .cloned()
@@ -227,8 +249,74 @@ impl Panel for KeybindingsPanel {
         let profile = ctx
             .resource::<SceneInputBindings>()
             .and_then(|profile| profile.0.clone());
+        let recording = ctx
+            .resource::<ShortcutRecording>()
+            .is_some_and(|recording| recording.0);
+        if recording {
+            let captured = ctx.resource::<ButtonInput<KeyCode>>().and_then(|keys| {
+                let mut pressed: Vec<_> = keys
+                    .get_just_pressed()
+                    .copied()
+                    .filter(|key| {
+                        self.recording_intent.is_some()
+                            || !matches!(
+                                key,
+                                KeyCode::ControlLeft
+                                    | KeyCode::ControlRight
+                                    | KeyCode::ShiftLeft
+                                    | KeyCode::ShiftRight
+                                    | KeyCode::AltLeft
+                                    | KeyCode::AltRight
+                                    | KeyCode::SuperLeft
+                                    | KeyCode::SuperRight
+                            )
+                    })
+                    .collect();
+                pressed.sort_by_key(|key| format!("{key:?}"));
+                pressed.first().map(|key| {
+                    let mut chord: Vec<_> = keys
+                        .get_pressed()
+                        .copied()
+                        .filter(|key| {
+                            matches!(
+                                key,
+                                KeyCode::ControlLeft
+                                    | KeyCode::ControlRight
+                                    | KeyCode::ShiftLeft
+                                    | KeyCode::ShiftRight
+                                    | KeyCode::AltLeft
+                                    | KeyCode::AltRight
+                                    | KeyCode::SuperLeft
+                                    | KeyCode::SuperRight
+                            )
+                        })
+                        .collect();
+                    chord.sort_by_key(|key| format!("{key:?}"));
+                    chord.push(*key);
+                    (*key, chord)
+                })
+            });
+            if let Some((key, chord)) = captured {
+                if key != KeyCode::Escape {
+                    if let Some(intent) = self.recording_intent.take() {
+                        self.editing_intent = Some((intent, format!("{key:?}")));
+                    } else if self.recording_command {
+                        self.chord = shortcut_label(&chord);
+                    }
+                }
+                self.recording_command = false;
+                self.recording_intent = None;
+                ctx.set_resource(ShortcutRecording(false));
+            }
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
         ui.heading("Keybindings");
+        if recording {
+            let mut hint = String::from("Press the new key or chord; Escape cancels");
+            let field = ui.add(text_editor::singleline(&mut hint).id_salt("record_shortcut_capture"));
+            field.request_focus();
+        }
+
         ui.label("Global shortcuts are saved in Settings. Twin shortcuts take precedence while that Twin is active.");
         if let Some(conflicts) = ctx.resource::<InputBindingConflicts>() {
             for conflict in &conflicts.0 { ui.label(format!("{}: {} overrides {} — recorded in Recent Events", conflict.chord, conflict.winner, conflict.displaced)); }
@@ -238,18 +326,37 @@ impl Panel for KeybindingsPanel {
         ui.strong("Global movement and actions");
         for (intent, keys) in &settings.bindings {
             if !intent.to_lowercase().contains(&self.filter.to_lowercase()) { continue; }
-            ui.horizontal(|ui| {
-                ui.label(intent);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(lunco_core::humanize_identifier(intent)).on_hover_text(intent);
                 ui.label(if keys.is_empty() { "Unbound".into() } else { lunco_input_core::key_label(keys) });
                 let overridden = profile.as_ref().is_some_and(|profile| profile.bindings.contains_key(intent) || profile.key_chords.contains_key(intent))
                     || active.bindings.get(intent) != Some(keys);
                 if overridden { ui.label(egui::RichText::new("Twin override").strong()); }
                 if ui.small_button("Edit").clicked() { self.editing_intent = Some((intent.clone(), keys.iter().map(|key| format!("{key:?}")).collect::<Vec<_>>().join(", "))); }
+                if ui.small_button("Unbind").clicked() {
+                    ctx.trigger(SetInputIntentBinding { intent: intent.clone(), keys: Vec::new() });
+                    self.editing_intent = None;
+                }
+                if let Some(keys) = defaults.as_ref().and_then(|defaults| defaults.bindings.get(intent)) {
+                    if ui.small_button("Restore default").clicked() {
+                        ctx.trigger(SetInputIntentBinding { intent: intent.clone(), keys: keys.clone() });
+                        self.editing_intent = None;
+                    }
+                }
+                if ui.small_button("Record key").clicked() {
+                    self.recording_intent = Some(intent.clone()); self.recording_command = false;
+                    ctx.set_resource(ShortcutRecording(true));
+                }
             });
         }
         if let Some((intent, text)) = &mut self.editing_intent {
             let mut save = false;
-            ui.horizontal(|ui| { ui.label(intent.as_str()); ui.add(text_editor::singleline(text).hint_text("W, ArrowUp (empty to unbind)")); save = ui.button("Save global action").clicked(); });
+            ui.horizontal_wrapped(|ui| { ui.label(lunco_core::humanize_identifier(intent)); ui.add(text_editor::singleline(text).hint_text("W, ArrowUp (empty to unbind)")); save = ui.button("Save global action").clicked(); });
+            if let Ok(keys) = text.split(',').map(str::trim).filter(|key| !key.is_empty()).map(parse_shortcut).collect::<Result<Vec<_>, _>>() {
+                let mut change = InputBindingsSettings::default();
+                change.bindings.insert(intent.clone(), keys.into_iter().flatten().collect());
+                show_conflicts(ui, &settings, &change);
+            }
             if save {
                 let keys = text.split(',').map(str::trim).filter(|key| !key.is_empty()).map(parse_shortcut).collect::<Result<Vec<_>, _>>();
                 match keys {
@@ -262,10 +369,15 @@ impl Panel for KeybindingsPanel {
         ui.separator(); ui.strong("Global command shortcuts");
         for (id, binding) in &settings.command_bindings {
             if !format!("{id} {}", binding.command).to_lowercase().contains(&self.filter.to_lowercase()) { continue; }
-            ui.horizontal(|ui| {
-                ui.label(id); ui.label(&binding.command); ui.label(if binding.keys.is_empty() { "Unbound".into() } else { shortcut_label(&binding.keys) });
+            ui.horizontal_wrapped(|ui| {
+                ui.label(lunco_core::humanize_identifier(id)).on_hover_text(format!("{id} · {}", binding.command)); ui.label(if binding.keys.is_empty() { "Unbound".into() } else { shortcut_label(&binding.keys) });
                 if active.command_bindings.get(id) != Some(binding) { ui.label(egui::RichText::new("Twin override").strong()); }
                 if ui.small_button("Edit").clicked() { self.id = id.clone(); self.command = binding.command.clone(); self.chord = shortcut_label(&binding.keys); self.arguments = binding.arguments.clone(); self.allow_in_text = binding.allow_in_text; }
+                if let Some(binding) = defaults.as_ref().and_then(|defaults| defaults.command_bindings.get(id)) {
+                    if ui.small_button("Restore default").clicked() {
+                        ctx.trigger(SetCommandKeyBinding { id: id.clone(), keys: binding.keys.clone(), command: binding.command.clone(), arguments: binding.arguments.clone(), allow_in_text: binding.allow_in_text });
+                    }
+                }
                 if ui.small_button("Unbind").clicked() { ctx.trigger(SetCommandKeyBinding { id: id.clone(), keys: Vec::new(), command: binding.command.clone(), arguments: binding.arguments.clone(), allow_in_text: binding.allow_in_text }); }
             });
         }
@@ -274,19 +386,39 @@ impl Panel for KeybindingsPanel {
                 for (id, binding) in &profile.command_bindings { ui.label(format!("{id}: {} → {}", shortcut_label(&binding.keys), binding.command)); }
             });
         }
-        ui.separator(); ui.strong("Add or edit a command shortcut");
-        ui.horizontal(|ui| { ui.label("Shortcut name"); ui.add(text_editor::singleline(&mut self.id).hint_text("e.g. open-analysis")); });
-        ui.horizontal(|ui| { ui.label("Command"); ui.add(text_editor::singleline(&mut self.command).hint_text("Registered command name")); });
+        if !self.id.is_empty() {
+            ui.strong(lunco_core::humanize_identifier(&self.id));
+            ui.label(format!("Shortcut: {}", self.chord));
+            if let Ok(keys) = parse_shortcut(&self.chord) {
+                let mut change = InputBindingsSettings::default();
+                change.command_bindings.insert(self.id.clone(), CommandKeyBinding { keys, command: self.command.clone(), arguments: self.arguments.clone(), allow_in_text: self.allow_in_text });
+                show_conflicts(ui, &settings, &change);
+            }
+            if ui.button("Apply shortcut").clicked() {
+                match parse_shortcut(&self.chord) {
+                    Ok(keys) => ctx.trigger(SetCommandKeyBinding { id: self.id.clone(), keys, command: self.command.clone(), arguments: self.arguments.clone(), allow_in_text: self.allow_in_text }),
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        }
+        if ui.add_enabled(!self.id.is_empty(), egui::Button::new("Record shortcut")).on_hover_text("Choose an action with Edit before recording its shortcut").clicked() {
+            self.recording_intent = None; self.recording_command = true; ctx.set_resource(ShortcutRecording(true));
+        }
+        ui.separator();
+        ui.collapsing("Advanced command and parameter editing", |ui| {
+        ui.strong("Add or edit a command shortcut");
+        ui.horizontal_wrapped(|ui| { ui.label("Shortcut name"); ui.add(text_editor::singleline(&mut self.id).hint_text("e.g. open-analysis")); });
+        ui.horizontal_wrapped(|ui| { ui.label("Command"); ui.add(text_editor::singleline(&mut self.command).hint_text("Registered command name")); });
         if let Some(catalog) = ctx.resource::<CommandCatalog>() {
             egui::ComboBox::from_id_salt("keybinding_command_picker").selected_text("Choose a command…").show_ui(ui, |ui| {
                 for name in &catalog.0 { if self.command.is_empty() || name.to_lowercase().contains(&self.command.to_lowercase()) { ui.selectable_value(&mut self.command, name.clone(), name); } }
             });
         }
-        ui.horizontal(|ui| { ui.label("Keys"); ui.add(text_editor::singleline(&mut self.chord).hint_text("Ctrl+Shift+P, W, F6…")); });
+        ui.horizontal_wrapped(|ui| { ui.label("Keys"); ui.add(text_editor::singleline(&mut self.chord).hint_text("Ctrl+Shift+P, W, F6…")); });
         ui.checkbox(&mut self.allow_in_text, "Allow while typing (use for modified application shortcuts)");
         let mut remove = None;
         for (index, argument) in self.arguments.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add(text_editor::singleline(&mut argument.name).hint_text("Parameter name"));
                 match &mut argument.value {
                     CommandBindingValue::Text(value) => { ui.add(text_editor::singleline(value)); }
@@ -311,8 +443,29 @@ impl Panel for KeybindingsPanel {
                 Err(error) => self.error = Some(error),
             }
         }
+        });
         if let Some(error) = self.error.as_ref().or_else(|| ctx.resource::<BindingUiError>().and_then(|error| error.0.as_ref())) { ui.colored_label(ctx.resource_expect::<lunco_theme::Theme>().tokens.error, error); }
         });
+    }
+}
+
+/// Preview the exact displacement that the authoritative settings resolver applies.
+fn show_conflicts(
+    ui: &mut egui::Ui,
+    settings: &InputBindingsSettings,
+    change: &InputBindingsSettings,
+) {
+    let (_, collisions) = settings.resolve_overrides(change);
+    for collision in collisions {
+        let action = collision
+            .displaced
+            .split_once(':')
+            .map_or(collision.displaced.as_str(), |(_, action)| action);
+        ui.label(format!(
+            "Applying {} removes this shortcut from {}.",
+            collision.chord,
+            lunco_core::humanize_identifier(action)
+        ));
     }
 }
 
@@ -353,7 +506,9 @@ pub(super) fn install(app: &mut App) {
                 ui.close();
             }
         });
-    app.init_resource::<CommandCatalog>()
+    app.init_resource::<ShortcutRecording>()
+        .add_systems(Update, release_hidden_recording)
+        .init_resource::<CommandCatalog>()
         .add_systems(Startup, prepare_catalog)
         .add_systems(Update, dispatch_bindings);
     #[cfg(feature = "api")]

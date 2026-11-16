@@ -962,9 +962,8 @@ fn prepared_twin_sysml_analysis(
     reference: &str,
     twin_id: lunco_workspace::TwinId,
     twin: &lunco_twin::Twin,
-    authority: &str,
 ) -> Result<std::sync::Arc<lunco_sysml_ast::SysmlAnalysis>, ValidationReport> {
-    match analyses.state_for(authority, twin_id, &twin.root) {
+    match analyses.state_for_source_identity(name, twin_id, &twin.root) {
         Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => Ok(analysis),
         Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => {
             Err(ValidationReport::new(reference, "sysml").error(format!(
@@ -994,11 +993,10 @@ pub fn sysml_model_analysis(
     if let Some(name) = lunco_assets_core::parse_twin_root_uri(reference)
         && let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>()
     {
-        let (twin_id, twin, _, authority) =
+        let (twin_id, twin, _, _) =
             mounted_sysml_twin(world, name, reference).map_err(|report| report.errors)?;
-        let analysis =
-            prepared_twin_sysml_analysis(analyses, name, reference, twin_id, twin, &authority)
-                .map_err(|report| report.errors)?;
+        let analysis = prepared_twin_sysml_analysis(analyses, name, reference, twin_id, twin)
+            .map_err(|report| report.errors)?;
         let diagnostics = sysml_diagnostic_messages(&analysis);
         return if diagnostics.is_empty() {
             Ok(analysis)
@@ -1032,9 +1030,7 @@ fn validate_sysml_twin(
 
     #[cfg(feature = "sysml-runtime")]
     if let Some(analyses) = world.get_resource::<lunco_sysml::TwinSysmlAnalyses>() {
-        return match prepared_twin_sysml_analysis(
-            analyses, name, reference, _twin_id, _twin, &authority,
-        ) {
+        return match prepared_twin_sysml_analysis(analyses, name, reference, _twin_id, _twin) {
             Ok(analysis) if apply_structural_policy => {
                 let policy_source = analysis
                     .files()

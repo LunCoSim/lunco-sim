@@ -556,6 +556,7 @@ pub fn on_set_object_property(
     asset_server: Res<AssetServer>,
     shaders: Res<Assets<bevy::shader::Shader>>,
     active_command: Res<lunco_core::ActiveCommandId>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut q_shader_look: Query<&mut ShaderLook>,
     mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
@@ -634,7 +635,28 @@ pub fn on_set_object_property(
             // Preserve existing uniforms if the object already has a shader look,
             // so swapping the .wesl keeps tuned params.
             let existing = q_shader_look.get(target).ok().cloned();
-            author_shader_look(&mut commands, target, existing.as_ref(), &cmd.value);
+            let path = match lunco_assets_core::asset_path::load_source_uri(
+                &cmd.value,
+                roots.as_deref(),
+            ) {
+                Ok(path) => path.to_string(),
+                Err(error) => {
+                    let command_id = active_command.get();
+                    let message = error.to_string();
+                    warn!("SET_PROPERTY: {message}");
+                    commands.queue(move |world: &mut World| {
+                        lunco_api::executor::finish_command_result(
+                            world,
+                            command_id,
+                            None,
+                            Err::<lunco_command_contracts::Ack, _>(message),
+                            lunco_api_core::ApiErrorCode::CommandRejected,
+                        );
+                    });
+                    return;
+                }
+            };
+            author_shader_look(&mut commands, target, existing.as_ref(), &path);
             info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
         }
         "visible" => {
@@ -803,18 +825,28 @@ pub fn apply_shader_source_live(
         return Err("shader source must not be empty".to_string());
     }
 
+    let load_address = lunco_assets_core::asset_path::load_source_uri(requested, roots)
+        .map_err(|error| error.to_string())?
+        .to_string();
     let paths = {
-        let active = active_shader_paths(asset_server, shaders, requested);
+        let active = active_shader_paths(asset_server, shaders, &load_address);
         if active.is_empty() {
-            vec![crate::shader_doc::canonical_shader_path(requested)]
+            vec![crate::shader_doc::canonical_shader_path(&load_address)]
         } else {
             active
         }
     };
 
     lunco_materials::validate_shader_syntax(source)?;
+    let sources = paths
+        .iter()
+        .map(|path| {
+            lunco_assets_core::asset_path::source_uri_for_address(path, roots)
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     pending.queue(asset_server, roots, &paths, source)?;
-    Ok(paths)
+    Ok(sources)
 }
 
 /// Force-reload live WESL assets from disk so edits apply without restarting
@@ -823,9 +855,9 @@ pub fn apply_shader_source_live(
 ///
 /// A supplied bare path such as `"shaders/wheel.wesl"` resolves against the
 /// active engine-library identity, including its explicit `lunco://` spelling.
-/// An explicit `lunco://…` or `twin://…` path is matched exactly. An empty path
+/// A stable `twin://…` source is resolved to its current private load lease. An empty path
 /// reloads every currently loaded WESL asset. The command fails visibly when
-/// the requested asset is not active instead of reporting a successful no-op.
+/// the requested source is not active instead of reporting a successful no-op.
 #[Command(default)]
 pub struct ReloadShader {
     pub path: String,
@@ -838,6 +870,7 @@ pub fn on_reload_shader(
     asset_server: Res<AssetServer>,
     shaders: Res<Assets<bevy::shader::Shader>>,
     mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let requested = trigger.event().path.trim().to_string();
     if !requested.is_empty() && !is_wesl_shader_path(&requested) {
@@ -845,7 +878,21 @@ pub fn on_reload_shader(
             "shader path must name a standalone .wesl asset, got '{requested}'"
         ));
     }
-    let paths = active_shader_paths(&asset_server, &shaders, &requested);
+    let load_address = if requested.is_empty() {
+        String::new()
+    } else {
+        lunco_assets_core::asset_path::load_source_uri(&requested, roots.as_deref())
+            .map_err(|error| error.to_string())?
+            .to_string()
+    };
+    let paths = active_shader_paths(&asset_server, &shaders, &load_address);
+    let sources = paths
+        .iter()
+        .map(|path| {
+            lunco_assets_core::asset_path::source_uri_for_address(path, roots.as_deref())
+                .map_err(|error| error.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     if paths.is_empty() {
         return Err(if requested.is_empty() {
             "no loaded WESL shader assets are available to reload".to_string()
@@ -862,7 +909,6 @@ pub fn on_reload_shader(
         // Owned `String` → `AssetPath<'static>`, so the queued reload doesn't
         // borrow the short-lived command trigger.
         asset_server.reload(path.clone());
-        info!("RELOAD_SHADER: queued {}", path);
     }
     info!(
         "RELOAD_SHADER: queued {} active asset(s) for '{}'",
@@ -878,7 +924,7 @@ pub fn on_reload_shader(
         lunco_api_core::api_value!({
             "accepted": true,
             "requested": requested,
-            "queued_paths": paths,
+            "queued_paths": sources,
         }),
     ))
 }
@@ -893,7 +939,7 @@ pub fn on_reload_shader(
 /// directly.
 #[Command(default)]
 pub struct SetShaderSource {
-    /// Asset path of the shader to overwrite, e.g. `"shaders/wheel.wesl"`.
+    /// Stable source URI or engine-library path, e.g. `"shaders/wheel.wesl"`.
     pub path: String,
     /// New WESL source text.
     pub source: String,
@@ -911,7 +957,7 @@ pub fn on_set_shader_source(
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
 ) -> Result<lunco_command_contracts::Ack, String> {
     let ev = trigger.event();
-    let requested = ev.path.trim();
+    let requested = crate::shader_doc::canonical_shader_path(ev.path.trim());
     // Validate and admit the source before recording the edit. Preparation
     // resolves native imports asynchronously; GPU compilation follows publication.
     let paths = apply_shader_source_live(
@@ -919,7 +965,7 @@ pub fn on_set_shader_source(
         &shaders,
         &mut pending,
         roots.as_deref(),
-        requested,
+        &requested,
         &ev.source,
     )?;
     // Record the edit into the Twin journal (`DomainKind::Shader`) via the shader
@@ -929,7 +975,7 @@ pub fn on_set_shader_source(
     // the journal replay leg applies + hot-reloads it here — re-recording would
     // duplicate the entry.
     if guard.is_none_or(|g| g.0.is_none()) {
-        registry.apply_source(requested, ev.source.clone());
+        registry.apply_source(&requested, ev.source.clone(), roots.as_deref())?;
     }
     info!(
         "SET_SHADER_SOURCE: queued {} active asset(s) from {} bytes of WESL",
@@ -1092,7 +1138,7 @@ fn install_shader(
     asset_server.reload(asset_path.clone());
 
     // Make it pickable.
-    catalog.add(asset_path.clone());
+    catalog.add(crate::shader_doc::canonical_shader_path(&asset_path));
 
     // Optionally apply to a target entity (preserve any existing shader params).
     if target != 0 {
@@ -1101,13 +1147,16 @@ fn install_shader(
             Some(ent) => {
                 // The binder loads the persisted source through the same asset identity.
                 author_shader_look(commands, ent, q_look.get(ent).ok(), &asset_path);
-                info!("INSTALL_SHADER: applied {asset_path} to entity {target}");
+                info!("INSTALL_SHADER: applied shader to entity {target}");
             }
             None => warn!("INSTALL_SHADER: target id {target} not in registry"),
         }
     }
 
-    info!("INSTALL_SHADER: registered {asset_path}");
+    info!(
+        "INSTALL_SHADER: registered {}",
+        lunco_assets_core::asset_path::display_source_path(&asset_path, twin_roots)
+    );
     Some(asset_path)
 }
 
@@ -1260,32 +1309,30 @@ pub struct DeleteShader {
 pub fn on_delete_shader(
     trigger: On<DeleteShader>,
     #[cfg(not(target_arch = "wasm32"))] schemes: Option<Res<lunco_assets_core::SchemeRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut pending: ResMut<crate::shader_sources::PendingShaderSources>,
     mut catalog: ResMut<lunco_materials::ShaderCatalog>,
-) {
-    let path = trigger.event().path.trim().to_string();
-    if path.is_empty() {
-        warn!("DELETE_SHADER: empty path");
-        return;
+) -> Result<lunco_command_contracts::Ack, String> {
+    let source = trigger.event().path.trim();
+    if source.is_empty() || !is_wesl_shader_path(source) {
+        return Err("DeleteShader requires a standalone .wesl source".into());
     }
-    pending.cancel(&[crate::shader_doc::canonical_shader_path(&path)]);
-    let removed = catalog.remove(&path);
-    // `twin://<authority>/<rel>` → the Twin root, a bare `shaders/foo.wesl` → the
-    // shipped library: both are the registry's job, so this crate re-derives
-    // neither root (a copy here once joined a bare relative `"assets"`, resolving
-    // against the CWD instead of the library path the loader uses).
+    let path = lunco_assets_core::asset_path::load_source_uri(source, roots.as_deref())
+        .map_err(|error| error.to_string())?
+        .to_string();
+    #[cfg(target_arch = "wasm32")]
+    return Err("Deleting shader files requires a native filesystem".into());
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(schemes) = schemes.as_ref() {
-        match schemes.local_path(&path) {
-            Ok(Some(disk)) => match lunco_storage::delete_file_sync(&disk) {
-                Ok(()) => info!("DELETE_SHADER: removed {path} ({})", disk.display()),
-                Err(e) => warn!("DELETE_SHADER: unregistered {path}, file remove failed: {e}"),
-            },
-            Ok(None) => {}
-            Err(error) => error!("DELETE_SHADER: asset scheme registry unavailable: {error}"),
-        }
-    }
-    if !removed {
-        warn!("DELETE_SHADER: '{path}' was not in the catalog");
+    {
+        let disk = schemes
+            .ok_or("asset scheme registry unavailable")?
+            .local_path(&path)
+            .map_err(|error| error.to_string())?
+            .ok_or("shader source has no local file")?;
+        lunco_storage::delete_file_sync(&disk).map_err(|error| error.to_string())?;
+        pending.cancel(&[crate::shader_doc::canonical_shader_path(&path)]);
+        catalog.remove(&crate::shader_doc::canonical_shader_path(&path));
+        info!("DELETE_SHADER: removed {source}");
+        Ok(lunco_command_contracts::Ack::default())
     }
 }

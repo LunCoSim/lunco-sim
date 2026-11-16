@@ -109,11 +109,13 @@ impl Panel for TwinSettingsPanel {
                 ui.label("No Twin is open.");
                 return;
             };
-            ui.label(
-                egui::RichText::new(format!("Active Twin {}", active_twin.raw()))
-                    .weak()
-                    .small(),
-            );
+            if let Some(twin) = ctx
+                .resource::<WorkspaceResource>()
+                .and_then(|workspace| workspace.twin(active_twin))
+            {
+                ui.label(egui::RichText::new(twin.display_name()).weak().small())
+                    .on_hover_text(format!("Twin {}", active_twin.raw()));
+            }
             render_shared_scene_setting(ui, ctx, active_twin);
             render_shared_physics_escape_setting(ui, ctx, active_twin);
             ui.separator();
@@ -562,8 +564,8 @@ fn matches_query(key: &str, query: &str) -> bool {
 
 fn render_setting_row(ui: &mut egui::Ui, ctx: &mut PanelCtx, row: &TwinSettingRow) {
     ui.horizontal(|ui| {
-        let label = ui.label(&row.key);
-        label.on_hover_text("Twin-scoped value persisted in twin.toml [settings]");
+        let label = ui.label(lunco_core::humanize_identifier(&row.key));
+        label.on_hover_text(format!("{} · saved with this Twin", row.key));
         let mut changed = None;
         match &row.value {
             TwinSettingValue::Bool(current) => {

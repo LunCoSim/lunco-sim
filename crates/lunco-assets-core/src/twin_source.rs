@@ -89,11 +89,11 @@ pub enum TwinRootsError {
     RegistryUnavailable,
     #[error("Twin root registry is unavailable because its lock is poisoned")]
     RegistryPoisoned,
-    #[error("invalid Twin asset authority `{0}`")]
+    #[error("invalid internal Twin asset mount")]
     InvalidAuthority(String),
     #[error("invalid Twin logical source identity `{0}`")]
     InvalidLogicalIdentity(String),
-    #[error("unknown Twin asset authority `{0}`")]
+    #[error("unknown or retired internal Twin asset mount")]
     UnknownAuthority(String),
     #[error("Twin source identity is not mounted")]
     SourceNotMounted,

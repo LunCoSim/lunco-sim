@@ -80,7 +80,7 @@ impl Panel for TelemetryPanel {
         PanelId("modelica_inspector")
     }
     fn title(&self) -> String {
-        "🔎 Model Inspector".into()
+        "Model State".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector

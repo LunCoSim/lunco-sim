@@ -23,7 +23,7 @@
         <text id="asset-consent-row-label">{label}</text>
         <text id="asset-consent-row-status">{status}</text>
       </node>
-      <button id="asset-consent-row-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}" tag:scope="{scope}"><text>{action_label}</text></button>
+      <button id="asset-consent-row-action" tag:aria_description="{label}" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}" tag:scope="{scope}"><text>{action_label}</text></button>
     </node>
     <node id="asset-consent-row-stages">
     <text id="asset-consent-row-download">{download_status}</text>
@@ -31,8 +31,8 @@
     </node>
     <text id="asset-consent-row-error">{detail}</text>
     <node id="asset-consent-row-links">
-      <button id="asset-consent-row-source" on_press="runtime_ui_authored_action" tag:action="open_web_url" tag:url="{source_url}"><text>View source</text></button>
-      <button id="asset-consent-row-details-toggle" on_press="runtime_ui_authored_action" tag:action="dataset_details" tag:id="{parameter_id}"><text>{details_label}</text></button>
+      <button id="asset-consent-row-source" tag:aria_description="{label}" on_press="runtime_ui_authored_action" tag:action="open_web_url" tag:url="{source_url}"><text>View source</text></button>
+      <button id="asset-consent-row-details-toggle" tag:aria_description="{label}" on_press="runtime_ui_authored_action" tag:action="dataset_details" tag:id="{parameter_id}"><text>{details_label}</text></button>
     </node>
     <node id="asset-consent-row-details">
       <text>{source_files}</text>

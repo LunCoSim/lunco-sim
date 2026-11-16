@@ -12,7 +12,7 @@
       <text id="program-source">{source}</text>
       <text id="program-status">{status}</text>
     </node>
-    <button id="program-select" on_press="runtime_ui_authored_action" tag:action="{select_action}"><text>SELECT</text></button>
-    <button id="program-edit" on_press="runtime_ui_authored_action" tag:action="{edit_action}"><text>EDIT</text></button>
+    <button id="program-select" tag:aria_description="{path}" on_press="runtime_ui_authored_action" tag:action="{select_action}"><text>SELECT</text></button>
+    <button id="program-edit" tag:aria_description="{path}" on_press="runtime_ui_authored_action" tag:action="{edit_action}"><text>EDIT</text></button>
   </node>
 </template>

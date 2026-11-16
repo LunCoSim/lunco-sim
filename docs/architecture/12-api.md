@@ -1067,3 +1067,34 @@ remain its mutation boundary. `ModelicaVariables` uses this contract to preserve
 its numerical inventory and layout-bound projections. `ModelicaModel` protects
 its input/parameter maps through field metadata; source/control edits use
 the existing typed Modelica and port commands.
+
+### Twin source identity at presentation boundaries
+
+Asset loading retains an opaque mount lease internally. Public script source
+metadata (`InspectScriptDocument.asset_id` and `origin.uri`) uses the canonical
+stable source URI; script diagnostic messages pass through the asset owner's
+stable text projection. Source contents are returned verbatim. Registry errors
+retain private tokens only in structured internal debug data, not Display text.
+SysML consumers use `TwinSysmlAnalyses::state_for_source_identity`; mount-keyed
+snapshot lookup remains private to the analysis owner. UI source-file matching
+uses the same stable identity as analysis facts. Temporary mounts are not
+persisted or authored source references. UUID-backed Twin identities survive
+renames; the documented encoded-name identity applies to UUID-less sources.
+
+Asset discovery carries `AssetFile.source_uri` as the stable public identity and
+`asset_path` as the private native load address. Catalog IDs, program attachments,
+source tabs and authored shader references use `source_uri`; readers, metadata
+caches and worker leases use the native address. `SpawnSource::UsdFile` keeps
+these two facts explicit. Its catalog collision keys use the stable source.
+
+Shader commands resolve public sources through `load_source_uri`; journal edits
+and command responses retain stable source URIs. `SaveDocument` and
+`SaveAsDocument` inspect native USD dependency paths and reject references to
+known current or retired private mounts and unresolved opaque mount tokens before writing. Document-relative
+references remain relative. Script document metadata applies the same public
+identity conversion at the HTTP query boundary.
+
+Shader document and undo/recorder state is owned by its admitted Twin root and
+retires on `TwinClosed`, including reopening the same stable source. Engine shader
+documents have explicit application lifetime. Replay validates the current source
+owner before creating or modifying a shader document.

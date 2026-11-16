@@ -136,6 +136,13 @@ impl Panel for DiagnosticsPanel {
             .unwrap_or_else(lunco_theme::Theme::dark);
         let muted = theme.tokens.text_subdued;
         let mut clear_requested = false;
+        let has_model = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_document)
+            .is_some_and(|doc| {
+                ctx.resource::<ModelicaDocuments>()
+                    .is_some_and(|docs| docs.host(doc).is_some())
+            });
         let lint_status = ctx
             .resource::<lunco_workspace::WorkspaceResource>()
             .and_then(|workspace| workspace.active_document)
@@ -153,6 +160,23 @@ impl Panel for DiagnosticsPanel {
                     .filter(|snapshot| snapshot.generation == generation)
                     .map(|snapshot| snapshot.state.clone())
             });
+        let empty_message = if !has_model {
+            "No Modelica document open. Open a model to check it."
+        } else {
+            match &lint_status {
+                Some(lunco_doc::DiagnosticSourceState::Ready) => {
+                    "No diagnostics reported for the current source revision."
+                }
+                Some(lunco_doc::DiagnosticSourceState::Pending) => {
+                    "Checking the current source revision…"
+                }
+                Some(
+                    lunco_doc::DiagnosticSourceState::Failed(_)
+                    | lunco_doc::DiagnosticSourceState::Unavailable(_),
+                ) => "Checks did not complete. See the diagnostic above.",
+                None => "The current source revision has not been checked.",
+            }
+        };
         match lint_status {
             Some(lunco_doc::DiagnosticSourceState::Pending) => {
                 ui.label(
@@ -170,7 +194,7 @@ impl Panel for DiagnosticsPanel {
         let jump = render_log_view(
             ui,
             &snapshot,
-            "(no diagnostics — model parses cleanly)",
+            empty_message,
             &mut clear_requested,
             muted,
             &theme,

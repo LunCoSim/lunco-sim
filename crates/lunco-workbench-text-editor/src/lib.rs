@@ -97,7 +97,7 @@ impl InstancePanel for SourceEditorPanel {
                     return false;
                 };
                 let source = &mut tab.state;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let display_path = source
                         .origin
                         .as_ref()
@@ -475,7 +475,7 @@ fn open_path(
         path: path.clone(),
         asset_uri: asset
             .as_ref()
-            .map(|asset| lunco_assets_core::engine_asset_uri(&asset.asset_path)),
+            .map(|asset| lunco_assets_core::engine_asset_uri(&asset.source_uri)),
         text: String::new(),
         origin,
         dirty: false,

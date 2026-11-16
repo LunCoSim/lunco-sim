@@ -75,7 +75,9 @@ impl ApiQueryProvider for SpawnCatalogProvider {
             .into_iter()
             .map(|entry| {
                 let source = match &entry.source {
-                    SpawnSource::UsdFile(path) => api_value!({
+                    SpawnSource::UsdFile {
+                        source_uri: path, ..
+                    } => api_value!({
                         "kind": "usd_file",
                         "path": path.clone(),
                     }),
@@ -86,7 +88,7 @@ impl ApiQueryProvider for SpawnCatalogProvider {
                     "category": entry.category.clone(),
                     "origin": entry.origin.as_api_value(),
                     "description": match &entry.source {
-                        SpawnSource::UsdFile(path) => metadata
+                        SpawnSource::UsdFile { load_address: path, .. } => metadata
                             .and_then(|store| store.description(path))
                             .map(str::to_string),
                     },
@@ -276,7 +278,7 @@ impl SpawnCatalog {
 
         let base = entry.id.clone();
         let source_key = match &entry.source {
-            SpawnSource::UsdFile(path) => sanitize_id_component(path),
+            SpawnSource::UsdFile { source_uri, .. } => sanitize_id_component(source_uri),
         };
         let mut candidate = format!("{base}__{source_key}");
         let mut suffix = 2;
@@ -325,7 +327,10 @@ impl SpawnCatalog {
 
 fn same_source(a: &SpawnableEntry, b: &SpawnableEntry) -> bool {
     match (&a.source, &b.source) {
-        (SpawnSource::UsdFile(a), SpawnSource::UsdFile(b)) => a == b,
+        (
+            SpawnSource::UsdFile { source_uri: a, .. },
+            SpawnSource::UsdFile { source_uri: b, .. },
+        ) => a == b,
     }
 }
 
@@ -368,7 +373,12 @@ pub enum SpawnSource {
     /// Load from a USD file via the asset server. The only spawn source —
     /// every spawnable, including props once built procedurally in Rust, is
     /// now authored as USD and constructed by the USD→Bevy loader.
-    UsdFile(String),
+    UsdFile {
+        /// Stable reference for API facts, authored references and catalog identity.
+        source_uri: String,
+        /// Internal loading address retaining the exact asset mount lease.
+        load_address: String,
+    },
 }
 
 /// Authored provenance for a catalog entry.
@@ -457,7 +467,9 @@ pub fn spawn_usd_entry(
     rotation: Quat,
     anchor: SpawnAnchor,
 ) -> Result<SpawnResult, String> {
-    let SpawnSource::UsdFile(path) = &entry.source;
+    let SpawnSource::UsdFile {
+        load_address: path, ..
+    } = &entry.source;
     let path = lunco_assets_core::asset_path::load_asset_path(path, None, None, None)
         .map_err(|error| format!("catalog asset address is invalid: {error}"))?;
     let handle = asset_server.load(path);
@@ -709,7 +721,9 @@ fn retain_live_catalog_sources(
         .entries
         .iter()
         .filter(|entry| {
-            let SpawnSource::UsdFile(path) = &entry.source;
+            let SpawnSource::UsdFile {
+                load_address: path, ..
+            } = &entry.source;
             retained(path)
         })
         .cloned()
@@ -917,7 +931,9 @@ pub fn drain_catalog_listing(
             Ok(assets) => {
                 let added = assets
                     .into_iter()
-                    .filter(|asset| shaders.add(asset.asset_path.clone()))
+                    .filter(|asset| {
+                        shaders.add(lunco_assets_core::engine_asset_uri(&asset.asset_path))
+                    })
                     .count();
                 if added > 0 {
                     info!("SHADER_CATALOG: published +{added} shader(s)");
@@ -970,7 +986,7 @@ pub async fn read_asset_meta(
                 let twin_root = match twin_root {
                     Ok(root) => root,
                     Err(error) => {
-                        warn!("CATALOG: {}: {error}", asset.asset_path);
+                        warn!("CATALOG: {}: {error}", asset.source_uri);
                         meta.spawnable = false;
                         meta.read_error = Some(error);
                         return meta;
@@ -1092,12 +1108,12 @@ pub fn drain_usd_scan(
     // catalog's existing unsuffixed stem IDs for shipped assets.
     scan.staged.sort_unstable_by(|a, b| {
         let a_key = (
-            lunco_assets_path::split_scheme(&a.asset.asset_path).is_some(),
-            &a.asset.asset_path,
+            lunco_assets_path::split_scheme(&a.asset.source_uri).is_some(),
+            &a.asset.source_uri,
         );
         let b_key = (
-            lunco_assets_path::split_scheme(&b.asset.asset_path).is_some(),
-            &b.asset.asset_path,
+            lunco_assets_path::split_scheme(&b.asset.source_uri).is_some(),
+            &b.asset.source_uri,
         );
         a_key.cmp(&b_key)
     });
@@ -1121,7 +1137,10 @@ pub fn entry_for(asset: &AssetFile, _meta: &SpawnMeta) -> SpawnableEntry {
         id: asset.stem.clone(),
         display_name: title_case(&asset.stem),
         category: categorize(&asset.rel),
-        source: SpawnSource::UsdFile(asset.asset_path.clone()),
+        source: SpawnSource::UsdFile {
+            source_uri: asset.source_uri.clone(),
+            load_address: asset.asset_path.clone(),
+        },
         origin: asset
             .twin_display_name
             .as_deref()
@@ -1228,7 +1247,10 @@ mod spawn_anchor_tests {
                 id: "modelica_balloon".into(),
                 display_name: "Modelica Balloon".into(),
                 category: "Vessels".into(),
-                source: SpawnSource::UsdFile("vessels/balloons/modelica_balloon.usda".into()),
+                source: SpawnSource::UsdFile {
+                    source_uri: "vessels/balloons/modelica_balloon.usda".into(),
+                    load_address: "vessels/balloons/modelica_balloon.usda".into(),
+                },
                 origin: SpawnOrigin::BuiltIn,
                 default_transform: Transform::default(),
             },
@@ -1314,6 +1336,8 @@ mod tests {
             abs_path: path.clone().into(),
             twin_authority: None,
             twin_display_name: None,
+            source_uri: lunco_assets_core::asset_path::source_uri_for_address(&path, Some(&roots))
+                .unwrap(),
             asset_path: path,
         };
         let paths = [
@@ -1417,6 +1441,7 @@ mod tests {
     fn entry_for_preserves_discovery_provenance() {
         let asset = |asset_path: &str, twin: Option<&str>| AssetFile {
             asset_path: asset_path.into(),
+            source_uri: asset_path.into(),
             stem: "rover".into(),
             rel: "vessels/rovers/rover.usda".into(),
             abs_path: asset_path.into(),
@@ -1452,7 +1477,10 @@ mod tests {
             id: id.into(),
             display_name: id.into(),
             category: "Structures".into(),
-            source: SpawnSource::UsdFile("x.usda".into()),
+            source: SpawnSource::UsdFile {
+                source_uri: "x.usda".into(),
+                load_address: "x.usda".into(),
+            },
             origin: SpawnOrigin::BuiltIn,
             default_transform: Transform::default(),
         };
@@ -1468,7 +1496,10 @@ mod tests {
             id: "rover".into(),
             display_name: "Rover".into(),
             category: "Rovers".into(),
-            source: SpawnSource::UsdFile(source.into()),
+            source: SpawnSource::UsdFile {
+                source_uri: source.into(),
+                load_address: source.into(),
+            },
             origin: if source.starts_with("twin://") {
                 SpawnOrigin::Twin("moonbase".into())
             } else {
@@ -1485,7 +1516,10 @@ mod tests {
             c.entries[1].id,
             "rover__twin_moonbase_vessels_rovers_rover_usda"
         );
-        assert!(!c.add_unique(entry("twin://moonbase/vessels/rovers/rover.usda")));
+        let mut remounted = entry("twin://moonbase/vessels/rovers/rover.usda");
+        let SpawnSource::UsdFile { load_address, .. } = &mut remounted.source;
+        *load_address = "twin://private-new-lease/vessels/rovers/rover.usda".into();
+        assert!(!c.add_unique(remounted));
         assert_eq!(c.entries.len(), 2);
     }
 
@@ -1495,6 +1529,7 @@ mod tests {
             generation: 0,
             asset: AssetFile {
                 asset_path: source.into(),
+                source_uri: source.into(),
                 stem: "rover".into(),
                 rel: "vessels/rovers/rover.usda".into(),
                 abs_path: source.into(),
@@ -1538,7 +1573,7 @@ mod tests {
         assert_eq!(catalog.entries[0].id, "rover");
         assert!(matches!(
             &catalog.entries[0].source,
-            SpawnSource::UsdFile(path) if path == "vessels/rovers/rover.usda"
+            SpawnSource::UsdFile { load_address: path, .. } if path == "vessels/rovers/rover.usda"
         ));
         assert_eq!(
             catalog.entries[1].id,
@@ -1561,7 +1596,10 @@ mod tests {
                 id: "z-last".into(),
                 display_name: "Last".into(),
                 category: "Other".into(),
-                source: SpawnSource::UsdFile("z.usda".into()),
+                source: SpawnSource::UsdFile {
+                    source_uri: "z.usda".into(),
+                    load_address: "z.usda".into(),
+                },
                 origin: SpawnOrigin::Twin("summer-space-school".into()),
                 default_transform: Transform::from_xyz(1.0, 2.0, 3.0),
             },
@@ -1569,7 +1607,10 @@ mod tests {
                 id: "a-first".into(),
                 display_name: "First".into(),
                 category: "Other".into(),
-                source: SpawnSource::UsdFile("a.usda".into()),
+                source: SpawnSource::UsdFile {
+                    source_uri: "a.usda".into(),
+                    load_address: "a.usda".into(),
+                },
                 origin: SpawnOrigin::BuiltIn,
                 default_transform: Transform::default(),
             },
@@ -1693,7 +1734,10 @@ mod tests {
             id: id.into(),
             display_name: id.into(),
             category: cat.into(),
-            source: SpawnSource::UsdFile("x.usda".into()),
+            source: SpawnSource::UsdFile {
+                source_uri: "x.usda".into(),
+                load_address: "x.usda".into(),
+            },
             origin: SpawnOrigin::BuiltIn,
             default_transform: Transform::default(),
         };
@@ -1768,6 +1812,7 @@ def Xform \"BrokenWheel\" (\n\
 
         let asset = AssetFile {
             asset_path: path.to_string_lossy().into_owned(),
+            source_uri: path.to_string_lossy().into_owned(),
             stem: "broken_wheel".into(),
             rel: "broken_wheel.usda".into(),
             abs_path: path,

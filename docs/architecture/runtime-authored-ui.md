@@ -1040,3 +1040,42 @@ runtime binds Bevy's maintained `Scrollbar`/`ScrollbarThumb` to that collection'
 The track belongs to HTML/CSS, while the native thumb uses `lunco-theme` tokens.
 Thumbs are children of their track and retire with the surface. No domain-specific
 scroll handler or independent scroll state is installed.
+
+## Keyboard and assistive control access
+
+Authored press controls join the shared Bevy TabGroup/TabIndex navigation path.
+Enter and Space invoke the same current callback lease as primary pointer
+presses, with visibility and disabled-state admission. AccessibilityNode labels
+come from descendant authored text or `tag:aria_label`; `tag:aria_description`
+adds context to repeated row actions and their Controls menu labels; the runtime does not
+invent a label from a callback identity. Focus has a theme-owned visible outline.
+Scene-owned catalog entries retain exact entity generations and retire on scene
+teardown. Hidden controls are withdrawn from the Controls menu.
+
+The workbench enables egui's maintained AccessKit integration; the GUI host
+also enables Bevy's Unix platform adapter (`accesskit_unix`). Its adapter owns
+the platform tree while egui is active; Bevy and egui trees are not merged by
+that adapter. The Controls menu therefore exposes the same labelled runtime
+controls through the workbench's accessible keyboard surface as well as their
+native HUD presentation. The workbench forwards platform action requests to
+egui's public RawInput event API while egui owns the tree. The native adapter
+accepts actions only while Bevy owns it, preventing cross-tree node-ID collisions.
+The existing Camera menu remains a semantic task route.
+This is an interaction contract, not a claim of platform screen-reader conformance.
+
+The adapter owns generic label projection, keyboard focus and exact callback
+admission. Its inputs are current authored text/tags, surface interactivity,
+visibility and disabled state; its output is accessibility nodes and a callable
+menu entry. Authors retain action and visibility policy through the existing
+surface manifest, exposure policy and typed `RuntimeUiAction` route. The adapter
+contains no camera, program or dataset action decisions. Catalog reset wakes
+surviving application controls; retired entity generations cannot activate a
+replacement control. The callback seam test covers these negative admissions,
+and `scripts/api/test_ui_review.py` exercises native editor and input workflows.
+
+On Linux, `scripts/api/test_runtime_accessibility.py --port <free-port>` checks
+the real AT-SPI application by its verified PID, opens Controls through an
+assistive action, invokes the authored camera callback, and verifies that hidden
+controls are withdrawn. It restores the prior desktop accessibility setting and
+exits its owned process through the API. Protocol acceptance is narrower than
+formal screen-reader or cross-platform conformance.

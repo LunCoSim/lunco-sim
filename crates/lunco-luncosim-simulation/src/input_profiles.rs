@@ -2,7 +2,7 @@
 use bevy::prelude::*;
 use lunco_assets_runtime::{JsonAssetContent, JsonAssetScopeChanged};
 use lunco_core::AppSceneExt;
-use lunco_input_core::{InputBindingsSettings, SceneInputBindings};
+use lunco_input_core::{ApplicationInputBindings, InputBindingsSettings, SceneInputBindings};
 use lunco_workspace::{TwinClosed, TwinId, WorkspaceResource};
 use std::collections::BTreeMap;
 
@@ -34,6 +34,7 @@ fn admit_input_profile(
     workspace: Option<Res<WorkspaceResource>>,
     mut profiles: ResMut<InputProfiles>,
     mut settings: ResMut<InputBindingsSettings>,
+    mut defaults: ResMut<ApplicationInputBindings>,
     mut commands: Commands,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
@@ -86,10 +87,12 @@ fn admit_input_profile(
             // User preferences override application defaults. Twin profiles
             // are composed separately and never enter the persisted section.
             let resolved = profile.overridden_by(&settings);
+            defaults.set_if_neq(ApplicationInputBindings(Some(profile)));
             settings.set_if_neq(resolved);
         }
         Ok(None) => {}
         Err(error) => {
+            defaults.0 = None;
             faults.raise("input-profile-invalid", None, &scope.asset_root_uri, &error);
             lunco_core::trigger_runtime_error(&mut commands, "input-profile-invalid", error);
         }

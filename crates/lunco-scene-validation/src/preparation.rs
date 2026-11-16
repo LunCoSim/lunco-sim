@@ -189,7 +189,7 @@ fn capture_fence(
         let root = roots
             .root_for(authority)
             .map_err(|error| rejected(error.to_string()))?
-            .ok_or_else(|| rejected(format!("Twin mount `{authority}` is retired or unknown")))?;
+            .ok_or_else(|| rejected("Twin source mount is retired or unknown"))?;
         mount = Some((authority.to_owned(), root));
     } else if let DocumentRuntimeOwner::LocalTwin(id) = &runtime {
         if let Some(twin) = workspace.and_then(|workspace| workspace.twin(*id)) {
@@ -850,9 +850,7 @@ fn read_identities(
                 .ok_or("Twin registry unavailable at source preparation")?
                 .root_for(authority)
                 .map_err(|error| error.to_string())?
-                .ok_or_else(|| {
-                    format!("Twin source mount `{authority}` retired during preparation")
-                })?;
+                .ok_or_else(|| "Twin source mount retired during preparation".to_owned())?;
             if !mounts.iter().any(|(name, _)| name == authority) {
                 mounts.push((authority.to_owned(), root));
             }

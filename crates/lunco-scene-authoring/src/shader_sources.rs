@@ -39,7 +39,7 @@ impl PendingShaderSources {
                         .ok_or("Twin asset registry is unavailable")?
                         .root_for(authority)
                         .map_err(|error| error.to_string())?
-                        .ok_or_else(|| format!("shader source mount `{authority}` is retired"))?;
+                        .ok_or_else(|| "Shader source Twin mount is retired".to_owned())?;
                     Some((authority.to_owned(), root))
                 } else {
                     None
@@ -89,7 +89,7 @@ pub fn publish_shader_sources(
             match roots.as_deref().map(|roots| roots.root_for(authority)) {
                 Some(Ok(Some(current))) if &current == root => {}
                 Some(Err(error)) => {
-                    warn!("SET_SHADER_SOURCE: {path}: {error}");
+                    warn!("SET_SHADER_SOURCE: Twin source registry unavailable: {error}");
                     return false;
                 }
                 _ => return false,
@@ -98,19 +98,33 @@ pub fn publish_shader_sources(
         let Some(result) = future::block_on(future::poll_once(&mut pending.task)) else {
             return true;
         };
+        let label = lunco_assets_core::asset_path::display_source_path(path, roots.as_deref());
         match result {
             Ok(mut shader) => {
                 let Some(current) = shaders.get(pending.handle.id()) else {
-                    warn!("SET_SHADER_SOURCE: {path}: source asset was retired during preparation");
+                    warn!(
+                        "SET_SHADER_SOURCE: {label}: source asset was retired during preparation"
+                    );
                     return false;
                 };
                 shader.shader_defs = current.shader_defs.clone();
                 shader.validate_shader = current.validate_shader.clone();
                 if let Err(error) = shaders.insert(pending.handle.id(), shader) {
-                    warn!("SET_SHADER_SOURCE: {path}: {error}");
+                    warn!("SET_SHADER_SOURCE: {label}: {error}");
                 }
             }
-            Err(error) => warn!("SET_SHADER_SOURCE: {path}: preparation failed: {error}"),
+            Err(error) => {
+                let error = match roots.as_deref() {
+                    Some(roots) => match roots.stable_source_text(&error) {
+                        Ok(error) => error,
+                        Err(error) => {
+                            format!("Shader diagnostic source identity is unavailable: {error}")
+                        }
+                    },
+                    None => lunco_assets_core::twin_source::redact_opaque_twin_authorities(&error),
+                };
+                warn!("SET_SHADER_SOURCE: {label}: preparation failed: {error}");
+            }
         }
         false
     });

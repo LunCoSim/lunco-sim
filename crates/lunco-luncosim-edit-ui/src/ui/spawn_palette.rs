@@ -25,6 +25,7 @@ pub(crate) fn on_spawn_state_requested(
 /// Spawn palette panel — lists spawnable objects by category.
 #[derive(Default)]
 pub struct SpawnPalette {
+    filter: String,
     catalog_revision: Option<u64>,
     row_labels: HashMap<usize, String>,
 }
@@ -67,6 +68,11 @@ fn spawn_palette_content(
     success_subdued: egui::Color32,
 ) {
     ui.heading("Spawn");
+    ui.add(
+        lunco_workbench_widgets::text_editor::singleline(&mut panel.filter)
+            .hint_text("Search components…"),
+    );
+    let search = panel.filter.trim().to_lowercase();
 
     // Keep the selection borrowed during paint; own an id only when an action
     // is dispatched.
@@ -100,56 +106,74 @@ fn spawn_palette_content(
             panel.row_labels.clear();
         }
         for (category, entry_indices) in catalog.category_groups() {
-            ui.collapsing(category, |ui| {
-                for &entry_index in entry_indices {
-                    let entry = catalog
-                        .entry_at(entry_index)
-                        .expect("spawn category index points to a catalog entry");
-                    let selected = selecting_id.as_deref() == Some(entry.id.as_str());
+            let matches = |entry_index: &usize| {
+                catalog.entry_at(*entry_index).is_some_and(|entry| {
+                    search.is_empty()
+                        || format!("{category} {} {}", entry.display_name, entry.id)
+                            .to_lowercase()
+                            .contains(&search)
+                })
+            };
+            if !entry_indices.iter().any(matches) {
+                continue;
+            }
+            egui::CollapsingHeader::new(category)
+                .open((!search.is_empty()).then_some(true))
+                .show(ui, |ui| {
+                    for &entry_index in entry_indices {
+                        if !matches(&entry_index) {
+                            continue;
+                        }
+                        let entry = catalog
+                            .entry_at(entry_index)
+                            .expect("spawn category index points to a catalog entry");
+                        let selected = selecting_id.as_deref() == Some(entry.id.as_str());
 
-                    let btn_text = panel.row_labels.entry(entry_index).or_insert_with(|| {
-                        format!("{} · {}", entry.display_name, entry.origin.label())
-                    });
+                        let btn_text = panel.row_labels.entry(entry_index).or_insert_with(|| {
+                            format!("{} · {}", entry.display_name, entry.origin.label())
+                        });
 
-                    let btn = egui::Button::new(btn_text.as_str());
-                    let btn = if selected {
-                        btn.fill(success_subdued)
-                    } else {
-                        btn
-                    };
-
-                    let response = ui.add(btn);
-                    // The catalog and tooltip share the same async USD metadata
-                    // store. Show a hint only when the authored default prim has
-                    // a non-empty standard USD `doc` field; absent metadata stays
-                    // quiet instead of inventing a description or placeholder.
-                    let response = if let Some(description) = metadata
-                        .and_then(|store| match &entry.source {
-                            SpawnSource::UsdFile(path) => store.description(path),
-                        })
-                        .filter(|description| !description.trim().is_empty())
-                    {
-                        response.on_hover_text(description)
-                    } else {
-                        response
-                    };
-
-                    if response.clicked() {
-                        let entry_id = entry.id.clone();
-                        requested_states.push(SpawnStateRequested(if selected {
-                            SpawnState::Idle
+                        let btn = egui::Button::new(btn_text.as_str());
+                        let btn = if selected {
+                            btn.fill(success_subdued)
                         } else {
-                            SpawnState::Selecting { entry_id }
-                        }));
-                    }
+                            btn
+                        };
 
-                    if response.drag_started() {
-                        let entry_id = entry.id.clone();
-                        requested_states
-                            .push(SpawnStateRequested(SpawnState::Selecting { entry_id }));
+                        let response = ui.add(btn);
+                        // The catalog and tooltip share the same async USD metadata
+                        // store. Show a hint only when the authored default prim has
+                        // a non-empty standard USD `doc` field; absent metadata stays
+                        // quiet instead of inventing a description or placeholder.
+                        let response = if let Some(description) = metadata
+                            .and_then(|store| match &entry.source {
+                                SpawnSource::UsdFile {
+                                    load_address: path, ..
+                                } => store.description(path),
+                            })
+                            .filter(|description| !description.trim().is_empty())
+                        {
+                            response.on_hover_text(description)
+                        } else {
+                            response
+                        };
+
+                        if response.clicked() {
+                            let entry_id = entry.id.clone();
+                            requested_states.push(SpawnStateRequested(if selected {
+                                SpawnState::Idle
+                            } else {
+                                SpawnState::Selecting { entry_id }
+                            }));
+                        }
+
+                        if response.drag_started() {
+                            let entry_id = entry.id.clone();
+                            requested_states
+                                .push(SpawnStateRequested(SpawnState::Selecting { entry_id }));
+                        }
                     }
-                }
-            });
+                });
         }
     }
     for requested_state in requested_states {

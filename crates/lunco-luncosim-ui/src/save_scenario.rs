@@ -45,49 +45,31 @@ fn on_save_scenario(
     registry: Res<lunco_scripting::ScriptRegistry>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut commands: Commands,
-) {
+) -> Result<lunco_command_contracts::Ack, String> {
     let target = trigger.event().target;
 
     // 1. The live source the runtime is currently running for this entity.
-    let Ok(model) = q_model.get(target) else {
-        warn!("[save-scenario] entity {target} has no scenario attached");
-        return;
-    };
-    let Some(doc_id) = model.document_id else {
-        warn!("[save-scenario] entity {target}'s scenario has no document");
-        return;
-    };
-    let Some(host) = registry.documents.get(&lunco_doc::DocumentId::new(doc_id)) else {
-        warn!("[save-scenario] no script document {doc_id} for entity {target}");
-        return;
-    };
+    let model = q_model
+        .get(target)
+        .map_err(|_| "Selected entity has no scenario attached".to_owned())?;
+    let doc_id = model
+        .document_id
+        .ok_or_else(|| "Selected scenario has no source document".to_owned())?;
+    let host = registry
+        .documents
+        .get(&lunco_doc::DocumentId::new(doc_id))
+        .ok_or_else(|| "Selected scenario source document is no longer open".to_owned())?;
     let source = host.document().source.clone();
 
     // 2. The prim to author onto + the editable scene document behind it.
-    let Ok(upp) = q_prim.get(target) else {
-        warn!("[save-scenario] entity {target} is not a USD-backed prim — nothing to save onto");
-        return;
-    };
-    let Some(scene_doc) = lunco_usd_bevy_twin::scene_document_for(&backed, upp.stage_handle.id())
-    else {
-        warn!(
-            "[save-scenario] the scene backing {target} is a raw-file scene (not doc-backed) — \
-             open it as a Twin to save scenarios in place"
-        );
-        return;
-    };
-
-    // 3. Convert the PROGRAM prim to the selected inline `sourceCode` arm
-    // (root layer → durable in the `.usda` on SaveDocument). The shared
-    // lowering clears the previous id/asset arms before selecting the new
-    // source, so the composed program has one unambiguous implementation.
-    let Ok(program) = q_program.get(target) else {
-        warn!(
-            "[save-scenario] entity {target} runs a scenario that came from no program prim \
-             (it was started at runtime, not authored in the scene) — nothing to save onto"
-        );
-        return;
-    };
+    let upp = q_prim
+        .get(target)
+        .map_err(|_| "Selected scenario is not backed by a USD prim".to_owned())?;
+    let scene_doc = lunco_usd_bevy_twin::scene_document_for(&backed, upp.stage_handle.id())
+        .ok_or_else(|| "Open this scene as a Twin before applying behaviour source".to_owned())?;
+    let program = q_program
+        .get(target)
+        .map_err(|_| "Selected scenario has no authored program prim".to_owned())?;
     commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: scene_doc,
         parent_gen: None,
@@ -98,10 +80,9 @@ fn on_save_scenario(
             source,
         ),
     });
-    info!(
-        "[save-scenario] {target}: scenario source written onto `{}` (doc {}) — journals; SaveDocument persists to disk",
-        program.0, scene_doc.0
-    );
+    Ok(lunco_command_contracts::Ack::new(
+        lunco_command_contracts::OpId::new(),
+    ))
 }
 
 lunco_core::register_commands!(on_save_scenario);

@@ -1181,6 +1181,44 @@ const DEFAULT_USDA_SCAFFOLD: &str = "#usda 1.0\n(\n    defaultPrim = \"World\"\n
 // SaveDocument — gated on registry membership
 // ─────────────────────────────────────────────────────────────────────
 
+/// Persisted USD references must never capture a private asset-cache lease.
+/// Native OpenUSD visits asset attributes, dictionaries, clips and composition arcs.
+fn validate_saved_source_references(
+    document: &UsdDocument,
+    roots: Option<&lunco_assets_core::TwinRoots>,
+) -> Result<(), String> {
+    for reference in lunco_usd_compose::layer_dependency_paths(document.data())
+        .map_err(|error| error.to_string())?
+    {
+        let Some((identity, _)) = lunco_assets_core::parse_twin_uri(&reference) else {
+            continue;
+        };
+        let Some(roots) = roots else {
+            return Err(
+                "Saving Twin asset references requires the source identity registry".into(),
+            );
+        };
+        match roots.logical_identity_for_authority(identity) {
+            Ok(logical) => {
+                return Err(format!(
+                    "An authored asset reference uses a temporary Twin mount. Use stable source identity `{logical}` or a document-relative reference before saving."
+                ));
+            }
+            Err(lunco_assets_core::TwinRootsError::UnknownAuthority(_)) => {
+                if roots
+                    .stable_source_text(&reference)
+                    .map_err(|error| error.to_string())?
+                    != reference
+                {
+                    return Err("An authored asset reference contains an unresolved temporary Twin mount. Use its stable source identity or a document-relative reference before saving.".into());
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
 /// Publish the exact saved base bytes at the document's existing asset identity.
 /// Native runtime/view inputs retain their separate projection lease.
 fn publish_saved_twin_source(
@@ -1198,7 +1236,7 @@ fn publish_saved_twin_source(
     let root = roots
         .root_for(&name)
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("USD source authority `{name}` retired before save publication"))?;
+        .ok_or_else(|| "USD source mount retired before save publication".to_owned())?;
     if root.join(&relative) != path {
         // Save-As to a different file does not overwrite the original asset.
         return Ok(());
@@ -1237,6 +1275,7 @@ fn on_save_document(
             };
             let bytes = doc.export_bytes(path.extension().and_then(|ext| ext.to_str()).unwrap_or(""))
                 .map_err(|error| error.to_string())?;
+            validate_saved_source_references(doc, world.get_resource::<lunco_assets_core::TwinRoots>())?;
             let storage = lunco_storage::FileStorage::new();
             storage.write_sync(&lunco_storage::StorageHandle::File(path.clone()), &bytes)
                 .map_err(|error| format!("write USD {}: {error}", path.display()))?;
@@ -1297,6 +1336,7 @@ fn on_save_as_document(
                 .document()
                 .export_bytes(path.extension().and_then(|ext| ext.to_str()).unwrap_or(""))
                 .map_err(|error| error.to_string())?;
+            validate_saved_source_references(host.document(), roots.as_deref())?;
             let storage = lunco_storage::FileStorage::new();
             storage
                 .write_sync(&lunco_storage::StorageHandle::File(path.clone()), &bytes)
@@ -3374,6 +3414,29 @@ fn on_attach_program(
         .map(|request| request.correlation_id)
         .filter(|id| *id != 0);
     commands.queue(move |world: &mut World| {
+        if lunco_assets_core::parse_twin_uri(&command.spec.source_asset).is_some() {
+            let source = lunco_assets_core::asset_path::source_uri_for_address(
+                &command.spec.source_asset,
+                world.get_resource::<lunco_assets_core::TwinRoots>(),
+            );
+            let error = match source {
+                Ok(stable) if stable != command.spec.source_asset => Some(format!(
+                    "Program references require a stable source URI: {stable}"
+                )),
+                Err(error) => Some(format!("Cannot resolve program source identity: {error}")),
+                _ => None,
+            };
+            if let Some(error) = error {
+                finish_command_result(
+                    world,
+                    command_id,
+                    correlation_id,
+                    Err(error),
+                    ApiErrorCode::CommandRejected,
+                );
+                return;
+            }
+        }
         let ops = match lunco_usd_core::program::program_attach_ops(&command.spec) {
             Ok(ops) => ops,
             Err(error) => {
@@ -3815,6 +3878,40 @@ mod change_set_tests {
 mod tests {
     use super::*;
     use lunco_doc::Document;
+
+    #[test]
+    fn saved_asset_references_require_stable_source_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = lunco_assets_core::TwinRoots::default();
+        let mount = roots
+            .register_authority("stable-fixture", dir.path())
+            .unwrap();
+        let document = |identity: &str| {
+            UsdDocument::new(
+                DocumentId::new(701),
+                format!(
+                    "#usda 1.0\ndef Xform \"World\" {{\n asset script = @twin://{identity}/scripts/probe.rhai@\n}}\n"
+                ),
+            )
+        };
+        validate_saved_source_references(&document("stable-fixture"), Some(&roots)).unwrap();
+        let error = validate_saved_source_references(&document(&mount), Some(&roots)).unwrap_err();
+        assert!(error.contains("stable-fixture"));
+        assert!(!error.contains(&mount));
+        roots.unregister_authority(&mount).unwrap();
+        assert!(validate_saved_source_references(&document(&mount), Some(&roots)).is_err());
+        assert!(
+            validate_saved_source_references(
+                &document("00000000000000000000000000000000"),
+                Some(&roots)
+            )
+            .is_err()
+        );
+        let hex_name = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let other = tempfile::tempdir().unwrap();
+        roots.register_authority(hex_name, other.path()).unwrap();
+        validate_saved_source_references(&document(hex_name), Some(&roots)).unwrap();
+    }
 
     #[test]
     fn browser_usd_payload_preparation_preserves_pathless_source_identity() {

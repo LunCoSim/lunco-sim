@@ -312,14 +312,13 @@ fn render_line_plot(ui: &mut egui::Ui, ctx: &mut PanelCtx, viz_id: VizId) {
 }
 
 /// Gather the plot's bound signals, pop a native save-file picker,
-/// and write a CSV with `time` + one column per signal.
+/// and export exact samples with seconds on the time axis.
 fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
     struct Column {
         label: String,
         data: Vec<(f64, f64)>,
     }
     let mut columns: Vec<Column> = Vec::new();
-    let mut all_times: Vec<f64> = Vec::new();
 
     // 1. Collect live signals from SignalRegistry
     {
@@ -355,7 +354,6 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                             });
                             let mut data = Vec::new();
                             for s in hist.iter() {
-                                all_times.push(s.time);
                                 data.push((s.time, s.value));
                             }
                             columns.push(Column { label, data });
@@ -388,10 +386,7 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
                                 let mut data = Vec::new();
                                 for (i, &t) in result.times.iter().enumerate() {
                                     if let Some(&v) = series.get(i) {
-                                        if v.is_finite() {
-                                            all_times.push(t);
-                                            data.push((t, v));
-                                        }
+                                        data.push((t, v));
                                     }
                                 }
                                 columns.push(Column { label, data });
@@ -407,68 +402,13 @@ fn export_graph_to_csv(world: &mut World, viz_id: VizId) {
         return;
     }
 
-    // 3. Flatten into unified CSV rows with forward-filling
-    let mut csv = String::from("time");
-    for col in &columns {
-        csv.push(',');
-        crate::ui::panels::csv_export::push_csv_field(&mut csv, &col.label);
-    }
-    csv.push('\n');
-
-    // Build the master time axis.
-    all_times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    all_times.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
-
-    let mut cursors = vec![0usize; columns.len()];
-    let mut last_val = vec![Option::<f64>::None; columns.len()];
-
-    for t in all_times {
-        csv.push_str(&format!("{t}"));
-        for (i, col) in columns.iter().enumerate() {
-            while cursors[i] < col.data.len() && col.data[cursors[i]].0 <= t + f64::EPSILON {
-                last_val[i] = Some(col.data[cursors[i]].1);
-                cursors[i] += 1;
-            }
-            csv.push(',');
-            if let Some(v) = last_val[i] {
-                csv.push_str(&format!("{v}"));
-            }
-        }
-        csv.push('\n');
-    }
-
-    let storage = lunco_storage::FileStorage::new();
-    let hint = lunco_workbench_file_dialog::SaveHint {
-        suggested_name: Some(format!("modelica_plot_{}.csv", viz_id.0)),
-        start_dir: None,
-        filters: vec![lunco_workbench_file_dialog::OpenFilter::new(
-            "CSV",
-            &["csv"],
-        )],
-    };
-    let Some(handle) = lunco_workbench_file_dialog::pick_save_blocking(&hint) else {
-        return; // user cancelled the save dialog
-    };
-
-    if let Err(e) = bevy::tasks::futures_lite::future::block_on(
-        <lunco_storage::FileStorage as lunco_storage::Storage>::write(
-            &storage,
-            &handle,
-            csv.as_bytes(),
-        ),
-    ) {
-        if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
-            console.error(format!("CSV export: write failed: {e}"));
-        }
-    } else if let Some(mut console) = world.get_resource_mut::<lunco_ui::log::LogBuffer>() {
-        let path = match &handle {
-            lunco_storage::StorageHandle::File(p) => p.display().to_string(),
-            _ => "(handle)".to_string(),
-        };
-        console.info(format!(
-            "Exported {} bytes ({} columns) to {path}",
-            csv.len(),
-            columns.len()
-        ));
-    }
+    let columns: Vec<_> = columns
+        .into_iter()
+        .map(|column| (column.label, column.data))
+        .collect();
+    crate::ui::panels::csv_export::export_columns(
+        world,
+        format!("modelica_plot_{}.csv", viz_id.0),
+        columns,
+    );
 }

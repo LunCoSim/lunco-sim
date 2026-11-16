@@ -67,6 +67,7 @@ use lunco_workbench_widgets::{UiIcon, icon_button_sized, text_editor};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod accessibility;
 mod authored_perspectives;
 mod keybindings;
 mod layout_render;
@@ -83,10 +84,10 @@ pub use render::menu_popup_max_width;
 pub(crate) use render::{
     PanelTabViewer, TopMenuMode, dock_group_rects, measured_menu_row_width,
     measured_titlebar_right_width, menu_item, needs_full_backdrop, new_document_menu_label,
-    perspective_help_anchor, perspective_switcher_tabs, publish_panel_anchor, render_custom_menus,
-    render_edit_menu, render_help_menu, render_network_menu, render_panel_solo,
-    render_settings_menu, render_status_bar_inner, render_time_menu, run_menu_callback,
-    scene_camera_is_rendering, top_menu_mode, truncate_title_to_width,
+    perspective_help_anchor, perspective_switcher_tabs, render_custom_menus, render_edit_menu,
+    render_help_menu, render_network_menu, render_settings_menu, render_status_bar_inner,
+    render_time_menu, run_menu_callback, scene_camera_is_rendering, top_menu_mode,
+    truncate_title_to_width,
 };
 use render::{
     register_graphics_settings_menu, register_workbench_appearance_settings_menu, render_workbench,
@@ -640,7 +641,7 @@ pub struct WorkbenchAppearanceSettings {
 }
 
 fn default_translucent_tab_content() -> bool {
-    true
+    false
 }
 
 impl Default for WorkbenchAppearanceSettings {
@@ -729,6 +730,7 @@ impl Plugin for WorkbenchPlugin {
                 app.add_plugins(lunco_workspace_api::WorkspaceApiQueriesPlugin);
             }
         }
+        accessibility::install(app);
         if !app.is_plugin_added::<bevy_egui::EguiPlugin>() {
             app.add_plugins(bevy_egui::EguiPlugin {
                 // egui owns the workbench chrome and its transient surfaces:

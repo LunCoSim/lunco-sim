@@ -359,14 +359,26 @@ impl WorkbenchLayout {
             .or_else(|| {
                 if !matches!(
                     preferred_slot,
-                    Some(PanelSlot::Bottom | PanelSlot::RightInspectorBottom)
-                ) && !(preferred_slot == Some(PanelSlot::Center)
-                    && self.center_has_initial_instances)
-                {
+                    Some(PanelSlot::Bottom | PanelSlot::RightInspectorBottom | PanelSlot::Center)
+                ) {
                     first_leaf(main)
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                (preferred_slot == Some(PanelSlot::Center))
+                    .then(|| {
+                        main.iter()
+                            .enumerate()
+                            .find_map(|(index, node)| match node {
+                                egui_dock::Node::Leaf(leaf) if leaf.tabs.is_empty() => {
+                                    Some(NodeIndex(index))
+                                }
+                                _ => None,
+                            })
+                    })
+                    .flatten()
             })
             // …but never the exclusive scene-viewport leaf.
             .filter(|n| Some(*n) != vp_leaf)
@@ -656,7 +668,9 @@ impl WorkbenchLayout {
 
     /// Whether a central panel or center-slot instance is currently open.
     pub fn has_central_content(&self) -> bool {
-        let center_instances_enabled = self.center_has_initial_instances
+        let center_instances_enabled = self.active_scene_interaction_mode()
+            == lunco_interaction_core::SceneInteractionMode::Editor
+            || self.center_has_initial_instances
             || self
                 .active_perspective
                 .as_ref()
@@ -1429,13 +1443,9 @@ impl WorkbenchLayout {
     /// Called by every slot setter and by [`activate_perspective`]. After
     /// rebuild, user drags persist until the next call.
     ///
-    /// **Two-mode rendering** — the dock is only used when there are
-    /// central tabs (i.e. apps like `lunica` that have
-    /// Code/Diagram in the centre). In 3D apps where the centre is
-    /// reserved for the Bevy viewport, the dock is left empty and the
-    /// side panels render via plain `egui::SidePanel`/`TopBottomPanel`
-    /// instead — see [`render_layout`]. This keeps the central region
-    /// transparent so the 3D scene shows through.
+    /// Every populated slot uses the dock, including side-only editor tasks.
+    /// Scene-only perspectives leave the dock unpainted. The viewport panel
+    /// owns its transparent rendering boundary inside populated perspectives.
     ///
     /// **`egui_dock` fraction quirk** — the docstring says `fraction`
     /// is the OLD node's share, but that's only true for `split_right`
@@ -1718,38 +1728,8 @@ impl WorkbenchLayout {
                 _ => None,
             });
 
-        // Viewport-only perspectives: no central singleton tabs → don't
-        // build a side-panel dock tree. The renderer lays out side panels
-        // with egui's SidePanels and leaves the central area transparent
-        // (it stays in 3D mode — see the `has_dock_tabs` gate in
-        // `render_layout` — so a non-empty dock here is *not* shown).
-        //
-        // A pure 3D app keeps no instance tabs at all, but a hybrid app
-        // (the rover luncosim embeds the Modelica workbench) can have
-        // document/model tabs open while a viewport-only perspective is
-        // active. Park those instance tabs in the dock rather than dropping
-        // them — wiping would lose the open documents on every viewport
-        // perspective activation. They render nowhere while this
-        // perspective is active and re-attach to the centre when the user
-        // switches to a centre-driven perspective (which collects them as
-        // `preserved_instances` on its own rebuild).
-        if center_tabs.is_empty() {
-            let parked: Vec<TabId> = preserved_instances
-                .iter()
-                .map(|(kind, instance)| TabId::Instance {
-                    kind: *kind,
-                    instance: *instance,
-                })
-                .collect();
-            self.dock = DockState::new(parked);
-            return;
-        }
-
-        // Centre-driven apps: build the standard cross layout in egui_dock.
-        // Splits are ordered so right and left span the full window height,
-        // and bottom spans the central column's width (sandwiched between
-        // them). Each subsequent split at NodeIndex::root() wraps the
-        // previous tree, so the outermost splits dominate the layout.
+        // Empty center leaves are valid dock regions. Every declared side/bottom
+        // group is materialized even before its first document is opened.
         let mut dock = DockState::new(center_tabs);
         let mut central = NodeIndex::root();
 
@@ -1820,26 +1800,8 @@ impl WorkbenchLayout {
         }
     }
 
-    /// Reconcile a freshly-restored dock tree against the active
-    /// perspective's declared chrome (side browser / inspectors /
-    /// bottom singletons).
-    ///
-    /// A persisted dock can omit those panels — e.g. it was last saved
-    /// while a viewport-only perspective was active (which parks only
-    /// instance tabs, no chrome — see [`Self::rebuild_dock`]'s
-    /// `center_tabs.is_empty()` branch), or from an older layout. In
-    /// dock-mode the renderer draws the dock tree verbatim, so any
-    /// missing chrome silently never appears (open documents show, but
-    /// the side/right panels are gone).
-    ///
-    /// When the active perspective is centre-driven (it declares
-    /// registered centre singletons) yet the restored dock is missing
-    /// any declared chrome, rebuild the full layout from intent.
-    /// [`Self::rebuild_dock`] re-attaches the open document/instance
-    /// tabs, so only the saved split *sizes* are lost — not the open
-    /// documents or the chrome. Viewport-only perspectives (no
-    /// registered centre singleton — the luncosim's `View`) are left
-    /// untouched: their chrome lives outside the dock by design.
+    /// Require every declared registered panel after restoring a dock. Rebuilding
+    /// materializes the authoritative slots while retaining open document instances.
     pub fn ensure_chrome_present(&mut self) {
         if !self.perspective_chrome_complete() {
             warn!(
@@ -1850,19 +1812,7 @@ impl WorkbenchLayout {
         }
     }
 
-    /// True when the live dock is consistent with the active
-    /// perspective's declared chrome. Either the perspective is
-    /// viewport-only (declares no *registered* centre singleton — its
-    /// side panels render outside the dock, so a chrome-less dock is
-    /// correct), or every declared+registered chrome panel
-    /// (side/right/bottom/centre singleton) is present in the dock tree.
-    ///
-    /// Used at both ends of persistence: [`Self::ensure_chrome_present`]
-    /// heals a restored dock that fails this, and `build_state` refuses
-    /// to persist a dock that fails it (so a transient chrome-less dock —
-    /// e.g. mid perspective-switch through the viewport-only
-    /// [`Self::rebuild_dock`] branch — never round-trips as a layout with
-    /// missing side panels).
+    /// Whether every registered panel in the current slot intent is materialized.
     pub fn perspective_chrome_complete(&self) -> bool {
         self.chrome_complete(
             &self.dock,
@@ -1875,16 +1825,7 @@ impl WorkbenchLayout {
         )
     }
 
-    /// True when `dock` is consistent with the given slot intent's declared
-    /// chrome. Either the intent is viewport-only (declares no *registered*
-    /// centre singleton — its chrome renders outside the dock, so a
-    /// chrome-less dock is correct), or every declared+registered chrome
-    /// panel (side/right/bottom/centre singleton) is present in `dock`.
-    ///
-    /// Parameterised over the dock + intent so it can judge a CACHED
-    /// perspective's dock by its OWN intent (in
-    /// [`capture_perspective_docks`]), not the active perspective's. The
-    /// live variant is [`perspective_chrome_complete`].
+    /// Check a live or cached dock against its own authoritative slot intent.
     fn chrome_complete(
         &self,
         dock: &DockState<TabId>,
@@ -1895,10 +1836,6 @@ impl WorkbenchLayout {
         right_inspector_bottom: &[PanelId],
         bottom: &[PanelId],
     ) -> bool {
-        let is_centre_driven = center.iter().any(|id| self.panels.contains_key(id));
-        if !is_centre_driven {
-            return true; // viewport-only — chrome renders outside the dock
-        }
         let in_dock: std::collections::HashSet<PanelId> = dock
             .iter_all_tabs()
             .filter_map(|(_, t)| {

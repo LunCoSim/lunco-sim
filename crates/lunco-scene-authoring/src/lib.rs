@@ -30,6 +30,7 @@ impl Plugin for SceneAuthoringPlugin {
     fn build(&self, app: &mut App) {
         register_all_commands(app);
         app.init_resource::<shader_doc::ShaderRegistry>();
+        app.add_observer(shader_doc::retire_shader_documents);
         app.init_resource::<shader_sources::PendingShaderSources>();
         app.add_observer(shader_sources::retire_shader_sources);
         app.add_systems(Update, shader_sources::publish_shader_sources);

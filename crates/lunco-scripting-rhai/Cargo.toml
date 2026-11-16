@@ -6,6 +6,7 @@ license.workspace = true
 description = "Rhai authoring, discovery, diagnostics, and dataset query surfaces"
 
 [dependencies]
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }

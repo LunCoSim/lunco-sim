@@ -257,9 +257,12 @@ impl RequirementQuickFilter {
 }
 
 /// Compact requirements browser for the active Twin, with source navigation
-/// and an inline editor backed by the canonical SysML document registry.
+/// and source editing backed by the canonical SysML document registry.
 #[derive(Default)]
-pub struct SysmlRequirementsPanel {
+pub struct SysmlRequirementsPanel;
+
+#[derive(bevy::prelude::Resource, Default)]
+pub(crate) struct SysmlRequirementsState {
     search: String,
     filters: RequirementFilters,
     selected_source: Option<String>,
@@ -308,34 +311,37 @@ impl Panel for SysmlRequirementsPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
-        let theme = ctx
-            .resource::<lunco_theme::Theme>()
-            .cloned()
-            .unwrap_or_else(lunco_theme::Theme::dark);
-        let mut panel_state = ctx
-            .resource::<SysmlRequirementPanelState>()
-            .cloned()
-            .unwrap_or_default();
-        let actions = {
-            let view_model = ctx.resource::<SysmlRequirementsViewModel>();
-            let documents = ctx.resource::<DocumentRegistry<SysmlDocument>>();
-            let runs = ctx.resource::<SysmlVerificationRuns>();
-            self.render_panel(ui, view_model, documents, runs, &theme, &mut panel_state)
-        };
-        panel_state.twin_id = self.view_twin_id;
-        panel_state.selected_requirement = self.view_twin_id.and(self.selected_requirement.clone());
-        panel_state.draft_source = self.editor.as_ref().and_then(|editor| {
-            editor.has_local_draft().then(|| {
-                editor.twin_id.map(|twin_id| RequirementDraftSource {
-                    twin_id,
-                    logical_uri: editor.logical_uri.clone(),
-                })
-            })?
+        ctx.resource_scope::<SysmlRequirementsState, _>(|ctx, state| {
+            let theme = ctx
+                .resource::<lunco_theme::Theme>()
+                .cloned()
+                .unwrap_or_else(lunco_theme::Theme::dark);
+            let mut panel_state = ctx
+                .resource::<SysmlRequirementPanelState>()
+                .cloned()
+                .unwrap_or_default();
+            let actions = {
+                let view_model = ctx.resource::<SysmlRequirementsViewModel>();
+                let documents = ctx.resource::<DocumentRegistry<SysmlDocument>>();
+                let runs = ctx.resource::<SysmlVerificationRuns>();
+                state.render_panel(ui, view_model, documents, runs, &theme, &mut panel_state)
+            };
+            panel_state.twin_id = state.view_twin_id;
+            panel_state.selected_requirement =
+                state.view_twin_id.and(state.selected_requirement.clone());
+            panel_state.draft_source = state.editor.as_ref().and_then(|editor| {
+                editor.has_local_draft().then(|| {
+                    editor.twin_id.map(|twin_id| RequirementDraftSource {
+                        twin_id,
+                        logical_uri: editor.logical_uri.clone(),
+                    })
+                })?
+            });
+            if ctx.resource::<SysmlRequirementPanelState>() != Some(&panel_state) {
+                ctx.set_resource(panel_state);
+            }
+            dispatch_panel_actions(ctx, actions);
         });
-        if ctx.resource::<SysmlRequirementPanelState>() != Some(&panel_state) {
-            ctx.set_resource(panel_state);
-        }
-        dispatch_panel_actions(ctx, actions);
     }
 }
 
@@ -420,7 +426,7 @@ impl Panel for SysmlRequirementDetailsPanel {
             });
         let mut actions = Vec::new();
         let mut open_traceability = false;
-        let source = SysmlRequirementsPanel::render_requirement_detail(
+        let source = SysmlRequirementsState::render_requirement_detail(
             ui,
             view_model,
             selected,
@@ -445,6 +451,45 @@ impl Panel for SysmlRequirementDetailsPanel {
             ctx.trigger(FocusPanel {
                 id: SYSML_REQUIREMENTS_PANEL_ID.as_str().to_owned(),
             });
+        }
+    }
+}
+
+/// Hidden panels retire Twin-owned drafts at the same closure boundary as documents.
+pub(crate) fn retire_requirement_panel_state(
+    closed: bevy::prelude::On<lunco_workspace::TwinClosed>,
+    mut state: bevy::prelude::ResMut<SysmlRequirementsState>,
+    mut selection: bevy::prelude::ResMut<SysmlRequirementPanelState>,
+) {
+    if state
+        .editor
+        .as_ref()
+        .is_some_and(|editor| editor.twin_id == Some(closed.twin))
+    {
+        state.editor = None;
+    }
+    if state.view_twin_id == Some(closed.twin) {
+        state.view_twin_id = None;
+        state.selected_requirement = None;
+        state.selected_source = None;
+        state.selected_structure_element = None;
+    }
+    if selection.twin_id == Some(closed.twin) {
+        *selection = SysmlRequirementPanelState::default();
+    } else {
+        if selection
+            .draft_source
+            .as_ref()
+            .is_some_and(|source| source.twin_id == closed.twin)
+        {
+            selection.draft_source = None;
+        }
+        if selection
+            .pending_source
+            .as_ref()
+            .is_some_and(|(owner, _, _)| *owner == closed.twin)
+        {
+            selection.pending_source = None;
         }
     }
 }
@@ -510,7 +555,7 @@ fn dispatch_panel_actions(ctx: &mut PanelCtx, actions: Vec<PanelAction>) {
     }
 }
 
-impl SysmlRequirementsPanel {
+impl SysmlRequirementsState {
     fn render_panel(
         &mut self,
         ui: &mut egui::Ui,
@@ -520,6 +565,7 @@ impl SysmlRequirementsPanel {
         theme: &lunco_theme::Theme,
         panel_state: &mut SysmlRequirementPanelState,
     ) -> Vec<PanelAction> {
+        ui.set_max_width(ui.clip_rect().width());
         let Some(view_model) = view_model else {
             ui.label("SysML requirements view is not available.");
             panel_state.twin_id = None;
@@ -683,8 +729,21 @@ impl SysmlRequirementsPanel {
         }
 
         let close_editor = if let Some(editor) = &mut self.editor {
-            ui.separator();
-            Self::render_source_editor(ui, view_model, editor, documents, theme, &mut actions)
+            let screen = ui.ctx().viewport_rect();
+            egui::Window::new(format!(
+                "SysML source · {}",
+                source_display_path(view_model, &editor.logical_uri)
+            ))
+            .id(egui::Id::new(("sysml_source_window", &editor.logical_uri)))
+            .frame(egui::Frame::window(ui.style()).fill(theme.tokens.surface_sunken))
+            .default_pos(screen.min + screen.size() * 0.14)
+            .default_size(screen.size() * 0.72)
+            .max_size(screen.size() * 0.9)
+            .resizable(true)
+            .show(ui.ctx(), |ui| {
+                Self::render_source_editor(ui, view_model, editor, documents, theme, &mut actions)
+            })
+            .is_some_and(|window| window.inner == Some(true))
         } else {
             false
         };
@@ -698,7 +757,7 @@ impl SysmlRequirementsPanel {
     }
 
     fn render_workspace_tabs(&mut self, ui: &mut egui::Ui, theme: &lunco_theme::Theme) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (view, label) in [
                 (RequirementsWorkspaceView::Requirements, "Requirements"),
                 (RequirementsWorkspaceView::Traceability, "Traceability"),
@@ -720,7 +779,9 @@ impl SysmlRequirementsPanel {
         theme: &lunco_theme::Theme,
         actions: &mut Vec<PanelAction>,
     ) -> Option<(SourceFileView, usize)> {
-        self.render_summary(ui, view_model, runs, unsaved_source, theme, actions);
+        egui::CollapsingHeader::new("Coverage and test summary").show(ui, |ui| {
+            self.render_summary(ui, view_model, runs, unsaved_source, theme, actions)
+        });
         ui.add_space(theme.spacing.item_spacing);
         self.render_filters(ui, view_model, runs, theme);
         ui.add_space(theme.spacing.item_spacing);
@@ -1279,10 +1340,8 @@ impl SysmlRequirementsPanel {
             }
         });
         if let Some(revision) = view_model.source_revision {
-            ui.small(
-                egui::RichText::new(format!("Source revision {revision}"))
-                    .color(theme.tokens.text_subdued),
-            );
+            ui.weak("Current source set")
+                .on_hover_text(format!("Source revision {revision}"));
         }
     }
 
@@ -1462,7 +1521,7 @@ impl SysmlRequirementsPanel {
                     .unwrap_or_default();
                 ui.horizontal_wrapped(|ui| {
                     let selected_label = format!(
-                        "Run selected tests ({})",
+                        "Run selected ({})",
                         selected_names.len()
                     );
                     if ui
@@ -1484,7 +1543,7 @@ impl SysmlRequirementsPanel {
                         });
                     }
 
-                    let label = format!("Run all mapped tests ({})", names.len());
+                    let label = format!("Run mapped ({})", names.len());
                     if ui
                         .add_enabled(can_run && !names.is_empty(), egui::Button::new(label))
                         .on_hover_text(if unsaved_source {
@@ -1863,6 +1922,19 @@ impl SysmlRequirementsPanel {
         runs: Option<&SysmlVerificationRuns>,
         theme: &lunco_theme::Theme,
     ) {
+        ui.add(
+            lunco_workbench_widgets::text_editor::singleline(&mut self.search)
+                .hint_text("Search requirements…")
+                .desired_width(ui.available_width().min(400.0)),
+        );
+        let narrowed =
+            self.selected_source.is_some() || self.filters != RequirementFilters::default();
+        let title = if narrowed {
+            "Filters and columns · active"
+        } else {
+            "Filters and columns"
+        };
+        egui::CollapsingHeader::new(title).id_salt("requirement_filter_controls").show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut self.include_definitions, "Definitions")
                 .on_hover_text("Include reusable requirement definitions alongside the applied usages.");
@@ -1880,11 +1952,6 @@ impl SysmlRequirementsPanel {
                 .on_hover_text("Show source, declaration kind and overall status as well as the independent status dimensions.");
         });
         ui.horizontal_wrapped(|ui| {
-            ui.add(
-                lunco_workbench_widgets::text_editor::singleline(&mut self.search)
-                    .hint_text("Search name, ID, docs or test")
-                    .desired_width((ui.available_width() * 0.52).clamp(120.0, 400.0)),
-            );
             let selected_name = self
                 .selected_source
                 .as_deref()
@@ -2014,6 +2081,7 @@ impl SysmlRequirementsPanel {
                     }
                 });
         });
+        });
         let search = self.search.trim().to_lowercase();
         let visible_count = view_model
             .requirements
@@ -2066,6 +2134,49 @@ impl SysmlRequirementsPanel {
             };
             ordering.then_with(|| left.qualified_name.cmp(&right.qualified_name))
         });
+
+        // A dock narrower than the useful table columns uses selectable cards;
+        // the details panel owns the full evidence and execution breakdown.
+        if !self.full_table && ui.available_width() < 500.0 {
+            let row_height = 4.0 * ui.text_style_height(&egui::TextStyle::Body)
+                + 2.0 * ui.spacing().button_padding.y;
+            egui::ScrollArea::vertical()
+                .id_salt("sysml_requirement_cards")
+                .show_rows(ui, row_height, ordered.len(), |ui, range| {
+                    for index in range {
+                        let requirement = &view_model.requirements[ordered[index]];
+                        let selected = self.selected_requirement.as_deref()
+                            == Some(&requirement.qualified_name);
+                        let state = requirement_rollup_state(requirement, view_model, runs);
+                        let (status, _, explanation) = requirement_rollup_label(state, theme);
+                        let mut label = format!("{}\n{status}", requirement.display_name);
+                        if let Some(statement) = requirement.statement.first() {
+                            label.push('\n');
+                            label.push_str(statement);
+                        }
+                        let mut text = egui::text::LayoutJob::simple(
+                            label,
+                            egui::TextStyle::Body.resolve(ui.style()),
+                            ui.visuals().text_color(),
+                            (ui.available_width() - 2.0 * ui.spacing().button_padding.x).max(1.0),
+                        );
+                        text.wrap.max_rows = 4;
+                        text.wrap.overflow_character = Some('…');
+                        let text = ui.fonts_mut(|fonts| fonts.layout_job(text));
+                        if ui
+                            .add_sized(
+                                egui::vec2(ui.available_width(), row_height),
+                                egui::Button::new(text).selected(selected),
+                            )
+                            .on_hover_text(format!("{}\n{explanation}", requirement.qualified_name))
+                            .clicked()
+                        {
+                            self.selected_requirement = Some(requirement.qualified_name.clone());
+                        }
+                    }
+                });
+            return;
+        }
 
         let mut next_sort = None;
         let mut next_reorder = None;
@@ -2518,7 +2629,7 @@ impl SysmlRequirementsPanel {
                 let rollup = requirement_rollup_state(requirement, view_model, runs);
                 let (rollup_label, rollup_color, rollup_explanation) =
                     requirement_rollup_label(rollup, theme);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.strong("Overall requirement status");
                     ui.colored_label(rollup_color, rollup_label)
                         .on_hover_text(rollup_explanation);
@@ -2526,7 +2637,7 @@ impl SysmlRequirementsPanel {
                 ui.separator();
                 let (evidence_label, evidence_color, evidence_explanation) =
                     evidence_status(requirement, view_model, runs, theme);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.strong("Requirement evidence");
                     ui.colored_label(evidence_color, evidence_label)
                         .on_hover_text(evidence_explanation);
@@ -2551,7 +2662,7 @@ impl SysmlRequirementsPanel {
                     );
                 } else {
                     let execution = execution_summary(requirement, view_model, runs);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.strong("Test execution");
                         ui.colored_label(
                             execution_color(execution.state, theme),
@@ -2861,7 +2972,7 @@ impl SysmlRequirementsPanel {
         }
 
         let mut close = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Source editor");
             if let Some(line) = editor.focus_line {
                 muted(ui, theme, &format!("Line {line}"));
@@ -2975,10 +3086,10 @@ impl SysmlRequirementsPanel {
                 .memory_mut(|memory| memory.request_focus(text_edit_id));
         }
 
-        egui::ScrollArea::vertical()
+        egui::ScrollArea::both()
             .id_salt("sysml_source_editor")
             .auto_shrink([false; 2])
-            .max_height(ui.available_height().max(1.0))
+            .max_height((ui.available_height() - 3.0 * ui.spacing().interact_size.y).max(80.0))
             .show(ui, |ui| {
                 ui.add(
                     lunco_workbench_widgets::text_editor::code(&mut editor.buffer)
@@ -2999,7 +3110,7 @@ impl SysmlRequirementsPanel {
                 "Document changes are not saved to disk",
             );
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let can_save = document.writable && !editor.conflict && (local_draft || document.dirty);
             if ui
                 .add_enabled(can_save, egui::Button::new("Save source"))
@@ -4581,6 +4692,48 @@ fn line_to_char_offset(source: &str, line: usize) -> usize {
 #[cfg(test)]
 mod requirement_column_order_tests {
     use super::*;
+
+    #[test]
+    fn requirement_drafts_retire_without_painting() {
+        use bevy::prelude::*;
+        let mut app = App::new();
+        app.init_resource::<SysmlRequirementsState>()
+            .init_resource::<SysmlRequirementPanelState>()
+            .add_observer(retire_requirement_panel_state);
+        let owner = lunco_workspace::TwinId::new(7);
+        app.world_mut()
+            .resource_mut::<SysmlRequirementsState>()
+            .editor = Some(SourceEditor {
+            twin_id: Some(owner),
+            logical_uri: "twin://fixture/source.sysml".into(),
+            doc_id: None,
+            buffer: "draft".into(),
+            base_source: "source".into(),
+            base_generation: None,
+            conflict: false,
+            focus_line: None,
+        });
+        let closed = |twin| lunco_workspace::TwinClosed {
+            twin,
+            root: "/fixture".into(),
+            was_active: false,
+        };
+        app.world_mut()
+            .trigger(closed(lunco_workspace::TwinId::new(8)));
+        assert!(
+            app.world()
+                .resource::<SysmlRequirementsState>()
+                .editor
+                .is_some()
+        );
+        app.world_mut().trigger(closed(owner));
+        assert!(
+            app.world()
+                .resource::<SysmlRequirementsState>()
+                .editor
+                .is_none()
+        );
+    }
 
     #[test]
     fn columns_move_in_both_directions_without_losing_the_order() {

@@ -21,6 +21,8 @@
 //! starts on a descendant tagged `tag:ui_drag_handle="true"`. A resizable
 //! window changes size only from a descendant tagged
 //! `tag:ui_resize_handle="true"`.
+mod accessibility;
+
 use bevy::ecs::entity::EntityHashSet;
 use bevy::picking::Pickable;
 use bevy::picking::events::{PointerClick, PointerDrag};
@@ -1608,6 +1610,7 @@ impl Plugin for RuntimeUiPlugin {
                     RuntimeUiHtmlInput,
                 ));
             });
+        accessibility::install(app);
         app.add_observer(dispatch_runtime_ui_press)
             .init_resource::<RuntimeSurfaceLayouts>()
             .init_resource::<RuntimeUiRenderState>()
@@ -3977,7 +3980,10 @@ fn register_runtime_ui_input_regions(
             // cannot dispatch a second invocation for a held press.
             commands
                 .entity(entity)
-                .try_insert(RuntimeUiPressCallbacks(press.0.clone()))
+                .try_insert((
+                    RuntimeUiPressCallbacks(press.0.clone()),
+                    bevy::input_focus::tab_navigation::TabIndex(0),
+                ))
                 .try_remove::<OnUiPress>();
         }
         let surface_gesture_content =

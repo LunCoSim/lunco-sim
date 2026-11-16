@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use lunco_assets_core::twin_source::{TwinRoots, twin_uri};
+use lunco_assets_core::twin_source::twin_uri;
 use lunco_doc::{Document, FileBacked};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_scene_runner::SceneTestRunReport;
@@ -233,7 +233,6 @@ impl SysmlWorkspaceInputs {
 
 pub(crate) fn produce_sysml_requirements_view_model(
     workspace: Option<Res<WorkspaceResource>>,
-    roots: Option<Res<TwinRoots>>,
     analyses: Option<Res<TwinSysmlAnalyses>>,
     documents: Option<Res<DocumentRegistry<SysmlDocument>>>,
     evidence: Option<Res<SysmlVerificationEvidence>>,
@@ -247,7 +246,6 @@ pub(crate) fn produce_sysml_requirements_view_model(
         && !workspace_inputs.matches(workspace.as_deref());
     let changed = first
         || workspace_changed
-        || roots.as_ref().is_some_and(Res::is_changed)
         || analyses.as_ref().is_some_and(Res::is_changed)
         || documents.as_ref().is_some_and(Res::is_changed)
         || evidence.as_ref().is_some_and(Res::is_changed);
@@ -261,7 +259,6 @@ pub(crate) fn produce_sysml_requirements_view_model(
     let _span = bevy::log::info_span!(
         "sysml_requirements_rebuild",
         workspace = workspace_changed,
-        roots = roots.as_ref().is_some_and(Res::is_changed),
         analyses = analyses.as_ref().is_some_and(Res::is_changed),
         documents = documents.as_ref().is_some_and(Res::is_changed),
         evidence = evidence.as_ref().is_some_and(Res::is_changed),
@@ -270,7 +267,6 @@ pub(crate) fn produce_sysml_requirements_view_model(
 
     let next = build_view_model(
         workspace.as_deref(),
-        roots.as_deref(),
         analyses.as_deref(),
         documents.as_deref(),
         evidence.as_deref(),
@@ -280,7 +276,6 @@ pub(crate) fn produce_sysml_requirements_view_model(
 
 fn build_view_model(
     workspace: Option<&WorkspaceResource>,
-    roots: Option<&TwinRoots>,
     analyses: Option<&TwinSysmlAnalyses>,
     documents: Option<&DocumentRegistry<SysmlDocument>>,
     evidence: Option<&SysmlVerificationEvidence>,
@@ -300,39 +295,7 @@ fn build_view_model(
             ..Default::default()
         };
     };
-    let Some(roots) = roots else {
-        return SysmlRequirementsViewModel {
-            state: AnalysisState::Failed(vec![
-                "Twin asset identities are not available yet.".to_owned(),
-            ]),
-            twin_id: Some(twin_id),
-            twin_name: Some(twin_display_name(twin)),
-            ..Default::default()
-        };
-    };
-    let name = match roots.authority_for_root(&twin.root) {
-        Ok(Some(name)) => name,
-        Ok(None) => {
-            return SysmlRequirementsViewModel {
-                state: AnalysisState::Failed(vec![
-                    "The active Twin has no registered twin:// source identity.".to_owned(),
-                ]),
-                twin_id: Some(twin_id),
-                twin_name: Some(twin_display_name(twin)),
-                ..Default::default()
-            };
-        }
-        Err(error) => {
-            return SysmlRequirementsViewModel {
-                state: AnalysisState::Failed(vec![format!(
-                    "Cannot resolve the active Twin source identity: {error}"
-                )]),
-                twin_id: Some(twin_id),
-                twin_name: Some(twin_display_name(twin)),
-                ..Default::default()
-            };
-        }
-    };
+    let source_identity = lunco_assets_core::logical_twin_source_identity(twin);
     let has_sources = twin
         .files()
         .iter()
@@ -353,7 +316,8 @@ fn build_view_model(
             ..Default::default()
         };
     };
-    let Some(state) = analyses.state_for(&name, twin_id, &twin.root) else {
+    let Some(state) = analyses.state_for_source_identity(&source_identity, twin_id, &twin.root)
+    else {
         return SysmlRequirementsViewModel {
             state: AnalysisState::Waiting,
             twin_id: Some(twin_id),
@@ -390,7 +354,7 @@ fn build_view_model(
         };
     }
 
-    let source_files = build_source_file_views(twin, &name, &analysis, documents);
+    let source_files = build_source_file_views(twin, &source_identity, &analysis, documents);
     let model_elements = build_model_element_views(&analysis, &source_files);
     let model_structure = build_model_structure(&model_elements);
     let requirements = build_requirement_views(&analysis, &source_files, &model_elements);
@@ -519,7 +483,7 @@ fn is_sysml_path(path: &Path) -> bool {
 
 fn build_source_file_views(
     twin: &Twin,
-    twin_name: &str,
+    source_identity: &str,
     analysis: &SysmlAnalysis,
     documents: Option<&DocumentRegistry<SysmlDocument>>,
 ) -> Vec<SourceFileView> {
@@ -529,7 +493,7 @@ fn build_source_file_views(
         .filter_map(|file| {
             let indexed = twin.files().iter().find(|entry| {
                 is_sysml_path(&entry.relative_path)
-                    && twin_uri(twin_name, &entry.relative_path) == file.name
+                    && twin_uri(source_identity, &entry.relative_path) == file.name
             })?;
             let absolute_path = twin.root.join(&indexed.relative_path);
             let document_id = documents.and_then(|registry| registry.doc_for_file(&absolute_path));

@@ -209,7 +209,7 @@ impl Panel for AvatarStatusPanel {
         PanelId("avatar_status")
     }
     fn title(&self) -> String {
-        "Telemetry".into()
+        "Camera & Control".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
@@ -242,7 +242,7 @@ impl Panel for AvatarStatusPanel {
             .map(|t| t.tokens.success)
             .unwrap_or(egui::Color32::PLACEHOLDER);
 
-        ui.heading("Avatar Status");
+        ui.heading("Camera & Control");
         ui.separator();
 
         // The panel is a pure reader of the change-driven view-model; if it
@@ -452,7 +452,11 @@ pub fn populate_avatar_status_view(
     } else if surface.single().is_ok() {
         (ModeColor::Yellow, "SURFACE".to_string(), String::new())
     } else {
-        (ModeColor::Text, "UNKNOWN".to_string(), String::new())
+        (
+            ModeColor::Text,
+            "No active avatar".to_string(),
+            String::new(),
+        )
     };
     view.mode_color = color;
     view.mode_label = label;

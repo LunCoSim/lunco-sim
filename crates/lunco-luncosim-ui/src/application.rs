@@ -659,9 +659,8 @@ fn luncosim_window(
         window.resolution = bevy::window::WindowResolution::new(960, 540);
     } else if vertical {
         window.resolution = bevy::window::WindowResolution::new(540, 960);
-    } else {
-        window.resolution = bevy::window::WindowResolution::new(1280, 720);
     }
+    // Standard launches retain the geometry restored by the window owner.
     // Keep the OS application identity aligned with the generated desktop
     // entry and icon name.
     window.name = Some("luncosim".to_string());

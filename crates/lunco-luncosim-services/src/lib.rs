@@ -626,20 +626,23 @@ fn replay_scenario_journal_shader(
         if let Ok(shader_op) =
             serde_json::from_value::<lunco_scene_authoring::shader_doc::ShaderOp>(op)
         {
-            if let Some((path, source)) = registry.apply_replayed(&shader_op) {
-                // Use the same source/asset identity resolver as the local
-                // command. A journal path may be bare while the peer's live
-                // material is keyed under the explicit `lunco://` source.
-                if let Err(error) = lunco_scene_authoring::properties::apply_shader_source_live(
-                    &asset_server,
-                    &shaders,
-                    &mut pending_sources,
-                    roots.as_deref(),
-                    &path,
-                    &source,
-                ) {
-                    warn!("SHADER_JOURNAL: live source apply failed: {error}");
+            match registry.apply_replayed(&shader_op, roots.as_deref()) {
+                Ok((path, source)) => {
+                    // Use the same source/asset identity resolver as the local
+                    // command. A journal path may be bare while the peer's live
+                    // material is keyed under the explicit `lunco://` source.
+                    if let Err(error) = lunco_scene_authoring::properties::apply_shader_source_live(
+                        &asset_server,
+                        &shaders,
+                        &mut pending_sources,
+                        roots.as_deref(),
+                        &path,
+                        &source,
+                    ) {
+                        warn!("SHADER_JOURNAL: live source apply failed: {error}");
+                    }
                 }
+                Err(error) => warn!("SHADER_JOURNAL: source owner rejected: {error}"),
             }
         }
         applied.insert(id);

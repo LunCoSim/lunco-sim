@@ -22,6 +22,8 @@ impl Plugin for SysmlUiPlugin {
         app.init_resource::<view_model::SysmlRequirementsViewModel>()
             .init_resource::<view_model::SysmlVerificationEvidence>()
             .init_resource::<panel::SysmlRequirementPanelState>()
+            .init_resource::<panel::SysmlRequirementsState>()
+            .add_observer(panel::retire_requirement_panel_state)
             .init_resource::<verification::SysmlVerificationRuns>()
             .register_panel(panel::SysmlRequirementsPanel::default())
             .register_panel(panel::SysmlRequirementDetailsPanel)

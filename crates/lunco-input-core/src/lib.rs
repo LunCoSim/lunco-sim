@@ -402,6 +402,11 @@ fn build_input_map(
 #[reflect(Resource)]
 pub struct ActiveInputBindings(pub InputBindingsSettings);
 
+/// The admitted application keymap, before user preferences or Twin overrides.
+/// The asset owner replaces this snapshot when its application document changes.
+#[derive(Resource, Default, Clone, PartialEq)]
+pub struct ApplicationInputBindings(pub Option<InputBindingsSettings>);
+
 /// Optional scene-owned binding overrides, supplied by the application asset owner.
 #[derive(Resource, Default, Clone, PartialEq)]
 pub struct SceneInputBindings(pub Option<InputBindingsSettings>);
@@ -442,6 +447,7 @@ impl Plugin for InputBindingsPlugin {
             .register_type::<InputBindingsSettings>()
             .register_settings_section::<InputBindingsSettings>()
             .init_scene_resource::<SceneInputBindings>()
+            .init_resource::<ApplicationInputBindings>()
             .init_resource::<ActiveInputBindings>()
             .init_scene_resource::<InputBindingConflicts>()
             .register_type::<InputBindingConflicts>()

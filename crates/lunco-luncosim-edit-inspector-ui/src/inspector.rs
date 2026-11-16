@@ -802,7 +802,7 @@ impl Panel for Inspector {
         PanelId("sandbox_inspector")
     }
     fn title(&self) -> String {
-        "Inspector".into()
+        "Scene Properties".into()
     }
     fn default_slot(&self) -> PanelSlot {
         PanelSlot::RightInspector
@@ -988,39 +988,40 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         .unwrap_or_default();
 
     ui.group(|ui| {
-        ui.label(egui::RichText::new("USD editor session").strong());
-        ui.horizontal_wrapped(|ui| {
-            ui.small(format!("preview {}", preview.0));
-            ui.small(format!("document {doc}"));
-            ui.small(format!("target {}", edit_target.as_str()));
-        });
-        ui.horizontal_wrapped(|ui| {
-            if projection_ready {
-                ui.small(format!("projected generation {projected_generation}"));
+        ui.collapsing("Document diagnostics", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.small(format!("preview {}", preview.0));
+                ui.small(format!("document {doc}"));
+                ui.small(format!("target {}", edit_target.as_str()));
+            });
+            ui.horizontal_wrapped(|ui| {
+                if projection_ready {
+                    ui.small(format!("projected generation {projected_generation}"));
+                } else {
+                    ui.label("USD projection pending");
+                }
+                if let Some((generation, base_revision, dirty)) = document_state {
+                    ui.small(format!("document generation {generation}"));
+                    ui.small(format!("base revision {base_revision}"));
+                    ui.small(if dirty { "modified" } else { "saved" });
+                } else {
+                    ui.colored_label(ui.visuals().error_fg_color, "document is not open");
+                }
+            });
+            if proposals.is_empty() {
+                ui.label("proposal: none");
             } else {
-                ui.label("USD projection pending");
-            }
-            if let Some((generation, base_revision, dirty)) = document_state {
-                ui.small(format!("document generation {generation}"));
-                ui.small(format!("base revision {base_revision}"));
-                ui.small(if dirty { "modified" } else { "saved" });
-            } else {
-                ui.colored_label(ui.visuals().error_fg_color, "document is not open");
+                for proposal in proposals {
+                    ui.small(format!(
+                        "proposal #{} · {} · {} · {} op(s)",
+                        proposal.id.0,
+                        proposal.scope.as_str(),
+                        proposal.state.as_str(),
+                        proposal.operation_count
+                    ));
+                }
             }
         });
-        if proposals.is_empty() {
-            ui.label("proposal: none");
-        } else {
-            for proposal in proposals {
-                ui.small(format!(
-                    "proposal #{} · {} · {} · {} op(s)",
-                    proposal.id.0,
-                    proposal.scope.as_str(),
-                    proposal.state.as_str(),
-                    proposal.operation_count
-                ));
-            }
-        }
     });
     ui.separator();
 }
@@ -1227,7 +1228,7 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
     // Esc / Backspace deselection lives in the Bevy `handle_entity_selection`
     // system (the single mutation path), not here.
 
-    ui.heading("Inspector");
+    ui.heading("Scene Properties");
     usd_editor_session_context(ui, ctx);
 
     // Get current selection
@@ -1236,13 +1237,6 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
         ui.label("Left-click an object to select it; Shift extends and Ctrl removes.");
         return;
     };
-
-    if let Some(api_id) = ctx
-        .resource::<lunco_api::registry::ApiEntityRegistry>()
-        .and_then(|registry| registry.api_id_for(entity))
-    {
-        ui.label(format!("API ID: {}", api_id.get()));
-    }
 
     let name = ctx.get::<Name>(entity);
     let callsign = ctx.get::<lunco_core::markers::Callsign>(entity);
@@ -1253,7 +1247,12 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
         .and_then(|view| view.selected_display_name.as_deref());
     let display_name = camera_name.unwrap_or(semantic_name.as_str());
     if !display_name.is_empty() {
-        let response = ui.label(format!("Name: {display_name}"));
+        let response = ui.strong(display_name).on_hover_text(
+            ctx.resource::<lunco_api::registry::ApiEntityRegistry>()
+                .and_then(|registry| registry.api_id_for(entity))
+                .map(|id| format!("API entity {}", id.get()))
+                .unwrap_or_default(),
+        );
         if let Some(name) = name.map(Name::as_str) {
             if display_name != name {
                 response.on_hover_text(name);
@@ -3052,6 +3051,19 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
         report_inspector_error(world, "Selected shader target is not document-backed");
         return;
     };
+    let authored_source = match lunco_assets_core::asset_path::source_uri_for_address(
+        path,
+        world.get_resource::<lunco_assets_core::TwinRoots>(),
+    ) {
+        Ok(source) => source,
+        Err(error) => {
+            report_inspector_error(
+                world,
+                format!("Cannot resolve shader source identity: {error}"),
+            );
+            return;
+        }
+    };
     let mut look = world.get::<ShaderLook>(part).cloned().unwrap_or_default();
     look.shader = path.to_string();
     world
@@ -3081,7 +3093,7 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
             path: shader_prim,
             name: "info:wesl:sourceAsset".to_string(),
             type_name: "asset".to_string(),
-            value: format!("@{}@", path),
+            value: format!("@{}@", authored_source),
         },
     });
 }
@@ -3090,7 +3102,8 @@ fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
 /// it isn't using one. The path IS the intent — no material lookup.
 fn current_shader_path(ctx: &PanelCtx, part: Entity) -> Option<String> {
     let look = ctx.get::<ShaderLook>(part)?;
-    (!look.shader.is_empty()).then(|| look.shader.clone())
+    (!look.shader.is_empty())
+        .then(|| lunco_scene_authoring::shader_doc::canonical_shader_path(&look.shader))
 }
 
 /// "Shader Tools" — GUI front-end for the live shader-authoring commands.
@@ -3187,10 +3200,23 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                 if let Some(path) = current_shader_path(ctx, part) {
                     if ui
                         .button("Delete current")
-                        .on_hover_text(format!("Remove {path} (file + picker)"))
+                        .on_hover_text(format!(
+                            "Remove {} (file + picker)",
+                            lunco_assets_core::asset_path::display_source_path(
+                                &path,
+                                ctx.resource::<lunco_assets_core::TwinRoots>()
+                            )
+                        ))
                         .clicked()
                     {
-                        ctx.trigger(lunco_scene_authoring::properties::DeleteShader { path });
+                        match lunco_assets_core::asset_path::source_uri_for_address(
+                            &path,
+                            ctx.resource::<lunco_assets_core::TwinRoots>(),
+                        ) {
+                            Ok(path) => ctx
+                                .trigger(lunco_scene_authoring::properties::DeleteShader { path }),
+                            Err(error) => warn!("Cannot delete shader: {error}"),
+                        }
                     }
                 }
             });

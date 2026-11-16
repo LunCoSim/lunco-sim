@@ -501,7 +501,10 @@ pub fn on_spawn_entity_command(
         &admission.backed,
         scene_root_prim.stage_handle.id(),
     ) {
-        let SpawnSource::UsdFile(asset_path) = &entry.source;
+        let SpawnSource::UsdFile {
+            source_uri: asset_path,
+            ..
+        } = &entry.source;
         let (prim_path, ops) = runtime_spawn_ops(
             &cmd.entry_id,
             asset_path,

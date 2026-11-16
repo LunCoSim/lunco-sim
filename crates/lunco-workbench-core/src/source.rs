@@ -18,7 +18,7 @@ pub enum SourceDragPayload {
 /// Open a registered asset as read-only text in the source viewer.
 #[Command(default)]
 pub struct OpenSourceView {
-    /// Registered asset path.
+    /// Stable Twin source URI or engine-library path.
     pub asset_path: String,
 }
 

@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**316 commands** across **59** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
+**317 commands** across **59** crates. 3 command(s) lack a `///` description — marked _(no description)_ below, and shown the same way in the MCP tool list an agent reads; add a doc comment on the struct to fix it.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -121,7 +121,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-viz`](#lunco-viz) (7 commands)
 - [`lunco-workbench-browser`](#lunco-workbench-browser) (2 commands)
 - [`lunco-workbench-core`](#lunco-workbench-core) (18 commands)
-- [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (5 commands)
+- [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (6 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
 - [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (4 commands)
@@ -477,11 +477,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `UpdateUsdCurveView`
 
- Queue a live render update for an existing USD curve entity. The request is
- coalesced by target and immutable preparations run on the compute pool.
- Terrain curves publish sparse strokes consumed by the ground shader; a scene
- without declared terrain renders its authored 3D curve. No USD layer or
- scene projection is changed.
+ Coalesced presentation update of an existing USD curve, preserving its material.
+ Spatial geometry is not projected onto terrain and does not move its anchor.
+ No USD layer, document generation or physical geometry is changed.
 
 - *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
 
@@ -491,6 +489,8 @@ actually call, with the fields the deserializer actually accepts. See the
 | `root_entity_id` | `u64` |  Stable API identity of the Xform carrying the curve's anchor. |
 | `curve_entity_id` | `u64` |  Stable API identity of the projected UsdGeomBasisCurves entity. |
 | `points` | `Vec < [f64 ; 3] >` |  Ordered centerline points in the route parent's local USD coordinates. |
+| `projection` | `UsdCurveViewProjection` |  Spatial points are curve-local; surface points retain route-parent coordinates. |
+| `normals` | `Vec < [f64 ; 3] >` |  Optional per-point ribbon normals. Empty uses local Y, as for legacy views. |
 | `width_m` | `f64` |  Full ribbon width in metres. |
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
@@ -2932,9 +2932,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
  A supplied bare path such as `"shaders/wheel.wesl"` resolves against the
  active engine-library identity, including its explicit `lunco://` spelling.
- An explicit `lunco://…` or `twin://…` path is matched exactly. An empty path
+ A stable `twin://…` source is resolved to its current private load lease. An empty path
  reloads every currently loaded WESL asset. The command fails visibly when
- the requested asset is not active instead of reporting a successful no-op.
+ the requested source is not active instead of reporting a successful no-op.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
@@ -2997,7 +2997,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `path` | `String` |  Asset path of the shader to overwrite, e.g. `"shaders/wheel.wesl"`. |
+| `path` | `String` |  Stable source URI or engine-library path, e.g. `"shaders/wheel.wesl"`. |
 | `source` | `String` |  New WESL source text. |
 
 ### `lunco-scene-camera` <a id="lunco-scene-camera"></a>
@@ -4131,7 +4131,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `asset_path` | `String` |  Registered asset path. |
+| `asset_path` | `String` |  Stable Twin source URI or engine-library path. |
 
 #### `OpenTab`
 
@@ -4254,6 +4254,18 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - *defined in:* `crates/lunco-workbench-file-ops/src/lib.rs`
 - *fields:* none — call with `CopyShareLink` (no params)
+
+#### `ExportText`
+
+ Export an immutable UTF-8 snapshot. An empty path opens a save dialog.
+
+- *defined in:* `crates/lunco-workbench-file-ops/src/export.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `suggested_name` | `String` |   |
+| `content` | `String` |   |
+| `path` | `String` |   |
 
 #### `SaveAll`
 
@@ -4689,7 +4701,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 316 commands from the runtime schema; scanned 1098 .rs files for docs (0 parse failure(s) skipped).
+<!-- 317 commands from the runtime schema; scanned 1101 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

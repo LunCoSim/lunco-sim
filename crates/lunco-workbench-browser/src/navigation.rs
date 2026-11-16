@@ -163,7 +163,7 @@ fn library_entries(world: &World) -> Result<Vec<NavigationEntry>, String> {
     for asset in lunco_assets_runtime::discovery::list_library_assets(manifest)
         .map_err(|error| error.to_string())?
     {
-        let source = asset.asset_path.clone();
+        let source = asset.source_uri.clone();
         entries.push(NavigationEntry {
             id: format!("library:{source}"),
             label: std::path::Path::new(&asset.rel)

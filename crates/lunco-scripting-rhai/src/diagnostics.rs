@@ -55,13 +55,13 @@ impl ApiQueryProvider for ScriptStatusProvider {
             .get::<ScriptedModel>(entity)
             .and_then(|m| m.document_id)
         else {
-            return Ok(Some(document_status_api_value(None)));
+            return Ok(Some(document_status_api_value(None, world)));
         };
         let doc = DocumentId::new(doc_raw);
         let entry = world
             .get_resource::<DocumentDiagnostics>()
             .and_then(|s| s.get(doc));
-        Ok(Some(document_status_api_value(entry)))
+        Ok(Some(document_status_api_value(entry, world)))
     }
 }
 
@@ -106,7 +106,28 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
             ScriptLanguage::Rhai => "rhai",
             ScriptLanguage::Python => "python",
         };
-        let status = document_status_api_value(status);
+        let status = document_status_api_value(status, world);
+        let public_reference = |reference: &str| -> Result<String, ApiQueryError> {
+            if lunco_assets_core::parse_twin_uri(reference).is_none() {
+                return Ok(reference.to_owned());
+            }
+            lunco_assets_core::asset_path::source_uri_for_address(
+                reference,
+                world.get_resource::<lunco_assets_core::TwinRoots>(),
+            )
+            .map_err(|error| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    format!("Cannot resolve script source identity: {error}"),
+                )
+            })
+        };
+        let origin_uri = public_reference(&origin.session_uri())?;
+        let asset_id = document
+            .asset_id
+            .as_deref()
+            .map(public_reference)
+            .transpose()?;
         Ok(Some(api_value!({
             "doc_id": raw,
             "kind": kind,
@@ -116,11 +137,11 @@ impl ApiQueryProvider for InspectScriptDocumentProvider {
             "dirty": document.is_dirty(),
             "read_only": origin.is_read_only(),
             "origin": {
-                "uri": origin.session_uri(),
+                "uri": origin_uri,
                 "title": origin.display_name(),
                 "writable": origin.is_writable(),
             },
-            "asset_id": document.asset_id.clone(),
+            "asset_id": asset_id,
             "inputs": document.inputs.clone(),
             "outputs": document.outputs.clone(),
             "status": status,
@@ -183,9 +204,9 @@ impl ApiQueryProvider for ScriptInspectProvider {
                 let entry = world
                     .get_resource::<DocumentDiagnostics>()
                     .and_then(|s| s.get(DocumentId::new(raw)));
-                document_status_api_value(entry)
+                document_status_api_value(entry, world)
             }
-            None => document_status_api_value(None),
+            None => document_status_api_value(None, world),
         };
 
         match intro {
@@ -214,15 +235,21 @@ impl ApiQueryProvider for ScriptInspectProvider {
     }
 }
 
-fn document_status_api_value(entry: Option<&DocDiagnostics>) -> ApiValue {
+fn document_status_api_value(entry: Option<&DocDiagnostics>, world: &World) -> ApiValue {
     let status = document_status(entry);
     let diagnostics = status
         .diagnostics
         .into_iter()
         .map(|diagnostic| {
+            let message = world
+                .get_resource::<lunco_assets_core::TwinRoots>()
+                .and_then(|roots| roots.stable_source_text(&diagnostic.message).ok())
+                .unwrap_or_else(|| {
+                    lunco_assets_core::redact_opaque_twin_authorities(&diagnostic.message)
+                });
             api_value!({
                 "severity": diagnostic.severity,
-                "message": diagnostic.message,
+                "message": message,
                 "line": diagnostic.line,
                 "col": diagnostic.col,
             })

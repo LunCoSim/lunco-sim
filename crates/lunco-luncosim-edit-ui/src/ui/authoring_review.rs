@@ -804,6 +804,6 @@ impl Panel for AuthoringReviewPanel {
         });
 
         ui.separator();
-        ui.label("Geometry measurements, tolerances, and requirement policy are authored in Rhai over QueryUsdPrim; this panel never guesses dimensions.");
+        ui.weak("Select a diagnostic to inspect its subject.");
     }
 }

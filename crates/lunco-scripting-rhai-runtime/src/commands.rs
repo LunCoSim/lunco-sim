@@ -544,6 +544,7 @@ fn on_run_scenario_asset(
     world_root: Query<Entity, With<lunco_spatial::WorldRoot>>,
     twin_hosts: Query<(Entity, &TwinScenarioHost)>,
     asset_server: Res<AssetServer>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     guard: Option<Res<lunco_core_session::SyncApplyGuard>>,
     mut admissions: ResMut<ScenarioPreparationAdmissions>,
@@ -556,7 +557,7 @@ fn on_run_scenario_asset(
         return Err("RunScenarioAsset: source_asset must not be empty".to_string());
     }
     let path = lunco_assets_core::engine_asset_uri(&cmd.source_asset);
-    let path = lunco_assets_core::asset_path::load_asset_path(&path, None, None, None)
+    let path = lunco_assets_core::asset_path::load_source_uri(&path, roots.as_deref())
         .map_err(|error| format!("RunScenarioAsset: {error}"))?;
     let owner_twin = resolve_scenario_twin_owner(
         workspace.as_deref(),
@@ -694,17 +695,15 @@ fn resolve_embedded_scenario_twin_owner(
     if let Some((source_authority, _)) = source_asset.and_then(lunco_assets_core::parse_twin_uri)
         && source_authority != stage_authority
     {
-        return Err(format!(
-            "embedded scenario asset authority `{source_authority}` differs from its USD scene authority `{stage_authority}`"
-        ));
+        return Err(
+            "Embedded scenario asset and its USD scene have different Twin mounts".to_owned(),
+        );
     }
 
-    let workspace = workspace.ok_or_else(|| {
-        format!("Twin-backed USD scene authority `{stage_authority}` has no workspace owner")
-    })?;
-    let twin_roots = twin_roots.ok_or_else(|| {
-        format!("Twin-backed USD scene authority `{stage_authority}` has no Twin asset registry")
-    })?;
+    let workspace =
+        workspace.ok_or_else(|| "Twin-backed USD scene has no workspace owner".to_owned())?;
+    let twin_roots =
+        twin_roots.ok_or_else(|| "Twin-backed USD scene has no Twin asset registry".to_owned())?;
     let mut owner = None;
     for (twin_id, twin) in workspace.twins() {
         let authority = twin_roots
@@ -712,15 +711,11 @@ fn resolve_embedded_scenario_twin_owner(
             .map_err(|error| format!("cannot resolve workspace Twin authority: {error}"))?;
         if authority.as_deref() == Some(stage_authority) {
             if owner.replace(twin_id).is_some() {
-                return Err(format!(
-                    "Twin scene authority `{stage_authority}` resolves to more than one workspace Twin"
-                ));
+                return Err("Twin scene mount resolves to more than one workspace Twin".to_owned());
             }
         }
     }
-    let owner = owner.ok_or_else(|| {
-        format!("Twin scene authority `{stage_authority}` has no open workspace Twin")
-    })?;
+    let owner = owner.ok_or_else(|| "Twin scene mount has no open workspace Twin".to_owned())?;
     resolve_scenario_twin_owner(workspace.into(), Some(owner.raw()), source_asset, true)
 }
 
@@ -1393,10 +1388,11 @@ pub fn resolve_embedded_scenario_paths(
             // Projection has already admitted and resolved the typed load path.
             // Keep filesystem characters and asset labels separate through load.
             let uri = path.0.clone();
-            info!(
-                "[scripting] loading scenario script `{}` for {entity:?} as `{uri}`",
-                path.0,
+            let label = lunco_assets_core::asset_path::display_source_path(
+                &uri.to_string(),
+                roots.as_deref(),
             );
+            info!("[scripting] loading scenario script `{label}` for {entity:?}");
             (path.0.clone(), asset_server.load(uri))
         });
         if lunco_scripting_rhai_world::source_asset::required_source_data_pending(

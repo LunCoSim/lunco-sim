@@ -42,6 +42,9 @@
 //!   delegates manifest creation to the workspace-owned [`CreateTwin`]
 //!   command and serialization to document owners.
 
+mod export;
+pub use export::{ExportLimits, ExportText};
+
 use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{Command, on_command, register_commands};
@@ -1253,6 +1256,9 @@ fn on_pick_resolved(
     mut commands: Commands,
 ) {
     let event = trigger.event();
+    if event.follow_up == PickFollowUp::ExportText {
+        return;
+    }
     let Ok((in_flight, promotion, source)) = requests.get(event.request) else {
         reject_pick(
             &mut commands,
@@ -1313,6 +1319,7 @@ fn on_pick_resolved(
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     match &event.follow_up {
+        PickFollowUp::ExportText => unreachable!("export has its own snapshot consumer"),
         PickFollowUp::OpenFile => match lunco_storage::file_path_to_uri(native_path) {
             Ok(path) => commands.trigger(OpenFile { path }),
             Err(reason) => reject_pick(
@@ -1424,6 +1431,7 @@ pub struct FileOpsPlugin;
 
 impl Plugin for FileOpsPlugin {
     fn build(&self, app: &mut App) {
+        export::install(app);
         app.init_resource::<lunco_core::CommandResults>()
             .init_resource::<lunco_core::ActiveCommandId>();
         if !app.is_plugin_added::<lunco_workbench_file_dialog::PickerPlugin>() {
