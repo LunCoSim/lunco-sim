@@ -9,9 +9,9 @@ from scripts.msi_version import (
 
 class MsiVersionTests(unittest.TestCase):
     def test_dev_semver_maps_to_monotonic_msi_versions(self):
-        self.assertEqual(windows_installer_version("0.6.0-dev.1"), "1.6.1")
-        self.assertEqual(windows_installer_version("0.6.0-dev.2"), "1.6.2")
-        self.assertEqual(windows_installer_version("0.6.0"), "1.6.999")
+        self.assertEqual(windows_installer_version("0.6.0-dev.1"), "0.6.1")
+        self.assertEqual(windows_installer_version("0.6.0-dev.2"), "0.6.2")
+        self.assertEqual(windows_installer_version("0.6.0"), "0.6.999")
 
     def test_release_allocator_uses_the_next_dev_sequence(self):
         assets = [
@@ -37,23 +37,23 @@ class MsiVersionTests(unittest.TestCase):
             "0.6.0-dev.2",
         )
 
-    def test_publication_requires_newer_semver_and_msi_versions(self):
+    def test_publication_requires_newer_app_semver_versions(self):
         assets = ["luncosim-0.6.0-dev.1-win-x64-full.nupkg"]
         check_published_versions("0.6.0-dev.2", assets)
-        for candidate in ("0.6.0-dev.1", "0.6.0", "0.5.0-dev.2"):
+        for candidate in ("0.6.0-dev.1", "0.5.0-dev.2"):
             with self.subTest(candidate=candidate):
                 with self.assertRaises(ValueError):
                     check_published_versions(candidate, assets)
 
-        # Existing update releases used the runtime before and after the version.
+        # MSI ProductVersion may reset independently from the app SemVer train.
         check_published_versions(
-            "0.6.0-dev.1",
-            ["LunCoSim-win-x64-0.6.0-nightly.160.1-win-x64-full.nupkg"],
+            "0.6.0-dev.2",
+            [
+                "luncosim-0.6.0-nightly.161.1-win-x64-full.nupkg",
+                "luncosim-0.6.0-dev.1-win-x64-full.nupkg",
+            ],
         )
-        check_published_versions(
-            "0.6.0-dev.1",
-            ["LunCoSim-win-x64-0.6.0-nightly.37.1-win-x64-full.nupkg"],
-        )
+        check_published_versions("0.6.0", assets)
         check_published_versions(
             "0.6.0-dev.2",
             [
@@ -68,7 +68,6 @@ class MsiVersionTests(unittest.TestCase):
             "0.6.0-dev.999",
             "0.6.0.1",
             "0.256.0",
-            "0.6.0-nightly.139.1",
         ):
             with self.subTest(version=version):
                 with self.assertRaises(ValueError):

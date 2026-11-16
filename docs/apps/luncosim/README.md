@@ -185,10 +185,12 @@ appear there as prereleases. See the
 
 The Windows installer has an internal, ordered MSI version distinct from the
 displayed application version. Development SemVer versions such as
-`0.6.0-dev.1` map to `1.6.1`; a stable `0.6.0` maps to `1.6.999`. Publication
-rejects non-increasing versions within the development SemVer train and keeps
-the MSI number ahead of every published Windows package. Windows Installer
-compares only the three MSI version fields.
+`0.6.0-dev.1` map to `0.6.1`, `0.6.0-dev.2` maps to `0.6.2`, and stable
+`0.6.0` maps to `0.6.999`. Publication orders Dev and nightly packages by app
+SemVer. MSI numbering is internal to Windows Installer and does not determine
+the Velopack update order. Windows Installer compares only the three MSI
+version fields; the new `0.x` MSI line is lower than previously published `1.x`
+installers, so users of those installers may need to reinstall manually.
 
 The first `0.6.0-dev.1` release sorts before existing `0.6.0-nightly.*` builds
 under SemVer. Install its MSI manually to move an existing nightly installation

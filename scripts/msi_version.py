@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allocate development releases with monotonic Windows MSI versions."""
+"""Allocate development releases and map SemVer to Windows MSI versions."""
 
 from __future__ import annotations
 
@@ -11,10 +11,6 @@ import sys
 _SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-dev\.([1-9][0-9]*))?$"
-)
-_LEGACY_NIGHTLY = re.compile(
-    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
-    r"-nightly\.([1-9][0-9]*)\.([1-9][0-9]*)$"
 )
 _WINDOWS_PACKAGE = re.compile(
     r"^luncosim-(?:win-x64-)?(.+?)(?:-win-x64)?-full\.nupkg$",
@@ -30,7 +26,7 @@ def windows_installer_version(version: str) -> str:
     major, minor, patch = map(int, match.groups()[:3])
     development = int(match.group(4)) if match.group(4) is not None else 999
 
-    if major >= 255 or minor > 255:
+    if major > 255 or minor > 255:
         raise ValueError("release version exceeds the Windows Installer major/minor limits")
     if match.group(4) is not None and not 1 <= development <= 998:
         raise ValueError("development sequence must be 1..998; stable releases use slot 999")
@@ -38,21 +34,7 @@ def windows_installer_version(version: str) -> str:
     build = patch * 1000 + development
     if build > 65535:
         raise ValueError("release version exceeds the Windows Installer build limit")
-    return f"{major + 1}.{minor}.{build}"
-
-
-def _legacy_nightly_msi_identity(version: str) -> tuple[int, int, int]:
-    legacy = _LEGACY_NIGHTLY.fullmatch(version)
-    if legacy is None:
-        raise ValueError(f"unsupported release version: {version}")
-    run_number, attempt = map(int, legacy.groups()[3:])
-    if attempt > 99:
-        raise ValueError(f"unsupported legacy nightly version: {version}")
-    ordinal = run_number * 100 + attempt
-    minor, build = divmod(ordinal, 65536)
-    if minor > 255:
-        raise ValueError("legacy MSI version sequence exhausted")
-    return 1, minor, build
+    return f"{major}.{minor}.{build}"
 
 
 def _package_versions(asset_names: list[str]) -> list[str]:
@@ -90,51 +72,32 @@ def next_development_version(base_version: str, asset_names: list[str]) -> str:
     return f"{base_version}-dev.{latest_dev + 1}"
 
 
-def _msi_identity(version: str) -> tuple[int, int, int]:
-    match = _SEMVER.fullmatch(version)
-    if match is not None:
-        return tuple(map(int, windows_installer_version(version).split(".")))
-    return _legacy_nightly_msi_identity(version)
-
-
 def check_published_versions(candidate: str, asset_names: list[str]) -> None:
-    """Reject repeated dev versions and any MSI version that would move back."""
+    """Reject a non-increasing app SemVer version within the release train."""
     proposed = _SEMVER.fullmatch(candidate)
     if proposed is None:
         raise ValueError(f"unsupported release version: {candidate}")
     proposed_identity = tuple(map(int, proposed.groups()[:3]))
     proposed_dev = int(proposed.group(4)) if proposed.group(4) is not None else None
-    proposed_msi = _msi_identity(candidate)
 
     for published_version in _package_versions(asset_names):
-        legacy = _LEGACY_NIGHTLY.fullmatch(published_version)
-        if legacy is not None:
-            published_msi = _msi_identity(published_version)
-            if published_msi >= proposed_msi:
-                raise ValueError(
-                    f"MSI version {candidate} is not newer than published package {published_version}"
-                )
-            # `dev.N` starts a new user-facing version train. Legacy nightly
-            # labels are not SemVer-compatible upgrade predecessors.
-            continue
-
         match = _SEMVER.fullmatch(published_version)
         if match is None:
             continue
         published_identity = tuple(map(int, match.groups()[:3]))
         published_dev = int(match.group(4)) if match.group(4) is not None else None
-        published_msi = _msi_identity(published_version)
 
-        if published_msi >= proposed_msi:
-            raise ValueError(
-                f"MSI version {candidate} is not newer than published package {published_version}"
-            )
         if published_identity > proposed_identity:
             raise ValueError(
                 f"application version {candidate} is older than published package {published_version}"
             )
         if published_identity == proposed_identity:
-            if published_dev is None or proposed_dev is None or published_dev >= proposed_dev:
+            if proposed_dev is None:
+                if published_dev is None:
+                    raise ValueError(
+                        f"application version {candidate} is already published"
+                    )
+            elif published_dev is None or published_dev >= proposed_dev:
                 raise ValueError(
                     f"application version {candidate} is not newer than published package {published_version}"
                 )
