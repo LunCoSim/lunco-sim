@@ -344,6 +344,18 @@ impl<'a, 'w> BrowserCtx<'a, 'w> {
     {
         self.panel.trigger(event);
     }
+
+    /// Queue a typed command after painting while preserving the producer
+    /// origin across the deferred render boundary.
+    pub fn trigger_command<E: bevy::ecs::event::Event>(
+        &mut self,
+        event: E,
+        origin: lunco_core::CommandOrigin,
+    ) where
+        for<'t> <E as bevy::ecs::event::Event>::Trigger<'t>: Default,
+    {
+        self.panel.trigger_command(event, origin);
+    }
 }
 
 /// One pluggable section in the Twin Browser.

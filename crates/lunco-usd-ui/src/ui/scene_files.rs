@@ -702,10 +702,8 @@ impl BrowserSection for SceneFilesSection {
             }
             egui::CollapsingHeader::new(format!("{} ({})", kind.title(), group.len()))
                 .id_salt(("scene_files_group", kind.title()))
-                .default_open(matches!(
-                    kind,
-                    SceneFileKind::Layer | SceneFileKind::Modelica
-                ))
+                .default_open(kind == SceneFileKind::Modelica)
+                .open(query.is_active().then_some(true))
                 .show(ui, |ui| {
                     for row in group {
                         // Openable rows are routed through the normal typed
@@ -774,12 +772,17 @@ impl BrowserSection for SceneFilesSection {
         if let Some((path, kind)) = clicked {
             if kind.opens_in_source_view() {
                 // Scripts and shaders are source text, not USD/Modelica
-                // documents. Send the typed source command directly so the
-                // shared text viewer owns the absolute scene-closure path;
-                // BrowserAction is reserved for domain document dispatchers.
-                ctx.trigger(OpenFile {
-                    path: path.to_string_lossy().into_owned(),
-                });
+                // documents. The shared text viewer owns the absolute
+                // scene-closure path; carry the local user origin through the
+                // deferred panel render boundary with the typed command.
+                ctx.trigger_command(
+                    OpenFile {
+                        path: path.to_string_lossy().into_owned(),
+                    },
+                    lunco_core::CommandOrigin::LocalUser {
+                        session_id: lunco_command_contracts::SessionId::LOCAL,
+                    },
+                );
             } else {
                 // Absolute path: the domain dispatchers (`.mo` → Modelica model
                 // tab, `.usda` → USD) take it as-is rather than anchoring on the

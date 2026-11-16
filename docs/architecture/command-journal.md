@@ -104,8 +104,10 @@ dispatcher scopes that origin with the active command id, and the generated
 `CommandOccurred` fact carries it to downstream observers. User-facing
 workbench panel commands use `PanelCtx::trigger_command` to preserve their
 explicit `LocalUser` session origin across deferred layout dispatch. Browser
-source-file actions pass through `BrowserActions` and are dispatched with the
-same origin after the UI render pass. `CommandOccurred` does not retain typed
+section commands use `BrowserCtx::trigger_command` to preserve their explicit
+origin across deferred layout dispatch; browser source-file actions pass
+through `BrowserActions` and are dispatched with the same origin after the UI
+render pass. `CommandOccurred` does not retain typed
 parameters, target identity, scene generation, effective tick, or per-tick
 input order. The bounded session-input owner records those
 facts for admitted semantic controls, live Modelica input changes, identified
