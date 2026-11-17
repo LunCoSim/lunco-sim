@@ -43,7 +43,7 @@ The initial existing development executable measured 43.166 FPS over 442 fresh
 frames: p95 32.044 ms, maximum 37.497 ms. It was stamped `3fbb85e5-dirty`,
 whereas this checkout is `9ba26ca`; it is not a matched source-change comparator.
 
-The current release executable's completed bounded landed window measured
+The earlier completed bounded release window measured
 **51.657 FPS**, median **18.650 ms**, p95 **25.213 ms**, p99 **29.050 ms**,
 and maximum **33.964 ms** over **541 frames**. All 541 frames exceeded the
 10 ms budget. The driver correctly exited nonzero. This does not establish
@@ -112,12 +112,6 @@ frames are 48.014, 35.700 and 40.424 ms. This shows observer perturbation, not
 a runtime optimization or acceptance. Sources are unchanged, but other simulator
 processes run concurrently, so the difference is not an isolated speedup.
 
-The later retained-render-handoff comparison is unqualified: the Twin manifest
-changed externally during its run, and another simulator consumed GPU time.
-It cannot justify retaining the scheduling experiment. Runtime scheduling
-remains unchanged; the current source retains the native First handoff and
-normal schedule executors. All task-owned sessions and collectors exited.
-The unrelated simulator on API 4293 was left untouched.
 
 Attribute the remaining application/physics and render preparation costs with
 caller-complete evidence, then qualify an unchanged source cohort. Preserve
@@ -166,3 +160,80 @@ places all 83 samples bearing the ambiguous generic query leaf inside
 their instrumented execution context; it does not reconstruct missing caller
 frames or make that bounded cost the dominant frame bottleneck. Native captures,
 the timestamp join and the diagnostic query drivers remain ignored evidence.
+
+
+## Native render/simulation overlap
+
+The native host receives the previous render frame after ordinary fixed work
+and before physical presentation sampling. Its automatic clock is sampled
+independently of Bevy's optional render timestamp receiver; manual clock
+strategies are unchanged. Ready completions still use the deterministic fixed
+runner, never extend a ready render receipt, and never add wall time. The
+runtime owner and physics inputs are unchanged; this scheduling mechanism has
+no changeable routing policy or hook candidate.
+
+The matched integrated control and candidate are retained as
+`luncosim-handoff-control` and `luncosim-handoff-late`. The candidate passes the
+native presentation gate (13 authored checks) and the background transport gate
+(8 authored checks; measured rates 2.003, 4.008 and 8.008).
+
+The `handoff-late-debt` diagnostic explains its first playing window's 75.592
+ticks per wall second: pending simulation duration decreases from 6.593 to
+0.995 seconds. Pausing retains about 1.017 seconds, and resuming drains the
+remaining debt. No max-delta clipping is reported. These catch-up windows do not
+qualify ordinary transport throughput or the 100 FPS target.
+
+The `handoff-control-landing` and `handoff-late-landing` runs use the Twin's
+existing production landing observer in the native host, with one compute
+thread in each run. Their source snapshots match. All physical metrics match
+exactly; only virtual elapsed wall-paced time differs. Both latch touchdown at
+tick 1350, complete 3600 post-touchdown ticks, retain all four contacts across
+361 samples, and report no missing or non-finite sample. Both **fail** the
+existing SysML stability requirement: peak ground speed is 0.069062 m/s against
+0.05 m/s. This is unchanged baseline behavior, not a passing landing-stability
+gate. No authored limit, timestep, substep, solver or visual setting is changed.
+
+
+## Typed script-result and contact-query allocation
+
+Tracy's tether-task samples include the body-state query's all-entity walk,
+result-tree allocation and mount-authority text projection. The scripting bridge
+now retains owned typed containers during selector filtering and authority
+sanitization, including reflected compound reads. The asset owner retains its
+registry error boundary and skips replacement-set construction when text cannot
+contain a hexadecimal mount authority. No public value, selector or authority
+rule changes.
+
+`QueryPhysicsState` retains its wheel-contact `SystemState` in the provider
+registration instead of scanning every scene entity. A non-blocking lease checks
+the exact World and reads live contact ownership and values, including
+disabled entities. USD-path ordering and target rejection remain unchanged.
+Only access metadata is retained, so scene teardown and new archetypes need no
+parallel entity index. This is a query mechanism consumed by the existing Rhai
+and HTTP interfaces; there is no new lifecycle or scenario policy hook.
+
+The retained regular release artifact `luncosim-projected-query` has SHA256
+`1729e26f5d93bab7887af6405247987cbad8a5a219af39518376c04b8da56591`.
+Its exact compiled runtime diff and source hashes are recorded in
+`projected-query-build-runtime.patch` and `projected-query-build-source.json`.
+The release build passes. Focused bridge tests cover stable/retired/unknown
+source identities and both Twin-scoped reflection/exposure boundaries; the
+asset owner test covers retired and all-hex source identities. The production
+`projected-query-gates` run passes five static-wheel contact checks and seven
+Twin identity checks, plus invalid/missing-target and scene-retirement checks.
+Its owned process and API port 5412 are released.
+
+The separate `projection-query-before` and `projection-query-after` diagnostics
+retain unchanged source snapshots. Five repetitions of 100 body-state reads
+have median native elapsed times of 194.134 and 64.210 ms. Entity-pose medians
+are 1.644 and 0.775 ms; USD-pose medians are 34.424 and 38.120 ms. Corresponding
+20-second frame-only windows are 25.227 and 30.207 FPS, with maxima 103.833
+and 107.536 ms. Concurrent simulators remain active, and these diagnostics do
+not establish an isolated whole-frame speedup or stable 100 FPS.
+
+The independent `projected-query-acceptance` attempt requests the unchanged
+60-second, 100 FPS, maximum-10-ms gate. It stops after three sampled updates
+when terrain reports `selection_pending=1`, with wanted/resident both 181 and
+no pending presentation. Sources remain unchanged and the owned process/API
+port 5410 are released. This is an incomplete qualification, not a successful
+sustained performance result. The 100 FPS and spike requirements remain open.

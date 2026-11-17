@@ -12,6 +12,7 @@ use avian3d::prelude::{
     NoAutoAngularInertia, NoAutoCenterOfMass, NoAutoMass, PhysicsLengthUnit, RigidBody,
     SimpleCollider, SleepThreshold, SleepTimer, Sleeping, SleepingDisabled, TimeToSleep,
 };
+use bevy::ecs::system::SystemState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, SimulationQueryReadScope};
 use lunco_api::registry::ApiEntityRegistry;
@@ -28,8 +29,19 @@ use lunco_physics::{
 use lunco_usd_avian_contracts::ShouldBeDynamic;
 use lunco_usd_bevy_scene::UsdPrimPath;
 
+type WheelContactQuery<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static PhysicsWheelContact),
+    bevy::ecs::query::Allow<bevy::ecs::entity_disabling::Disabled>,
+>;
+
 /// `QueryPhysicsState { id }` → generic live body/admission state.
-pub struct QueryPhysicsStateProvider;
+pub struct QueryPhysicsStateProvider {
+    // Access metadata belongs to this World's provider registration. Values,
+    // ownership and entity lifetimes are read from the live contact query.
+    contacts: std::sync::Mutex<SystemState<WheelContactQuery<'static, 'static>>>,
+}
 
 /// `PhysicsPerformance` — read-only solver timing and topology population.
 ///
@@ -431,18 +443,35 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
         // implementation. The result is sorted by USD wheel path to make
         // Rhai/headless evidence deterministic across ECS archetype order.
         let registry = world.get_resource::<ApiEntityRegistry>();
-        let mut wheel_contacts = world
-            .iter_entities()
-            .filter_map(|wheel_entity| {
-                let contact = wheel_entity.get::<PhysicsWheelContact>()?;
+        let mut contacts = self.contacts.try_lock().map_err(|error| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("QueryPhysicsState: wheel-contact query is unavailable ({error})"),
+            )
+        })?;
+        if !contacts.matches_world(world.id()) {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "QueryPhysicsState: wheel-contact query belongs to another World",
+            ));
+        }
+        let contact_query = contacts.get(world).map_err(|error| {
+            ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                format!("QueryPhysicsState: wheel-contact query is unavailable ({error})"),
+            )
+        })?;
+        let mut wheel_contacts = contact_query
+            .iter()
+            .filter_map(|(wheel_entity, contact)| {
                 if contact.owner != entity {
                     return None;
                 }
                 let wheel_id = registry
-                    .and_then(|registry| registry.api_id_for(wheel_entity.id()))
+                    .and_then(|registry| registry.api_id_for(wheel_entity))
                     .map(|id| id.get());
-                let wheel_path = wheel_entity
-                    .get::<UsdPrimPath>()
+                let wheel_path = world
+                    .get::<UsdPrimPath>(wheel_entity)
                     .map(|path| path.path.as_str().to_owned());
                 let hit_id = contact.hit_entity.and_then(|hit| {
                     registry
@@ -454,7 +483,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                         .get::<UsdPrimPath>(hit)
                         .map(|path| path.path.as_str().to_owned())
                 });
-                let filter = wheel_entity.get::<PhysicsWheelRaycastFilter>();
+                let filter = world.get::<PhysicsWheelRaycastFilter>(wheel_entity);
                 let filter_exclusions = filter
                     .map(|filter| {
                         filter
@@ -518,6 +547,7 @@ impl ApiQueryProvider for QueryPhysicsStateProvider {
                 }))
             })
             .collect::<Vec<_>>();
+        drop(contacts);
         wheel_contacts.sort_by(|left, right| {
             left.get("wheel_usd_prim_path")
                 .and_then(ApiValue::as_str)
@@ -638,9 +668,12 @@ pub fn register(app: &mut App) {
     world.register_component::<PhysicsWheelContact>();
     world.register_component::<PhysicsWheelRaycastFilter>();
     world.register_component::<UsdPrimPath>();
+    let physics_state = QueryPhysicsStateProvider {
+        contacts: std::sync::Mutex::new(SystemState::new(world)),
+    };
     world
         .resource_mut::<ApiQueryRegistry>()
-        .register(QueryPhysicsStateProvider);
+        .register(physics_state);
     world
         .resource_mut::<ApiQueryRegistry>()
         .register(PhysicsPerformanceProvider);

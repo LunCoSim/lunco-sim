@@ -1160,7 +1160,15 @@ impl Plugin for TimePlugin {
             )
             .add_systems(
                 RunFixedMainLoop,
-                finish_fixed_loop_timing.in_set(RunFixedMainLoopSystems::AfterFixedMainLoop),
+                finish_fixed_loop_timing
+                    .after(RunFixedMainLoopSystems::FixedMainLoop)
+                    .before(lunco_core::RuntimeCycleSet::Presentation),
+            )
+            .configure_sets(
+                RunFixedMainLoop,
+                lunco_core::RuntimeCycleSet::Presentation
+                    .after(RunFixedMainLoopSystems::FixedMainLoop)
+                    .before(RunFixedMainLoopSystems::AfterFixedMainLoop),
             )
             .add_systems(FixedFirst, begin_fixed_tick_timing)
             .add_systems(FixedLast, finish_fixed_tick_timing)

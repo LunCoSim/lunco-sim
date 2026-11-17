@@ -611,6 +611,16 @@ impl TwinRoots {
             .registry
             .read()
             .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        // Mount authorities are UUIDs in simple hexadecimal form. Most typed
+        // field names and scalar labels cannot contain one; preserve the
+        // registry error boundary without building a replacement set for them.
+        if !text
+            .as_bytes()
+            .split(|byte| !byte.is_ascii_hexdigit())
+            .any(|run| run.len() >= 32)
+        {
+            return Ok(text.to_owned());
+        }
         let known_sources = registry
             .logical_identities
             .keys()

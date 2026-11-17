@@ -167,6 +167,13 @@ reading pending owner facts. Source-selected entity access is committed with
 startup before the first access. Twin SysML keys use the stable source identity
 returned by `twin_source_identity()`; mount authorities remain inside the asset owner.
 
+The shared scripting bridge projects owned typed results in place. Twin-scoped
+workspace-selector filtering and asset-owned mount-authority sanitization retain
+the existing array/map containers and ordering; no result-tree clone is needed
+to enter the current World scope. Reflected compound reads use the same projection
+before conversion to a scripting value. Missing World scope still applies the
+standalone opaque-authority redaction boundary.
+
 
 `RuntimeCycleSet` names ordering lanes inside Bevy schedules. It does not by
 itself isolate CPU cost or give `Visualization` an independent cadence. Terrain
@@ -243,6 +250,13 @@ missing or busy metadata remains an explicit unavailable-query result. The
 registry's unordered entity traversal is borrowed rather than copied for name,
 USD-path and proximity reductions. Observable batches still collect and sort
 by canonical identity, and first-match reductions still choose the lowest id.
+
+`QueryPhysicsState` keeps wheel-contact access metadata in its World-bound
+provider registration. Its non-blocking lease reads current contact components,
+including ECS-disabled entities, filters by the requested native body, and retains
+USD-path result ordering. It caches no ownership, contact values or entity IDs;
+new archetypes and retired entities use Bevy's live query membership. Wrong-World
+or unavailable metadata is a typed query failure.
 
 Co-simulation endpoint lifecycle publication retains Bevy's native exclusive
 `QueryState` for changed `SimComponent` owners. Each pass updates archetype
@@ -1754,7 +1768,8 @@ The whole-simulation guarantee remains open because:
     The separate max-delta diagnostic detects unexpected virtual-clock clipping.
     It cannot report wall-paced deadline misses and does not move fixed work off
     the GUI thread. The native pipelined host can also service ready completions
-    and existing fixed debt during the render handoff, before clock sampling;
+    and existing fixed debt during the render handoff, after ordinary fixed work
+    and before physical presentation sampling;
     this retains the same World and fixed runner rather than isolating UI work.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
