@@ -872,41 +872,33 @@ pub fn is_workspace_twin_selector(name: &str, type_name: &str) -> bool {
 /// Remove application-owned workspace Twin selectors from values returned to
 /// Twin-scoped scripts. The typed Rust execution context remains the authority
 /// used to bind command targets; authored Twin code does not need these ids.
-fn hide_workspace_twin_identity(value: ApiValue, parent: Option<&str>) -> ApiValue {
+fn hide_workspace_twin_identity(value: &mut ApiValue, parent: Option<&str>) {
     match value {
-        HookValue::Array(values) => HookValue::Array(
-            values
-                .into_iter()
-                .map(|value| hide_workspace_twin_identity(value, parent))
-                .collect(),
-        ),
+        HookValue::Array(values) => {
+            for value in values {
+                hide_workspace_twin_identity(value, parent);
+            }
+        }
         HookValue::Map(fields) => {
             let scope_is_twin = fields.iter().any(|(name, value)| {
                 name == "kind" && matches!(value, HookValue::Str(kind) if kind == "twin")
             });
-            HookValue::Map(
-                fields
-                    .into_iter()
-                    .filter(|(name, value)| {
-                        let named_identity = is_workspace_twin_selector_name(name);
-                        let twin_scalar = name == "twin"
-                            && matches!(value, HookValue::Int(_) | HookValue::UInt(_));
-                        let nested_twin_id = parent == Some("workspace_twin") && name == "id";
-                        !(named_identity || twin_scalar || nested_twin_id)
-                    })
-                    .map(|(name, value)| {
-                        let nested_parent =
-                            matches!(name.as_str(), "twin" | "active_twin" | "workspace_twin")
-                                .then_some("workspace_twin")
-                                .or_else(|| {
-                                    (name == "scope" && scope_is_twin).then_some("workspace_twin")
-                                });
-                        (name, hide_workspace_twin_identity(value, nested_parent))
-                    })
-                    .collect(),
-            )
+            fields.retain(|(name, value)| {
+                let named_identity = is_workspace_twin_selector_name(name);
+                let twin_scalar =
+                    name == "twin" && matches!(value, HookValue::Int(_) | HookValue::UInt(_));
+                let nested_twin_id = parent == Some("workspace_twin") && name == "id";
+                !(named_identity || twin_scalar || nested_twin_id)
+            });
+            for (name, value) in fields {
+                let nested_parent =
+                    matches!(name.as_str(), "twin" | "active_twin" | "workspace_twin")
+                        .then_some("workspace_twin")
+                        .or_else(|| (name == "scope" && scope_is_twin).then_some("workspace_twin"));
+                hide_workspace_twin_identity(value, nested_parent);
+            }
         }
-        value => value,
+        _ => {}
     }
 }
 
@@ -957,49 +949,53 @@ fn sanitize_mount_authority_text(text: String, world: Option<&World>) -> String 
     redact_opaque_authority_tokens(&text)
 }
 
-fn sanitize_mount_authorities(value: ApiValue, world: Option<&World>) -> ApiValue {
+fn sanitize_mount_authorities(value: &mut ApiValue, world: Option<&World>) {
     match value {
-        HookValue::Array(values) => HookValue::Array(
-            values
-                .into_iter()
-                .map(|value| sanitize_mount_authorities(value, world))
-                .collect(),
-        ),
-        HookValue::Map(fields) => HookValue::Map(
-            fields
-                .into_iter()
-                .map(|(name, value)| {
-                    let name = sanitize_mount_authority_text(name, world);
-                    (name, sanitize_mount_authorities(value, world))
-                })
-                .collect(),
-        ),
-        HookValue::Str(value) => HookValue::Str(sanitize_mount_authority_text(value, world)),
-        value => value,
+        HookValue::Array(values) => {
+            for value in values {
+                sanitize_mount_authorities(value, world);
+            }
+        }
+        HookValue::Map(fields) => {
+            for (name, value) in fields {
+                *name = sanitize_mount_authority_text(std::mem::take(name), world);
+                sanitize_mount_authorities(value, world);
+            }
+        }
+        HookValue::Str(value) => {
+            *value = sanitize_mount_authority_text(std::mem::take(value), world);
+        }
+        _ => {}
     }
 }
 
 /// Project a standalone script-facing diagnostic through the same private
 /// mount-authority boundary used for typed script values.
-pub fn project_script_text(text: String) -> String {
-    with_world(|world| sanitize_mount_authority_text(text.clone(), Some(world)))
-        .unwrap_or_else(|| sanitize_mount_authority_text(text, None))
+pub fn project_script_text(mut text: String) -> String {
+    if with_world(|world| {
+        text = sanitize_mount_authority_text(std::mem::take(&mut text), Some(world));
+    })
+    .is_none()
+    {
+        text = sanitize_mount_authority_text(text, None);
+    }
+    text
 }
 
 /// Project one typed script result. Mount authorities are always translated to
 /// stable source identities; Twin-scoped scripts also lose app-owned Twin
-/// selectors.
-pub fn project_script_value(value: ApiValue) -> ApiValue {
-    let projected = if execution_context()
+/// selectors. The owned value is projected in place, retaining its containers.
+pub fn project_script_value(mut value: ApiValue) -> ApiValue {
+    if execution_context()
         .route
         .is_some_and(|route| route.scope == lunco_core::RuntimeScope::Twin)
     {
-        hide_workspace_twin_identity(value, None)
-    } else {
-        value
-    };
-    with_world(|world| sanitize_mount_authorities(projected.clone(), Some(world)))
-        .unwrap_or_else(|| sanitize_mount_authorities(projected, None))
+        hide_workspace_twin_identity(&mut value, None);
+    }
+    if with_world(|world| sanitize_mount_authorities(&mut value, Some(world))).is_none() {
+        sanitize_mount_authorities(&mut value, None);
+    }
+    value
 }
 
 fn twin_scope_identity_path(path: &str) -> bool {
@@ -1043,12 +1039,10 @@ fn project_reflected_script_read<B: ValueBuilder>(
         }
         return build_from_reflect(builder, value);
     }
-    let typed = build_from_reflect(&ApiValueBuilder, value)?;
-    let projected = hide_workspace_twin_identity(typed, None);
-    Some(build_from_value(
-        builder,
-        &sanitize_mount_authorities(projected, Some(world)),
-    ))
+    let mut typed = build_from_reflect(&ApiValueBuilder, value)?;
+    hide_workspace_twin_identity(&mut typed, None);
+    sanitize_mount_authorities(&mut typed, Some(world));
+    Some(build_from_value(builder, &typed))
 }
 
 /// Bind command identity fields from the active execution owner. The identity

@@ -82,18 +82,25 @@ waiter; worker leases retire sources, and dropping the host closes the waiter.
 Failure to create the waiter raises `simulation-completion-waker-failed` through
 the existing runtime-fault owner and holds simulation admission.
 The UI never waits for a worker, and headless deadline waiting retains its owner.
-The native pipelined render host receives the previous render frame in `First`,
-before completion admission and clock projection, through Bevy's public
-`RenderAppChannels` API. During that existing GPU
-handoff it services ready simulation completions and already-admitted fixed
-cycles on the main thread. Render readiness always ends the handoff; solver
-readiness can never prolong it. Each service pass retains the fixed runner's
-bounded work budget and never samples or accumulates wall time. The normal `First`
-clock systems then sample the clock once, and presentation producers run before the
-received frame is extracted and sent back to the renderer. This preserves the
-single extraction path, asset events, scene teardown and physical easing while
-removing the one-asynchronous-step-per-rendered-frame limit. The render frame is
-application-owned, never shared with a concurrent World evaluator.
+The native pipelined render host receives the previous render frame in
+`RunFixedMainLoop`, after ordinary admitted fixed work and before
+`AfterFixedMainLoop` presentation sampling, through Bevy's public
+`RenderAppChannels` API. Rendering overlaps the next update's clock admission
+and simulation. The native host removes Bevy's optional render timestamp
+receiver: automatic time samples the main-thread monotonic clock once in `First`;
+manual recording/test strategies retain their selected source.
+During the existing GPU handoff the host services ready simulation completions
+and already-admitted fixed cycles on the main thread. Render readiness always
+ends the handoff; solver readiness can never prolong it. Each service pass
+retains the fixed runner's bounded work budget and never samples or accumulates
+wall time. Ordinary fixed-loop timing ends before the handoff; per-tick timing
+also covers the serviced cycles. Physical easing samples only after that final
+service boundary. The received frame is extracted and sent through the single
+native path after presentation producers, preserving asset events and scene
+teardown. Fixed debt remains queued through pauses and is drained on resume;
+catch-up must not be mistaken for a change to the requested transport rate.
+The render frame is application-owned, never shared with a concurrent World
+evaluator.
 This is a generic host-service invariant, with no authored routing or selection
 decision requiring a Rhai policy hook. The native window gate is
 `scripts/api/test_simulation_transport_rate.py`: it verifies actual 2x, 4x and 8x

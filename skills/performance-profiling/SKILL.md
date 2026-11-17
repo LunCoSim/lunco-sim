@@ -31,6 +31,14 @@ to improve a timing.
   proximity reductions borrow `ApiEntityRegistry::entities_unordered()`; collect
   only when a consumer needs an owned, identity-ordered snapshot.
 
+- `QueryPhysicsState` retains only wheel-contact query metadata in its World-bound
+  provider. Read live contacts through that query instead of scanning every scene
+  entity; preserve owner filtering, USD-path ordering and entity retirement. Check
+  the production `static_wheel_contact` gate and an invalid target. Script-result
+  projection retains typed containers in place while keeping Twin selectors
+  hidden and translating live/retired mount authorities. Verify the production
+  Twin identity boundary and native query timings separately from frame timings.
+
 - Use the root manifest's Bevy patches for ordinary measurements. Record each
   selected owner's revision and local diff with the executable, including a
   maintained path dependency when the manifest selects one. A command-line path
@@ -2003,8 +2011,13 @@ admission for a held pending cycle; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
 The native pipelined host also services ready completions and existing fixed
-debt during its render-frame handoff, before clock sampling. That service never
-adds wall time or waits for a solver; rendering readiness ends the handoff.
+debt during its render-frame handoff, after ordinary fixed work and before
+physical presentation sampling. Automatic time uses the host monotonic clock,
+independent of the optional render timestamp channel; manual strategies retain
+their source. That service never adds wall time or waits for a solver; rendering
+readiness ends the handoff. Record pending simulation duration when interpreting
+transport throughput: catching up retained debt may temporarily exceed the
+requested wall-clock rate, and pause does not discard that debt.
 See [the time owner](../../docs/architecture/19-unified-time-and-clock.md).
 Use `scripts/api/test_physical_presentation_time.py --windowed --port <free-port>
 --output <path>` for the native pause, single-step and physical easing-clock gate.

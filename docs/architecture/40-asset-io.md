@@ -34,9 +34,13 @@ injectively. Manifest metadata and filesystem folder names remain unchanged.
 Low-level `register` consumes source components and still rejects unsafe
 unencoded delimiters; consumers use its returned mount authority for loading.
 Unmount retires that authority permanently. Reopening assigns a fresh authority
-while keeping the authored logical source identity. `load_asset_path` binds
-authored logical dependencies to current mounts only when the requesting Twin
-origin is still live; worker search-path preparation uses the same binding.
+while keeping the authored logical source identity. Diagnostic text translation
+also retains retired identity metadata. `TwinRoots::stable_source_text` checks the
+registry before projecting text; strings without a possible hexadecimal mount
+authority avoid replacement-set construction. Unknown opaque URI authorities are
+still redacted, and stable logical identities remain visible.
+`load_asset_path` binds authored logical dependencies to current mounts only when
+the requesting Twin origin is still live; worker search-path preparation uses the same binding.
 A retired origin fails before binding. Origin-free
 transport requests retain their exact authority and cannot revive a closed
 source. Background file-closure snapshots resolve authored logical names and

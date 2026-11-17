@@ -12,8 +12,8 @@ pub(crate) fn install(app: &mut App) {
 struct NativeSimulationHostPlugin;
 
 // The render world stays on the main thread between receipt and extraction.
-// Keeping the handoff before clock sampling leaves every presentation producer
-// between the final physical tick and the next native extraction.
+// Receive after the admitted fixed work and before presentation sampling, so
+// the preceding render overlaps simulation without extracting stale easing.
 struct ReadyRenderFrame(Option<bevy::app::SubApp>);
 
 enum HostReady {
@@ -45,9 +45,14 @@ impl Plugin for NativeSimulationHostPlugin {
             return;
         }
         app.world_mut().insert_non_send(ReadyRenderFrame(None));
+        // The host samples its monotonic clock independently of render completion.
+        // Bevy's optional render timestamp channel is retired at this boundary;
+        // manual recording/test time strategies still use their selected source.
+        app.world_mut()
+            .remove_resource::<bevy::time::TimeReceiver>();
         app.add_systems(
-            First,
-            receive_render_frame.before(lunco_core_runtime::SimulationCompletionSet),
+            RunFixedMainLoop,
+            receive_render_frame.in_set(lunco_core::RuntimeCycleSet::Presentation),
         );
         app.sub_app_mut(RenderExtractApp)
             .set_extract(extract_ready_frame);
