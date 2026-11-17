@@ -41,7 +41,12 @@ The optional sizing path requires `python3-xlib` and X11/XWayland. It resizes
 only the window whose native PID matches the owned process and verifies the
 active scene camera's physical target throughout the measured window. The FPS
 gate requires both mean FPS and p95 frame time to meet the requested budget;
-receipts also report the percentage of frames within budget. The settled samples also retain the native
+receipts also report the percentage of frames within budget, the number over
+budget, p99 and the worst frame. Use `--measurement-seconds 60 --timeout 240`
+for a longer stability window; all readiness and terrain gates remain active
+throughout that window. A passing mean/p95 gate alone does not establish that
+every frame met the budget. Add `--max-frame-ms 10` to require every observed
+frame in a 100 FPS stability window to meet its 10 ms budget. The settled samples also retain the native
 `engine-health` exposure, including aggregate Modelica worker work per
 completed physics tick, its exact tick denominator and participant count. Keep
 that attribution metric separate from the largest participant mean and from

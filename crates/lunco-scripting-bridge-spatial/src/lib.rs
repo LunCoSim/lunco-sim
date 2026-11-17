@@ -18,6 +18,34 @@ use lunco_spatial::{
     coords::{GridPos, VehicleFrame},
 };
 
+/// Read current pose through Bevy's World-owned system cache. Only archetype
+/// access metadata persists; every invocation samples the live physics frame.
+fn read_simulation_pose(
+    In(entity): In<Entity>,
+    poses: lunco_physics::SimulationPoseQuery,
+) -> Option<(
+    lunco_spatial::coords::GridPos,
+    lunco_spatial::coords::GridRot,
+)> {
+    poses.pose(entity)
+}
+
+fn simulation_pose(
+    world: &mut World,
+    entity: Entity,
+) -> Option<(
+    lunco_spatial::coords::GridPos,
+    lunco_spatial::coords::GridRot,
+)> {
+    match world.run_system_cached_with(read_simulation_pose, entity) {
+        Ok(pose) => pose,
+        Err(error) => {
+            warn!("[script-pose] live pose query failed: {error}");
+            None
+        }
+    }
+}
+
 /// `world_pos(id)` — f64 position in the active simulation frame, or `None`.
 ///
 /// For a surface scene this is the authored site frame used by Avian, terrain,
@@ -26,12 +54,7 @@ use lunco_spatial::{
 pub fn world_pos(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        state
-            .get(world)
-            .ok()?
-            .position(entity)
-            .map(|position| position.0)
+        simulation_pose(world, entity).map(|(position, _)| position.0)
     })
     .flatten()
 }
@@ -74,8 +97,7 @@ pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
 pub fn world_forward(gid: u64) -> Option<DVec3> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        let rotation = state.get(world).ok()?.rotation(entity)?;
+        let (_, rotation) = simulation_pose(world, entity)?;
         Some(rotation.0 * DVec3::NEG_Z)
     })
     .flatten()
@@ -95,10 +117,7 @@ pub fn navigation_command(
     with_world(|world| {
         let entity = resolve_entity(world, vessel_gid)?;
         let geometry = *world.get::<SteeringGeometry>(entity)?;
-        let (pos, rotation) = {
-            let mut pose: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-            pose.get(world).ok()?.pose(entity)?
-        };
+        let (pos, rotation) = simulation_pose(world, entity)?;
         let target = GridPos(target);
         let fwd = VehicleFrame::forward(rotation);
         lunco_spatial::nav_setpoint(pos, fwd, target, speed, radius, geometry)
@@ -124,8 +143,7 @@ pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
 pub fn world_rotation_quat(gid: u64) -> Option<DQuat> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<lunco_physics::SimulationPoseQuery> = SystemState::new(world);
-        let q = state.get(world).ok()?.rotation(entity)?.0;
+        let q = simulation_pose(world, entity)?.1.0;
         (q.is_finite() && q.length_squared() >= 1.0e-24).then_some(q.normalize())
     })
     .flatten()
@@ -239,6 +257,34 @@ pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
 mod tests {
     use super::*;
     use lunco_core::GlobalEntityId;
+
+    #[test]
+    fn pose_query_cache_tracks_live_archetypes_values_and_retirement() {
+        let mut world = World::new();
+        let root = lunco_spatial::ensure_world_root(&mut world);
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(root));
+        let entity = world.spawn((Transform::default(), ChildOf(root))).id();
+        assert!(simulation_pose(&mut world, entity).is_some());
+        world.entity_mut(entity).insert((
+            Transform::from_translation(Vec3::new(17.0, -2.0, 3.0)),
+            Name::new("new archetype"),
+        ));
+        assert_eq!(
+            simulation_pose(&mut world, entity).unwrap().0.0,
+            DVec3::new(17.0, -2.0, 3.0)
+        );
+        world.despawn(entity);
+        assert!(simulation_pose(&mut world, entity).is_none());
+        let replacement = world
+            .spawn((Transform::from_translation(Vec3::X), ChildOf(root)))
+            .id();
+        assert_eq!(
+            simulation_pose(&mut world, replacement).unwrap().0.0,
+            DVec3::X
+        );
+        world.remove_resource::<lunco_spatial::ActivePhysicsFrame>();
+        assert!(simulation_pose(&mut world, replacement).is_none());
+    }
 
     #[test]
     fn script_pose_reads_are_empty_before_a_simulation_frame_exists() {
