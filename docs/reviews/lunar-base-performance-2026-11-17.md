@@ -435,3 +435,42 @@ GPU process are recorded in its workload inventory. The run falls short even
 with a held simulation clock. It does not isolate the registry's frame impact.
 Twin source hashes match, the history API reads 567 ordered samples, and the
 owned app releases API port 5410.
+
+## Render receipt with an empty fixed queue
+
+`paused-render-tracy/capture.tracy` uses the earlier instrumented telemetry
+candidate with the local directional visibility cache. It contains 18,932,281
+zones over 107.9 s for owned PID 629523. The landed timing window holds fixed
+tick 1775 with 3.338 s of queued simulation time retained during pause.
+The program records 49.849 instrumented FPS over 45 s. In its central
+35-second window, the main thread spends a mean 6.644 ms waiting for the render
+world before running Update (3.402 ms) and PostUpdate (5.095 ms).
+Render-world work averages 9.915 ms in the same window. GPU timestamps record
+2.187 ms for opaque, 1.934 ms for early directional shadows and 0.833 ms for
+the depth prepass. These covered passes do not constitute a GPU frame total.
+
+The native host now checks the time owner's queued fixed demand. With no
+full cycle requested, main-world presentation overlaps the previous render
+and receives the render world at extraction. With outstanding demand, the
+same host can service completions before sampling presentation. The receiver
+never admits fixed cycles during extraction, so a frame uses a single
+presentation sample after the last admitted cycle. This is a host scheduling
+mechanism with no authored hook change.
+
+The queued-demand and complete-cycle yield tests pass. The regular locked
+release passes all 13 native presentation tests and all eight transport
+checks. The observed 2×, 4× and 8× rates are 2.005×, 4.004× and 8.020×.
+The executable SHA256 is
+`2bef47464c09e4b58ee45a90baa5c9eaaf00ed7ed8cd398f381a95a272a550a4`.
+
+`extract-time-render-receipt/landed` records **56.664 FPS** over 60.28 s
+with p99 **25.858 ms** and maximum **36.033 ms**. Pending fixed time remains
+below 0.016 s at the endpoints with zero clipping. In the same windowed
+session the held simulation records **92.959 FPS** over 20.26 s with zero
+fixed ticks, p99 **15.311 ms** and maximum **25.786 ms**. The prior locked
+build measured 65.237 FPS and maximum 83.947 ms while paused with the same
+three other simulator processes present, under varying GPU activity.
+The new session resumes at 55.980 FPS over 20.49 s. Every phase retains all
+181 drawn terrain tiles at both endpoints, with no runtime errors. Source
+hashes match and owned API ports 5410 and 5412 are released. The running
+100 FPS and 10 ms worst-frame gates remain open.
