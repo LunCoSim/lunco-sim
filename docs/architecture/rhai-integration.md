@@ -155,7 +155,9 @@ A scenario is a `.rhai` program with lifecycle hooks. Attach it to any entity:
   correlation scope. Admission failures return terminal results before queued
   execution. These calls
   resolve the registered tool and capture its actual `ToolScope` from one
-  registry snapshot and pin the committed scene generation. A pending or active
+  registry snapshot and pin the committed scene generation. The registry owns
+  name-keyed layers, so dispatch resolves only the requested name. Discovery
+  traverses those registrations using the same scope precedence. A pending or active
   scene transition rejects interaction admission. Before execution, that exact
   generation must still be current. A Twin registration supplies its stable owner even when
   `owner_twin_id` is omitted. An explicit interaction owner and a typed Twin

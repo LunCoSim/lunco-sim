@@ -110,14 +110,37 @@ pub struct ToolInfo {
     pub scope: String,
 }
 
-fn registry() -> &'static RwLock<HashMap<(ToolScope, String), Arc<dyn Tool>>> {
-    static R: OnceLock<RwLock<HashMap<(ToolScope, String), Arc<dyn Tool>>>> = OnceLock::new();
-    R.get_or_init(|| RwLock::new(HashMap::new()))
+type ToolLayers = HashMap<ToolScope, Arc<dyn Tool>>;
+
+#[derive(Default)]
+struct ToolRegistry {
+    tools: HashMap<String, ToolLayers>,
+    active_twin: Option<ToolScope>,
 }
 
-fn active_twin() -> &'static RwLock<Option<String>> {
-    static T: OnceLock<RwLock<Option<String>>> = OnceLock::new();
-    T.get_or_init(|| RwLock::new(None))
+impl ToolRegistry {
+    fn resolve<'a>(&'a self, layers: &'a ToolLayers) -> Option<(&'a ToolScope, &'a Arc<dyn Tool>)> {
+        self.active_twin
+            .iter()
+            .chain([
+                &ToolScope::Application,
+                &ToolScope::Core,
+                &ToolScope::Standard,
+            ])
+            .find_map(|scope| layers.get_key_value(scope))
+    }
+
+    fn visible(&self) -> impl Iterator<Item = (&String, &ToolScope, &Arc<dyn Tool>)> {
+        self.tools.iter().filter_map(move |(name, layers)| {
+            self.resolve(layers)
+                .map(|(scope, tool)| (name, scope, tool))
+        })
+    }
+}
+
+fn registry() -> &'static RwLock<ToolRegistry> {
+    static R: OnceLock<RwLock<ToolRegistry>> = OnceLock::new();
+    R.get_or_init(RwLock::default)
 }
 
 fn generation_cell() -> &'static AtomicU64 {
@@ -133,43 +156,49 @@ pub fn register(tool: Arc<dyn Tool>) {
 
 /// Register (or hot-replace) a tool in an explicit lifecycle layer.
 pub fn register_scoped(scope: ToolScope, tool: Arc<dyn Tool>) {
-    registry()
+    let name = tool.name().to_owned();
+    let mut registry = registry()
         .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert((scope, tool.name().to_string()), tool);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let replaced = registry.tools.entry(name).or_default().insert(scope, tool);
     generation_cell().fetch_add(1, Ordering::Relaxed);
+    drop(registry);
+    drop(replaced);
 }
 
 /// Select the active Twin overlay. `None` removes every Twin layer from the
 /// visible registry without touching the stored standard/core/application
 /// registrations.
 pub fn set_active_twin(twin: Option<String>) {
-    let mut active = active_twin()
+    let mut registry = registry()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if *active == twin {
+    let scope = twin.map(ToolScope::Twin);
+    if registry.active_twin == scope {
         return;
     }
-    *active = twin;
+    registry.active_twin = scope;
     generation_cell().fetch_add(1, Ordering::Relaxed);
 }
 
 /// Remove every registration owned by one scope.
 pub fn unregister_scope(scope: &ToolScope) -> usize {
-    let mut tools = registry()
+    let mut registry = registry()
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let before = tools.len();
-    tools.retain(|(registered_scope, _), _| registered_scope != scope);
-    let removed = before - tools.len();
-    if removed != 0 {
+    let mut removed = Vec::new();
+    registry.tools.retain(|_, layers| {
+        removed.extend(layers.remove(scope));
+        !layers.is_empty()
+    });
+    if !removed.is_empty() {
         generation_cell().fetch_add(1, Ordering::Relaxed);
     }
-    removed
+    drop(registry);
+    removed.len()
 }
 
 /// Remove an application-owned tool by name and bump the binding generation.
-///
 /// Explicit lifecycle owners should use [`unregister_scoped`] instead.
 pub fn unregister(name: &str) -> Option<Arc<dyn Tool>> {
     unregister_scoped(&ToolScope::Application, name)
@@ -177,27 +206,33 @@ pub fn unregister(name: &str) -> Option<Arc<dyn Tool>> {
 
 /// Remove one tool from an explicit layer.
 pub fn unregister_scoped(scope: &ToolScope, name: &str) -> Option<Arc<dyn Tool>> {
-    let removed = registry()
+    let mut registry = registry()
         .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&(scope.clone(), name.to_string()));
-    if removed.is_some() {
-        generation_cell().fetch_add(1, Ordering::Relaxed);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let layers = registry.tools.get_mut(name)?;
+    let removed = layers.remove(scope)?;
+    if layers.is_empty() {
+        registry.tools.remove(name);
     }
-    removed
+    generation_cell().fetch_add(1, Ordering::Relaxed);
+    Some(removed)
 }
 
-/// Monotonic registry generation — changes whenever the registry is modified
-/// by [`register`] or [`unregister`]. A runtime adapter compares this against
-/// its last-bound value to detect added, replaced, or removed tools.
+/// Monotonic registry generation. Runtime adapters compare this against their
+/// last binding to detect changes to tool registrations or the active overlay.
 pub fn generation() -> u64 {
     generation_cell().load(Ordering::Relaxed)
 }
 
-/// Every visible tool after scope resolution (clones the `Arc`s; cheap). Order
+/// Every visible tool after scope resolution (clones the `Arc`s). Order
 /// unspecified.
 pub fn all() -> Vec<Arc<dyn Tool>> {
-    visible().into_values().map(|(_, tool)| tool).collect()
+    registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .visible()
+        .map(|(_, _, tool)| Arc::clone(tool))
+        .collect()
 }
 
 /// A registered tool by name, if any.
@@ -208,7 +243,11 @@ pub fn get(name: &str) -> Option<Arc<dyn Tool>> {
 /// Resolve a tool and its lifecycle owner from the same registry snapshot.
 /// Queued consumers retain the scope and revalidate it before dispatch.
 pub fn get_with_scope(name: &str) -> Option<(ToolScope, Arc<dyn Tool>)> {
-    visible().remove(name)
+    let registry = registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (scope, tool) = registry.resolve(registry.tools.get(name)?)?;
+    Some((scope.clone(), Arc::clone(tool)))
 }
 
 /// The layer that currently owns the visible tool, if any.
@@ -218,55 +257,36 @@ pub fn active_scope(name: &str) -> Option<ToolScope> {
 
 /// Sorted names of every registered tool.
 pub fn names() -> Vec<String> {
-    let mut v: Vec<String> = visible().into_keys().collect();
-    v.sort();
-    v
+    let mut names: Vec<_> = registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .visible()
+        .map(|(name, _, _)| name.clone())
+        .collect();
+    names.sort();
+    names
 }
 
 /// Discovery index (name + backend + function sigs) for every tool, sorted by
 /// name — the data behind a `ListTools`/`ListToolLibraries` API query.
 pub fn index() -> Vec<ToolInfo> {
-    let mut v: Vec<ToolInfo> = visible()
+    let tools: Vec<_> = registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .visible()
+        .map(|(name, scope, tool)| (name.clone(), scope.clone(), Arc::clone(tool)))
+        .collect();
+    let mut tools: Vec<_> = tools
         .into_iter()
-        .map(|(name, (scope, t))| ToolInfo {
+        .map(|(name, scope, tool)| ToolInfo {
             name,
-            backend: t.backend().to_string(),
-            functions: t.functions(),
+            backend: tool.backend().to_string(),
+            functions: tool.functions(),
             scope: scope.identity(),
         })
         .collect();
-    v.sort_by(|a, b| a.name.cmp(&b.name));
-    v
-}
-
-/// Return the visible overlay in resolution order. The map contains one
-/// winning registration per name; later layers have narrower ownership.
-fn visible() -> HashMap<String, (ToolScope, Arc<dyn Tool>)> {
-    let twin = active_twin()
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    let scopes = [ToolScope::Standard, ToolScope::Core, ToolScope::Application];
-    let tools = registry()
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut visible = HashMap::new();
-    for scope in scopes {
-        for ((registered_scope, name), tool) in tools.iter() {
-            if *registered_scope == scope {
-                visible.insert(name.clone(), (scope.clone(), Arc::clone(tool)));
-            }
-        }
-    }
-    if let Some(twin) = twin {
-        let scope = ToolScope::Twin(twin);
-        for ((registered_scope, name), tool) in tools.iter() {
-            if *registered_scope == scope {
-                visible.insert(name.clone(), (scope.clone(), Arc::clone(tool)));
-            }
-        }
-    }
-    visible
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    tools
 }
 
 /// The function a tool must expose to become a CLICK TOOL in the editor's Tools
@@ -390,20 +410,41 @@ mod tests {
         assert_eq!(active_scope(name), Some(ToolScope::Application));
 
         let twin = ToolScope::Twin("probe".into());
-        register_scoped(twin.clone(), Arc::new(ScopedDummy(name)));
+        let other = ToolScope::Twin("other_probe".into());
+        let twin_tool: Arc<dyn Tool> = Arc::new(ScopedDummy(name));
+        register_scoped(twin.clone(), Arc::clone(&twin_tool));
+        register_scoped(other.clone(), Arc::new(ScopedDummy(name)));
         set_active_twin(Some("probe".into()));
         assert_eq!(active_scope(name), Some(twin.clone()));
         let (scope, tool) = get_with_scope(name).expect("resolved Twin tool snapshot");
         assert_eq!(scope, twin);
-        assert_eq!(tool.name(), name);
+        assert!(Arc::ptr_eq(&tool, &twin_tool));
+        assert_eq!(
+            index()
+                .into_iter()
+                .find(|info| info.name == name)
+                .unwrap()
+                .scope,
+            scope.identity()
+        );
+        assert_eq!(
+            names()
+                .into_iter()
+                .filter(|visible| visible == name)
+                .count(),
+            1
+        );
 
-        unregister_scope(&twin);
-        set_active_twin(None);
+        assert_eq!(unregister_scope(&twin), 1);
         assert_eq!(active_scope(name), Some(ToolScope::Application));
-        unregister_scope(&ToolScope::Application);
+        set_active_twin(Some("other_probe".into()));
+        assert_eq!(active_scope(name), Some(other.clone()));
+        assert_eq!(unregister_scope(&other), 1);
+        set_active_twin(None);
+        unregister_scoped(&ToolScope::Application, name);
         assert_eq!(active_scope(name), Some(ToolScope::Core));
-        unregister_scope(&ToolScope::Core);
-        unregister_scope(&ToolScope::Standard);
+        unregister_scoped(&ToolScope::Core, name);
+        unregister_scoped(&ToolScope::Standard, name);
         assert!(get(name).is_none());
     }
 }

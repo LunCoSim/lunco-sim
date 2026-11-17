@@ -401,3 +401,37 @@ no deque-drain-to-vector copy. Host workloads and fixed debt differ between
 captures. The instrumented frame window averages 61.842 FPS, with queued fixed
 time below 0.014 s at both endpoints and zero clipping. The app and collector
 exit and release their ports after the capture.
+
+## Scoped tool lookup
+
+The landed trace records 902 main-thread CPU samples inside the quiet native
+task calls for Griffin's Compact Egress Observation. Native symbols include
+allocation and hash-table growth in the shared tool registry. The registry now
+groups every registration by tool name. A named lookup visits only that name's
+layers, and discovery uses the same scope resolution. The registry retains one
+committed active Twin under the registration lock. Tool dispatch uses its
+existing captured scope and scene-generation validation. This is a registry
+mechanism and requires no authored hook change.
+
+In five optimized batches of 10,000 lookups over 128 tool names and one active
+Twin override, the median elapsed time per lookup is 10.510 µs on the control
+and 0.054 µs on the candidate. This measures the registry operation.
+
+Both focused registry tests pass. A windowed production Twin-switch probe
+passes five authored checks for discovery, binding, invocation and outgoing
+registration retirement. The retired lookup also returns HTTP 404. The
+broader guided UI test passes the same 36 authored checks on both releases
+before the same watched-menu fixture fails to publish.
+
+The locked release build uses the checked-in Bevy pin. Its executable SHA256 is
+`9e186d16713e23edacfb618799ac82b9b7e6a8d6873cfd4a314bd08a14755433`.
+The `tool-resolution/landed` diagnostic at High 2560×1440 records **57.603 FPS**,
+p99 **25.288 ms**, and maximum **67.957 ms** over 60.26 s with advancing physics.
+Queued fixed time is below 0.016 s at both endpoints, with zero clipping, zero
+runtime errors, and all 181 selected tiles drawn. The same session reports
+65.237 FPS with zero fixed ticks during a 20.40 s pause and 56.555 FPS over
+20.46 s after resuming. Two other simulator sessions and an additional active
+GPU process are recorded in its workload inventory. The run falls short even
+with a held simulation clock. It does not isolate the registry's frame impact.
+Twin source hashes match, the history API reads 567 ordered samples, and the
+owned app releases API port 5410.
