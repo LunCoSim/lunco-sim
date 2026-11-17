@@ -35,7 +35,10 @@
 use crate::look_cache::{CachedLook, LookCache, sweep_look_cache};
 use crate::shader_material::{ShaderMaterial, build_shader_material, wesl_source};
 use bevy::asset::AssetId;
-use bevy::camera::{primitives::MeshAabb, visibility::VisibilitySystems};
+use bevy::camera::{
+    primitives::{Aabb, MeshAabb},
+    visibility::VisibilitySystems,
+};
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::pbr::{MeshMaterial3d, StandardMaterial};
 use bevy::platform::collections::{HashMap, HashSet};
@@ -55,10 +58,36 @@ use std::sync::Arc;
 /// [`LookCache`](crate::look_cache::LookCache), shared with the PBR binder.
 pub type ShaderLookCache = LookCache<ShaderLook>;
 
-#[derive(Component)]
-struct DisplacedMeshBounds {
-    mesh: AssetId<Mesh>,
-    padding: f32,
+#[derive(Component, PartialEq)]
+struct DisplacementPadding(f32);
+
+fn sync_displacement_padding(
+    mut commands: Commands,
+    mut looks: Query<
+        (
+            Entity,
+            Option<&ShaderLook>,
+            Option<&mut DisplacementPadding>,
+        ),
+        Or<(
+            Changed<ShaderLook>,
+            (With<DisplacementPadding>, Without<ShaderLook>),
+        )>,
+    >,
+) {
+    for (entity, look, previous) in &mut looks {
+        let padding = match look.and_then(|look| look.values().get("displacement_bound_m")) {
+            Some(lunco_materials::ParamValue::F32(value)) => *value,
+            _ => 0.0,
+        };
+        if let Some(mut previous) = previous {
+            previous.set_if_neq(DisplacementPadding(padding));
+        } else if padding != 0.0 {
+            commands
+                .entity(entity)
+                .try_insert(DisplacementPadding(padding));
+        }
+    }
 }
 
 /// Culling uses a conservative authored bound for vertex-displaced geometry.
@@ -66,30 +95,18 @@ struct DisplacedMeshBounds {
 fn update_displaced_mesh_bounds(
     mut commands: Commands,
     meshes: Res<Assets<Mesh>>,
-    mut events: MessageReader<AssetEvent<Mesh>>,
     mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
-    query: Query<(Entity, &Mesh3d, &ShaderLook, Option<&DisplacedMeshBounds>)>,
+    query: Query<
+        (Entity, &Mesh3d, &DisplacementPadding),
+        Or<(
+            Changed<DisplacementPadding>,
+            Changed<Mesh3d>,
+            AssetChanged<Mesh3d>,
+            Added<Aabb>,
+        )>,
+    >,
 ) {
-    let changed: HashSet<_> = events
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => Some(*id),
-            _ => None,
-        })
-        .collect();
-    for (entity, mesh, look, previous) in &query {
-        let padding = match look.values().get("displacement_bound_m") {
-            Some(lunco_materials::ParamValue::F32(value)) => *value,
-            _ => 0.0,
-        };
-        if padding == 0.0 && previous.is_none() {
-            continue;
-        }
-        if previous.is_some_and(|value| value.mesh == mesh.id() && value.padding == padding)
-            && !changed.contains(&mesh.id())
-        {
-            continue;
-        }
+    for (entity, mesh, &DisplacementPadding(padding)) in &query {
         let Some(mut bounds) = meshes.get(mesh.id()).and_then(MeshAabb::get_aabb) else {
             continue;
         };
@@ -116,12 +133,7 @@ fn update_displaced_mesh_bounds(
         bounds.half_extents += bevy::math::Vec3A::splat(padding);
         commands.entity(entity).try_insert(bounds);
         if padding == 0.0 {
-            commands.entity(entity).try_remove::<DisplacedMeshBounds>();
-        } else {
-            commands.entity(entity).try_insert(DisplacedMeshBounds {
-                mesh: mesh.id(),
-                padding,
-            });
+            commands.entity(entity).try_remove::<DisplacementPadding>();
         }
     }
 }
@@ -1102,7 +1114,8 @@ pub(crate) fn build(app: &mut App) {
         )
         .add_systems(
             PostUpdate,
-            update_displaced_mesh_bounds
+            (sync_displacement_padding, update_displaced_mesh_bounds)
+                .chain()
                 .after(VisibilitySystems::CalculateBounds)
                 .before(VisibilitySystems::CheckVisibility),
         )
@@ -1519,6 +1532,77 @@ mod tests {
         app.init_asset::<Image>().init_asset::<Mesh>();
         build(&mut app);
         app
+    }
+
+    #[test]
+    fn displaced_bounds_follow_mesh_and_look_lifetimes() {
+        use bevy::camera::visibility::{NoAutoAabb, calculate_bounds};
+        use bevy::math::Vec3A;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Mesh>()
+            .init_resource::<lunco_core::RuntimeFaults>()
+            .add_systems(
+                PostUpdate,
+                (
+                    calculate_bounds,
+                    sync_displacement_padding,
+                    update_displaced_mesh_bounds,
+                )
+                    .chain()
+                    .after(bevy::asset::AssetEventSystems),
+            );
+        let mesh = app.world().resource::<Assets<Mesh>>().reserve_handle();
+        let mut look = ShaderLook::new("surface.wesl");
+        look.set_value("displacement_bound_m", ParamValue::F32(0.5));
+        let displaced = app.world_mut().spawn((Mesh3d(mesh.clone()), look)).id();
+        let manual = Aabb::from_min_max(Vec3::ZERO, Vec3::splat(12.0));
+        let plain = app
+            .world_mut()
+            .spawn((
+                Mesh3d(mesh.clone()),
+                ShaderLook::new("surface.wesl"),
+                NoAutoAabb,
+                manual,
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get::<Aabb>(displaced).is_none());
+
+        let extent = |app: &App| app.world().get::<Aabb>(displaced).unwrap().half_extents;
+        let set_mesh = |app: &mut App, edge| {
+            app.world_mut()
+                .resource_mut::<Assets<Mesh>>()
+                .insert(mesh.id(), Mesh::from(Cuboid::new(edge, edge, edge)))
+                .unwrap();
+        };
+        set_mesh(&mut app, 2.0);
+        app.update();
+        assert_eq!(extent(&app), Vec3A::splat(1.5));
+        set_mesh(&mut app, 6.0);
+        app.update();
+        assert_eq!(extent(&app), Vec3A::splat(3.5));
+        app.world_mut()
+            .entity_mut(displaced)
+            .insert(Mesh3d(mesh.clone()));
+        app.update();
+        assert_eq!(extent(&app), Vec3A::splat(3.5));
+        app.world_mut().entity_mut(displaced).remove::<Aabb>();
+        app.update();
+        assert_eq!(extent(&app), Vec3A::splat(3.5));
+        app.world_mut().entity_mut(displaced).remove::<ShaderLook>();
+        app.update();
+        assert_eq!(extent(&app), Vec3A::splat(3.0));
+        assert!(app.world().get::<DisplacementPadding>(displaced).is_none());
+        assert_eq!(app.world().get::<Aabb>(plain), Some(&manual));
+
+        let mut invalid = ShaderLook::new("surface.wesl");
+        invalid.set_value("displacement_bound_m", ParamValue::F32(-0.5));
+        app.world_mut().entity_mut(displaced).insert(invalid);
+        app.update();
+        assert!(app.world().resource::<lunco_core::RuntimeFaults>().active());
+        assert_eq!(extent(&app), Vec3A::splat(3.0));
     }
 
     #[test]

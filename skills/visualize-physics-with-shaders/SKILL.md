@@ -232,6 +232,10 @@ deferral with a known migration path, not the absence of a standard.
 
   The Shader prim is the shader's **interface**; the WESL is its implementation.
   Both must name the parameter.
+- A vertex-displaced mesh needs an authored `displacement_bound_m` large
+  enough to contain its entire displacement range. The render adapter expands
+  the original mesh extents when that bound or its source mesh changes. Removing
+  displacement restores the mesh extents used for visibility.
 - **A name neither declares is refused** — and that is the feature. It surfaces as a
   dangling-wire warning from propagation instead of the classic silent dead uniform.
   If your wire logs as dangling, check the Shader prim's `inputs:` first, then the
