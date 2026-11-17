@@ -518,3 +518,16 @@ one update. The windowed presentation gate passed all 13 checks. The transport
 gate passed all eight checks and measured 1.999×, 4.002× and 7.999×.
 The authored Griffin surface-operations verification passed all nine checks
 at tick 8,756, including four grounded wheels at the end of the descent.
+
+## Command resolution during tether control
+
+In the settled-camera interval of `locked-main-tracy-93b/capture.tracy`,
+1,121 tether-controller ticks with an empty event queue averaged 0.925 ms.
+Their p99 was 5.897 ms. Of 1,020 native CPU samples on that task's thread
+inside those calls, 12 landed in construction of the matching registration
+vector inside `find_api_command`. Ordinary command dispatch now uses the
+unique short-name index maintained by Bevy. A registry-reported ambiguity
+still distinguishes multiple types from replacement of the same type.
+Public markers, reflected events and runtime visibility continue to govern
+admission. These samples measure the controller and identify an allocation.
+They do not quantify a whole-frame saving.

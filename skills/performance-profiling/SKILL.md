@@ -156,6 +156,10 @@ to improve a timing.
   can be narrowed to complete instances of one exact zone by appending its name
   to the sample export command; inspect `matched_zones` and the terminal result.
   Frame-wide samples include unrelated work outside the selected child zone.
+  For a Rhai `cmd` call, distinguish single-command resolution from whole-schema
+  discovery. The former uses Bevy's short-name index. Check name collisions,
+  replacement of the same type, command markers and visibility in the API
+  owner's discovery tests.
   Sample CSV rows retain `time_ns` and per-thread `sample_index`; count once per
   `(tid, sample_index)` and join to same-thread zone intervals for execution
   context. A zone match does not reconstruct missing callers in a partial stack.

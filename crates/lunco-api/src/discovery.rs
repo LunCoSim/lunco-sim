@@ -62,25 +62,26 @@ pub fn is_api_command(registration: &TypeRegistration, visibility: Option<&ApiVi
 
 /// Resolve one short command name through the same reflected API boundary used
 /// by discovery and transports.
-///
-/// `TypeRegistry::get_with_short_type_path` intentionally returns `None` for an
-/// ambiguous short name. Walking the registrations here lets us distinguish a
-/// missing command from a plugin collision and prevents a schema from silently
-/// choosing whichever registration happened to be visited first.
 pub fn find_api_command<'a>(
     type_registry: &'a TypeRegistry,
     name: &str,
     visibility: Option<&ApiVisibility>,
 ) -> Result<&'a TypeRegistration, ApiCommandLookupError> {
-    let matches: Vec<&TypeRegistration> = type_registry
-        .iter()
-        .filter(|registration| registration.type_info().type_path_table().short_path() == name)
-        .collect();
-
-    let registration = match matches.as_slice() {
-        [] => return Err(ApiCommandLookupError::NotFound),
-        [registration] => *registration,
-        _ => return Err(ApiCommandLookupError::Ambiguous),
+    let registration = if let Some(registration) = type_registry.get_with_short_type_path(name) {
+        registration
+    } else if type_registry.is_ambiguous(name) {
+        // Bevy also marks a short path ambiguous when overwrite_registration
+        // replaces the same TypeId. Only distinct registered types collide.
+        let mut matches = type_registry
+            .iter()
+            .filter(|reg| reg.type_info().type_path_table().short_path() == name);
+        let registration = matches.next().ok_or(ApiCommandLookupError::NotFound)?;
+        if matches.next().is_some() {
+            return Err(ApiCommandLookupError::Ambiguous);
+        }
+        registration
+    } else {
+        return Err(ApiCommandLookupError::NotFound);
     };
 
     if !is_api_command(registration, None) {
@@ -251,6 +252,28 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["PluginCommand"]
         );
+        assert!(find_api_command(&registry, "PluginCommand", None).is_ok());
+        assert!(matches!(
+            find_api_command(&registry, "ReflectedEvent", None),
+            Err(ApiCommandLookupError::NotApiCommand)
+        ));
+        assert!(matches!(
+            find_api_command(&registry, "Missing", None),
+            Err(ApiCommandLookupError::NotFound)
+        ));
+        let mut visibility = ApiVisibility::default();
+        visibility.hide("PluginCommand");
+        assert!(matches!(
+            find_api_command(&registry, "PluginCommand", Some(&visibility)),
+            Err(ApiCommandLookupError::Hidden)
+        ));
+        registry.overwrite_registration(
+            registry
+                .get(std::any::TypeId::of::<PluginCommand>())
+                .unwrap()
+                .clone(),
+        );
+        assert!(find_api_command(&registry, "PluginCommand", None).is_ok());
     }
 
     #[test]
