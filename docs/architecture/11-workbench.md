@@ -305,6 +305,22 @@ the workbench's menu, status, inspector, and window-control boundaries without
 inventing per-window screen offsets. Non-interactive overlays do not become
 input owners; modal behavior belongs to the shared modal host.
 
+Connections' scene browser has a **Scenario access** overlay. It draws dashed,
+color-distinguished declared reads toward each controller and writes toward its
+targets, with separate directional lanes. The snapshot borrows committed plans
+from `SimulationBarrierParticipants`; it rebuilds on plan revision, structural
+source generation or exact scene-source lease changes. Grouping rebinds the
+cached endpoints, retaining exact scenario and target paths even when both are
+inside one collapsed group. Internal group accesses are inspectable but do not
+paint a self-loop. Document previews do not inherit live-scene authorizations.
+Displayed accesses aggregate by node/group pair and direction, with multiplicity
+labels; exact endpoint identities remain individually inspectable. The overlay
+never creates authored USD wires or changes static connection counts. `InspectConnectionDiagram` exposes its enabled state, plan revision,
+exact links, displayed group/node keys and unresolved runtime identities.
+Only declared access is shown: applying forces or issuing commands is not
+inferred from these grants.
+
+
 Script-driven hint/objective/action cards are owned by
 `lunco-workbench-guided-ui`. `GuidedHudVisibility` restricts the complete card;
 LunCoSim defaults it to `sandbox_view`. Rhai declares a card-specific allowlist
@@ -748,6 +764,24 @@ Its center starts empty. In a document task, an explicit center-instance open es
 intent and creates its leaf beside the surviving browser/inspector regions,
 so the requested editor renders immediately. Connections, source editors, and USD previews open
 only through an explicit document/tool action or a declared perspective layout.
+The complete vehicle schema belongs to Connections: it projects composed USD
+dataflow, acausal connectors and physics joints across subsystem boundaries.
+The application Rhai perspective policy exposes **Systems** with Connections
+using the full workspace, so large diagrams do not compete with editor sidebars.
+Generated Modelica documents provide the individual subsystem equation views.
+Named `.lunco-view.toml` documents retain scope, complete nested topology and
+independent group disclosure without changing USD connections. Their source
+identity is the stable asset URI, while asynchronous work remains fenced to the
+exact live source lease. Collapsed ports display their original endpoint names;
+member labels disambiguate repeated ports. Fit includes routed feedback edges.
+The renderer sizes ordinary and summary cards from their endpoint captions.
+Summary dimensions are supplied to the layout hook; layout and projection use
+the same card dimensions and port anchors.
+Collapsed cards cap their height at sixteen port rows and distribute every exact
+endpoint along that boundary. Captions appear only when the actual row spacing
+permits readable text; the inspector retains all original endpoint identities.
+Parallel feedback bindings share geometric lanes by node pair and wire kind;
+the graph and inspector retain each original edge and port identity.
 SysML Requirements and Requirement details share the upper-right tab group
 with Inspector; details follows the selected requirement. Change History
 occupies the lower-right pane.
@@ -1657,3 +1691,10 @@ Its `TwinClosed` observer retires closed-Twin drafts even while the panel is hid
 
 Close editor is disabled while a local draft needs saving or discarding, with
 an explanation on the disabled control.
+
+The live Connections scenario-access overlay uses the typed
+`SetConnectionRuntimeInteractions { view_id, enabled }` command from both its
+checkbox and API callers. Its producer wakes on the access-plan owner's revision
+as well as stage and workbench changes, so admitted or retired plans refresh
+without requiring a new scene edit or simulation tick. Static wiring counts
+remain independent of the overlay.

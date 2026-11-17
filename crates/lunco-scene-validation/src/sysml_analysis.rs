@@ -12,8 +12,6 @@ use lunco_sysml_ast::lint_facts::{SysmlFactPage, SysmlFactSelection, SysmlFactTa
 use lunco_sysml_ast::{SysmlElementHandle, SysmlFeatureHandle};
 use std::collections::{BTreeSet, HashSet};
 
-use crate::validate::validate_sysml_reference;
-
 /// Register the generic `AnalyzeSysml` source query.
 pub fn register(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
@@ -31,9 +29,52 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
 
     fn execute(&self, world: &World, params: &HookValue) -> ApiQueryResult {
         use crate::preparation::{PreparationPoll, QueryKind};
-        let prepared = if lunco_api::api_param_str(params, "path")
-            .is_some_and(crate::validate::is_twin_source_set)
+        let source_set_report = if let Some(reference) = lunco_api::api_param_str(params, "path")
+            && let Some(name) = lunco_assets_core::parse_twin_root_uri(reference)
         {
+            let (_id, _twin, _, _) = crate::validate::mounted_sysml_twin(world, name, reference)
+                .map_err(|report| {
+                    ApiQueryError::new(ApiErrorCode::CommandRejected, report.errors.join("; "))
+                })?;
+            #[cfg(feature = "sysml-runtime")]
+            let state = world
+                .get_resource::<lunco_sysml::TwinSysmlAnalyses>()
+                .and_then(|analyses| analyses.state_for_source_identity(name, _id, &_twin.root));
+            #[cfg(not(feature = "sysml-runtime"))]
+            return Ok(Some(source_set_status(
+                reference,
+                "unprepared",
+                Some(vec![
+                    "Mounted Twin SysML analysis requires its asynchronous preparation owner"
+                        .to_owned(),
+                ]),
+            )));
+            #[cfg(feature = "sysml-runtime")]
+            match state {
+                Some(lunco_sysml::TwinSysmlAnalysisState::Ready(analysis)) => {
+                    Some(crate::validate::finish_sysml_report(reference, analysis))
+                }
+                Some(lunco_sysml::TwinSysmlAnalysisState::Pending) => {
+                    return Ok(Some(source_set_status(reference, "pending", None)));
+                }
+                Some(lunco_sysml::TwinSysmlAnalysisState::Failed(errors)) => {
+                    return Ok(Some(source_set_status(reference, "failed", Some(errors))));
+                }
+                None => {
+                    return Ok(Some(source_set_status(
+                        reference,
+                        "unprepared",
+                        Some(vec![format!(
+                            "Twin `{name}` SysML source set has not been prepared for the current Twin identity"
+                        )]),
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+        let source_set = source_set_report.is_some();
+        let prepared = if source_set {
             None
         } else {
             match crate::preparation::poll(world, QueryKind::AnalyzeSysml, params)? {
@@ -62,11 +103,7 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
             Some((id, report, params, revisions)) => (Some(id), report, params, revisions),
             None => (
                 None,
-                validate_sysml_reference(
-                    world,
-                    lunco_api::api_param_str(params, "path").expect("source-set path"),
-                    false,
-                ),
+                source_set_report.expect("source-set analysis captured"),
                 params.clone(),
                 HookValue::Unit,
             ),
@@ -91,12 +128,29 @@ impl ApiQueryProvider for AnalyzeSysmlProvider {
             )?,
             reference_from_features: parse_name_selection(params, "reference_from_features")?,
         };
-        let value = sysml_report_facts(&report, &selection);
+        let mut value = sysml_report_facts(&report, &selection);
+        if source_set && let HookValue::Map(fields) = &mut value {
+            fields.push(("state".to_owned(), HookValue::str("ready")));
+        }
         Ok(Some(operation_id.map_or_else(
             || value.clone(),
             |id| crate::preparation::report_envelope(id, value.clone(), revisions),
         )))
     }
+}
+
+fn source_set_status(reference: &str, state: &str, errors: Option<Vec<String>>) -> HookValue {
+    let mut fields = vec![
+        ("path".to_owned(), HookValue::str(reference)),
+        ("state".to_owned(), HookValue::str(state)),
+    ];
+    if let Some(errors) = errors {
+        fields.push((
+            "errors".to_owned(),
+            HookValue::Array(errors.into_iter().map(HookValue::str).collect()),
+        ));
+    }
+    HookValue::Map(fields)
 }
 
 /// Project an already admitted semantic snapshot through the shared typed ABI.

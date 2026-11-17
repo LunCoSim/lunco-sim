@@ -275,6 +275,11 @@ change would overwrite you.
 
 ## Delivery order
 
+When adding coupled subsystems, follow
+[Usable USD system models](../compose-multidomain-twin/references/inspectable-usd-systems.md)
+for component/solver boundaries, complete wiring, and saved diagrams. Deliver a
+vehicle whose internal systems can be inspected as well as driven.
+
 Author the vehicle and its test in the owning Twin. Keep generic components and
 engine regression scenes in the shared LunCo asset library only when they are
 reusable beyond one mission or presentation. A scene-specific vehicle should

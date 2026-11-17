@@ -31,10 +31,10 @@ pub use health::{
     ENGINE_HEALTH_HISTORY_LEN, EngineHealthSnapshot, ModelicaHealthSnapshot, PhysicsHealthSnapshot,
 };
 pub use pacing::{
-    FramePacingDemand, SimulationBarrier, SimulationBarrierParticipants, SimulationDependencyKey,
-    SimulationDependencyStates, SimulationDependencyStatus, SimulationExecutionMode,
-    SimulationProgress, SimulationProgressAdmissionSet, SimulationProgressBlocker,
-    SimulationProgressKey, SimulationProgressOwner,
+    FramePacingDemand, ScenarioAccessPlan, SimulationBarrier, SimulationBarrierParticipants,
+    SimulationDependencyKey, SimulationDependencyStates, SimulationDependencyStatus,
+    SimulationExecutionMode, SimulationProgress, SimulationProgressAdmissionSet,
+    SimulationProgressBlocker, SimulationProgressKey, SimulationProgressOwner,
 };
 pub use sync::LockExt;
 

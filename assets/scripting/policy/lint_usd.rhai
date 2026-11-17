@@ -8,7 +8,7 @@
 // ── WHAT A RULE MAY SEE ─────────────────────────────────────────────────────
 //
 // `facts` is a projection of the COMPOSED stage, built by
-// `lunco-usd-avian/src/lint.rs`:
+// `lunco-scene-validation` and the `lunco-usd-avian-lint` fact reader:
 //
 //   facts.bodies[]  #{ path, type, kinematic, simulated, collider,
 //                      subtree_collider, host_body, jointed,
@@ -968,20 +968,23 @@ fn direction_source_contract(facts) {
     };
 
     for prim in facts.prims {
+        if !prim.schemas.contains("LunCoDirectionTargetAPI") { continue; }
         for issue in direction_target_identity_findings(facts, prim) { out.push(issue); }
     }
 
     for prim in facts.prims {
-        for issue in direction_prim_input_findings(facts, prim, root_path) {
+        let frames = direction_input_frames(prim);
+        if frames.is_empty() { continue; }
+        for issue in direction_prim_input_findings(facts, prim, frames, root_path) {
             out.push(issue);
         }
     }
     out
 }
 
-fn direction_prim_input_findings(facts, prim, root_path) {
+fn direction_prim_input_findings(facts, prim, frames, root_path) {
     let out = [];
-    for frame in direction_input_frames(prim) {
+    for frame in frames {
         if frame == "target" || direction_component_relay(facts, prim.path, frame) != () {
             if frame == "target" && facts.stage.root_spawnable == true
                 && direction_spawnable_target_interface(prim) {
@@ -1044,7 +1047,6 @@ fn direction_input_name_non_generic(prim, frame) {
 
 fn direction_target_identity_findings(facts, prim) {
     let out = [];
-    if !prim.schemas.contains("LunCoDirectionTargetAPI") { return out; }
     let id = prim.direction_target_id;
     if prim.schemas.contains("LunCoCelestialBodyAPI") { out.push(direction_celestial_conflict(prim)); }
     if !valid_direction_id(id) {

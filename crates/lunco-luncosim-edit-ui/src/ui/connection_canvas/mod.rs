@@ -37,6 +37,7 @@ mod inspection;
 mod layout;
 mod navigation;
 mod projection;
+mod runtime_interactions;
 mod toolbar;
 mod view_files;
 mod visuals;
@@ -140,6 +141,7 @@ pub struct UsdCanvasSessionState {
     /// schema root is a presentation operation, not a stage reload.
     source_nodes: Vec<PrimNode>,
     source_wires: Vec<Wire>,
+    runtime_interactions: runtime_interactions::RuntimeInteractions,
     /// All composed prim paths, including prims without ECS projections.
     /// Structural deltas use this index to re-read only the affected subtree.
     source_prim_paths: BTreeSet<String>,
@@ -208,6 +210,7 @@ impl Default for UsdCanvasSessionState {
             scope_search: String::new(),
             source_nodes: Vec::new(),
             source_wires: Vec::new(),
+            runtime_interactions: Default::default(),
             source_prim_paths: BTreeSet::new(),
             pending_changes: CanvasStageChanges::default(),
             schema_roots: Vec::new(),
@@ -298,6 +301,7 @@ impl UsdCanvasSessionState {
         }
         projection::route_edges(&mut self.canvas.scene);
         groups::project(self);
+        runtime_interactions::bind(self);
     }
 
     fn project_view(&self) -> (Vec<PrimNode>, Vec<Wire>) {
@@ -493,6 +497,7 @@ fn sort_graph(nodes: &mut [PrimNode], wires: &mut [Wire]) {
 /// rebuilds its canvas scene when the topology changes. Runs on the main thread
 /// because `StageView` is `!Send`.
 pub fn produce_usd_canvas(
+    asset_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     q: Query<(Entity, &UsdPrimPath)>,
     path_changes: Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: Query<&ChildOf>,
@@ -503,6 +508,7 @@ pub fn produce_usd_canvas(
     workbench: Option<Res<WorkbenchSnapshot>>,
     mut views: ResMut<UsdCanvasState>,
     mut scene_change_reader: MessageReader<UsdSceneChangeBatch>,
+    participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
 ) {
     let viewport = viewport_state.as_deref();
     let open: HashSet<_> = viewport
@@ -546,9 +552,17 @@ pub fn produce_usd_canvas(
             &path_changes,
             &q_parents,
             &stages,
+            asset_roots.as_deref(),
             &mut canonical,
             &mut views.scene,
             changes_by_stage.get(&path.stage_handle.id()),
+        );
+        runtime_interactions::refresh(
+            &mut views.scene,
+            participants.as_deref(),
+            &q,
+            &q_parents,
+            !path_changes.is_empty(),
         );
     }
     for session in viewport.into_iter().flat_map(|v| v.sessions()) {
@@ -564,6 +578,7 @@ pub fn produce_usd_canvas(
             &path_changes,
             &q_parents,
             &stages,
+            asset_roots.as_deref(),
             &mut canonical,
             state,
             changes_by_stage.get(&session.stage_handle().id()),
@@ -582,6 +597,7 @@ fn produce_usd_canvas_session(
     path_changes: &Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
     q_parents: &Query<&ChildOf>,
     stages: &Assets<UsdStageAsset>,
+    asset_roots: Option<&lunco_assets_core::TwinRoots>,
     canonical: &mut CanonicalStages,
     state: &mut UsdCanvasSessionState,
     changes: Option<&CanvasStageChanges>,
@@ -615,10 +631,19 @@ fn produce_usd_canvas_session(
         state.pending_changes = accumulated_changes;
         return;
     }
-    state.source_uri = stages
+    let source_uri = stages
         .get(&handle)
         .and_then(|asset| asset.recipe.as_ref())
-        .map(|recipe| recipe.root_id.clone());
+        .map(|recipe| {
+            lunco_assets_core::asset_path::source_uri_for_address(&recipe.root_id, asset_roots)
+        });
+    state.source_uri = match source_uri.transpose() {
+        Ok(uri) => uri,
+        Err(error) => {
+            state.last_error = Some(format!("Diagram source identity: {error}"));
+            return;
+        }
+    };
     if state.view_document.is_none() {
         if let Some(uri) = state.source_uri.as_ref() {
             state.diagram_root = root_prim.path.clone();
@@ -843,7 +868,15 @@ pub fn editor_canvas_changed(
     mounts: Res<lunco_core::SceneMountState>,
     revision: Res<lunco_usd_bevy_scene::UsdStageRevision>,
     workbench: Option<Res<WorkbenchSnapshot>>,
+    participants: Option<Res<lunco_core_runtime::SimulationBarrierParticipants>>,
+    views: Res<UsdCanvasState>,
 ) -> bool {
+    let access_revision = participants
+        .as_deref()
+        .map(|owner| owner.scenario_plan_revision());
+    let access_changed = views.scene.built
+        && mounts.active_root().is_some()
+        && views.scene.runtime_interactions.revision != access_revision;
     let viewport_changed = viewport.is_some_and(|state| state.is_changed());
     let visible = workbench
         .as_deref()
@@ -851,7 +884,9 @@ pub fn editor_canvas_changed(
     viewport_changed
         || mounts.is_changed()
         || (visible
-            && (revision.is_changed() || workbench.is_some_and(|snapshot| snapshot.is_changed())))
+            && (revision.is_changed()
+                || access_changed
+                || workbench.is_some_and(|snapshot| snapshot.is_changed())))
 }
 
 // ─── Write-back: SceneEvent → UsdOp ─────────────────────────────────────────
@@ -1184,6 +1219,7 @@ impl Panel for UsdCanvasPanel {
             let (response, events) = ui.scope_builder(egui::UiBuilder::new().max_rect(graph_rect), |ui| state.canvas.ui(ui)).inner;
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
             groups::frames(ui, ctx, state, graph_rect);
+            runtime_interactions::paint(ui, state, graph_rect);
             drop_assets::drop_ui(ui, &response, state, ctx);
             if show_controls { inspection::connection_guidance(ui, &response, state); }
             response.context_menu(|ui| inspection::context_menu(ui, ctx, state));

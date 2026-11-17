@@ -10671,6 +10671,7 @@ dependencies = [
  "lunco-assets-datasets",
  "lunco-assets-runtime",
  "lunco-core",
+ "lunco-core-runtime",
  "lunco-doc",
  "lunco-doc-bevy",
  "lunco-hooks",

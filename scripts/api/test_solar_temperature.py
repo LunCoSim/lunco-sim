@@ -9,14 +9,16 @@ from pathlib import Path
 
 from runtime import BINARY, ROOT, ProductionSession, port_is_open, run_authored_scenario
 
-STATIC = ['available_w', 'delivered_w', 'heat_w', 'factor', 'energy_balance_w']
+STATIC = ['available_w', 'delivered_w', 'heat_w', 'factor', 'energy_balance_w', 'actual_temperature_k', 'curve_temperature_k', 'curve_limited', 'curve_in_range']
 DYNAMIC = ['temperature_k', 'available_w', 'heat_w', 'cooling_w',
            'generated_heat_j', 'rejected_heat_j', 'thermal_balance_j']
 STATIC_CASES = ['Reference', 'Hot', 'Cold', 'HotNameplate', 'ColdNameplate',
-                'HighBus', 'ExtremeHot']
+                'HighBus', 'ExtremeHot', 'BoundedCold', 'BoundedColdNameplate', 'BoundedHot']
 DYNAMIC_CASES = ['StrongCooling', 'WeakCooling', 'Cooldown', 'BelowSink', 'DisconnectedHeat']
 INVALID = {'InvalidTemperature': 'positive absolute cell temperature',
-           'InvalidCooling': 'LimitedCoolingSink requires'}
+           'InvalidCooling': 'LimitedCoolingSink requires',
+           'InvalidCurveBounds': 'SolarPanel coefficient bounds require',
+           'InvalidCalibrationHot': 'exceeds the authored coefficient upper bound'}
 
 
 def main():
@@ -69,7 +71,7 @@ def main():
             (output / 'runs.json').write_text(json.dumps(runs, indent=2))
             execute('SetTimeTransport', playing=True)
             run_authored_scenario(session, 'lunco://scenarios/tests/solar_temperature_contracts.rhai',
-                                  title='SOLAR TEMPERATURE', check_count=45, params={'runs': runs})
+                                  title='SOLAR TEMPERATURE', check_count=59, params={'runs': runs})
         finally:
             for run in runs:
                 status = execute('RunStatus', experiment_id=run['experiment_id'])
@@ -95,13 +97,13 @@ def main():
         artifacts.rmdir()
     files = [source, ROOT / 'assets/models/LunCo/Electrical/SolarPanel.mo',
              ROOT / 'assets/models/LunCo/Thermal/LimitedCoolingSink.mo']
-    evidence = {'checks': 45, 'runs': runs, 'headless': args.headless,
+    evidence = {'checks': 59, 'runs': runs, 'headless': args.headless,
                 'binary_sha256': binary_sha256,
                 'source_sha256': {str(p.relative_to(ROOT)): hashlib.file_digest(p.open('rb'), 'sha256').hexdigest()
                                   for p in files}, 'port_released': not port_is_open(args.port)}
     (output / 'validation.json').write_text(json.dumps(evidence, indent=2))
     assert evidence['port_released']
-    print('PASS 45 authored solar temperature checks; owned API Exit and port release')
+    print('PASS 59 authored solar temperature checks; owned API Exit and port release')
 
 
 if __name__ == '__main__':

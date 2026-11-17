@@ -515,12 +515,18 @@ impl Scene {
         self.edges.len()
     }
 
-    /// Bounding rectangle of every node in the scene, or `None` if
-    /// empty. Used by `fit_all`.
+    /// Bounding rectangle of nodes and routed edges, or `None` if empty.
+    /// Used by `fit_all` so feedback routes remain inside the viewport.
     pub fn bounds(&self) -> Option<Rect> {
         let mut iter = self.nodes.values().map(|n| n.rect);
         let first = iter.next()?;
-        Some(iter.fold(first, Rect::union))
+        let mut bounds = iter.fold(first, Rect::union);
+        for edge in self.edges.values() {
+            for point in &edge.waypoints {
+                bounds = Rect::union(bounds, Rect::from_min_max(*point, *point));
+            }
+        }
+        Some(bounds)
     }
 
     /// Data-driven hit test — returns which node (and which part of
@@ -763,14 +769,22 @@ mod tests {
     }
 
     #[test]
-    fn bounds_covers_all_nodes() {
+    fn bounds_cover_nodes_and_routes() {
         let mut s = Scene::new();
         assert!(s.bounds().is_none());
-        mk_node(&mut s, 0.0, 0.0); // 40×30
-        mk_node(&mut s, 100.0, 50.0); // 40×30
+        let a = mk_node(&mut s, 0.0, 0.0); // 40×30
+        let c = mk_node(&mut s, 100.0, 50.0); // 40×30
         let b = s.bounds().expect("non-empty");
         assert_eq!(b.min, Pos::new(0.0, 0.0));
         assert_eq!(b.max, Pos::new(140.0, 80.0));
+        let edge = mk_edge(&mut s, a, c);
+        s.edge_mut(edge)
+            .unwrap()
+            .waypoints
+            .push(Pos::new(-24.0, -96.0));
+        let routed = s.bounds().unwrap();
+        assert_eq!(routed.min, Pos::new(-24.0, -96.0));
+        assert_eq!(routed.max, Pos::new(140.0, 80.0));
     }
 
     #[test]

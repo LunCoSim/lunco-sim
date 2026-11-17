@@ -180,6 +180,7 @@ pub(super) fn read_network_with_members(
             }
         };
         let source_asset = source_ref.asset;
+        let source_component_types = classes.component_types(&source_asset);
         let attrs = view.attr_names(&path);
         let mut constants = BTreeMap::new();
         let mut parameters = BTreeMap::new();
@@ -311,6 +312,14 @@ pub(super) fn read_network_with_members(
                 });
             }
         }
+        let connector_types = declared_connectors
+            .iter()
+            .filter_map(|name| {
+                source_component_types
+                    .and_then(|types| types.get(name))
+                    .map(|type_name| (name.clone(), type_name.clone()))
+            })
+            .collect();
         components.push(DomainComponent {
             path: path.to_string(),
             source_asset,
@@ -319,6 +328,7 @@ pub(super) fn read_network_with_members(
             parameters,
             connectors,
             declared_connectors,
+            connector_types,
             inputs,
             declared_outputs,
             topology_role,

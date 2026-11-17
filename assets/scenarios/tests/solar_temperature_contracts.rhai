@@ -50,11 +50,22 @@ fn on_tick(me, params) {
         results[run.label]=r;
     }
     for spec in [["Reference",245.0],["Hot",199.675],["Cold",290.325],
-        ["HotNameplate",220.05],["ColdNameplate",319.95],["HighBus",245.0],["ExtremeHot",0.0]] {
+        ["HotNameplate",220.05],["ColdNameplate",319.95],["HighBus",245.0],["ExtremeHot",0.0],
+        ["BoundedCold",245.0],["BoundedColdNameplate",270.0],["BoundedHot",199.675]] {
         let s=results[spec[0]].series;
         checks.push(t_true(near_all(s.available_w,spec[1],1.0e-7),spec[0]+" follows its temperature-adjusted rating"));
         checks.push(t_true(near_all(s.energy_balance_w,0.0,1.0e-8)
             && bounded(s.heat_w,0.0,2000.0,1.0e-8),spec[0]+" conserves radiant, electrical and thermal power"));
+    }
+    for spec in [["BoundedCold",248.15,298.15,1.0,0.0],
+                 ["BoundedColdNameplate",248.15,298.15,1.0,0.0],
+                 ["BoundedHot",348.15,348.15,0.0,1.0]] {
+        let s=results[spec[0]].series;
+        checks.push(t_true(near_all(s.actual_temperature_k,spec[1],1.0e-8)
+            && near_all(s.curve_temperature_k,spec[2],1.0e-8)
+            && near_all(s.curve_limited,spec[3],1.0e-8)
+            && near_all(s.curve_in_range,spec[4],1.0e-8),
+            spec[0]+" preserves actual temperature and reports its coefficient-evaluation boundary"));
     }
     checks.push(t_true(near_all(results.HighBus.series.delivered_w,245.0,1.0e-7),
         "high bus voltage cannot multiply the sunlight power budget"));

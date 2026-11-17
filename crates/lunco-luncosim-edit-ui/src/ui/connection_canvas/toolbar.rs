@@ -32,6 +32,25 @@ pub(super) fn render(
     }
     ui.horizontal_wrapped(|ui| {
         source_picker(ui, &mut requested_source);
+        if show_scene {
+            let mut enabled = state.runtime_interactions.enabled;
+            if ui.checkbox(&mut enabled, "Scenario access")
+                .on_hover_text("Overlay declared scenario reads and writes. These dashed links describe access authorization, not observed signal or force transfers.")
+                .changed()
+            {
+                if let Some(host) = state.view_document.as_ref() {
+                    ctx.trigger(super::runtime_interactions::SetConnectionRuntimeInteractions {
+                        view_id: host.document().id().raw(), enabled,
+                    });
+                }
+            }
+            ui.label(format!("{} declared accesses", state.runtime_interactions.links.len()));
+            if state.runtime_interactions.enabled {
+                let theme = lunco_theme::active(ui.ctx());
+                ui.colored_label(theme.tokens.port_input, "read → scenario");
+                ui.colored_label(theme.tokens.port_output, "scenario → write");
+            }
+        }
         if let Some(host) = state.view_document.as_ref() {
             let view_id = host.document().id().raw();
             let dirty = host.document().generation() != state.saved_view_generation;

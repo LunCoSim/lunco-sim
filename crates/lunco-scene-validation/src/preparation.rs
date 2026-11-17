@@ -1,5 +1,6 @@
 //! One-shot query preparation. Source I/O and pure facts use the existing Bevy
-//! task/reader boundary; admitted policy executes serially when consumed.
+//! task/reader boundary. Twin facts, pure policy and response preparation share
+//! that job; publication consumes the exact fenced result.
 
 use crate::{
     twin_lint::{TwinInspectionInput, TwinNamespaceSnapshot},
@@ -57,7 +58,6 @@ struct PreparationState {
 struct Operation {
     kind: QueryKind,
     params: Option<ApiValue>,
-    reference: String,
     fence: OwnerFence,
     #[cfg(not(target_arch = "wasm32"))]
     task: NativePreparation,
@@ -78,6 +78,13 @@ struct OwnerFence {
     mount: Option<(String, PathBuf)>,
     twin_input: Option<(lunco_workspace::TwinId, TwinInspectionInput)>,
     policies: Vec<(&'static str, Option<Arc<lunco_hooks::RegisteredHook>>)>,
+    #[cfg(feature = "sysml-runtime")]
+    sysml_analysis: Option<(
+        String,
+        lunco_workspace::TwinId,
+        PathBuf,
+        Arc<lunco_sysml_ast::SysmlAnalysis>,
+    )>,
 }
 impl OwnerFence {
     fn lifetime_current(&self, world: &World) -> bool {
@@ -101,12 +108,25 @@ impl OwnerFence {
     }
     fn is_current(&self, world: &World) -> bool {
         self.lifetime_current(world)
+            && self.sysml_current(world)
             && self.twin_input.as_ref().is_none_or(|(id, input)| {
                 world
                     .get_resource::<WorkspaceResource>()
                     .and_then(|workspace| workspace.twin(*id))
                     .is_some_and(|twin| TwinInspectionInput::capture(twin) == *input)
             })
+    }
+    fn sysml_current(&self, world: &World) -> bool {
+        #[cfg(feature = "sysml-runtime")]
+        if let Some((source_identity, id, root, admitted)) = &self.sysml_analysis {
+            return world.get_resource::<lunco_sysml::TwinSysmlAnalyses>()
+                .and_then(|analyses| analyses.state_for_source_identity(source_identity, *id, root))
+                .is_some_and(|state| matches!(state,
+                    lunco_sysml::TwinSysmlAnalysisState::Ready(current) if Arc::ptr_eq(admitted, &current)));
+        }
+        #[cfg(not(feature = "sysml-runtime"))]
+        let _ = world;
+        true
     }
 }
 
@@ -116,15 +136,8 @@ pub(crate) struct ReadRevision {
     cid: String,
 }
 enum PreparedFacts {
-    Asset {
-        report: ValidationReport,
-        text: String,
-    },
-    Twin {
-        snapshot: TwinNamespaceSnapshot,
-        registry_errors: Vec<String>,
-        policy: String,
-    },
+    Asset { report: ValidationReport },
+    Twin(PreparedTwinResult),
 }
 struct Prepared {
     facts: PreparedFacts,
@@ -144,17 +157,94 @@ pub(crate) enum PreparationPoll {
     },
     ReadyTwin {
         operation_id: u64,
-        snapshot: TwinNamespaceSnapshot,
-        registry_errors: Vec<String>,
-        policy: String,
-        reference: String,
-        revisions: Vec<ReadRevision>,
+        result: PreparedTwinResult,
         permit: Arc<ExternalWorkPermit>,
     },
     Failed {
         operation_id: u64,
         diagnostic: String,
     },
+}
+
+pub(crate) enum PreparedTwinResult {
+    Query {
+        report: ApiValue,
+        revisions: ApiValue,
+    },
+    Lint {
+        twin: String,
+        source_errors: Vec<String>,
+        findings: Vec<lunco_doc::Diagnostic>,
+    },
+}
+
+struct PolicyPreparation {
+    kind: QueryKind,
+    context: lunco_hooks::RuntimeExecutionContext,
+    policies: Vec<(&'static str, Option<Arc<lunco_hooks::RegisteredHook>>)>,
+}
+
+impl PolicyPreparation {
+    fn registration(&self, domain: &str) -> Option<&lunco_hooks::RegisteredHook> {
+        self.policies
+            .iter()
+            .find(|(name, _)| *name == domain)
+            .and_then(|(_, registration)| registration.as_deref())
+    }
+    fn finish_asset(&self, report: ValidationReport, text: &str) -> ValidationReport {
+        if self.kind == QueryKind::AnalyzeSysml {
+            return report;
+        }
+        let registration = self.registration(&report.kind);
+        crate::validate::apply_lint_policy_with_registration(
+            report,
+            text,
+            self.context,
+            registration,
+        )
+    }
+    fn finish_twin(
+        &self,
+        reference: &str,
+        policy: &str,
+        snapshot: TwinNamespaceSnapshot,
+        registry_errors: Vec<String>,
+        revisions: &[ReadRevision],
+    ) -> Result<PreparedTwinResult, String> {
+        let findings = lunco_lint::run_lint_with_registration(
+            "twin",
+            crate::twin_lint::facts(&snapshot, policy),
+            self.context,
+            self.registration("twin"),
+        );
+        match self.kind {
+            QueryKind::Twin => {
+                let report = crate::validate::finish_twin_report(
+                    reference,
+                    policy,
+                    snapshot,
+                    registry_errors,
+                    findings,
+                );
+                Ok(PreparedTwinResult::Query {
+                    report: lunco_api_core::api_value_from_serializable(&report)
+                        .map_err(|error| error.to_string())?,
+                    revisions: lunco_api_core::api_value_from_serializable(revisions)
+                        .map_err(|error| error.to_string())?,
+                })
+            }
+            QueryKind::TwinLint => {
+                let mut source_errors = registry_errors;
+                source_errors.extend(snapshot.read_errors);
+                Ok(PreparedTwinResult::Lint {
+                    twin: snapshot.twin,
+                    source_errors,
+                    findings,
+                })
+            }
+            _ => Err("Twin policy preparation belongs to another query".to_owned()),
+        }
+    }
 }
 
 fn rejected(message: impl Into<String>) -> ApiQueryError {
@@ -165,11 +255,6 @@ fn envelope(id: u64, state: &str, report: ApiValue, revisions: ApiValue) -> ApiV
 }
 pub(crate) fn failed(id: u64, diagnostic: impl Into<String>) -> ApiValue {
     api_value!({"operation_id": id, "state": "failed", "diagnostic": diagnostic.into()})
-}
-fn twin_authority(reference: &str) -> Option<&str> {
-    lunco_assets_core::parse_twin_uri(reference)
-        .map(|(authority, _)| authority)
-        .or_else(|| lunco_assets_core::parse_twin_root_uri(reference))
 }
 fn capture_fence(
     world: &World,
@@ -182,15 +267,25 @@ fn capture_fence(
         workspace.new_document_runtime_owner(replication.as_ref())
     });
     let mut mount = None;
-    if let Some(authority) = twin_authority(reference) {
+    if let Some(identity) = lunco_assets_core::parse_twin_root_uri(reference)
+        .or_else(|| lunco_assets_core::parse_twin_uri(reference).map(|(identity, _)| identity))
+    {
         let roots = world
             .get_resource::<TwinRoots>()
             .ok_or_else(|| rejected("Twin asset registry is unavailable"))?;
-        let root = roots
-            .root_for(authority)
+        let authority = roots
+            .mounted_authority_for_logical(identity)
             .map_err(|error| rejected(error.to_string()))?
-            .ok_or_else(|| rejected("Twin source mount is retired or unknown"))?;
-        mount = Some((authority.to_owned(), root));
+            .ok_or_else(|| rejected(format!("Twin source `{identity}` is not mounted")))?;
+        let root = roots
+            .root_for(&authority)
+            .map_err(|error| rejected(error.to_string()))?
+            .ok_or_else(|| {
+                rejected(format!(
+                    "Twin source `{identity}` mount retired during admission"
+                ))
+            })?;
+        mount = Some((authority, root));
     } else if let DocumentRuntimeOwner::LocalTwin(id) = &runtime {
         if let Some(twin) = workspace.and_then(|workspace| workspace.twin(*id)) {
             let roots = world
@@ -214,6 +309,8 @@ fn capture_fence(
         runtime,
         mount,
         twin_input: None,
+        #[cfg(feature = "sysml-runtime")]
+        sysml_analysis: None,
         policies: domains
             .iter()
             .map(|domain| (*domain, lunco_hooks::get(&lunco_lint::hook_id(domain))))
@@ -254,6 +351,7 @@ pub(crate) fn poll(
         reference.to_owned(),
         policy.to_owned(),
         Some(params.clone()),
+        lunco_hooks::RuntimeExecutionContext::unclassified(),
     )?;
     Ok(PreparationPoll::Pending { operation_id })
 }
@@ -338,13 +436,8 @@ pub(crate) fn poll_operation(
         ));
     }
     return match prepared.facts {
-        PreparedFacts::Asset { report, text } => {
+        PreparedFacts::Asset { report } => {
             let revisions = lunco_api_core::api_value_from_serializable(&prepared.revisions)?;
-            let report = if kind == QueryKind::AnalyzeSysml {
-                report
-            } else {
-                crate::validate::apply_lint_policy(report, &text)
-            };
             Ok(PreparationPoll::Ready {
                 operation_id: id,
                 report,
@@ -354,17 +447,9 @@ pub(crate) fn poll_operation(
                 revisions,
             })
         }
-        PreparedFacts::Twin {
-            snapshot,
-            registry_errors,
-            policy,
-        } => Ok(PreparationPoll::ReadyTwin {
+        PreparedFacts::Twin(result) => Ok(PreparationPoll::ReadyTwin {
             operation_id: id,
-            snapshot,
-            registry_errors,
-            policy,
-            reference: operation.reference,
-            revisions: prepared.revisions,
+            result,
             permit,
         }),
     };
@@ -374,6 +459,7 @@ pub(crate) fn admit_twin_lint(
     world: &World,
     reference: &str,
     policy: &str,
+    context: lunco_hooks::RuntimeExecutionContext,
 ) -> Result<u64, ApiQueryError> {
     admit_request(
         world,
@@ -381,6 +467,7 @@ pub(crate) fn admit_twin_lint(
         reference.to_owned(),
         policy.to_owned(),
         None,
+        context,
     )
 }
 
@@ -390,6 +477,7 @@ fn admit_request(
     reference: String,
     policy: String,
     params: Option<ApiValue>,
+    context: lunco_hooks::RuntimeExecutionContext,
 ) -> Result<u64, ApiQueryError> {
     let preparations = world
         .get_resource::<QueryPreparations>()
@@ -403,6 +491,11 @@ fn admit_request(
         .retain(|_, operation| operation.fence.lifetime_current(world));
     let mut fence = capture_fence(world, &reference, kind)?;
     let source = admit_source(world, &reference, kind, &mut fence)?;
+    let prepared_policy = PolicyPreparation {
+        kind,
+        context,
+        policies: fence.policies.clone(),
+    };
     let next = state
         .next
         .checked_add(1)
@@ -427,6 +520,7 @@ fn admit_request(
         server,
         policy,
         limits,
+        prepared_policy,
     ));
     #[cfg(not(target_arch = "wasm32"))]
     let task = {
@@ -478,7 +572,6 @@ fn admit_request(
         Operation {
             kind,
             params,
-            reference,
             fence,
             task,
             #[cfg(target_arch = "wasm32")]
@@ -528,6 +621,7 @@ enum Source {
     Native {
         path: PathBuf,
         admission: FileDocumentAdmission,
+        scope: Option<NativeReadScope>,
     },
     MountedTwin {
         authority: String,
@@ -537,7 +631,42 @@ enum Source {
         path: PathBuf,
         admission: FileDocumentAdmission,
     },
+    #[cfg(feature = "sysml-runtime")]
+    SysmlAnalysis(Arc<lunco_sysml_ast::SysmlAnalysis>),
 }
+
+/// Captured native composition scope. Authored source identities remain
+/// separate from the runtime mount fenced by the admitting owner.
+struct NativeReadScope {
+    root: PathBuf,
+    logical_identity: String,
+    scope: lunco_assets_core::TwinReadScope,
+}
+
+fn native_read_scope(
+    world: &World,
+    fence: &OwnerFence,
+) -> Result<Option<NativeReadScope>, ApiQueryError> {
+    fence
+        .mount
+        .as_ref()
+        .map(|(authority, root)| {
+            let roots = world.get_resource::<TwinRoots>().ok_or_else(|| {
+                rejected("Native source scope requires its admitted Twin registry")
+            })?;
+            Ok(NativeReadScope {
+                root: root.clone(),
+                logical_identity: roots
+                    .logical_identity_for_authority(authority)
+                    .map_err(|error| rejected(error.to_string()))?,
+                scope: roots
+                    .read_scope(authority)
+                    .map_err(|error| rejected(error.to_string()))?,
+            })
+        })
+        .transpose()
+}
+
 fn admit_source(
     world: &World,
     reference: &str,
@@ -545,8 +674,8 @@ fn admit_source(
     fence: &mut OwnerFence,
 ) -> Result<Source, ApiQueryError> {
     if matches!(kind, QueryKind::Twin | QueryKind::TwinLint) {
-        if let Some(authority) = lunco_assets_core::parse_twin_root_uri(reference) {
-            let root = fence.mount.as_ref().expect("Twin fence captured").1.clone();
+        if lunco_assets_core::parse_twin_root_uri(reference).is_some() {
+            let (authority, root) = fence.mount.as_ref().expect("Twin fence captured").clone();
             let workspace = world
                 .get_resource::<WorkspaceResource>()
                 .ok_or_else(|| rejected("Mounted Twin validation requires the Workspace"))?;
@@ -556,14 +685,11 @@ fn admit_source(
                 .ok_or_else(|| rejected("Twin mount has no indexed Workspace owner"))?;
             let input = TwinInspectionInput::capture(twin);
             fence.twin_input = Some((id, input.clone()));
-            return Ok(Source::MountedTwin {
-                authority: authority.to_owned(),
-                input,
-            });
+            return Ok(Source::MountedTwin { authority, input });
         }
         #[cfg(target_arch = "wasm32")]
         return Err(rejected(
-            "Browser ValidateTwin requires the current mounted twin:// authority",
+            "Browser ValidateTwin requires a mounted stable twin:// source URI",
         ));
     }
     let workspace = world.get_resource::<WorkspaceResource>();
@@ -580,13 +706,43 @@ fn admit_source(
             None if !reference.contains("://") => PathBuf::from(reference),
             None => {
                 return Err(rejected(
-                    "Twin directory validation requires a native path, standard file URI, or mounted twin:// authority",
+                    "Twin directory validation requires a native path, standard file URI, or mounted stable twin:// source URI",
                 ));
             }
         };
         return Ok(Source::NativeTwin { path, admission });
     }
     if matches!(kind, QueryKind::Sysml | QueryKind::AnalyzeSysml) {
+        if let Some(name) = lunco_assets_core::parse_twin_root_uri(reference) {
+            #[cfg(feature = "sysml-runtime")]
+            {
+                let (id, twin, _, _) = crate::validate::mounted_sysml_twin(world, name, reference)
+                    .map_err(|report| rejected(report.errors.join("; ")))?;
+                let analyses = world
+                    .get_resource::<lunco_sysml::TwinSysmlAnalyses>()
+                    .ok_or_else(|| {
+                        rejected("Mounted Twin SysML preparation owner is unavailable")
+                    })?;
+                let analysis = crate::validate::prepared_twin_sysml_analysis(
+                    analyses, name, reference, id, twin,
+                )
+                .map_err(|report| rejected(report.errors.join("; ")))?;
+                fence.sysml_analysis = Some((
+                    name.to_owned(),
+                    id,
+                    twin.root.clone(),
+                    Arc::clone(&analysis),
+                ));
+                return Ok(Source::SysmlAnalysis(analysis));
+            }
+            #[cfg(not(feature = "sysml-runtime"))]
+            {
+                let _ = name;
+                return Err(rejected(
+                    "Mounted Twin SysML validation requires its asynchronous SysML preparation owner",
+                ));
+            }
+        }
         let native = lunco_storage::file_uri_to_path(reference)
             .map_err(|error| rejected(error.to_string()))?;
         let path = native
@@ -607,17 +763,32 @@ fn admit_source(
     if let Some(path) =
         lunco_storage::file_uri_to_path(reference).map_err(|error| rejected(error.to_string()))?
     {
-        return Ok(Source::Native { path, admission });
+        return Ok(Source::Native {
+            path,
+            admission,
+            scope: native_read_scope(world, fence)?,
+        });
     }
     #[cfg(not(target_arch = "wasm32"))]
     if !reference.contains("://") {
         return Ok(Source::Native {
             path: PathBuf::from(reference),
             admission,
+            scope: native_read_scope(world, fence)?,
         });
     }
+    let load_reference = match lunco_assets_core::parse_twin_uri(reference) {
+        Some((_, relative)) => {
+            let (authority, _) = fence
+                .mount
+                .as_ref()
+                .ok_or_else(|| rejected("Twin file admission has no captured source mount"))?;
+            lunco_assets_core::twin_uri(authority, relative)
+        }
+        None => reference.to_owned(),
+    };
     let path = lunco_assets_core::asset_path::load_asset_path(
-        reference,
+        &load_reference,
         None,
         world.get_resource::<TwinRoots>(),
         None,
@@ -633,9 +804,37 @@ async fn prepare(
     server: Option<AssetServer>,
     policy: String,
     limits: lunco_usd_compose::recipe::StageClosureLimits,
+    prepared_policy: PolicyPreparation,
 ) -> Result<Prepared, String> {
     let limit = limits.max_bytes;
     match source {
+        #[cfg(feature = "sysml-runtime")]
+        Source::SysmlAnalysis(analysis) => {
+            let text = analysis
+                .files()
+                .iter()
+                .map(|file| file.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let revisions = analysis
+                .files()
+                .iter()
+                .map(|file| ReadRevision {
+                    path: file.name.clone(),
+                    cid: lunco_hash::content::cid(file.text.as_bytes()).to_string(),
+                })
+                .collect();
+            let report = prepared_policy.finish_asset(
+                crate::validate::finish_sysml_report(&reference, analysis),
+                &text,
+            );
+            Ok(Prepared {
+                facts: PreparedFacts::Asset { report },
+                source_runtime: None,
+                revisions,
+                mounts: Vec::new(),
+            })
+        }
         Source::MountedTwin { authority, input } => {
             let server = server.ok_or("Registered asset server is unavailable")?;
             let prepared = prepare_twin_sources(
@@ -648,11 +847,13 @@ async fn prepare(
             )
             .await?;
             Ok(Prepared {
-                facts: PreparedFacts::Twin {
-                    snapshot: inspect_prepared_twin(&input, &prepared.sources),
-                    registry_errors: input.registry_errors,
-                    policy,
-                },
+                facts: PreparedFacts::Twin(prepared_policy.finish_twin(
+                    &reference,
+                    &policy,
+                    inspect_prepared_twin(&input, &prepared.sources),
+                    input.registry_errors,
+                    &prepared.revisions,
+                )?),
                 source_runtime: None,
                 revisions: prepared.revisions,
                 mounts: prepared.mounts,
@@ -686,11 +887,13 @@ async fn prepare(
                 )
                 .await?;
                 return Ok(Prepared {
-                    facts: PreparedFacts::Twin {
-                        snapshot: inspect_prepared_twin(&input, &prepared.sources),
-                        registry_errors: input.registry_errors,
-                        policy,
-                    },
+                    facts: PreparedFacts::Twin(prepared_policy.finish_twin(
+                        &reference,
+                        &policy,
+                        inspect_prepared_twin(&input, &prepared.sources),
+                        input.registry_errors,
+                        &prepared.revisions,
+                    )?),
                     source_runtime: Some(resolved.runtime),
                     revisions: prepared.revisions,
                     mounts: prepared.mounts,
@@ -725,18 +928,31 @@ async fn prepare(
             } else {
                 None
             };
-            let (revisions, mounts) =
-                read_identities(&id, &bytes, recipe.as_ref(), roots.as_ref())?;
+            let (revisions, mounts) = read_identities(
+                &id,
+                &bytes,
+                recipe.as_ref(),
+                ReadIdentityScope::Registered {
+                    origin: &path,
+                    roots: roots.as_ref(),
+                },
+            )?;
             let (report, text) =
                 crate::validate::validate_prepared_bytes(&reference, path.path(), bytes, recipe);
             Ok(Prepared {
-                facts: PreparedFacts::Asset { report, text },
+                facts: PreparedFacts::Asset {
+                    report: prepared_policy.finish_asset(report, &text),
+                },
                 source_runtime: None,
                 revisions,
                 mounts,
             })
         }
-        Source::Native { path, admission } => {
+        Source::Native {
+            path,
+            admission,
+            scope,
+        } => {
             #[cfg(not(target_arch = "wasm32"))]
             let path = if path.is_absolute() {
                 path
@@ -748,6 +964,9 @@ async fn prepare(
                 .map_err(|error| error.to_string())?
             };
             let (resolved, mut bytes) = admission.read_bounded(&path, limit).await?;
+            let scope = scope
+                .as_ref()
+                .filter(|scope| resolved.path.starts_with(&scope.root));
             let id = lunco_storage::file_path_to_uri(&resolved.path)
                 .map_err(|error| error.to_string())?;
             let recipe = if crate::validate::is_usd_path(&resolved.path) {
@@ -762,7 +981,7 @@ async fn prepare(
                                     .map_err(|error| error.to_string())?
                                     .as_path(),
                             ),
-                            None,
+                            scope.map(|scope| &scope.scope),
                             limits,
                         )
                         .map_err(|error| error.to_string())?,
@@ -807,12 +1026,41 @@ async fn prepare(
             } else {
                 None
             };
+            #[cfg(not(target_arch = "wasm32"))]
+            let identity_scope = ReadIdentityScope::Native {
+                logical_identity: scope.map(|scope| scope.logical_identity.as_str()),
+            };
+            #[cfg(target_arch = "wasm32")]
+            let origin = recipe
+                .as_ref()
+                .map(|recipe| {
+                    lunco_assets_core::asset_path::load_asset_path(
+                        &recipe.root_id,
+                        None,
+                        roots.as_ref(),
+                        None,
+                    )
+                    .map_err(|error| error.to_string())
+                })
+                .transpose()?;
+            #[cfg(target_arch = "wasm32")]
+            let identity_scope = match origin.as_ref() {
+                Some(origin) => ReadIdentityScope::Registered {
+                    origin,
+                    roots: roots.as_ref(),
+                },
+                None => ReadIdentityScope::Native {
+                    logical_identity: scope.map(|scope| scope.logical_identity.as_str()),
+                },
+            };
             let (revisions, mounts) =
-                read_identities(&id, &bytes, recipe.as_ref(), roots.as_ref())?;
+                read_identities(&id, &bytes, recipe.as_ref(), identity_scope)?;
             let (report, text) =
                 crate::validate::validate_prepared_bytes(&reference, &resolved.path, bytes, recipe);
             Ok(Prepared {
-                facts: PreparedFacts::Asset { report, text },
+                facts: PreparedFacts::Asset {
+                    report: prepared_policy.finish_asset(report, &text),
+                },
                 source_runtime: Some(resolved.runtime),
                 revisions,
                 mounts,
@@ -821,11 +1069,21 @@ async fn prepare(
     }
 }
 
+enum ReadIdentityScope<'a> {
+    Registered {
+        origin: &'a AssetPath<'static>,
+        roots: Option<&'a TwinRoots>,
+    },
+    Native {
+        logical_identity: Option<&'a str>,
+    },
+}
+
 fn read_identities(
     root_id: &str,
     bytes: &[u8],
     recipe: Option<&lunco_usd_compose::recipe::StageRecipe>,
-    roots: Option<&TwinRoots>,
+    scope: ReadIdentityScope<'_>,
 ) -> Result<(Vec<ReadRevision>, Vec<(String, PathBuf)>), String> {
     let mut revisions = if let Some(recipe) = recipe {
         recipe
@@ -845,9 +1103,32 @@ fn read_identities(
     revisions.sort_by(|left, right| left.path.cmp(&right.path));
     let mut mounts = Vec::new();
     for revision in &revisions {
-        if let Some(authority) = twin_authority(&revision.path) {
+        if let Some((identity, _)) = lunco_assets_core::parse_twin_uri(&revision.path) {
+            let (origin, roots) = match &scope {
+                ReadIdentityScope::Native { logical_identity } => {
+                    if *logical_identity != Some(identity) {
+                        return Err(format!(
+                            "Twin source `{identity}` is outside the admitted native scope"
+                        ));
+                    }
+                    continue;
+                }
+                ReadIdentityScope::Registered { origin, roots } => (
+                    *origin,
+                    roots.ok_or("Registered Twin dependency has no registry")?,
+                ),
+            };
+            let address = lunco_assets_core::asset_path::load_asset_path(
+                &revision.path,
+                Some(origin),
+                Some(roots),
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+            let address = lunco_assets_core::asset_path::anchor_of(&address);
+            let (authority, _) = lunco_assets_core::parse_twin_uri(&address)
+                .ok_or("Registered Twin dependency lost its load authority")?;
             let root = roots
-                .ok_or("Twin registry unavailable at source preparation")?
                 .root_for(authority)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "Twin source mount retired during preparation".to_owned())?;
@@ -858,15 +1139,40 @@ fn read_identities(
     }
     Ok((revisions, mounts))
 }
-struct PreparedTwinSource {
-    text: Option<String>,
-    recipe: Option<lunco_usd_compose::recipe::StageRecipe>,
+enum PreparedTwinSource {
+    Modelica(String),
+    Usd {
+        entries: Vec<crate::twin_lint::NamespaceEntry>,
+        errors: Vec<String>,
+    },
 }
 struct PreparedTwinSources {
     sources: HashMap<PathBuf, Result<PreparedTwinSource, String>>,
     revisions: Vec<ReadRevision>,
     mounts: Vec<(String, PathBuf)>,
 }
+
+fn retain_read_revisions(
+    retained: &mut HashMap<String, String>,
+    revisions: impl IntoIterator<Item = ReadRevision>,
+) -> Result<(), String> {
+    for revision in revisions {
+        match retained.entry(revision.path) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(revision.cid);
+            }
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get() != &revision.cid => {
+                return Err(format!(
+                    "Source `{}` changed during Twin preparation",
+                    entry.key()
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 async fn prepare_twin_sources(
     input: &TwinInspectionInput,
     authority: Option<&str>,
@@ -880,7 +1186,10 @@ async fn prepare_twin_sources(
             "Twin indexed source count exceeds the shared closure preparation budget".to_owned(),
         );
     }
+    // USD bytes live only through this source's inspection. The persistent
+    // source-byte allowance is occupied only by retained Modelica text.
     let mut retained_bytes = 0_usize;
+    let mut read_revisions = HashMap::<String, String>::new();
     let mut prepared = PreparedTwinSources {
         sources: HashMap::new(),
         revisions: Vec::new(),
@@ -975,39 +1284,66 @@ async fn prepare_twin_sources(
                     return Err("Native Twin sources cannot enter browser preparation".to_owned());
                 }
             };
-            let owned_bytes = if let Some(recipe) = &recipe {
-                recipe.bytes.values().try_fold(0_usize, |sum, bytes| {
-                    sum.checked_add(bytes.len())
-                        .ok_or("Twin source byte budget overflow")
-                })?
-            } else {
-                bytes.len()
+            let origin = authority
+                .map(|_| {
+                    lunco_assets_core::asset_path::load_asset_path(&id, None, roots, None)
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?;
+            let scope = match origin.as_ref() {
+                Some(origin) => ReadIdentityScope::Registered { origin, roots },
+                None => ReadIdentityScope::Native {
+                    logical_identity: Some(&input.source_name),
+                },
             };
-            retained_bytes = retained_bytes
-                .checked_add(owned_bytes)
-                .ok_or("Twin source byte budget overflow")?;
-            if retained_bytes > limits.max_bytes {
-                return Err("Twin sources exceed the shared preparation byte budget".to_owned());
+            let (revisions, mounts) = read_identities(&id, &bytes, recipe.as_ref(), scope)?;
+            retain_read_revisions(&mut read_revisions, revisions)?;
+            for mount in mounts {
+                if !prepared.mounts.contains(&mount) {
+                    prepared.mounts.push(mount);
+                }
             }
-            let (revisions, mounts) = read_identities(&id, &bytes, recipe.as_ref(), roots)?;
-            prepared.revisions.extend(revisions);
-            prepared.mounts.extend(mounts);
-            let text = if usd {
-                None
-            } else {
-                Some(String::from_utf8(bytes).map_err(|error| error.to_string())?)
-            };
-            Ok(PreparedTwinSource { text, recipe })
+            match recipe {
+                Some(recipe) => {
+                    let mut entries = Vec::new();
+                    let mut errors = recipe
+                        .dependency_diagnostics
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>();
+                    match lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(&recipe) {
+                        Ok(stage) => {
+                            crate::twin_lint::inspect_usd_stage(&stage, relative, &mut entries)
+                        }
+                        Err(error) => errors.push(format!("{}: {error}", relative.display())),
+                    }
+                    Ok(PreparedTwinSource::Usd { entries, errors })
+                }
+                None => {
+                    let text = String::from_utf8(bytes).map_err(|error| error.to_string())?;
+                    retained_bytes = retained_bytes
+                        .checked_add(text.len())
+                        .ok_or("Twin source byte budget overflow")?;
+                    if retained_bytes > limits.max_bytes {
+                        return Err(
+                            "Twin source text exceeds the shared preparation byte budget"
+                                .to_owned(),
+                        );
+                    }
+                    Ok(PreparedTwinSource::Modelica(text))
+                }
+            }
         }
         .await;
         prepared.sources.insert(relative.clone(), result);
     }
+    prepared.revisions = read_revisions
+        .into_iter()
+        .map(|(path, cid)| ReadRevision { path, cid })
+        .collect();
     prepared
         .revisions
         .sort_by(|left, right| (&left.path, &left.cid).cmp(&(&right.path, &right.cid)));
-    prepared
-        .revisions
-        .dedup_by(|left, right| left.path == right.path && left.cid == right.cid);
     Ok(prepared)
 }
 fn inspect_prepared_twin(
@@ -1017,46 +1353,35 @@ fn inspect_prepared_twin(
     crate::twin_lint::inspect_input(
         input,
         |relative| match sources.get(relative) {
-            Some(Ok(source)) => source
-                .text
-                .clone()
-                .ok_or_else(|| "Source has no prepared text".to_owned()),
+            Some(Ok(PreparedTwinSource::Modelica(text))) => Ok(text.clone()),
+            Some(Ok(PreparedTwinSource::Usd { .. })) => {
+                Err("USD facts have no Modelica source text".to_owned())
+            }
             Some(Err(error)) => Err(error.clone()),
             None => Err("Indexed source was not prepared".to_owned()),
         },
-        |relative, entries, errors| {
-            let recipe = match sources.get(relative) {
-                Some(Ok(source)) => match &source.recipe {
-                    Some(recipe) => recipe,
-                    None => {
-                        errors.push(format!(
-                            "{}: missing prepared USD recipe",
-                            relative.display()
-                        ));
-                        return;
-                    }
-                },
-                Some(Err(error)) => {
-                    errors.push(format!("{}: {error}", relative.display()));
-                    return;
-                }
-                None => {
-                    errors.push(format!(
-                        "{}: indexed USD source was not prepared",
-                        relative.display()
-                    ));
-                    return;
-                }
-            };
-            errors.extend(
-                recipe
-                    .dependency_diagnostics
-                    .iter()
-                    .map(ToString::to_string),
-            );
-            match lunco_usd_bevy_stage::canonical::CanonicalStage::from_recipe(recipe) {
-                Ok(stage) => crate::twin_lint::inspect_usd_stage(&stage, relative, entries),
-                Err(error) => errors.push(format!("{}: {error}", relative.display())),
+        |relative, entries, errors| match sources.get(relative) {
+            Some(Ok(PreparedTwinSource::Usd {
+                entries: prepared_entries,
+                errors: prepared_errors,
+            })) => {
+                entries.extend(prepared_entries.iter().cloned());
+                errors.extend(prepared_errors.iter().cloned());
+            }
+            Some(Ok(PreparedTwinSource::Modelica(_))) => {
+                errors.push(format!(
+                    "{}: Modelica source has no USD facts",
+                    relative.display()
+                ));
+            }
+            Some(Err(error)) => {
+                errors.push(format!("{}: {error}", relative.display()));
+            }
+            None => {
+                errors.push(format!(
+                    "{}: indexed USD source was not prepared",
+                    relative.display()
+                ));
             }
         },
     )
@@ -1076,10 +1401,41 @@ pub(crate) fn retire(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_revisions_are_unique_and_reject_changed_content() {
+        let mut retained = HashMap::new();
+        let original = lunco_hash::content::cid(b"original").to_string();
+        let revision = || ReadRevision {
+            path: "part.usda".to_owned(),
+            cid: original.clone(),
+        };
+        retain_read_revisions(&mut retained, [revision(), revision()]).unwrap();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained.get("part.usda"), Some(&original));
+        let error = retain_read_revisions(
+            &mut retained,
+            [ReadRevision {
+                path: "part.usda".to_owned(),
+                cid: lunco_hash::content::cid(b"changed").to_string(),
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(error, "Source `part.usda` changed during Twin preparation");
+        assert_eq!(retained.get("part.usda"), Some(&original));
+    }
+
     #[test]
     fn source_revisions_preserve_actual_bytes() {
-        let (revisions, mounts) =
-            read_identities("payload.rhai", b"let value = 1;", None, None).unwrap();
+        let (revisions, mounts) = read_identities(
+            "payload.rhai",
+            b"let value = 1;",
+            None,
+            ReadIdentityScope::Native {
+                logical_identity: None,
+            },
+        )
+        .unwrap();
         assert_eq!(revisions.len(), 1);
         assert_eq!(
             revisions[0].cid,
@@ -1102,21 +1458,103 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
+    fn logical_revisions_retain_their_native_or_registered_source_scope() {
+        let logical = "twin://preparation/part.usda";
+        let recipe = lunco_usd_compose::recipe::StageRecipe::new(
+            logical.to_owned(),
+            HashMap::from([(logical.to_owned(), b"#usda 1.0".to_vec())]),
+        );
+        let (revisions, mounts) = read_identities(
+            logical,
+            &[],
+            Some(&recipe),
+            ReadIdentityScope::Native {
+                logical_identity: Some("preparation"),
+            },
+        )
+        .unwrap();
+        assert_eq!(revisions[0].path, logical);
+        assert!(mounts.is_empty());
+        assert!(
+            read_identities(
+                logical,
+                &[],
+                Some(&recipe),
+                ReadIdentityScope::Native {
+                    logical_identity: Some("foreign")
+                }
+            )
+            .is_err()
+        );
+
+        let folder = tempfile::tempdir().unwrap();
+        let roots = TwinRoots::default();
+        let authority = roots
+            .register_authority("preparation", folder.path())
+            .unwrap();
+        let origin = lunco_assets_core::asset_path::load_asset_path(
+            &lunco_assets_core::twin_uri(&authority, "root.usda"),
+            None,
+            Some(&roots),
+            None,
+        )
+        .unwrap();
+        let (revisions, mounts) = read_identities(
+            logical,
+            &[],
+            Some(&recipe),
+            ReadIdentityScope::Registered {
+                origin: &origin,
+                roots: Some(&roots),
+            },
+        )
+        .unwrap();
+        assert_eq!(revisions[0].path, logical);
+        assert_eq!(
+            mounts,
+            vec![(
+                authority.clone(),
+                roots.root_for(&authority).unwrap().unwrap()
+            )]
+        );
+        roots.unregister_authority(&authority).unwrap();
+        roots
+            .register_authority("preparation", folder.path())
+            .unwrap();
+        assert!(
+            read_identities(
+                logical,
+                &[],
+                Some(&recipe),
+                ReadIdentityScope::Registered {
+                    origin: &origin,
+                    roots: Some(&roots)
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn retired_mount_cannot_publish_into_reopened_root() {
         let folder = tempfile::tempdir().unwrap();
         let roots = TwinRoots::default();
         let authority = roots
             .register_authority("preparation", folder.path())
             .unwrap();
-        let root = roots.root_for(&authority).unwrap().unwrap();
-        let fence = OwnerFence {
-            runtime: DocumentRuntimeOwner::Application,
-            mount: Some((authority.clone(), root)),
-            twin_input: None,
-            policies: Vec::new(),
-        };
         let mut world = World::new();
         world.insert_resource(roots.clone());
+        let reference = "twin://preparation/source.usda";
+        let mut fence = capture_fence(&world, reference, QueryKind::Asset).unwrap();
+        let source = admit_source(&world, reference, QueryKind::Asset, &mut fence).unwrap();
+        let Source::Logical(path) = source else {
+            panic!("Twin file must use its registered source");
+        };
+        assert_eq!(
+            lunco_assets_core::asset_path::anchor_of(&path),
+            lunco_assets_core::twin_uri(&authority, "source.usda")
+        );
         assert!(fence.is_current(&world));
         roots.unregister_authority(&authority).unwrap();
         let replacement = roots

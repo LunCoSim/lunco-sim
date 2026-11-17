@@ -442,15 +442,15 @@ fn verify_sysml_retirement(ids) {
 fn verify_twin_source_scope(previous_identity) {
     let source_identity = twin_source_identity();
     let current = query("AnalyzeSysml", #{path: "twin://" + source_identity, tables: []});
-    let checks = [t_true(source_identity != "" && current != () && current.ok == true,
+    let checks = [t_true(source_identity != "" && current != () && current.state == "ready" && current.ok == true,
         "the active stable source identity resolves its SysML source set")];
     if previous_identity != "" && previous_identity == source_identity {
         checks.push(t_true(true,
             "reopening the same Twin preserves its stable source identity"));
     } else if previous_identity != "" {
-        let retired = query("AnalyzeSysml", #{path: "twin://" + previous_identity, tables: []});
-        checks.push(t_true(retired != () && retired.ok == false
-            && retired.errors != () && retired.errors.len() > 0,
+        let rejected = query("AnalyzeSysml", #{path: "twin://" + previous_identity, tables: []});
+        checks.push(t_true(rejected.ok == false && rejected.status == "rejected"
+            && rejected.error != () && rejected.analysis == (),
             "a closed Twin's stable source identity is no longer admitted"));
     }
     report_verdict(checks, "Twin scripting source scope", "TWIN_SCRIPT_SOURCE_SCOPE")

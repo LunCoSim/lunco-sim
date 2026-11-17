@@ -573,6 +573,19 @@ that adapter and does not replace an existing typed owner. The actuator-wrench
 adapter must keep its USD geometry and wrench-matrix path while the Rhai hook
 emits the Modelica source.
 
+The acausal-network fact snapshot also carries each USD-connected port's
+declared Modelica type from the exact loaded member source. Presentation policy
+uses those types to lay out connector domains; it does not infer electrical,
+thermal, fluid, or other domains from component names. Causal links retain their
+scalar Modelica bindings and equality equations. The policy draws directed
+orthogonal lines from the same typed link facts and bundles each component
+pair. High-fanout sources and shared external inputs use trunks; local input
+captions omit generated path prefixes. Exact variable bindings remain in
+generated source.
+Physical connector edges remain Modelica `connect()` equations. A common
+power-rail annotation is reserved for a unit whose connected ports are all
+`LunCo.Electrical.Pin`.
+
 ## Native providers
 
 An approved Twin may implement an existing installable hook with a native

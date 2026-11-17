@@ -208,13 +208,25 @@ choice set; use typed part usages or references for named system members. A
 `verify` membership is required for each usage, and the Twin's verification
 registry must bind that case to its scene and observer.
 
-For example, from an in-app Rhai tool with the Twin mounted:
+Source-evidence and verification joins use all three fields of the resolved
+element handle (revision, fingerprint, element index). The Rhai lint policy
+indexes those identities once per table; do not pass complete reference or
+attribute tables into a nested helper for each requirement. A populated
+locator on another evidence owner does not establish provenance. Qualitative
+acceptance still needs a required constraint bound to its finite named rubric;
+merely declaring a verification case does not supply an acceptance predicate.
+
+For example, admit from an in-app Rhai tool with the Twin mounted:
 
 ```rhai
-let report = query("ValidateSysml", #{path: "twin://" + twin_source_identity()});
+let operation = query("ValidateSysml", #{path: "twin://" + twin_source_identity()});
+// On a later interaction, poll this exact ID until ready or failed.
+let result = query("ValidateSysml", #{operation_id: operation.operation_id});
 ```
 
-Review `report.errors`, `report.warnings`, and the structured
+Read `result.report` only when `result.state == "ready"`; a pending poll keeps
+the same ID and a failed poll exposes `result.diagnostic`. Review the report's
+`errors`, `warnings`, and the structured
 `report.findings`. Use its stable `rule`, `severity`, `subject`, and `message`
 fields instead of parsing warning prose; SysML subjects include the qualified
 identity and source file/byte offset. Pay particular attention to
@@ -488,6 +500,15 @@ selection through `expected_index`. The `tolerance` argument on a check is
 numerical evaluator policy for equality comparisons; engineering acceptance
 bounds must remain parameters of the SysML constraint itself.
 
+A referenced study attribute is a provider dependency even when it has a
+literal initializer. With typed observation lists, include those limits using
+`model.source_literal_observation(model.attribute(qualified_name))` alongside
+the telemetry observations. Match the returned typed path to the compiled
+dependencies; do not supply a second guessed threshold or let an unbound limit
+turn acceptance into an inconclusive result. Use `report_structured_verdict`
+for requirement evidence. Raw diagnostic metrics need a distinct telemetry
+channel without the reserved `_EVIDENCE_RESULT` suffix.
+
 For observer/criterion diagnostics that accompany a system gate, use
 `sysml_requirement_checks::preflight_report` to build the diagnostic result
 without publishing a terminal verdict. Retain synthetic counterexamples as
@@ -540,9 +561,11 @@ Important source-set rules:
 - Use qualified names such as `Project::VerifyVisual` as stable keys for
   requirements and verification cases. Do not rely on a short name when
   packages can contain collisions.
-- Use the existing `twin://<authority>/...` and `lunco://...` address schemes. Do
-  not add a filesystem walker, a global source registry, or raw `std::fs` reads
-  in a runtime crate.
+- Use stable `twin://<source-identity>/...` and `lunco://...` references. The
+  asset owner resolves the current private mount at admission. SysML snapshot
+  consumers use `state_for_source_identity` with the exact Twin and root;
+  pending validation also checks its admitted analysis snapshot. Do not add a
+  filesystem walker, a global source registry, or raw `std::fs` runtime reads.
 
 ## Validate before runtime
 
@@ -592,26 +615,36 @@ the embedded standard library on the async analysis worker; an empty optional
 source set commits an empty ready snapshot without initializing that library.
 Until the snapshot is ready, the query returns an explicit preparation result.
 Use `"twin://" + twin_source_identity()` for the active source set and `twin_source_identity()` for
-its `sysml.twin-analysis` required-input identity. This is the current asset
-mount authority, including after reopen; the manifest display name cannot
-address a retired mount. A missing active mount fails visibly.
+its `sysml.twin-analysis` required-input identity. This stable logical identity
+survives reopen; the asset owner resolves its current private mount at admission.
+A missing active mount fails visibly.
 Saving an indexed SysML document invalidates the mounted Twin snapshot and
 reloads that exact `twin://` source before analysis runs again. After a save,
-retry the query until its preparation result becomes ready, then use the
-returned source revision for any paged join. Unsaved editor changes are not
+observe the source-set `AnalyzeSysml.state`: only `pending` permits another
+read of the current preparation. `ready` includes the selected analysis and its
+source revision; `failed` and `unprepared` include terminal owner diagnostics.
+Unknown or unmounted source identities reject the query. Use the ready revision
+for any paged join. Unsaved editor changes are not
 part of the Twin-wide snapshot.
 Use `AnalyzeSysml` for preflight, authoring, or explicit verification work; do
 not call it from a high-rate `on_tick` hook. Revision-stamped async analysis
 and admission are part of the cross-domain runtime contract in
 [`62-deterministic-runtime-and-async-boundaries.md`](../../docs/architecture/62-deterministic-runtime-and-async-boundaries.md).
 
-Single-file `ValidateSysml` and `AnalyzeSysml` use the one-shot preparation
+`ValidateSysml` for either a file or mounted source set, and single-file
+`AnalyzeSysml`, use the one-shot preparation
 protocol: initial source/selection parameters return `pending` and an
 `operation_id`; poll with only that ID. Consume `ready.report` with its actual
 `source_revisions`, or the terminal `failed.diagnostic`. Consumed or retired IDs
 reject. Logical engine/Twin files use their registered reader; native paths and
 standard file URIs use captured bounded file admission. Mounted source-set
-`twin://<authority>` queries retain the direct prepared-snapshot contract.
+`ValidateSysml` captures a ready immutable analysis, prepares full structural
+facts and pure policy off the native World thread, and checks the exact analysis
+and mount again before publication. A preparing, failed, or missing analysis
+rejects admission with its actual diagnostic. Mounted source-set `AnalyzeSysml`
+retains the direct prepared-snapshot contract for selected typed fact pages and
+includes its typed `state`. Observe that source until `ready` before admitting
+`ValidateSysml` once; never retry a terminal validation rejection.
 See [validate-assets](../validate-assets/SKILL.md#api--against-a-running-luncosim).
 
 `AnalyzeSysml` supports `elements`, `references`,

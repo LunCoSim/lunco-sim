@@ -58,6 +58,11 @@ COMSOL/OpenUSD practice mapping, read
 
 ## Component contract before geometry
 
+For a component with multiple physical parts or domain connections, read
+[Usable USD system models](../compose-multidomain-twin/references/inspectable-usd-systems.md).
+Choose an explicit inspection boundary and preserve installed wiring and numerical
+ownership when splitting a reusable assembly.
+
 Treat a component as a lightweight CAD deliverable rather than an isolated
 mesh. Before authoring, state its local frame, mount datum, required
 topology/types, dimensional envelope, mass/inertia owner, collision policy,

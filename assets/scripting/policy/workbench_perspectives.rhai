@@ -63,6 +63,13 @@ fn assemble(facts) {
         if has_panel(facts, "sandbox_environment") { editor.right.push("sandbox_environment"); }
         result.push(editor);
     }
+    if has_panel(facts, "usd_connection_canvas") {
+        result.push(#{
+            id: "systems", title: "Systems", interaction: "editor", revision: 1,
+            description: "Explore the complete USD connection diagram. Load a named view, expand system groups, and trace signal, physical and joint endpoints.",
+            center: ["usd_connection_canvas"], scene_visible: false,
+        });
+    }
     if has_panel(facts, "lunco.workbench.twin_browser") && "modelica_model_view" in facts.instance_kinds {
         let model = #{
             id: "modelica_analyze", title: "∿ Lunica", interaction: "editor", revision: 2,

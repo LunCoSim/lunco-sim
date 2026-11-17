@@ -215,6 +215,11 @@ and a whole-system test report.
 
 ## Decompose by ownership
 
+For multi-domain assemblies, use
+[Usable USD system models](../compose-multidomain-twin/references/inspectable-usd-systems.md)
+to select inspectable physical boundaries and verify the resulting full graph.
+Do not let component-by-component authoring omit cross-component connections.
+
 Start with the root datum and contract, then use a dependency order that keeps
 each checkpoint understandable:
 

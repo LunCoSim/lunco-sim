@@ -16,6 +16,7 @@ model PressureFedValve
   parameter Real minimum_available_mass_kg = 1.0e-6;
 
   input Real flow_fraction_command = 0.0 "Normalized requested liquid flow, 0..1";
+  input Real enabled = 1.0 "Valve health, 0..1; zero closes through the opening response";
   input Real available_mass_kg = 0.0 "Upstream available liquid (kg)";
   FluidPort inlet "Pressurized tank supply";
   FluidPort outlet "Chamber inlet after the valve and injector";
@@ -34,7 +35,7 @@ equation
   // restriction for current pressure head before applying valve dynamics.
   // Saturation preserves the physical supply limit; depletion gates flow.
   target_opening = noEvent(max(0.0, min(1.0,
-    max(0.0, min(1.0, flow_fraction_command)) * commanded_flow_kgs
+    max(0.0, min(1.0, flow_fraction_command * max(0.0, min(1.0, enabled)))) * commanded_flow_kgs
       / max(1.0e-6, flow_capacity_kgs))));
   der(opening) = (target_opening - opening)
     / max(minimum_time_constant_s, opening_time_constant_s);

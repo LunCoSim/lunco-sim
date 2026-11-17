@@ -496,7 +496,11 @@ supplies the composed facts — component identities and
 classes, constants, causal links, acausal connections, boundary ports, member
 outputs, and deterministic topology partition — and validates the result. It
 does not classify components as battery, motor, solar, thermal, fluid, or any
-other domain.
+other domain. It also carries the declared Modelica type of each connected USD
+port from the exact loaded member source into the policy facts. This lets the
+presentation policy group electrical pins, thermal ports, propellant ports,
+and other typed connector networks without inferring a domain from instance or
+class names.
 
 The shipped source and visual Modelica schema is the Rhai policy
 `assets/scripting/policy/synth_acausal_network.rhai`, registered as
@@ -514,6 +518,23 @@ to a normal Modelica document; lifecycle compile admission dispatches only
 after the document is current. This gives generated and authored models the
 same source-generation, session, and worker-result fences. A missing or invalid
 policy is an explicit projection error, never a compiled-schema fallback.
+
+The shipped layout groups connected members by their declared connector type
+and places different connector networks in separate labeled regions. Acausal
+connector edges remain Modelica `connect()` equations, with standard connection
+waypoints for the electrical bus. Causal signals retain their scalar Modelica
+bindings and equality equations; the policy draws directed orthogonal lines
+from the same typed link facts and bundles each component pair. High-fanout
+sources share a trunk; external inputs use short local captions and shared
+input buses. Each receiving component emits its local boundary-input bundle
+once, with one stub and caption per distinct input. Member captions omit
+generated path prefixes.
+Exact variable bindings remain in the generated equations, while promoted
+output telemetry stays in the interface and equations without one canvas wire
+per scalar output. The shared `POWER BUS` rail is used only when the complete
+unit is a `LunCo.Electrical.Pin` network; thermal, propellant,
+rotational, and unclassified connections keep their native connector routes
+and receive type-based subsystem labels.
 
 The production Rust boundary keeps these policy contracts in the public
 `lunco_usd_sim_domain::synthesis` module; the sibling `network` module owns USD
@@ -725,17 +746,21 @@ and complete member-variable units/descriptions); Rhai owns the hierarchy,
 annotation graphics, and policy-side layout so visual changes do not require a
 Rust rebuild.
 
-The shipped electrical presentation uses root-unique policy-owned unit class
-names (`<root>_NetworkSystem`/`<root>_NetworkUnit_N`) with readable instance
-names (`network_system`/`network_unit_N`), a dedicated power-bus rail, and
-standard `Line` waypoints on every generated acausal
-connection. Each route includes the icon-to-rail stubs and rail crossing, so a
-panel is not visually mistaken for a direct motor connection. The rail is drawn
-in the unit `Diagram`; it is not a second graph
-or an inferred runtime connection. Unit class identity includes its unique root
-because generated USD networks share the Rumoca source-library namespace;
-reusing `NetworkSystem` or `NetworkUnit_N` across roots creates conflicting
-class definitions. The policy chooses the highest-incidence
+The shipped presentation uses the `network_system` instance for a single-unit
+network. Multi-unit class names are root-unique and include the stable
+source-derived unit name; their root-diagram instance names use that same unit
+name. Generated USD networks share the Rumoca source-library namespace, so
+reusing a generic class name across roots creates conflicting definitions. A
+pure `LunCo.Electrical.Pin` unit gets a dedicated power-bus rail and standard
+`Line` waypoints on every acausal connection. Each route includes icon-to-rail
+stubs and the rail crossing, so a panel is not visually mistaken for a direct
+motor connection. Mixed-domain units instead keep their native connector
+routes and label each connector group. Scalar causal wiring uses directed,
+orthogonal lines, sharing high-fan-out trunks with explicit target taps. External
+input stubs label the receiving port. The line is a visual bundle, while
+generated scalar bindings keep their exact variable names in the source. The
+rail is drawn in the unit `Diagram`; it is not a second graph or an inferred
+runtime connection. The policy chooses the highest-incidence
 member in each connected unit as the visual bus hub, with an authored
 `LunCoModelicaTopologyAPI` `storage` role breaking equal-incidence ties. It
 places authored `source` members on one bank and `load` members on the opposite
@@ -748,9 +773,15 @@ remain one-to-one without a tangle of direct cross-bank wires. This is a generic
 presentation contract, not a battery/motor/solar class rule: Modelica's
 acausal `flow` direction remains runtime data and can reverse. The member
 source and load banks use disjoint column ranges around the hub, so a horizontal
-route cannot be mistaken for a direct source-to-load wire. Diagram titles and
-the bus label use policy-owned readable typography, while native reusable
-electrical icons carry their own larger component labels. Coordinates are local
+route cannot be mistaken for a direct source-to-load wire. Generated unit
+diagrams label every member and its native Modelica type. Repeated causal chains
+have outlined groups, and connector domains have distinct colored outlines.
+Small disconnected physical circuits occupy separate rows; their common name
+becomes a group heading and individual captions use the remaining suffix.
+The diagram uses bounds derived from actual members and input labels, and shows component,
+physical-connection, signal-link, and external-input counts in a unit header.
+Signal, bus, and boundary labels use policy-owned readable typography, while
+native reusable electrical icons carry their own larger component labels. Coordinates are local
 to their owning unit diagram. As the member count grows,
 the policy expands the diagram extents with the same source/AST path, so
 `FitCanvas` can show the complete topology without a Rust layout branch.

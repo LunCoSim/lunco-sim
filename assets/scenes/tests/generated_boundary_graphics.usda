@@ -1,0 +1,48 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "World" (
+    prepend apiSchemas = ["LunCoEpochAPI"]
+)
+{
+    double lunco:time:epochJd = 2461395.5
+    def Scope "Network" (
+        prepend apiSchemas = ["CollectionAPI:components"]
+    )
+    {
+        rel collection:components:includes = </World/Network/Probe>
+        custom double inputs:signal = 2.0
+        custom double inputs:valid = 0.0
+        custom double outputs:measurement
+        double outputs:measurement.connect = </World/Network/Probe.outputs:y>
+        def Scope "Probe" (
+            prepend apiSchemas = ["LunCoProgramAPI"]
+        )
+        {
+            uniform token info:implementationSource = "sourceAsset"
+            uniform asset info:sourceAsset = @lunco://models/LunCo/Sensors/FilteredSignal.mo@
+            uniform bool lunco:program:realtimeSafe = true
+            custom double inputs:u
+            double inputs:u.connect = </World/Network.inputs:signal>
+            custom double inputs:sample_valid
+            double inputs:sample_valid.connect = </World/Network.inputs:valid>
+            custom double outputs:y = 0.0
+        }
+    }
+    def Scope "Test" (
+        prepend apiSchemas = ["LunCoProgramAPI"]
+    )
+    {
+        uniform token info:implementationSource = "sourceAsset"
+        uniform asset info:sourceAsset = @lunco://scenarios/tests/generated_boundary_graphics.rhai@
+        uniform bool lunco:program:realtimeSafe = false
+    }
+    def DistantLight "Sun"
+    {
+        float inputs:intensity = 1.0
+    }
+}

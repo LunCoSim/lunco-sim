@@ -25,9 +25,14 @@ if plan.ok {
 }
 let collection = invoke_hook("diagram.group.plan", [#{nodes:nodes,edges:[],collections:[#{id:"collection:/System:actuators",label:"Actuators",members:["/A1","/B1"]}],scope:"/"}]);
 checks.push(t_true(collection.ok && collection.value[0].id == "collection:/System:actuators", "standard USD collections take precedence"));
+let component_collection=invoke_hook("diagram.group.plan",[#{nodes:nodes,edges:[],collections:[#{id:"collection:/System/Propulsion.components",label:"components",members:["/A1","/B1"]}],scope:"/"}]);
+checks.push(t_true(component_collection.ok && component_collection.value[0].label=="Propulsion","component collections use their system name"));
+let lighting_collection=invoke_hook("diagram.group.plan",[#{nodes:nodes,edges:[],collections:[#{id:"collection:/Light.lightLink",label:"lightLink",members:["/A1","/B1"]}],scope:"/"}]);
+let lighting_group=false;if lighting_collection.ok {for group in lighting_collection.value {lighting_group=lighting_group || group.id=="collection:/Light.lightLink";}}
+checks.push(t_true(lighting_collection.ok && !lighting_group,"lighting membership does not become an engineering system group"));
 let layout_nodes = []; for node in nodes {node.width=250.0;node.height=96.0;node.rank=0;layout_nodes.push(node);}
 let layout_edges=[];for edge in facts.edges {edge.source_port="outputs:y";edge.target_port="inputs:u";layout_edges.push(edge);}
-if plan.ok {let groups=[];for group in plan.value {group.collapsed=false;groups.push(group);}
+if plan.ok {let groups=[];for group in plan.value {group.collapsed=false;group.summary_width=250.0;group.summary_height=96.0;groups.push(group);}
     let grouped=invoke_hook("diagram.layout",[#{nodes:layout_nodes,edges:layout_edges,groups:groups,scope:"/"}]);
     if !grouped.ok {print(grouped);}
     checks.push(t_true(grouped.ok && grouped.value.len()==nodes.len(),"grouped layout retains every source member"));

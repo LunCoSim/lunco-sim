@@ -160,7 +160,17 @@ source revision. A Rhai assembler must check that revision on each page and
 fail if it changes; do not concatenate pages from different source snapshots.
 
 `ValidateSysml` applies the reloadable `lint.sysml` policy to the same resolved
-source snapshot. In addition to documentation, subject, and `verify`-link
+source snapshot. File and mounted-source-set requests use the one-shot
+`pending`/`operation_id` protocol: poll only that ID and consume `ready.report`
+or the terminal `failed.diagnostic`. Mounted validation admits a ready immutable
+analysis and fences publication by that exact analysis and load mount. Full
+fact construction and pure structural policy execute in the native preparation
+worker. `AnalyzeSysml` source-set selections remain direct reads of the committed
+snapshot and expose its owner `state`: `pending` permits another observation;
+`ready` includes the selected facts; `failed` and `unprepared` include terminal
+diagnostics. Unknown or unmounted identities reject the query. Callers await a
+ready analysis before admitting source-set validation once. In addition to
+documentation, subject, and `verify`-link
 checks, it reports requirement usages without a typed source-catalog link to a
 populated source locator, usages without an inherited or owned `require`
 acceptance predicate (`assume` memberships provide context but do not count as
@@ -177,6 +187,12 @@ form for existing callers.
 The source-evidence check follows typed references in the analyzed model: a
 requirement-evidence usage references its requirement and one or more source
 records, and each source record supplies a non-empty typed locator. The
+policy indexes each table once by the complete element handle: source
+revision, source fingerprint and semantic element index. Neither a matching
+display name nor a locator on an unrelated evidence record completes that
+join. This avoids nested copies of the complete fact tables during lint.
+Qualitative acceptance needs a required constraint bound to a finite named
+rubric; a verification declaration alone is not an acceptance predicate. The
 `verify` relationship establishes SysML verification coverage. The Twin
 verification registry and `luncosim test --verification` separately establish
 that a concrete observer is bound to a fixture; source lint does not claim

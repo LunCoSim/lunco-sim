@@ -1416,7 +1416,7 @@ impl DefaultTool {
                             pts.extend(e.waypoints.iter().copied());
                             pts.push(to);
                             for w in pts.windows(2) {
-                                if segment_rect_intersects(w[0], w[1], band) {
+                                if crate::geometry::clip_segment(w[0], w[1], band).is_some() {
                                     return Some(*eid);
                                 }
                             }
@@ -1533,51 +1533,6 @@ fn nearest_port_on_node(
 /// Axis-aligned rectangle intersection test (including touch).
 fn rects_intersect(a: Rect, b: Rect) -> bool {
     a.min.x <= b.max.x && a.max.x >= b.min.x && a.min.y <= b.max.y && a.max.y >= b.min.y
-}
-
-/// True when the segment `(a, b)` crosses or lies inside the
-/// axis-aligned rectangle `r`. Used so a rubber-band that doesn't
-/// enclose either wire endpoint but crosses a long segment still
-/// selects the wire.
-fn segment_rect_intersects(a: Pos, b: Pos, r: Rect) -> bool {
-    // Trivial accept: either endpoint inside.
-    if r.contains(a) || r.contains(b) {
-        return true;
-    }
-    // Clip the segment to the rect on each axis using the Liang-
-    // Barsky parametric approach. If the resulting t-interval is
-    // non-empty within [0, 1], the segment intersects the rect.
-    let dx = b.x - a.x;
-    let dy = b.y - a.y;
-    let mut t_enter: f32 = 0.0;
-    let mut t_exit: f32 = 1.0;
-    let clip = |p: f32, q: f32, t_enter: &mut f32, t_exit: &mut f32| -> bool {
-        if p.abs() < f32::EPSILON {
-            // Parallel to clip edge: accept iff inside.
-            return q >= 0.0;
-        }
-        let t = q / p;
-        if p < 0.0 {
-            if t > *t_exit {
-                return false;
-            }
-            if t > *t_enter {
-                *t_enter = t;
-            }
-        } else {
-            if t < *t_enter {
-                return false;
-            }
-            if t < *t_exit {
-                *t_exit = t;
-            }
-        }
-        true
-    };
-    clip(-dx, a.x - r.min.x, &mut t_enter, &mut t_exit)
-        && clip(dx, r.max.x - a.x, &mut t_enter, &mut t_exit)
-        && clip(-dy, a.y - r.min.y, &mut t_enter, &mut t_exit)
-        && clip(dy, r.max.y - a.y, &mut t_enter, &mut t_exit)
 }
 
 /// Quantise `(x, y)` to the canvas grid when snap is enabled. No-op
