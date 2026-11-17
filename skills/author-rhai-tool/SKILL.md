@@ -316,6 +316,8 @@ Verify all three layers, in order:
    one-shot check or `RunScenario` for a persistent hook).
 
 For interaction tools, verify the registered scope as well as callability.
+Dispatch and discovery use the same live precedence through the name-keyed
+registry, with the active Twin above application, core, and standard tools.
 Pass the captured Twin flow owner through `RunRhaiToolHook.owner_twin_id` when
 the UI flow belongs to a Twin. Explicit callback bindings supply that owner
 when the request omits it. Nested queued calls inherit their caller's complete
