@@ -6,6 +6,7 @@ use lunco_doc::{Ack, OpId};
 use lunco_hooks::{
     HookValue, RuntimeClock, RuntimeCycle, RuntimeExecutionContext, RuntimePhase, RuntimeRoute,
 };
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 
 const OPEN_HOOK: &str = "diagram.open.plan";
 /// Pending framing resolves against the current graph at the rendering boundary.
@@ -245,6 +246,10 @@ pub struct OpenConnectionNode {
 fn open_node(
     trigger: On<OpenConnectionNode>,
     mut views: ResMut<UsdCanvasState>,
+    asset_server: Res<AssetServer>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    stages: Res<Assets<UsdStageAsset>>,
+    canonical: NonSend<CanonicalStages>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
     let cmd = trigger.event();
@@ -361,8 +366,30 @@ fn open_node(
                                 .into(),
                         );
                     }
-                    commands.trigger(lunco_doc_bevy::OpenFile {
-                        path: source.into(),
+                    let stage = state
+                        .stage_id
+                        .ok_or("The program's USD stage is unavailable")?;
+                    let prepared = stages
+                        .get(stage)
+                        .and_then(|asset| canonical.native_asset_paths_for(stage, asset));
+                    let asset = lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+                        &asset_server,
+                        stage,
+                        source,
+                        roots.as_deref(),
+                        prepared,
+                    )
+                    .map_err(|error| {
+                        format!("Cannot resolve Modelica source `{source}`: {error}")
+                    })?;
+                    let source =
+                        lunco_assets_core::asset_path::source_uri(&asset, roots.as_deref())
+                            .map_err(|error| {
+                                format!("Cannot open Modelica source `{source}`: {error}")
+                            })?;
+                    commands.trigger(lunco_modelica_ui_core::OpenModelicaSource {
+                        source,
+                        class: program.modelica_class.clone(),
                     });
                 } else {
                     commands.trigger(lunco_workbench_core::source::OpenSourceView {

@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**321 commands** across **59** crates. All documented.
+**322 commands** across **59** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -103,7 +103,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-modelica-api`](#lunco-modelica-api) (11 commands)
 - [`lunco-modelica-runtime`](#lunco-modelica-runtime) (1 command)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
-- [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (2 commands)
+- [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (3 commands)
 - [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
@@ -2899,6 +2899,17 @@ actually call, with the fields the deserializer actually accepts. See the
 | `qualified` | `String` |  Fully-qualified class path, for example  `Library.Examples.Sample`. |
 | `action` | `ClassAction` |  Whether to view or duplicate the class. |
 
+#### `OpenModelicaSource`
+
+ Open a Modelica source asset in the editor at its exact authored class.
+
+- *defined in:* `crates/lunco-modelica-ui-core/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | `String` |  Stable Modelica source asset URI or native file path. |
+| `class` | `Option < String >` |  Exact qualified class from this source, if the caller selected one. |
+
 ### `lunco-notifications-core` <a id="lunco-notifications-core"></a>
 
 #### `ShowNotification`
@@ -4759,7 +4770,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 321 commands from the runtime schema; scanned 1109 .rs files for docs (0 parse failure(s) skipped).
+<!-- 322 commands from the runtime schema; scanned 1109 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

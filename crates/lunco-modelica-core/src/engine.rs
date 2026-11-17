@@ -295,41 +295,8 @@ impl ModelicaEngine {
         if let Some(hit) = self.icon_cache.peek(qualified) {
             return hit;
         }
-        let _members_span = bevy::log::info_span!("modelica_icon_members").entered();
-        let falsy_params: HashSet<String> = self
-            .inherited_members_typed(qualified)?
-            .into_iter()
-            .filter(|member| matches!(member.variability, InheritedVariability::Parameter))
-            .filter(|member| {
-                member.metadata.scalar_type
-                    == Some(lunco_modelica_ast::PredefinedComponentType::Boolean)
-                    && !member.metadata.has_array_dimensions
-            })
-            .filter(|member| member.default_value.as_deref() == Some("false"))
-            .map(|member| member.name)
-            .collect();
-        drop(_members_span);
-        let _merge_span = bevy::log::info_span!("modelica_icon_merge").entered();
-        let top = self.class_def(qualified)?;
-        let mut resolver = |scope: &str, reference: &str| {
-            self.session
-                .class_type_resolution_candidates_in_class_query(scope, reference)
-                .into_iter()
-                .find_map(|candidate| {
-                    let resolved = self.session.class_lookup_query(&candidate)?;
-                    (resolved == candidate).then_some(())?;
-                    self.class_def(&resolved)
-                        .map(|class| (resolved, std::sync::Arc::new(class)))
-                })
-        };
-        let mut visited = HashSet::new();
-        let icon = lunco_modelica_ast::annotations::project_inherited_icon(
-            qualified,
-            &top,
-            &mut resolver,
-            &falsy_params,
-            &mut visited,
-        );
+        let icon =
+            lunco_modelica_ast::annotations::project_session_icon(&mut self.session, qualified);
         self.icon_cache.insert(qualified, icon.clone());
         icon
     }

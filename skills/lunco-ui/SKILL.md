@@ -280,16 +280,19 @@ input-to-output computation. Keep `local_bindings_as_rows` and exact
 typed validation at its owner. Render source-authored Modelica icons through
 `lunco-modelica-icon-ui`; preserve USD handles and the full attached-program
 list. Source icon facts come from the existing asynchronous Modelica asset
-loader, never parsing or filename-to-class inference in paint.
+loader, including inheritance within the loaded source.
 Manual wiring, disconnect and explicit source replacement use the existing
 USD endpoint validator and journal lowering. Source Save/Undo/Redo are separate
-from layout history; model editing opens the established Modelica editor.
+from layout history; model editing opens the established Modelica editor at the
+class selected by the USD program.
 Binding-form submissions use typed `ApplyConnectionBinding`, with the current
 `InspectConnectionDiagram.source_generation` and exact endpoint keys. An edit
 names its original pair so source/target changes remove that pair atomically,
 preserve unrelated fan-in and undo as one change. Stale generations and absent
 originals reject; terminal completion comes from `ApplyUsdOps`.
-Live status consumes the binding, hold, diagnostic and port owners at a bounded
+Layout and disclosure refreshes preserve the draft's exact endpoints.
+Live status joins the authored property pair to its projected wire, then
+consumes the binding, hold, diagnostic and port owners at a bounded
 cadence for visible consumers. Highlight observed changes only while the fixed
 clock advances; a preview has document-only status and no live values.
 Run `scripts/api/test_connection_workspace.py --port <free-port>` for native

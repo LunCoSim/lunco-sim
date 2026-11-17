@@ -104,6 +104,24 @@ def main():
             cmd("ApplyUsdOp", doc_id=doc, op={"SetAttribute": {**selector, "value": '"MissingIconClass"'}})
             wait_for(session, lambda: any(n["path"] == "/World/Source" and not n["has_modelica_icon"]
                                           for n in diagram()["nodes"]), "retired icon after class selection changes")
+            alternate = "ConnectionWorkspaceProbeAlternate"
+            cmd("ApplyUsdOp", doc_id=doc, op={"SetAttribute": {**selector, "value": json.dumps(alternate)}})
+            wait_for(session, lambda: any(n["path"] == "/World/Source" and n["has_modelica_icon"]
+                                          for n in diagram()["nodes"]), "inherited icon on selected class")
+            gate("connection_workspace_icon();")
+            cmd("OpenConnectionNode", view_id=diagram()["view_id"], key="/World/Source",
+                program_path="/World/Source")
+            model_doc = wait_for(session, lambda: next((d["doc_id"] for d in cmd("ListOpenDocuments")["open_documents"]
+                                 if d["kind"] == "modelica"), None), "selected Modelica class")
+            wait_for(session, lambda: cmd("CompileStatus", doc_id=model_doc)["ast_parsed"], "Modelica class parsed")
+            gate(f'connection_workspace_model_class({model_doc}, "{alternate}");')
+            cmd("CloseDocument", doc_id=model_doc)
+            wait_for(session, lambda: not any(d["kind"] == "modelica" for d in cmd("ListOpenDocuments")["open_documents"]),
+                     "selected Modelica document retired")
+            cmd("FocusPanel", id="usd_connection_canvas")
+            cmd("UndoDocument", doc_id=doc)
+            wait_for(session, lambda: any(n["path"] == "/World/Source" and not n["has_modelica_icon"]
+                                          for n in diagram()["nodes"]), "undo retires inherited icon")
             cmd("UndoDocument", doc_id=doc)
             wait_for(session, lambda: any(n["path"] == "/World/Source" and n["has_modelica_icon"]
                                           for n in diagram()["nodes"]), "restored authored icon")
@@ -284,6 +302,18 @@ def main():
             gate("connection_workspace_dense();")
             cmd("ApplyUsdOp", doc_id=doc, op={"RemovePrim": {"edit_target": "@root@", "path": "/World/Dense"}})
             wait_for(session, lambda: diagram()["connection_count"] == 2, "dense fixture retirement")
+            cmd("ApplyUsdOps", doc_id=doc, label="Author a forwarded output", ops=[
+                {"SetAttribute": {**selector, "value": json.dumps(alternate)}},
+                {"AddPrim": {"edit_target": "@root@", "parent_path": "/World", "name": "Relay",
+                             "type_name": "Xform", "reference": None, "reference_prim_path": None}},
+                {"SetApiSchemas": {"edit_target": "@root@", "path": "/World/Relay",
+                                   "schemas": ["PhysxVehicleContextAPI"]}},
+                {"SetAttribute": {"edit_target": "@root@", "path": "/World/Relay", "name": "outputs:forwarded",
+                                  "type_name": "double", "value": "0"}},
+                {"SetConnection": {"edit_target": "@root@", "path": "/World/Relay", "name": "outputs:forwarded",
+                                   "type_name": "double", "sources": ["/World/Source.outputs:signal"]}},
+            ])
+            wait_for(session, lambda: diagram()["connection_count"] == 3, "authored forwarded output")
             source = twin_root / "workspace.usda"
             cmd("SaveAsDocument", doc_id=doc, path=str(source))
             wait_for(session, source.is_file, "USD save")
@@ -318,7 +348,7 @@ def main():
             cmd("ActivatePerspective", id="systems")
             cmd("SetConnectionSource", active_scene=True)
             cmd("FocusPanel", id="usd_connection_canvas")
-            wait_for(session, lambda: diagram().get("active_scene") and diagram().get("connection_count") == 2, "live diagram")
+            wait_for(session, lambda: diagram().get("active_scene") and diagram().get("connection_count") == 3, "live diagram")
             live_source = diagram()["source"]
             cmd("OpenFile", path=live_source.rsplit("/", 1)[0] + "/TwinConnectionProbe.mo")
             twin_model = wait_for(session, lambda: next((d["doc_id"] for d in cmd("ListOpenDocuments")["open_documents"] if d["kind"] == "modelica"), None), "stable Twin Modelica source")
@@ -328,11 +358,11 @@ def main():
             cmd("ActivatePerspective", id="editor")
             cmd("FocusPanel", id="usd_connection_canvas")
             cmd("SetConnectionSource", active_scene=False)
-            wait_for(session, lambda: diagram().get("editing") and diagram().get("connection_count") == 2, "live source document authoring")
+            wait_for(session, lambda: diagram().get("editing") and diagram().get("connection_count") == 3, "live source document authoring")
             gate("connection_workspace_preview();")
             if not rejection(session, "OpenUsdSourceDocument", source="twin://connection-workspace-unmounted/workspace.usda"):
                 raise RuntimeError("unmounted source was opened")
-            gate("connection_workspace_binding_count(2);")
+            gate("connection_workspace_binding_count(3);")
             cmd("SetConnectionSource", active_scene=True)
             wait_for(session, lambda: diagram().get("active_scene"), "restored live source")
             current = diagram()
@@ -341,7 +371,7 @@ def main():
                                  previous=None, replace_sources=False)
             if "Choose Edit connections" not in readonly:
                 raise RuntimeError("live scene binding edit did not reject at its document owner: " + readonly)
-            gate("connection_workspace_rejection(2);")
+            gate("connection_workspace_rejection(3);")
             workspace("bindings", live_values=True, animate_changes=True)
             wait_for(session, lambda: all(link["status"] == "bound" for link in diagram()["connections"]), "owner-bound connections")
             cmd("SetTimeTransport", playing=True)
@@ -349,7 +379,8 @@ def main():
             first = diagram()
             time.sleep(.4)
             previous = [link["source_value"] for link in first["connections"]]
-            gate("connection_workspace_live(" + json.dumps(previous) + ");")
+            gate("connection_workspace_live(" + json.dumps(previous) + ", 5.0, 7.0);")
+            gate("connection_workspace_forwarded();")
             session.capture_screenshot(area / "live-bindings.png")
             sink = int(cmd("RunRhai", code='print(find("/World/Sink"));')["stdout"].strip())
             cmd("SetPorts", target=sink, writes=[["feedback", 2.75]], producer_id=4587)

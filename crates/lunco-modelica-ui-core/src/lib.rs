@@ -55,3 +55,12 @@ pub struct OpenClass {
     #[serde(default)]
     pub action: ClassAction,
 }
+
+/// Open a Modelica source asset in the editor at its exact authored class.
+#[Command]
+pub struct OpenModelicaSource {
+    /// Stable Modelica source asset URI or native file path.
+    pub source: String,
+    /// Exact qualified class from this source, if the caller selected one.
+    pub class: Option<String>,
+}

@@ -84,6 +84,7 @@ fn source_lease(world: &World, entity: Entity) -> Result<Option<SourceLease>, St
     let authored = authored_snapshot(world.get::<UsdInputDefaults>(entity));
     let (native_inputs, native_outputs) = native_ports(world, entity)?;
     if let Some(pending) = world.get::<PendingModelicaSource>(entity) {
+        let selected = pending.class.as_ref().map_err(Clone::clone)?;
         if world
             .resource::<AssetServer>()
             .load_state(&pending.handle)
@@ -100,20 +101,20 @@ fn source_lease(world: &World, entity: Entity) -> Result<Option<SourceLease>, St
         else {
             return Ok(None);
         };
-        let name = source.interface.model_name.as_ref().ok_or_else(|| {
-            format!(
-                "Modelica source `{}` contains no runnable class",
-                pending.asset_path
-            )
-        })?;
-        let class = match source
-            .interface
-            .within
-            .as_deref()
-            .filter(|within| !within.is_empty())
-        {
-            Some(within) if !name.starts_with(&format!("{within}.")) => format!("{within}.{name}"),
-            _ => name.clone(),
+        let class = match selected {
+            Some(qualified) => qualified.clone(),
+            None => {
+                let name = source.interface.model_name.as_ref().ok_or_else(|| {
+                    format!(
+                        "Modelica source `{}` contains no runnable class",
+                        pending.asset_path
+                    )
+                })?;
+                lunco_modelica_ast::ast_extract::qualify(
+                    source.interface.within.as_deref().unwrap_or(""),
+                    name,
+                )
+            }
         };
         return Ok(Some(SourceLease {
             generation,

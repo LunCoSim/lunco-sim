@@ -1179,7 +1179,9 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   filesystem URI or registered `.mo` asset URI. Registered assets admit their
   stable identity through `load_source_uri` before `SchemeRegistry` resolves
   the captured load address on the file worker. Twin source opens must retain
-  that exact admitted Twin lifetime.
+  that exact admitted Twin lifetime. Use `OpenModelicaSource` for an attached
+  USD program's source URI and exact `info:sourceAsset:subIdentifier`; the same
+  class selection drives standalone USD co-simulation.
 - **File lifetime**: native file opens pin canonical local/replicated root ownership
   before installation; browser mounted files read OPFS, while picker/private saves
   have Application lifetime. Closing the admitted owner retires file work even
