@@ -278,3 +278,50 @@ load. The earlier instrumented control averages 44.549 FPS with a 91.118 ms
 worst frame. The different host loads prevent attributing the whole-frame
 difference to the cache. Owned API ports and the Tracy port are released.
 The dependency commit remains local and the simulator keeps its published pin.
+
+## Shared Griffin tether routing
+
+Model revision `ccd7e22` samples routing vectors once and hands them to the
+solver adapter and the curve view. During landing standby the view prepares the
+routing snapshot only when the previous publication has completed. It never
+constructs solver rates, centre-of-mass inputs, or the named scalar write list
+for standby drawing.
+
+The production inline comparison matched all 92 ordered solver inputs and
+both curves' vertices and normals on the same landed state. The production
+window then confirmed both spatial curves continued to publish after the script
+change. Their completed revisions advanced from 567/570 to 1961/1962, with no
+runtime diagnostic errors. The registered `Verify_GriffinSurfaceOperations`
+scene passed all nine authored checks, exited zero at tick 8756, and released
+its API port. Sources matched before and after both runs.
+
+The 60-second uninstrumented frame diagnostic averaged 26.197 FPS with p95
+49.090 ms and worst frame 188.041 ms. Pending fixed time decreased from 23.573
+to 10.116 seconds with zero delta clipping. That run includes catch-up and does
+not qualify steady landed performance.
+
+## Yield to a ready render frame between fixed cycles
+
+The two longest `tracy-ac46` updates contain 27–31 ms handoff intervals with
+one or more complete fixed cycles. The host now polls the outstanding frame
+before admitting completions and again before starting each eligible fixed
+cycle. A ready frame ends service at a complete-cycle boundary and the common
+accumulator retains all admitted time. The native host supplies readiness and
+the time owner retains deterministic cycle admission. No authored policy changes.
+
+The focused time test proves immediate yield, yield after a complete cycle and
+recovery of every queued tick. The regular release executable passes the 13
+native presentation checks and all eight transport checks. The measured 2×,
+4× and 8× rates are 2.000×, 4.000× and 7.988×.
+
+The `host-cycle-yield/landed` diagnostic uses the regular release executable
+built at application base `5853ed4b8` and model `ccd7e22`. In 60.36 seconds it
+records 4,878 frames at **81.488 FPS**, p95 **14.543 ms**, p99 **18.732 ms** and
+maximum **51.657 ms**. 4,778 frames exceed 10 ms. Queued time is 0.016 s at the
+first endpoint and 0.010 s at the last, with zero clipping or runtime errors.
+The earlier `luncosim-projected-query` executable records 54.832 FPS, p99
+32.901 ms and maximum 116.560 ms with the same Twin sources and settled debt.
+The application revisions and competing host workloads differ. This comparison
+supports the observed frame timings and does not isolate a whole-frame gain
+from the yield change. Terrain selection is pending at the sampled endpoints,
+so the stricter complete-readiness acceptance also remains open.

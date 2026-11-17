@@ -577,23 +577,28 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    run_pending_fixed_main_schedule(world, service_started, service_budget);
+    run_pending_fixed_main_schedule(world, service_started, service_budget, || true);
 }
 
 /// Service already admitted cycles while a native host waits for presentation.
 /// No wall time is sampled or accumulated here, and no participant is awaited.
-/// The next ordinary application update publishes all presentation projections.
-pub fn service_pending_simulation(world: &mut World) {
+/// The host may end service before admitting completions or before each full
+/// fixed cycle. Unconsumed time remains in the shared accumulator.
+pub fn service_pending_simulation(world: &mut World, mut continue_service: impl FnMut() -> bool) {
+    if !continue_service() {
+        return;
+    }
     lunco_core_runtime::admit_simulation_completions(world);
     let service_started = Instant::now();
     let service_budget = world.resource::<Time<Fixed>>().timestep();
-    run_pending_fixed_main_schedule(world, service_started, service_budget);
+    run_pending_fixed_main_schedule(world, service_started, service_budget, continue_service);
 }
 
 fn run_pending_fixed_main_schedule(
     world: &mut World,
     service_started: Instant,
     service_budget: Duration,
+    mut continue_service: impl FnMut() -> bool,
 ) {
     for cycle in 0..MAX_FIXED_STEPS_PER_SERVICE {
         if cycle > 0 && service_started.elapsed() >= service_budget {
@@ -627,6 +632,12 @@ fn run_pending_fixed_main_schedule(
             break;
         };
         let manual_step = world.resource::<SimulationStepControl>().remaining() > 0;
+        if !manual_step && world.resource::<Time<Fixed>>().overstep() < timestep {
+            break;
+        }
+        if !continue_service() {
+            break;
+        }
         if manual_step {
             world.resource_mut::<SimulationStepControl>().consume();
             world
@@ -635,8 +646,6 @@ fn run_pending_fixed_main_schedule(
             let mut virtual_time = world.resource_mut::<Time<Virtual>>();
             virtual_time.unpause();
             virtual_time.advance_by(timestep);
-        } else if world.resource::<Time<Fixed>>().overstep() < timestep {
-            break;
         }
         if !manual_step {
             lifecycle::start(world);
@@ -1769,6 +1778,49 @@ mod tests {
             app.world().resource::<Time<Fixed>>().overstep(),
             Duration::ZERO
         );
+    }
+
+    #[test]
+    fn host_service_yields_between_cycles_without_discarding_admitted_time() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            TimePlugin,
+            lunco_core_runtime::SimulationCompletionPlugin,
+        ))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ))
+        .init_resource::<FixedRunCount>()
+        .add_systems(FixedUpdate, (count_fixed_runs, count_fixed_ticks));
+        let quantum = Duration::from_secs(1);
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(quantum);
+        app.update();
+
+        let world = app.world_mut();
+        world
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(quantum * 3);
+        service_pending_simulation(world, || false);
+        assert_eq!(world.resource::<FixedRunCount>().0, 0);
+
+        let mut checks = 0;
+        service_pending_simulation(world, || {
+            checks += 1;
+            checks <= 2
+        });
+        assert_eq!(world.resource::<FixedRunCount>().0, 1);
+        let fixed = world.resource::<Time<Fixed>>();
+        assert_eq!(fixed.elapsed(), quantum);
+        assert_eq!(fixed.overstep(), quantum * 2);
+
+        service_pending_simulation(world, || true);
+        assert_eq!(world.resource::<FixedRunCount>().0, 3);
+        let fixed = world.resource::<Time<Fixed>>();
+        assert_eq!(fixed.elapsed(), quantum * 3);
+        assert_eq!(fixed.overstep(), Duration::ZERO);
     }
 
     #[derive(Resource, Default)]

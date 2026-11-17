@@ -1769,8 +1769,9 @@ The whole-simulation guarantee remains open because:
     It cannot report wall-paced deadline misses and does not move fixed work off
     the GUI thread. The native pipelined host can also service ready completions
     and existing fixed debt during the render handoff, after ordinary fixed work
-    and before physical presentation sampling;
-    this retains the same World and fixed runner rather than isolating UI work.
+    and before physical presentation sampling. The host stops starting cycles
+    when the frame is ready. Pending cycles retain their original order and
+    admitted time in the shared fixed accumulator.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
     invocation at 100,000 Rhai operations. This bounds interpreter work per
