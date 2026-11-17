@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy::render::pipelined_rendering::{RenderAppChannels, RenderExtractApp};
 use std::future::{Future, poll_fn};
-use std::task::Poll;
+use std::task::{Context, Poll, Waker};
 
 pub(crate) fn install(app: &mut App) {
     app.add_plugins(NativeSimulationHostPlugin);
@@ -103,7 +103,22 @@ fn receive_render_frame(world: &mut World) {
                 Some(HostReady::Completion) => {
                     // Release the host task scope before entering ECS schedules;
                     // their own main-thread executor must remain available.
-                    lunco_time::service_pending_simulation(world);
+                    let mut received = None;
+                    lunco_time::service_pending_simulation(world, || {
+                        // Recheck at complete-cycle boundaries. The blocking
+                        // scope installs its own waker if the frame is pending.
+                        let mut context = Context::from_waker(Waker::noop());
+                        match receipt.as_mut().poll(&mut context) {
+                            Poll::Ready(frame) => {
+                                received = Some(frame);
+                                false
+                            }
+                            Poll::Pending => true,
+                        }
+                    });
+                    if let Some(frame) = received {
+                        break frame;
+                    }
                 }
                 Some(HostReady::Fault(error)) => {
                     host_fault(world, "simulation-completion-waker-missing", error.into());

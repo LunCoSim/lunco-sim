@@ -90,11 +90,13 @@ and simulation. The native host removes Bevy's optional render timestamp
 receiver: automatic time samples the main-thread monotonic clock once in `First`;
 manual recording/test strategies retain their selected source.
 During the existing GPU handoff the host services ready simulation completions
-and already-admitted fixed cycles on the main thread. Render readiness always
-ends the handoff; solver readiness can never prolong it. Each service pass
-retains the fixed runner's bounded work budget and never samples or accumulates
-wall time. Ordinary fixed-loop timing ends before the handoff; per-tick timing
-also covers the serviced cycles. Physical easing samples only after that final
+and already-admitted fixed cycles on the main thread. The host rechecks rendering
+readiness before admitting completions and before starting each complete fixed
+cycle during the wait. It presents a ready frame after the current cycle, leaving
+unconsumed fixed time in the shared accumulator. Each service pass retains the
+fixed runner's bounded work budget and never advances the wall-clock sample.
+Ordinary fixed-loop timing ends before the handoff, and per-tick timing also
+covers the serviced cycles. Physical easing samples only after that final
 service boundary. The received frame is extracted and sent through the single
 native path after presentation producers, preserving asset events and scene
 teardown. Fixed debt remains queued through pauses and is drained on resume;

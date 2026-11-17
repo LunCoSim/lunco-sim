@@ -2014,10 +2014,12 @@ The native pipelined host also services ready completions and existing fixed
 debt during its render-frame handoff, after ordinary fixed work and before
 physical presentation sampling. Automatic time uses the host monotonic clock,
 independent of the optional render timestamp channel; manual strategies retain
-their source. That service never adds wall time or waits for a solver; rendering
-readiness ends the handoff. Record pending simulation duration when interpreting
-transport throughput: catching up retained debt may temporarily exceed the
-requested wall-clock rate, and pause does not discard that debt.
+their source. That service never adds wall time or waits for a solver. Render
+readiness gives the host a yield boundary between complete fixed cycles. Read
+nested `FixedMain` events before treating `receive_render_frame` as wait time.
+Record pending simulation duration when interpreting transport throughput.
+Catch-up may temporarily exceed the requested wall-clock rate, and pause keeps
+the remaining debt.
 See [the time owner](../../docs/architecture/19-unified-time-and-clock.md).
 Use `scripts/api/test_physical_presentation_time.py --windowed --port <free-port>
 --output <path>` for the native pause, single-step and physical easing-clock gate.
