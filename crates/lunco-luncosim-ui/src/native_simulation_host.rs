@@ -11,10 +11,13 @@ pub(crate) fn install(app: &mut App) {
 
 struct NativeSimulationHostPlugin;
 
-// The render world stays on the main thread between receipt and extraction.
-// Receive after the admitted fixed work and before presentation sampling, so
-// the preceding render overlaps simulation without extracting stale easing.
-struct ReadyRenderFrame(Option<bevy::app::SubApp>);
+#[derive(Default)]
+enum RenderFrameHandoff {
+    #[default]
+    Awaiting,
+    Ready(bevy::app::SubApp),
+    Failed,
+}
 
 enum HostReady {
     Frame(Option<bevy::app::SubApp>),
@@ -44,7 +47,8 @@ impl Plugin for NativeSimulationHostPlugin {
         if app.get_sub_app(RenderExtractApp).is_none() {
             return;
         }
-        app.world_mut().insert_non_send(ReadyRenderFrame(None));
+        app.world_mut()
+            .insert_non_send(RenderFrameHandoff::default());
         // The host samples its monotonic clock independently of render completion.
         // Bevy's optional render timestamp channel is retired at this boundary;
         // manual recording/test time strategies still use their selected source.
@@ -52,7 +56,7 @@ impl Plugin for NativeSimulationHostPlugin {
             .remove_resource::<bevy::time::TimeReceiver>();
         app.add_systems(
             RunFixedMainLoop,
-            receive_render_frame.in_set(lunco_core::RuntimeCycleSet::Presentation),
+            service_simulation_during_render.in_set(lunco_core::RuntimeCycleSet::Presentation),
         );
         app.sub_app_mut(RenderExtractApp)
             .set_extract(extract_ready_frame);
@@ -69,7 +73,17 @@ fn host_fault(world: &mut World, code: &'static str, detail: String) {
     world.write_message(AppExit::error());
 }
 
-fn receive_render_frame(world: &mut World) {
+fn service_simulation_during_render(world: &mut World) {
+    // Outstanding fixed demand can use ready completions while rendering.
+    // Otherwise let all presentation systems overlap the outgoing render.
+    if lunco_time::has_queued_fixed_tick(world) {
+        let handoff = wait_for_render_frame(world, true)
+            .map_or(RenderFrameHandoff::Failed, RenderFrameHandoff::Ready);
+        *world.non_send_mut::<RenderFrameHandoff>() = handoff;
+    }
+}
+
+fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> Option<bevy::app::SubApp> {
     let executor = world
         .resource::<bevy::ecs::schedule::MainThreadExecutor>()
         .clone();
@@ -86,20 +100,22 @@ fn receive_render_frame(world: &mut World) {
                         if let Poll::Ready(frame) = receipt.as_mut().poll(cx) {
                             return Poll::Ready(HostReady::Frame(frame));
                         }
-                        match world
-                            .resource::<lunco_core_runtime::SimulationCompletionSources>()
-                            .poll_wake(cx)
-                        {
-                            Ok(Poll::Ready(())) => return Poll::Ready(HostReady::Completion),
-                            Ok(Poll::Pending) => {}
-                            Err(error) => return Poll::Ready(HostReady::Fault(error)),
+                        if service_simulation {
+                            match world
+                                .resource::<lunco_core_runtime::SimulationCompletionSources>()
+                                .poll_wake(cx)
+                            {
+                                Ok(Poll::Ready(())) => return Poll::Ready(HostReady::Completion),
+                                Ok(Poll::Pending) => {}
+                                Err(error) => return Poll::Ready(HostReady::Fault(error)),
+                            }
                         }
                         Poll::Pending
                     }));
                 })
                 .pop();
             match ready {
-                Some(HostReady::Frame(frame)) => break frame,
+                Some(HostReady::Frame(frame)) => break Ok(frame),
                 Some(HostReady::Completion) => {
                     // Release the host task scope before entering ECS schedules;
                     // their own main-thread executor must remain available.
@@ -117,35 +133,39 @@ fn receive_render_frame(world: &mut World) {
                         }
                     });
                     if let Some(frame) = received {
-                        break frame;
+                        break Ok(frame);
                     }
                 }
-                Some(HostReady::Fault(error)) => {
-                    host_fault(world, "simulation-completion-waker-missing", error.into());
-                    break None;
-                }
-                None => break None,
+                Some(HostReady::Fault(error)) => break Err(error),
+                None => break Ok(None),
             }
         }
     });
     match ready {
-        Some(frame) => world.non_send_mut::<ReadyRenderFrame>().0 = Some(frame),
-        None => host_fault(
+        Ok(Some(frame)) => return Some(frame),
+        Ok(None) => host_fault(
             world,
             "native-render-handoff-failed",
             "render thread closed before returning its frame".into(),
         ),
+        Err(error) => host_fault(world, "simulation-completion-waker-missing", error.into()),
     }
+    None
 }
 
 fn extract_ready_frame(world: &mut World, _extract: &mut World) {
-    let Some(mut frame) = world.non_send_mut::<ReadyRenderFrame>().0.take() else {
-        host_fault(
-            world,
-            "native-render-frame-missing",
-            "presentation extraction has no received render frame".into(),
-        );
-        return;
+    let handoff = std::mem::take(&mut *world.non_send_mut::<RenderFrameHandoff>());
+    let mut frame = match handoff {
+        RenderFrameHandoff::Awaiting => {
+            // The main world has already sampled presentation for this update.
+            // Receive the render world here without admitting further cycles.
+            let Some(frame) = wait_for_render_frame(world, false) else {
+                return;
+            };
+            frame
+        }
+        RenderFrameHandoff::Ready(frame) => frame,
+        RenderFrameHandoff::Failed => return,
     };
     frame.extract(world);
     world

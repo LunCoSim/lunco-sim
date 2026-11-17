@@ -279,6 +279,12 @@ For the latest completed master tick `n`, the requested running sample is
 cannot move behind its previous sample within the same mission. Its
 `interpolation` field identifies that cursor inside the completed interval.
 
+The native host checks the shared clock's fixed demand before presentation.
+Queued full cycles can use ready completions during the previous render.
+When no cycle is queued, presentation proceeds immediately and receives the
+render world at extraction. Only the pre-presentation boundary can admit
+further fixed cycles.
+
 Coupling readiness only admits fixed execution: it does not select a render
 phase. While a participant is pending, retained pacing demand advances the
 sample toward the completed endpoint and then holds there. Explicit transport

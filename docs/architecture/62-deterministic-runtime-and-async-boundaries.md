@@ -1767,11 +1767,13 @@ The whole-simulation guarantee remains open because:
     fixed-loop service/budget samples and recoverable pending simulation duration.
     The separate max-delta diagnostic detects unexpected virtual-clock clipping.
     It cannot report wall-paced deadline misses and does not move fixed work off
-    the GUI thread. The native pipelined host can also service ready completions
-    and existing fixed debt during the render handoff, after ordinary fixed work
-    and before physical presentation sampling. The host stops starting cycles
-    when the frame is ready. Pending cycles retain their original order and
-    admitted time in the shared fixed accumulator.
+    the GUI thread. When the shared clock has a full cycle queued, the native
+    pipelined host can service ready completions during the render handoff,
+    after ordinary fixed work and before physical presentation sampling.
+    Without queued cycles, main-world presentation overlaps the preceding
+    render and extraction receives the render world. Extraction admits no
+    simulation work. Render readiness ends admission between complete cycles,
+    and the shared accumulator retains queued time in its original order.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
     invocation at 100,000 Rhai operations. This bounds interpreter work per

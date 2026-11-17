@@ -2010,13 +2010,15 @@ completion wait. The shared fixed runner also services it once before checking
 admission for a held pending cycle; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
-The native pipelined host also services ready completions and existing fixed
-debt during its render-frame handoff, after ordinary fixed work and before
-physical presentation sampling. Automatic time uses the host monotonic clock,
-independent of the optional render timestamp channel; manual strategies retain
-their source. That service never adds wall time or waits for a solver. Render
-readiness gives the host a yield boundary between complete fixed cycles. Read
-nested `FixedMain` events before treating `receive_render_frame` as wait time.
+The native host services ready completions during the preceding render when
+the fixed clock has a complete cycle queued. This happens after ordinary fixed
+work and before physical presentation sampling. When the clock has no queued
+cycle, the main world runs presentation and receives the render world during
+extraction. Automatic time uses the host monotonic clock, independent of the
+optional render timestamp channel. Manual strategies retain their source.
+Read nested `FixedMain` events when timing `service_simulation_during_render`.
+Compare `RenderExtractApp` with its inner `ExtractSchedule` to account for
+render-world receipt during extraction.
 Record pending simulation duration when interpreting transport throughput.
 Catch-up may temporarily exceed the requested wall-clock rate, and pause keeps
 the remaining debt.

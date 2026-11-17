@@ -507,13 +507,27 @@ fn finish_fixed_tick_timing(
     }
 }
 
-fn fixed_simulation_is_admitted(world: &World) -> bool {
+enum FixedSimulationDemand {
+    Manual,
+    Automatic,
+}
+
+fn fixed_simulation_demand(world: &World) -> Option<FixedSimulationDemand> {
+    let control = world.get_resource::<SimulationStepControl>();
+    if control.is_some_and(|control| control.remaining() > 0) {
+        return Some(FixedSimulationDemand::Manual);
+    }
     let transport_running = world
         .get_resource::<TimeTransport>()
         .is_none_or(TimeTransport::is_running);
     let virtual_running = world
         .get_resource::<Time<Virtual>>()
         .is_some_and(|time| !time.is_paused() && time.relative_speed_f64() > 0.0);
+    (transport_running && virtual_running && !control.is_some_and(SimulationStepControl::is_held))
+        .then_some(FixedSimulationDemand::Automatic)
+}
+
+fn fixed_simulation_is_admitted(world: &World) -> bool {
     let coupling_held = world
         .get_resource::<lunco_core_runtime::SimulationBarrier>()
         .is_some_and(|state| state.held);
@@ -524,15 +538,27 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
         .get_resource::<SceneTimeState>()
         .is_none_or(SceneTimeState::is_ready);
 
-    let control = world.get_resource::<SimulationStepControl>();
-    let manual_step = control.is_some_and(|control| control.remaining() > 0);
-    let automatic = transport_running
-        && virtual_running
-        && !control.is_some_and(SimulationStepControl::is_held);
     let faulted = world
         .get_resource::<lunco_core::RuntimeFaults>()
         .is_some_and(lunco_core::RuntimeFaults::active);
-    (manual_step || automatic) && !coupling_held && !progress_held && scene_time_ready && !faulted
+    fixed_simulation_demand(world).is_some()
+        && !coupling_held
+        && !progress_held
+        && scene_time_ready
+        && !faulted
+}
+
+/// Is a complete fixed cycle requested by the existing transport or manual
+/// step queue? A coupling hold can delay this work until a completion lands.
+/// The query does not admit cycles or advance any clock.
+pub fn has_queued_fixed_tick(world: &World) -> bool {
+    match fixed_simulation_demand(world) {
+        Some(FixedSimulationDemand::Manual) => true,
+        Some(FixedSimulationDemand::Automatic) => world
+            .get_resource::<Time<Fixed>>()
+            .is_some_and(|fixed| fixed.overstep() >= fixed.timestep()),
+        None => false,
+    }
 }
 
 /// Next wall-clock deadline for servicing the fixed accumulator, bounded by a
@@ -1821,6 +1847,35 @@ mod tests {
         let fixed = world.resource::<Time<Fixed>>();
         assert_eq!(fixed.elapsed(), quantum * 3);
         assert_eq!(fixed.overstep(), Duration::ZERO);
+    }
+
+    #[test]
+    fn queued_fixed_tick_distinguishes_fractional_time_pause_and_manual_steps() {
+        let mut world = World::new();
+        let quantum = Duration::from_secs(1);
+        world.insert_resource(Time::<Fixed>::from_duration(quantum));
+        world.init_resource::<Time<Virtual>>();
+        world.init_resource::<SimulationStepControl>();
+        let half = quantum / 2;
+
+        world
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(half);
+        assert!(!has_queued_fixed_tick(&world));
+        world
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(half);
+        assert!(has_queued_fixed_tick(&world));
+
+        world.resource_mut::<Time<Virtual>>().pause();
+        assert!(!has_queued_fixed_tick(&world));
+        world
+            .resource_mut::<SimulationStepControl>()
+            .request(Some(true), Some(1), false)
+            .unwrap();
+        assert!(has_queued_fixed_tick(&world));
+        assert_eq!(world.resource::<Time<Fixed>>().overstep(), quantum);
+        assert_eq!(world.resource::<SimulationStepControl>().remaining(), 1);
     }
 
     #[derive(Resource, Default)]
