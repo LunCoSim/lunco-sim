@@ -86,7 +86,7 @@ pub struct FixedTickTimingSample {
 /// Work and time-clamp observations for one rendered app update's fixed loop.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct FixedLoopTimingSample {
-    /// Monotonic wall-clock time spent draining Bevy's `FixedMain` loop.
+    /// Monotonic wall-clock service of ordinary and opportunistic fixed work.
     pub service_secs: f64,
     /// Number of causal fixed ticks completed by this app update.
     pub fixed_steps: u64,
@@ -221,7 +221,6 @@ struct SimulationTimingStart {
     tick_started_at: Option<Instant>,
     tick_started: u64,
     tick_service_budget_secs: f64,
-    loop_started_at: Option<Instant>,
     loop_started: u64,
 }
 
@@ -446,9 +445,22 @@ pub fn realtime_rate_label(rate: f64) -> String {
     format!("{rate}x")
 }
 
-/// Maximum number of complete causal fixed cycles one host service pass may drain.
+/// Maximum number of complete causal fixed cycles one host update may drain.
 /// Remaining admitted duration stays queued in `Time<Fixed>::overstep`.
 pub const MAX_FIXED_STEPS_PER_SERVICE: u32 = 64;
+
+#[derive(Resource, Clone, Copy, Default)]
+struct FixedServiceBudget {
+    limit: Duration,
+    spent: Duration,
+    cycles: u32,
+}
+
+impl FixedServiceBudget {
+    fn has_remaining(self, elapsed: Duration) -> bool {
+        self.cycles < MAX_FIXED_STEPS_PER_SERVICE && self.spent.saturating_add(elapsed) < self.limit
+    }
+}
 
 /// Run condition for systems that mutate the causal simulation. The virtual
 /// clock is mandatory in a composed host; an absent clock fails closed instead
@@ -551,7 +563,7 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
 /// Is a complete fixed cycle requested by the existing transport or manual
 /// step queue? A coupling hold can delay this work until a completion lands.
 /// The query does not admit cycles or advance any clock.
-pub fn has_queued_fixed_tick(world: &World) -> bool {
+fn has_queued_fixed_tick(world: &World) -> bool {
     match fixed_simulation_demand(world) {
         Some(FixedSimulationDemand::Manual) => true,
         Some(FixedSimulationDemand::Automatic) => world
@@ -559,6 +571,15 @@ pub fn has_queued_fixed_tick(world: &World) -> bool {
             .is_some_and(|fixed| fixed.overstep() >= fixed.timestep()),
         None => false,
     }
+}
+
+/// May this host update service more queued fixed simulation before presentation?
+/// Ordinary fixed work and opportunistic completion service share one budget.
+pub fn can_service_pending_simulation(world: &World) -> bool {
+    world
+        .resource::<FixedServiceBudget>()
+        .has_remaining(Duration::ZERO)
+        && has_queued_fixed_tick(world)
 }
 
 /// Next wall-clock deadline for servicing the fixed accumulator, bounded by a
@@ -592,18 +613,21 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// solver or scene admission barrier can arise inside a burst, so the remaining
 /// admitted time stays in the shared accumulator until its owner releases the
 /// hold. The host service budget also retains time rather than clipping the
-/// input delta or discarding pending fixed cycles. Yield after one fixed
-/// quantum of wall-clock service so overloaded catch-up cannot monopolize
-/// presentation. A complete causal cycle remains indivisible.
+/// input delta or discarding pending fixed cycles. Each host update starts
+/// with one fixed quantum of wall-clock service across ordinary and
+/// opportunistic work. A complete causal cycle remains indivisible.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
     let service_started = Instant::now();
-    let service_budget = world.resource::<Time<Fixed>>().timestep();
+    let budget = FixedServiceBudget {
+        limit: world.resource::<Time<Fixed>>().timestep(),
+        ..Default::default()
+    };
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
     world
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    run_pending_fixed_main_schedule(world, service_started, service_budget, || true);
+    run_pending_fixed_main_schedule(world, service_started, budget, || true);
 }
 
 /// Service already admitted cycles while a native host waits for presentation.
@@ -611,25 +635,22 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
 /// The host may end service before admitting completions or before each full
 /// fixed cycle. Unconsumed time remains in the shared accumulator.
 pub fn service_pending_simulation(world: &mut World, mut continue_service: impl FnMut() -> bool) {
-    if !continue_service() {
+    if !can_service_pending_simulation(world) || !continue_service() {
         return;
     }
-    lunco_core_runtime::admit_simulation_completions(world);
     let service_started = Instant::now();
-    let service_budget = world.resource::<Time<Fixed>>().timestep();
-    run_pending_fixed_main_schedule(world, service_started, service_budget, continue_service);
+    let budget = *world.resource::<FixedServiceBudget>();
+    lunco_core_runtime::admit_simulation_completions(world);
+    run_pending_fixed_main_schedule(world, service_started, budget, continue_service);
 }
 
 fn run_pending_fixed_main_schedule(
     world: &mut World,
     service_started: Instant,
-    service_budget: Duration,
+    mut budget: FixedServiceBudget,
     mut continue_service: impl FnMut() -> bool,
 ) {
-    for cycle in 0..MAX_FIXED_STEPS_PER_SERVICE {
-        if cycle > 0 && service_started.elapsed() >= service_budget {
-            break;
-        }
+    while budget.cycles == 0 || budget.has_remaining(service_started.elapsed()) {
         if !world.resource::<lunco_core::RuntimeFaults>().active()
             && (world
                 .get_resource::<lunco_core_runtime::SimulationBarrier>()
@@ -685,6 +706,7 @@ fn run_pending_fixed_main_schedule(
         drop(fixed);
         *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
         world.resource_mut::<SimulationStepControl>().active_cycle = true;
+        budget.cycles += 1;
         let outcome =
             world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| schedule.run(world));
         world.resource_mut::<SimulationStepControl>().active_cycle = false;
@@ -708,10 +730,11 @@ fn run_pending_fixed_main_schedule(
         world.resource_mut::<SimulationStepControl>().cancel();
     }
     *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
+    budget.spent = budget.spent.saturating_add(service_started.elapsed());
+    *world.resource_mut::<FixedServiceBudget>() = budget;
 }
 
 fn begin_fixed_loop_timing(tick: Res<SimTick>, mut start: ResMut<SimulationTimingStart>) {
-    start.loop_started_at = Some(Instant::now());
     start.loop_started = tick.0;
 }
 
@@ -719,13 +742,10 @@ fn finish_fixed_loop_timing(
     tick: Res<SimTick>,
     fixed_time: Res<Time<Fixed>>,
     input: Res<TimeUpdateTimingInput>,
-    mut start: ResMut<SimulationTimingStart>,
+    start: Res<SimulationTimingStart>,
+    budget: Res<FixedServiceBudget>,
     mut profile: ResMut<SimulationTimingProfile>,
 ) {
-    let Some(started_at) = start.loop_started_at.take() else {
-        return;
-    };
-    let service_secs = started_at.elapsed().as_secs_f64();
     let max_delta_limited_simulation_secs = if input.running {
         input.raw_real_delta_secs.map(|raw_delta_secs| {
             (raw_delta_secs - input.virtual_max_delta_secs).max(0.0) * input.effective_rate
@@ -734,7 +754,7 @@ fn finish_fixed_loop_timing(
         input.raw_real_delta_secs.map(|_| 0.0)
     };
     profile.record_loop(FixedLoopTimingSample {
-        service_secs,
+        service_secs: budget.spent.as_secs_f64(),
         fixed_steps: tick.0.wrapping_sub(start.loop_started),
         max_delta_limited_simulation_secs,
         pending_simulation_secs: fixed_time.overstep().as_secs_f64(),
@@ -1169,6 +1189,7 @@ impl Plugin for TimePlugin {
             .init_resource::<SimulationTimingProfile>()
             .init_resource::<TimeUpdateTimingInput>()
             .init_resource::<SimulationTimingStart>()
+            .init_resource::<FixedServiceBudget>()
             .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
@@ -1196,8 +1217,8 @@ impl Plugin for TimePlugin {
             .add_systems(
                 RunFixedMainLoop,
                 finish_fixed_loop_timing
-                    .after(RunFixedMainLoopSystems::FixedMainLoop)
-                    .before(lunco_core::RuntimeCycleSet::Presentation),
+                    .after(lunco_core::RuntimeCycleSet::Presentation)
+                    .before(RunFixedMainLoopSystems::AfterFixedMainLoop),
             )
             .configure_sets(
                 RunFixedMainLoop,
@@ -1847,6 +1868,65 @@ mod tests {
         let fixed = world.resource::<Time<Fixed>>();
         assert_eq!(fixed.elapsed(), quantum * 3);
         assert_eq!(fixed.overstep(), Duration::ZERO);
+    }
+
+    #[test]
+    fn host_service_shares_one_budget_across_completion_wakes() {
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            TimePlugin,
+            lunco_core_runtime::SimulationCompletionPlugin,
+        ))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ))
+        .init_resource::<FixedRunCount>()
+        .add_systems(FixedUpdate, (count_fixed_runs, count_fixed_ticks));
+        let quantum = Duration::from_secs(60);
+        let max_cycles = MAX_FIXED_STEPS_PER_SERVICE;
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .set_timestep(quantum);
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(quantum);
+        app.update();
+
+        let world = app.world_mut();
+        assert_eq!(world.resource::<FixedRunCount>().0, 1);
+        world
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(quantum * (max_cycles + 1));
+        for completed in 2..=max_cycles {
+            let mut checks = 0;
+            service_pending_simulation(world, || {
+                checks += 1;
+                checks <= 2
+            });
+            assert_eq!(world.resource::<FixedRunCount>().0, completed);
+        }
+        assert!(!can_service_pending_simulation(world));
+        service_pending_simulation(world, || panic!("the update exhausted its cycle allowance"));
+        assert_eq!(world.resource::<Time<Fixed>>().overstep(), quantum * 2);
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(world.resource::<FixedRunCount>().0, max_cycles + 2);
+        assert_eq!(world.resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+
+        // Inject an elapsed budget at the same boundary to avoid sleeping in
+        // the test. A completion wake cannot refresh the time allowance.
+        world
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(quantum);
+        world.resource_mut::<FixedServiceBudget>().spent = quantum;
+        assert!(!can_service_pending_simulation(world));
+        service_pending_simulation(world, || panic!("the update exhausted its time allowance"));
+        assert_eq!(world.resource::<FixedRunCount>().0, max_cycles + 2);
+        assert_eq!(world.resource::<Time<Fixed>>().overstep(), quantum);
+        app.update();
+        assert_eq!(app.world().resource::<FixedRunCount>().0, max_cycles + 3);
     }
 
     #[test]

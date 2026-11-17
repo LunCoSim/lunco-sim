@@ -76,14 +76,13 @@ fn host_fault(world: &mut World, code: &'static str, detail: String) {
 fn service_simulation_during_render(world: &mut World) {
     // Outstanding fixed demand can use ready completions while rendering.
     // Otherwise let all presentation systems overlap the outgoing render.
-    if lunco_time::has_queued_fixed_tick(world) {
-        let handoff = wait_for_render_frame(world, true)
-            .map_or(RenderFrameHandoff::Failed, RenderFrameHandoff::Ready);
+    if lunco_time::can_service_pending_simulation(world) {
+        let handoff = wait_for_render_frame(world, true);
         *world.non_send_mut::<RenderFrameHandoff>() = handoff;
     }
 }
 
-fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> Option<bevy::app::SubApp> {
+fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> RenderFrameHandoff {
     let executor = world
         .resource::<bevy::ecs::schedule::MainThreadExecutor>()
         .clone();
@@ -115,7 +114,9 @@ fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> Option<
                 })
                 .pop();
             match ready {
-                Some(HostReady::Frame(frame)) => break Ok(frame),
+                Some(HostReady::Frame(frame)) => {
+                    break Ok(frame.map_or(RenderFrameHandoff::Failed, RenderFrameHandoff::Ready));
+                }
                 Some(HostReady::Completion) => {
                     // Release the host task scope before entering ECS schedules;
                     // their own main-thread executor must remain available.
@@ -133,39 +134,45 @@ fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> Option<
                         }
                     });
                     if let Some(frame) = received {
-                        break Ok(frame);
+                        break Ok(
+                            frame.map_or(RenderFrameHandoff::Failed, RenderFrameHandoff::Ready)
+                        );
+                    }
+                    if !lunco_time::can_service_pending_simulation(world) {
+                        // Presentation can use the current sample before extraction
+                        // receives the world. Keep any fixed debt for the next update.
+                        break Ok(RenderFrameHandoff::Awaiting);
                     }
                 }
                 Some(HostReady::Fault(error)) => break Err(error),
-                None => break Ok(None),
+                None => break Ok(RenderFrameHandoff::Failed),
             }
         }
     });
     match ready {
-        Ok(Some(frame)) => return Some(frame),
-        Ok(None) => host_fault(
+        Ok(RenderFrameHandoff::Failed) => host_fault(
             world,
             "native-render-handoff-failed",
             "render thread closed before returning its frame".into(),
         ),
+        Ok(handoff) => return handoff,
         Err(error) => host_fault(world, "simulation-completion-waker-missing", error.into()),
     }
-    None
+    RenderFrameHandoff::Failed
 }
 
 fn extract_ready_frame(world: &mut World, _extract: &mut World) {
     let handoff = std::mem::take(&mut *world.non_send_mut::<RenderFrameHandoff>());
-    let mut frame = match handoff {
+    let handoff = match handoff {
         RenderFrameHandoff::Awaiting => {
             // The main world has already sampled presentation for this update.
             // Receive the render world here without admitting further cycles.
-            let Some(frame) = wait_for_render_frame(world, false) else {
-                return;
-            };
-            frame
+            wait_for_render_frame(world, false)
         }
-        RenderFrameHandoff::Ready(frame) => frame,
-        RenderFrameHandoff::Failed => return,
+        handoff => handoff,
+    };
+    let RenderFrameHandoff::Ready(mut frame) = handoff else {
+        return;
     };
     frame.extract(world);
     world
