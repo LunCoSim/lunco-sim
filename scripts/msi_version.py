@@ -114,10 +114,44 @@ def _msi_identity(version: str) -> tuple[int, int, int]:
 
 
 def check_published_versions(candidate: str, asset_names: list[str]) -> None:
-    """Reject repeated dev versions and any MSI version that would move back."""
+    """Reject repeated dev/nightly versions and version-track rollbacks."""
     proposed = _SEMVER.fullmatch(candidate)
     if proposed is None:
-        raise ValueError(f"unsupported release version: {candidate}")
+        proposed_nightly = _LEGACY_NIGHTLY.fullmatch(candidate)
+        if proposed_nightly is None:
+            raise ValueError(f"unsupported release version: {candidate}")
+
+        proposed_identity = tuple(map(int, proposed_nightly.groups()[:3]))
+        proposed_msi = _msi_identity(candidate)
+        for published_version in _package_versions(asset_names):
+            published_nightly = _LEGACY_NIGHTLY.fullmatch(published_version)
+            if published_nightly is not None:
+                published_msi = _msi_identity(published_version)
+                if published_msi >= proposed_msi:
+                    raise ValueError(
+                        f"MSI version {candidate} is not newer than published package {published_version}"
+                    )
+                continue
+
+            published = _SEMVER.fullmatch(published_version)
+            if published is None:
+                continue
+            published_identity = tuple(map(int, published.groups()[:3]))
+            published_dev = published.group(4)
+            if published_identity > proposed_identity:
+                raise ValueError(
+                    f"application version {candidate} is older than published package {published_version}"
+                )
+            if published_identity == proposed_identity and published_dev is None:
+                raise ValueError(
+                    f"application version {candidate} is older than published stable package {published_version}"
+                )
+
+        # A same-base nightly sorts after dev.N for Velopack. Its MSI uses the
+        # separate nightly sequence, so compare MSI ordering only with other
+        # nightly packages.
+        return
+
     proposed_identity = tuple(map(int, proposed.groups()[:3]))
     proposed_dev = int(proposed.group(4)) if proposed.group(4) is not None else None
     proposed_msi = _msi_identity(candidate)

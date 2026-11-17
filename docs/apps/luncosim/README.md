@@ -184,14 +184,18 @@ appear there as prereleases. See the
 
 The Windows installer has an internal, ordered MSI version distinct from the
 displayed application version. Development SemVer versions such as
-`0.6.0-dev.1` map to `1.6.1`; a stable `0.6.0` maps to `1.6.999`. Publication
-rejects non-increasing versions within the development SemVer train and keeps
-the MSI number ahead of every published Windows package. Windows Installer
-compares only the three MSI version fields.
+`0.6.0-dev.1` map to `1.6.1`; a stable `0.6.0` maps to `1.6.999`. Dev
+publication rejects non-increasing versions within the development SemVer
+train and keeps its MSI number ahead of published Windows packages. Windows
+Installer compares only the three MSI version fields.
 
 The first `0.6.0-dev.1` release sorts before existing `0.6.0-nightly.*` builds
 under SemVer. Install its MSI manually to move an existing nightly installation
 to the Dev update sequence; later Dev builds can update through Velopack.
+Nightly releases continue in their own version sequence. A same-base nightly
+sorts after `dev.N` and can update it through Velopack. Its MSI ProductVersion
+follows the separate nightly sequence, so use Velopack for Dev-to-nightly
+updates.
 
 The native package build enables the updater explicitly. Ordinary source and
 headless builds omit the updater closure and are not update-managed.

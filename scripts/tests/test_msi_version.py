@@ -63,6 +63,29 @@ class MsiVersionTests(unittest.TestCase):
             ["LunCoSim-win-x64-0.6.0-nightly.37.1-win-x64-full.nupkg"],
         )
 
+    def test_nightly_publication_continues_after_dev_and_nightly_packages(self):
+        assets = [
+            "luncosim-0.6.0-dev.1-win-x64-full.nupkg",
+            "luncosim-0.6.0-nightly.151.1-win-x64-full.nupkg",
+        ]
+        check_published_versions("0.6.0-nightly.152.1", assets)
+
+        for candidate, published in (
+            ("0.6.0-nightly.151.1", assets[1]),
+            ("0.6.0-nightly.150.1", assets[1]),
+            (
+                "0.6.0-nightly.152.1",
+                "luncosim-0.6.0-win-x64-full.nupkg",
+            ),
+            (
+                "0.5.0-nightly.152.1",
+                "luncosim-0.6.0-dev.1-win-x64-full.nupkg",
+            ),
+        ):
+            with self.subTest(candidate=candidate, published=published):
+                with self.assertRaises(ValueError):
+                    check_published_versions(candidate, [published])
+
     def test_invalid_or_exhausted_dev_versions_fail(self):
         for version in ("0.6.0-dev.0", "0.6.0-dev.999", "0.6.0.1", "0.256.0"):
             with self.subTest(version=version):
