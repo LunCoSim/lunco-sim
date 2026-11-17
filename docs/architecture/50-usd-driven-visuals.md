@@ -363,6 +363,16 @@ real today, so **a driver's parameters must be numbers**. That is not the hardsh
 sounds like: a colour belongs in a bound `Material`, where USD says it belongs, and
 `UsdPreviewSurface` expresses it far better than a float map would.
 
+### Culling bounds for vertex displacement
+
+A shader with vertex displacement declares its maximum excursion in metres
+through `displacement_bound_m`. The render adapter tracks the padding when
+the authored look changes. Only padded meshes need to extend their native
+bounding box. A mesh handle replacement, an edit or late load of the mesh
+asset, or a new bounding box reapplies the padding from the source mesh.
+Removing the look or clearing its bound restores the original extents.
+This runs after Bevy calculates mesh bounds and before visibility testing.
+
 ## Casting shadows — `primvars:doNotCastShadows`
 
 Generated visual globe tiles and their shared-surface DEM continuation collars

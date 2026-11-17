@@ -531,3 +531,25 @@ still distinguishes multiple types from replacement of the same type.
 Public markers, reflected events and runtime visibility continue to govern
 admission. These samples measure the controller and identify an allocation.
 They do not quantify a whole-frame saving.
+
+## Mesh bounds for vertex displacement
+
+In the 50 seconds beginning ten seconds after the View perspective activated,
+`indexed-command-tracy/capture.tracy` recorded 2,647 calls to
+`update_displaced_mesh_bounds`. They spent a mean 0.322 ms and p99 0.584 ms
+reading shader parameters and checking mesh identity and events. The maximum
+was 0.794 ms. The render adapter now reads displacement padding when its look
+changes and updates bounds on the affected mesh. Its lifecycle test checks a
+late mesh load, an edit through the same handle, restored native extents after
+look removal, manual bounds on another mesh, and rejection of negative padding.
+
+The uninstrumented `reactive-displacement-bounds/landed/receipt.json` window
+recorded 5,509 frames at 92.036 FPS, p99 17.161 ms, maximum 33.624 ms and
+3,628 frames over 10 ms. Physics advanced 3,688 ticks between qualification
+snapshots, with 181 terrain tiles drawn and 455 ordered torque samples.
+
+With the same recorder debug spans enabled in both Tracy captures, the
+original bounds system averaged 0.311 ms across 2,751 landed frames,
+p99 0.632 ms and maximum 1.216 ms. The two replacement systems together
+averaged 0.014 ms across 2,651 frames, p99 0.031 ms and maximum 0.084 ms.
+These are CPU times for bounds maintenance in matching 50-second windows.

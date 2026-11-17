@@ -198,6 +198,10 @@ to improve a timing.
 - Attribute CPU, GPU, physics, terrain, and UI separately. Never disable
   shadows, lower authored terrain quality, change BigSpace, or change the
   standard substep count to make a graph look better.
+  For vertex-displacement culling, measure both authored-look reconciliation
+  and mesh-bound updates. The render adapter's lifecycle test covers late
+  mesh arrival, same-handle edits, bound recreation, removing a look and
+  rejecting negative padding.
   To locate fragment cost before arithmetic edits, an ignored diagnostic may
   temporarily remove groups of shader work. Guard exact source bytes, bracket
   each altered variant with the original in one owned frozen session, restore
