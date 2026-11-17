@@ -82,24 +82,21 @@ waiter; worker leases retire sources, and dropping the host closes the waiter.
 Failure to create the waiter raises `simulation-completion-waker-failed` through
 the existing runtime-fault owner and holds simulation admission.
 The UI never waits for a worker, and headless deadline waiting retains its owner.
-The native pipelined render host receives the previous render frame in
-`RunFixedMainLoop`, after ordinary admitted fixed work and before
-`AfterFixedMainLoop` presentation sampling, through Bevy's public
-`RenderAppChannels` API. Rendering overlaps the next update's clock admission
-and simulation. The native host removes Bevy's optional render timestamp
+The native pipelined render host receives the previous render world through
+Bevy's public `RenderAppChannels` API. Rendering overlaps the next update's
+clock admission and simulation. The native host removes Bevy's optional render timestamp
 receiver: automatic time samples the main-thread monotonic clock once in `First`;
 manual recording/test strategies retain their selected source.
-During the existing GPU handoff the host services ready simulation completions
-and already-admitted fixed cycles on the main thread. The host rechecks rendering
-readiness before admitting completions and before starting each complete fixed
-cycle during the wait. It presents a ready frame after the current cycle, leaving
-unconsumed fixed time in the shared accumulator. Each service pass retains the
-fixed runner's bounded work budget and never advances the wall-clock sample.
-Ordinary fixed-loop timing ends before the handoff, and per-tick timing also
-covers the serviced cycles. Physical easing samples only after that final
-service boundary. The received frame is extracted and sent through the single
-native path after presentation producers, preserving asset events and scene
-teardown. Fixed debt remains queued through pauses and is drained on resume;
+When fixed demand and service budget remain after ordinary fixed work, the
+main thread can admit ready simulation completions and fixed cycles before
+physical easing samples the state. The host checks render readiness before
+admitting a completion and between cycles. Ordinary and opportunistic service
+share one count and wall-clock allowance for the host update. The host starts
+presentation when the renderer returns, fixed demand clears, or the allowance
+runs out. Extraction receives any outstanding render world and submits the next
+frame after presentation producers. The fixed-loop diagnostic reads the final
+debt and includes opportunistic service, with render waiting outside its timer.
+Fixed debt remains queued through pauses and is drained on resume;
 catch-up must not be mistaken for a change to the requested transport rate.
 The render frame is application-owned, never shared with a concurrent World
 evaluator.
@@ -133,7 +130,7 @@ equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
 The runner drains at most `MAX_FIXED_STEPS_PER_SERVICE` (64) complete cycles per
-host service pass at every transport rate. It also yields after one fixed timestep of
+host update at every transport rate. It also yields after one fixed timestep of
 measured wall-clock service, checked between complete causal cycles. This is a
 host service boundary derived from the existing fixed clock, not an authored
 mission decision. It keeps an overloaded catch-up batch from monopolizing

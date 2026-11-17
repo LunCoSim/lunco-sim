@@ -32,7 +32,9 @@ registry, so inspectors, APIs, recorders, and plots never depend on one another'
 The `SimulationTimingProfile` query is an on-demand, bounded runtime diagnostic
 alongside the channel catalog and history API. `lunco-time` records the complete
 synchronous `FixedMain` tick and fixed-loop service at monotonic clock boundaries
-into preallocated 240-sample rings; it exposes tick service and rate-derived
+into preallocated 240-sample rings. Fixed-loop service includes ordinary and
+opportunistic completion service, with render-only waiting outside its timer.
+The query exposes tick service and rate-derived
 service-budget percentiles, fixed steps per app update, and retained pending
 simulation duration (`fixed_loop.latest_pending_simulation_secs`, including
 whole ticks and fractional overstep). The separate max-delta fields detect

@@ -1104,6 +1104,7 @@ struct PoseToPositionParams<'w, 's> {
         ),
         (
             Or<(Changed<Transform>, Changed<CellCoord>, Changed<ChildOf>)>,
+            Or<(With<Children>, With<CellCoord>)>,
             Without<RigidBody>,
             Without<Collider>,
         ),

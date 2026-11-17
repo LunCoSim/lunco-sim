@@ -1760,20 +1760,23 @@ The whole-simulation guarantee remains open because:
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.
 12. Bevy's fixed loop executes synchronously on the GUI app thread before
-    `Update`. The owner drains at most 64 complete cycles per host service pass and retains
-    remaining admitted time; a fixed delta preserves numerical step size but does not
+    `Update`. Ordinary fixed work and native render-overlap service share one
+    allowance of 64 complete cycles and one fixed quantum of wall-clock service
+    per host update. Admission checks the allowance between complete cycles
+    and retains remaining simulation time. A fixed delta preserves numerical step size but does not
     promise 60 wall-clock physics ticks per second or responsive UI during a
     long tick/burst. `SimulationTimingProfile` now reports bounded tick and
     fixed-loop service/budget samples and recoverable pending simulation duration.
     The separate max-delta diagnostic detects unexpected virtual-clock clipping.
     It cannot report wall-paced deadline misses and does not move fixed work off
     the GUI thread. When the shared clock has a full cycle queued, the native
-    pipelined host can service ready completions during the render handoff,
-    after ordinary fixed work and before physical presentation sampling.
-    Without queued cycles, main-world presentation overlaps the preceding
-    render and extraction receives the render world. Extraction admits no
-    simulation work. Render readiness ends admission between complete cycles,
-    and the shared accumulator retains queued time in its original order.
+    pipelined host can spend the remaining allowance on ready completions
+    before physical presentation sampling. Render readiness ends admission
+    between complete cycles. When queued work or its allowance runs out,
+    main-world presentation can overlap the preceding render and extraction
+    receives the render world. Extraction admits no simulation work. The timing
+    profile records both fixed service phases and the final accumulator, with
+    render-only waiting outside the service timer.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
     invocation at 100,000 Rhai operations. This bounds interpreter work per

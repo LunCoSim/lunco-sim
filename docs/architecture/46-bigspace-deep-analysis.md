@@ -46,13 +46,13 @@ The reverse path returns to the semantic f64 pose before any cross-frame
 calculation. A cell/local pair is private representation state and must not
 cross a network, API, Modelica, Rhai, or user-facing model boundary.
 
-The physics bridge scopes read invalidation to the physical subtree. It collects
-changed `(CellCoord, Transform, ChildOf)` inputs and visits only bodies below a
-changed physical ancestor; unrelated render-only branches do not force a body
-pose read. First admission and an active-frame handoff still traverse all
-bodies because those lifecycle operations transport initial pose or frame state.
-The exact BigSpace re-split comparison remains the authority for distinguishing
-representation maintenance from semantic motion.
+The physics bridge scans changed plain nodes that have children or a
+`CellCoord`. A node with children can invalidate descendant bodies. A leaf
+with a cell still maintains its representation history before a hierarchy edit
+can give it descendants. The bridge reads poses only for affected bodies;
+first admission and an active-frame handoff traverse all bodies to transport
+initial pose or frame state. The exact BigSpace re-split comparison remains
+the authority for distinguishing representation maintenance from semantic motion.
 
 The application admits BigSpace's propagation schedule sets from spatial input
 changes rather than running the full hierarchy pass on every stable frame.

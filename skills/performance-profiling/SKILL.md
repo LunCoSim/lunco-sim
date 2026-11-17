@@ -219,7 +219,8 @@ to improve a timing.
   For pose-bridge selection, the ignored `pose_invalidation_diagnostic` in
   `lunco-usd-avian-core` measures 512 bodies over 256 persistent-system runs.
   Preserve its separate leaf, render-branch, above-frame and physical-parent
-  cases; require exact native poses, velocities and leaf representation history.
+  cases. The plain-node query admits ancestors and nodes with a `CellCoord`;
+  require exact native poses, velocities and cell history on a leaf.
   Pair it with a normal production window before claiming scene-level savings.
   `collider_composition_diagnostic` in the same owner runs 512 colliders over
   256 iterations for ancestor translation, rotation, scale, physical-parent
@@ -1972,11 +1973,12 @@ settled owned run. It summarizes the latest 240 fixed ticks and 240 app-update
 fixed-loop bursts: p50/p95/p99/max service time, per-tick realtime service-budget
 exceedances, fixed steps per app update, and retained pending simulation duration
 (`fixed_loop.latest_pending_simulation_secs`, whole ticks plus fractional
-overstep). The owner drains at most 64 complete cycles per host service pass and yields
-between complete ticks after one fixed quantum of monotonic wall-clock service,
-while admitting the full running delta. An expensive first tick still completes;
-the remaining demand stays queued instead of becoming a synchronous 64-tick
-batch. This fairness boundary does not make an individual slow tick fast. Its separate `Time<Virtual>::max_delta` diagnostic
+overstep). Ordinary fixed work and opportunistic render overlap share a budget
+of 64 complete cycles and one fixed quantum of monotonic wall-clock service per
+host update. Each admitted tick runs to completion and the full running delta
+stays accounted for. The fixed-loop timing sample includes both service phases
+and reads debt after the last admission. Render-only waiting is outside the
+service timer. Its separate `Time<Virtual>::max_delta` diagnostic
 detects unexpected clipping and should remain zero. Pair this with
 `QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
@@ -2011,10 +2013,11 @@ admission for a held pending cycle; compile requests remain in
 the `Update` lifecycle cycle. Preserve session/source/communication-point
 validation and the all-causal-participant hold when changing this boundary.
 The native host services ready completions during the preceding render when
-the fixed clock has a complete cycle queued. This happens after ordinary fixed
-work and before physical presentation sampling. When the clock has no queued
-cycle, the main world runs presentation and receives the render world during
-extraction. Automatic time uses the host monotonic clock, independent of the
+the fixed clock has a complete cycle queued and the update has service budget
+remaining. This happens after ordinary fixed work and before physical
+presentation sampling. When demand or budget is exhausted, the main world
+runs presentation and extraction receives the render world. Automatic time
+uses the host monotonic clock, independent of the
 optional render timestamp channel. Manual strategies retain their source.
 Read nested `FixedMain` events when timing `service_simulation_during_render`.
 Compare `RenderExtractApp` with its inner `ExtractSchedule` to account for

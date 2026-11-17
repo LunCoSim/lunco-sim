@@ -1194,10 +1194,10 @@ Scene lifecycle projection, stable entity identity assignment, and API/path
 index publication run in that order in `PreUpdate`, before
 `SimulationAdmissionSet`. Modelica completions are admitted in `First`, after
 message rotation and before `ClockProjectionSet` gates the following virtual
-delta sample. Compile intent remains in the `Update` lifecycle cycle, and the
-fixed runner checks admission before each full tick. Do
-not add a separate startup identity pass or readiness
-poll; a projected reference must resolve by path on the first resumed tick.
+delta sample. Compile intent remains in the `Update` lifecycle cycle. The
+fixed runner checks admission before each full tick and shares one host-update
+allowance with render-overlap service. A projected reference must resolve by
+path on the first resumed tick using the same published index.
 
 Keep acausal conservation connectors (`Pin`, `HeatPort`, `FluidPort`, `Flange`,
 and equivalent domain connectors) inside the root whose solver owns their

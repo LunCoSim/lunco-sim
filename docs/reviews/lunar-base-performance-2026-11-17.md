@@ -474,3 +474,47 @@ The new session resumes at 55.980 FPS over 20.49 s. Every phase retains all
 181 drawn terrain tiles at both endpoints, with no runtime errors. Source
 hashes match and owned API ports 5410 and 5412 are released. The running
 100 FPS and 10 ms worst-frame gates remain open.
+
+## Fixed service under a delayed render handoff
+
+`locked-main-tracy-93b/capture.tracy` profiles the checked-in Bevy pin and
+simulator revision `93bceff2c`. The adjacent Tracy collector records
+18,033,665 zones over 176.8 s for owned PID 682444. Griffin uses the tracking
+camera at High 2560×1440 with all 181 terrain tiles drawn at both checkpoints,
+unchanged Twin sources, zero runtime diagnostics and zero clock clipping.
+It records 318 ordered tether-torque history samples. The profiled session
+advances from fixed tick 1500 to 4164 during the 60-second sample. Queued
+fixed time grows from 45.732 to 63.816 s, with other active GPU processes.
+This is a catch-up diagnostic. The settled release run above supplies the
+clean FPS result.
+
+In the matched 50-second interval, the three longest frame periods are
+152.018, 140.863 and 130.899 ms. Each spends 94–98 ms in complete fixed
+cycles, with 9, 5 and 4 additional cycles admitted during the respective
+handoffs. Those additional cycles account for 63.765, 71.241 and 61.449 ms
+respectively. The long receiver spans include that simulation service.
+Many completion wakes in a single handoff can form a burst; the wait after
+the final late cycle is at most 1.388 ms in this window.
+
+The time owner grants one budget for both ordinary fixed work and render
+overlap per host update. Completions reuse the remaining time and cycle
+allowance. Exhausting the budget leaves all unconsumed time in the existing
+accumulator and allows the frame to reach presentation. The timing profile
+includes both service phases and records the final debt.
+
+The uninstrumented release in `host-update-budget/landed/receipt.json`
+measured 5,845 consecutive frames after the landing handoff over 60.34 s.
+At High 2560×1440 the mean was 97.683 FPS, p95 was 13.637 ms, p99 was
+16.083 ms and the maximum was 51.706 ms. 3,623 frames exceeded 10 ms.
+Both endpoints had 181 of 181 terrain tiles drawn, zero runtime warnings or
+errors and less than 8 ms of queued simulation time. The fixed clock advanced
+3,688 ticks between the qualifying API snapshots and reported zero time
+clipping. The same session measured 138.720 FPS paused and 92.943 FPS after
+resuming. The two other GPU clients were idle at the sampled endpoints.
+The different machine load limits comparison with the preceding run.
+
+Both host-budget unit cases passed, including repeated completion wakes in
+one update. The windowed presentation gate passed all 13 checks. The transport
+gate passed all eight checks and measured 1.999×, 4.002× and 7.999×.
+The authored Griffin surface-operations verification passed all nine checks
+at tick 8,756, including four grounded wheels at the end of the descent.
