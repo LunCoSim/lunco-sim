@@ -42,17 +42,21 @@ assets/tutorials/
   sandbox/                     # scene-building and co-simulation scenarios
 ```
 
-The catalog is presentation data. Each entry names a `source_asset`, may name a
-`scene_asset`, and belongs to a `track`; the policy presents entries under
+The catalog is presentation data. Each entry has a unique `source_asset`, may
+name a `scene_asset`, and belongs to a `track`; the policy presents entries under
 **Scenarios → Tutorials → track → lesson** and keeps authored order. At most
 one entry may set `featured: true`; the policy also exposes that lesson as a
-quick action on the empty viewport. An optional `featured_description` gives
-that button a shorter summary than the lesson's menu tooltip. The same catalog rule applies to a Twin,
-whose menu is nested under its name and whose quick action is visible only
-while that Twin is active. Both assets are resolved through the asset system. The menu sends
+direct quick-start action on the empty viewport. An optional
+`featured_description` gives that action a shorter summary than the lesson's
+menu tooltip. The empty-viewport **Tutorials** button opens quick navigation
+filtered to the catalog's lessons. The menu and quick-navigation rows use the
+same authored launch action, so the picker does not maintain a second lesson
+list. Twin catalogs follow the same rule: their menu is nested under the Twin's
+name, and their quick-start action is visible only while that Twin is active.
+Both assets are resolved through the asset system. Lesson actions send
 `reload_policy: "restart"` so selecting a lesson always gets a fresh scenario
-start after its requested scene is composed. Other applications
-can reuse the same generic command with their own catalog or no menu at all.
+start after its requested scene is composed. Other applications can reuse the
+same generic command with their own catalog or no menu at all.
 
 An opened Twin may contribute the same catalog shape in any JSON asset under
 its root, provided it carries `kind = "lunco.tutorial-catalog.v1"`. The shared
@@ -69,9 +73,11 @@ Optional `lesson_type` is `tour`, `exercise`, or `challenge`;
 another entry in the same catalog. The application policy rejects missing
 targets and cycles, and passes the resolved path as typed scenario parameters.
 `featured` is an optional boolean and may be true on only one entry in a
-catalog. `featured_description` is an optional string used only by its quick
-action. No lesson title, catalog parser, or lesson-selection rule is compiled
-into the Rust UI host.
+catalog. `featured_description` is an optional string used only by its direct
+quick-start action. The Tutorials button remains visible but disabled while
+the catalog loads, then enables when its navigation entries are installed. No
+lesson title, catalog parser, or lesson-selection rule is compiled into the
+Rust UI host.
 The shared `tutorials::navigation` and `tutorials::finish` functions consume
 that path. Standalone scenario launches omit catalog navigation.
 Restart relaunches the selected guide through the same launcher and retains its

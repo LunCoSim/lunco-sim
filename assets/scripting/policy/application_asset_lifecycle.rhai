@@ -3,7 +3,7 @@
 const TUTORIAL_CATALOG_KIND = "lunco.tutorial-catalog.v1";
 
 fn empty_menu_contribution() {
-    #{ menus: [], viewport_actions: [] }
+    #{ menus: [], viewport_actions: [], navigation_entries: [] }
 }
 
 fn scenario_menu_contribution(items, ctx) {
@@ -164,6 +164,24 @@ fn lesson_menu_item(lesson, source_asset, scene_asset, path) {
     item
 }
 
+fn lesson_navigation_entry(lesson, menu_item, source_asset) {
+    let detail = lesson.track + " · " + lesson.difficulty;
+    if lesson.contains("lesson_type") { detail += " · " + lesson.lesson_type; }
+    if lesson.contains("duration_minutes") {
+        detail += " · " + lesson.duration_minutes.to_string() + " min";
+    }
+    if lesson.blurb != "" { detail += " · " + lesson.blurb; }
+    #{
+        id: "tutorial:" + source_asset,
+        label: lesson.title,
+        detail: detail,
+        category: "Tutorials",
+        tool: menu_item.tool,
+        hook: menu_item.hook,
+        args: menu_item.args
+    }
+}
+
 fn track_menu_item(name, items) {
     let item = #{};
     item.label = name + " (" + items.len().to_string() + ")";
@@ -277,6 +295,8 @@ fn application_asset_lifecycle(event, ctx) {
     let track_names = [];
     let track_items = [];
     let viewport_actions = [];
+    let navigation_entries = [];
+    let lesson_sources = [];
     let lesson_index = 0;
     for lesson in catalog["tutorials"] {
         let index = lesson_index;
@@ -314,10 +334,15 @@ fn application_asset_lifecycle(event, ctx) {
             group = track_names.len() - 1;
         }
         let source_asset = qualify_catalog_asset(root, lesson["source_asset"]);
+        if lesson_sources.contains(source_asset) {
+            throw("duplicate tutorial source " + source_asset);
+        }
+        lesson_sources.push(source_asset);
         let scene_asset = qualify_catalog_asset(root, scene_asset);
         let path = learning_path(lesson, catalog, root);
         let menu_item = lesson_menu_item(lesson, source_asset, scene_asset, path);
         track_items[group].push(menu_item);
+        navigation_entries.push(lesson_navigation_entry(lesson, menu_item, source_asset));
         viewport_actions = append_featured_action(
             viewport_actions, lesson, menu_item, catalog_uri, entry, ctx.scope);
     }
@@ -333,5 +358,6 @@ fn application_asset_lifecycle(event, ctx) {
     }
     let result = scenario_menu_contribution(items, ctx);
     result.viewport_actions = viewport_actions;
+    result.navigation_entries = navigation_entries;
     result
 }

@@ -120,16 +120,33 @@ pub struct LunCoSimUiConfig {
 
 fn install_viewport_placeholder_actions(world: &mut World) {
     let mut placeholder = world.resource_mut::<ViewportPlaceholder>();
-    set_welcome_actions(&mut placeholder, Vec::new(), None);
+    set_welcome_actions(&mut placeholder, Vec::new(), None, false);
 }
 
 fn set_welcome_actions(
     placeholder: &mut ViewportPlaceholder,
     policy_actions: Vec<ViewportPlaceholderAction>,
     guidance: Option<String>,
+    tutorials_available: bool,
 ) {
     placeholder.guidance = guidance;
     let mut policy_actions = policy_actions;
+    let insert_at = if policy_actions.is_empty() { 0 } else { 1 };
+    policy_actions.insert(
+        insert_at,
+        ViewportPlaceholderAction {
+            label: "Tutorials".into(),
+            description: if tutorials_available {
+                "Browse guided lessons and exercises.".into()
+            } else {
+                "Tutorials are loading…".into()
+            },
+            enabled: tutorials_available,
+            is_available: Arc::new(|| true),
+            primary: false,
+            activate: Arc::new(open_tutorials),
+        },
+    );
     policy_actions.push(ViewportPlaceholderAction {
         label: "Open Twin".into(),
         description: "Choose a Twin project folder from your computer.".into(),
@@ -374,7 +391,9 @@ pub(super) fn refresh_viewport_placeholder(
     let policy_actions = scripted_menus::viewport_actions_for(scripted_menus, active_twin_id);
     let guidance = scripted_menus::viewport_guidance_for(scripted_menus, active_twin_id);
     if active_twin_id.is_none() {
-        set_welcome_actions(placeholder, policy_actions, guidance);
+        let tutorials_available =
+            scripted_menus::has_application_navigation_category(scripted_menus, "Tutorials");
+        set_welcome_actions(placeholder, policy_actions, guidance, tutorials_available);
     } else {
         placeholder.guidance = guidance;
         placeholder.actions = policy_actions;
@@ -384,6 +403,13 @@ pub(super) fn refresh_viewport_placeholder(
 fn open_twin(ctx: &mut PanelCtx<'_>) {
     ctx.trigger(lunco_workspace::open::OpenTwin {
         path: String::new(),
+    });
+}
+
+fn open_tutorials(ctx: &mut PanelCtx<'_>) {
+    ctx.trigger(lunco_workbench_core::commands::SearchNavigation {
+        query: String::new(),
+        category: "Tutorials".into(),
     });
 }
 

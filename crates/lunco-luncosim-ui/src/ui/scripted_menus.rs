@@ -174,7 +174,20 @@ fn inspect_viewport_action(
 pub(crate) fn register_navigation(world: &mut World) {
     world.init_resource::<lunco_workbench_core::navigation::NavigationRegistry>();
     let mut registry = world.resource_mut::<lunco_workbench_core::navigation::NavigationRegistry>();
-    registry.register(&["Scenes"], scripted_navigation_entries);
+    registry.register(&["Scenes", "Tutorials"], scripted_navigation_entries);
+}
+
+pub(crate) fn has_application_navigation_category(
+    providers: &ScriptedMenuBindings,
+    category: &str,
+) -> bool {
+    providers.0.values().any(|provider| {
+        provider.twin_id.is_none()
+            && provider
+                .navigation_entries
+                .iter()
+                .any(|entry| entry.category == category)
+    })
 }
 
 fn scripted_navigation_entries(

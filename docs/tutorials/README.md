@@ -8,10 +8,13 @@ track; the other tracks remain available as individual lessons and references.
 This directory contains authoring walkthroughs and links to the authored
 lessons shipped under `assets/tutorials/`. A lesson is an ordinary Rhai
 scenario with optional USD scene content. The application Rhai policy owns
-catalog selection and contributes its lesson tree under Scenarios → Tutorials;
-the shared asset lifecycle and workbench menu host stay tutorial-agnostic. An
-explicitly featured catalog entry can also supply the empty viewport's quick
-action through the same generic tool dispatch path.
+catalog selection and contributes its lesson tree under Scenarios → Tutorials
+and matching entries to the Tutorials quick-navigation category. With no Twin
+active, the empty-viewport Tutorials button opens that category. Menu and
+quick-navigation choices reuse the same typed launch action; the shared asset
+lifecycle and workbench menu host stay tutorial-agnostic. An explicitly
+featured catalog entry can also supply a direct quick-start action through the
+same generic tool dispatch path.
 
 For cross-host skill usage, task routing, format boundaries, dynamic Rhai
 tools, and the full development cycle, start with
