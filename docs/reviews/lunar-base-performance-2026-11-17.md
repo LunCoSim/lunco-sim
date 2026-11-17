@@ -237,3 +237,44 @@ when terrain reports `selection_pending=1`, with wanted/resident both 181 and
 no pending presentation. Sources remain unchanged and the owned process/API
 port 5410 are released. This is an incomplete qualification, not a successful
 sustained performance result. The 100 FPS and spike requirements remain open.
+
+## Directional visibility query cache
+
+The `tracy-ac46` control profiles application revision `ac46e590f` with
+20,109,389 zones over 112.2 seconds. In the 60–110 second interval the main
+update averages 22.025 ms. The fixed loop averages 9.168 ms, PostUpdate 5.625 ms,
+and receipt of the prior render frame 0.307 ms. The worst two updates include
+multiple complete fixed cycles, rendering, and other presentation work. Their
+27–31 ms render handoff zones include fixed cycles executed during the handoff.
+Main-thread directional visibility command application contains 1,071 of 1,089
+sampled leaves attributed to the folded query-construction symbol.
+
+The local Bevy change `400fa336e` moves deferred `ViewVisibility` writes through
+Bevy's cached system registry. The system retains access metadata and consumes
+only the current visibility queues. The selected caster set, pass ordering,
+shadow settings, and application-owned policy stay intact. The cache belongs to
+the Bevy visibility mechanism and requires no authored hook. The focused test
+covers live archetype admission, retired entities, missing components, and an
+empty publication after visible entities were written.
+
+The candidate was built at application revision `ac46e590f` with a local Cargo
+path override for `bevy_light` only. It passes 39 authored shadow input checks
+and all 12 moving-Sun GPU phases. The offscreen receiver raster test failed to
+start on the control with an Egui resource validation panic. The windowed checks
+supply the renderer evidence for this change.
+
+`bevy-visibility-query/capture.tracy` contains 13,492,553 zones over 210.4 s
+for owned PID 401486, with a verified 1 ms CPU sample period. The exact
+executable SHA256 is
+`0839330ccde40373d017602789e718d9a28dacc241ccb77e90660acbabc096d0`.
+Control and candidate use the same Griffin sources, High 2560×1440 tracking
+view, and 50-second comparison windows starting 10 s after View activation.
+The deferred visibility command mean falls from 0.518 to 0.043 ms, and its p99
+falls from 1.197 to 0.118 ms. The enclosing visibility calculation is separate.
+
+The candidate's instrumented 60-second frame window averages 19.415 FPS with
+p95 84.480 ms and worst frame 231.993 ms under concurrent builds and simulator
+load. The earlier instrumented control averages 44.549 FPS with a 91.118 ms
+worst frame. The different host loads prevent attributing the whole-frame
+difference to the cache. Owned API ports and the Tracy port are released.
+The dependency commit remains local and the simulator keeps its published pin.
