@@ -68,6 +68,17 @@ pub struct SchemeRegistry {
 }
 
 impl SchemeRegistry {
+    /// Classify a registered asset reference without resolving filesystem identity.
+    /// File/document owners can admit URI reads and resolve them on their worker.
+    pub fn recognizes(&self, reference: &str) -> Result<bool, SchemeRegistryError> {
+        let Some((scheme, _)) = crate::asset_path::split_scheme(reference) else {
+            return Ok(false);
+        };
+        self.handlers
+            .read()
+            .map(|handlers| handlers.contains_key(&scheme.to_ascii_lowercase()))
+            .map_err(|_| SchemeRegistryError::RegistryPoisoned)
+    }
     /// Register (or replace) the local-root resolver for `scheme`.
     ///
     /// Adding a scheme is this ONE call — there is deliberately no second
@@ -137,6 +148,8 @@ mod tests {
         let reg = SchemeRegistry::default();
         reg.register("pack", |rest| Ok(Some(PathBuf::from("/packs").join(rest))))
             .unwrap();
+        assert!(reg.recognizes("pack://a/b.usda").unwrap());
+        assert!(!reg.recognizes("unknown://a/b.usda").unwrap());
         assert_eq!(
             reg.local_path("pack://a/b.usda").unwrap(),
             Some(PathBuf::from("/packs/a/b.usda"))

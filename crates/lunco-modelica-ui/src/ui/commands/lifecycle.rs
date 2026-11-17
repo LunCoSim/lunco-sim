@@ -924,8 +924,12 @@ pub fn on_open_file(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    schemes: Option<Res<lunco_assets_core::SchemeRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
 ) {
     let path = trigger.event().path.clone();
+    let schemes = schemes.as_deref().cloned();
+    let roots = roots.as_deref().cloned();
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
     let admission = crate::ui::document_openings::FileOpenAdmission::capture(
@@ -972,8 +976,8 @@ pub fn on_open_file(
             return;
         }
 
-        // Everything else (bundled://, file://, raw .mo path) flows
-        // through the typed ClassRef + single `open_class` entry.
+        // Native file URIs and class-tree identities use the class owner.
+        // Registered asset references use the admitted file worker below.
         if let Some(native_path) = native_file_path {
             if !native_path
                 .extension()
@@ -990,7 +994,24 @@ pub fn on_open_file(
             );
             return;
         }
-        if let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path) {
+        let registered_asset = match schemes
+            .as_ref()
+            .map(|registry| registry.recognizes(&path))
+            .transpose()
+        {
+            Ok(registered) => registered.unwrap_or(false),
+            Err(error) => {
+                world.commands().trigger(lunco_core::RuntimeError {
+                    name: "modelica-file-open-failed".into(),
+                    message: format!("Modelica source `{path}` could not be admitted: {error}"),
+                });
+                return;
+            }
+        } && filesystem_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mo"));
+        if !registered_asset && let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path) {
             crate::ui::panels::package_browser::open_class(world, class, true, admission);
             return;
         }
@@ -1004,15 +1025,58 @@ pub fn on_open_file(
         }
 
         let path_buf = std::path::PathBuf::from(&path);
+        let asset_address = if registered_asset {
+            match lunco_assets_core::asset_path::load_source_uri(&path, roots.as_ref()) {
+                Ok(address) => Some(lunco_assets_core::asset_path::anchor_of(&address)),
+                Err(error) => {
+                    world.commands().trigger(lunco_core::RuntimeError {
+                        name: "modelica-file-open-failed".into(),
+                        message: format!("Modelica source `{path}` could not be admitted: {error}"),
+                    });
+                    return;
+                }
+            }
+        } else {
+            None
+        };
 
         bevy::tasks::AsyncComputeTaskPool::get()
             .spawn(async move {
                 let mut admission = admission;
                 admission.resolve_residents();
-                let read_result = lunco_modelica_runtime::source_asset::read_admitted_file(
-                    &path_buf,
-                    admission.file.clone(),
-                )
+                let read_result = async {
+                    let native = if let Some(address) = asset_address {
+                        schemes
+                            .ok_or("Modelica asset scheme registry is unavailable")?
+                            .local_path(&address)
+                            .map_err(|error| error.to_string())?
+                            .ok_or_else(|| {
+                                format!(
+                                    "Modelica source `{path}` has no admitted local asset source"
+                                )
+                            })?
+                    } else {
+                        path_buf.clone()
+                    };
+                    let (resolved, source) =
+                        lunco_modelica_runtime::source_asset::read_admitted_file(
+                            &native,
+                            admission.file.clone(),
+                        )
+                        .await?;
+                    if lunco_assets_core::parse_twin_uri(&path).is_some()
+                        && matches!(
+                            resolved.runtime,
+                            lunco_workspace::DocumentRuntimeOwner::Application
+                        )
+                    {
+                        return Err(
+                            "Modelica Twin source no longer belongs to the admitted Twin lifetime"
+                                .into(),
+                        );
+                    }
+                    Ok((resolved, source))
+                }
                 .await;
                 let _ = open_file_result_tx().send(OpenFileResult {
                     requested_path: path_buf,

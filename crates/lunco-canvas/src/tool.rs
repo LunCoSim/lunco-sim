@@ -104,6 +104,7 @@ const PORT_HIT_RADIUS: f32 = 6.0;
 /// than this distance is treated as a click (no scene mutation) to
 /// avoid phantom 1-pixel moves when the user intended to click.
 const DRAG_THRESHOLD_WORLD: f32 = 2.0;
+const EDGE_BODY_TOL_PX: f32 = 4.0;
 
 /// What drives the canvas's interactive behaviour. See module docs.
 pub trait Tool: Send + Sync {
@@ -334,6 +335,8 @@ pub type ConnectionValidator = fn(&Scene, &PortRef, &PortRef) -> Result<(), Stri
 /// Built-in Modelica/graph-editor tool: select, drag, connect, delete.
 pub struct DefaultTool {
     validator: Option<ConnectionValidator>,
+    on_geometry_changed: Option<fn(&mut Scene)>,
+    edit_waypoints: bool,
     snap_target: Option<Pos>,
     state: State,
     /// Tracks the last observed pointer position in world coords so
@@ -348,6 +351,8 @@ impl Default for DefaultTool {
         Self {
             state: State::Idle,
             validator: None,
+            on_geometry_changed: None,
+            edit_waypoints: true,
             snap_target: None,
             last_pointer_world: None,
         }
@@ -554,20 +559,17 @@ impl Tool for DefaultTool {
                     // mid-drag mutations so the scene looks like the
                     // user never started the gesture (Figma-style).
                     let state = std::mem::replace(&mut self.state, State::Idle);
+                    let mut geometry_changed = false;
                     match state {
                         State::DraggingNodes { original_rects, .. } => {
                             for (nid, orig) in original_rects {
-                                if let Some(n) = ops.scene.node_mut(nid) {
-                                    n.rect = orig;
-                                }
+                                geometry_changed |= set_node_rect(ops.scene, nid, orig);
                             }
                         }
                         State::ResizingNode {
                             id, original_rect, ..
                         } => {
-                            if let Some(n) = ops.scene.node_mut(id) {
-                                n.rect = original_rect;
-                            }
+                            geometry_changed |= set_node_rect(ops.scene, id, original_rect);
                         }
                         State::DraggingEdgeWaypoint { edge, original, .. } => {
                             if let Some(e) = ops.scene.edge_mut(edge) {
@@ -576,6 +578,7 @@ impl Tool for DefaultTool {
                         }
                         _ => {}
                     }
+                    self.refresh_geometry(ops.scene, geometry_changed);
                     ToolOutcome::Consumed
                 }
                 _ => ToolOutcome::Passthrough,
@@ -633,6 +636,25 @@ impl DefaultTool {
         Self {
             validator: Some(validator),
             ..Self::default()
+        }
+    }
+
+    /// Refresh host-derived geometry after a node gesture changes its rectangles.
+    /// Runs before paint and hit testing can observe the new node positions.
+    pub fn with_geometry_refresh(mut self, refresh: fn(&mut Scene)) -> Self {
+        self.on_geometry_changed = Some(refresh);
+        self
+    }
+
+    /// Keep generated wire geometry selectable while disabling bend gestures.
+    pub fn without_waypoint_editing(mut self) -> Self {
+        self.edit_waypoints = false;
+        self
+    }
+
+    fn refresh_geometry(&self, scene: &mut Scene, changed: bool) {
+        if changed && let Some(refresh) = self.on_geometry_changed {
+            refresh(scene);
         }
     }
 
@@ -768,12 +790,15 @@ impl DefaultTool {
             }
             Some((id, NodeHitKind::Body)) => PressTarget::NodeBody(id),
             None if !ops.show_edges => PressTarget::Empty,
+            None if !self.edit_waypoints => ops
+                .scene
+                .hit_edge(world, EDGE_BODY_TOL_PX / ops.viewport.zoom.max(0.001))
+                .map_or(PressTarget::Empty, PressTarget::EdgeBody),
             None => {
                 // Could still hit an edge. Tolerances are quoted in
                 // *screen points* and scaled to world units by the
                 // current zoom — otherwise 5-world-unit handles shrink
                 // off-grabbable at high zoom and balloon at low zoom.
-                const EDGE_BODY_TOL_PX: f32 = 4.0;
                 const EDGE_HANDLE_RADIUS_PX: f32 = 5.0;
                 let zoom = ops.viewport.zoom.max(0.001);
                 let body_tol = EDGE_BODY_TOL_PX / zoom;
@@ -997,6 +1022,7 @@ impl DefaultTool {
         }
 
         // Feed in-flight drag state.
+        let mut geometry_changed = false;
         match &mut self.state {
             State::DraggingNodes {
                 origin_world,
@@ -1033,9 +1059,7 @@ impl DefaultTool {
                     }
                 }
                 for (nid, original) in original_rects.iter() {
-                    if let Some(n) = ops.scene.node_mut(*nid) {
-                        n.rect = original.translated(dx, dy);
-                    }
+                    geometry_changed |= set_node_rect(ops.scene, *nid, original.translated(dx, dy));
                 }
             }
             State::ConnectingFromPort { pointer_world, .. } => {
@@ -1053,9 +1077,11 @@ impl DefaultTool {
                 let dy = world.y - origin_world.y;
                 let new_max_x = (original_rect.max.x + dx).max(original_rect.min.x + 8.0);
                 let new_max_y = (original_rect.max.y + dy).max(original_rect.min.y + 8.0);
-                if let Some(n) = ops.scene.node_mut(*id) {
-                    n.rect = Rect::from_min_max(original_rect.min, Pos::new(new_max_x, new_max_y));
-                }
+                geometry_changed = set_node_rect(
+                    ops.scene,
+                    *id,
+                    Rect::from_min_max(original_rect.min, Pos::new(new_max_x, new_max_y)),
+                );
             }
             State::DraggingEdgeWaypoint {
                 edge,
@@ -1196,6 +1222,7 @@ impl DefaultTool {
             }
             _ => {}
         }
+        self.refresh_geometry(ops.scene, geometry_changed);
     }
 
     fn on_primary_up(&mut self, world: Pos, ops: &mut CanvasOps) {
@@ -1506,6 +1533,16 @@ impl DefaultTool {
         ops.events
             .push(SceneEvent::SelectionChanged(ops.selection.clone()));
     }
+}
+
+fn set_node_rect(scene: &mut Scene, id: NodeId, rect: Rect) -> bool {
+    if scene.node(id).is_some_and(|node| node.rect != rect)
+        && let Some(node) = scene.node_mut(id)
+    {
+        node.rect = rect;
+        return true;
+    }
+    false
 }
 
 /// Find the port on `node_id` whose world-space anchor is closest

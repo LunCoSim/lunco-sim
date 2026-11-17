@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**318 commands** across **59** crates. All documented.
+**321 commands** across **59** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (27 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (30 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (4 commands)
 
 **USD / scenes**
@@ -171,6 +171,21 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `name` | `Option < String >` |  Prim name for the new camera. `None` picks the first free `View_N`. |
+
+#### `ApplyConnectionBinding`
+
+ Add a binding or replace one exact existing binding in one USD undo transaction.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/authoring.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |  Exact view identity returned by InspectConnectionDiagram. |
+| `parent_gen` | `u64` |  Source generation returned by InspectConnectionDiagram; stale drafts reject. |
+| `from` | `BindingEndpoint` |  First selected endpoint; the USD validator resolves causal direction. |
+| `to` | `BindingEndpoint` |  Second selected endpoint. |
+| `previous` | `Option < BindingPair >` |  Existing binding to remove atomically before installing the new endpoints. |
+| `replace_sources` | `bool` |  Explicitly replace every other source on the new sink. |
 
 #### `ClearScenePointerMoveHook`
 
@@ -407,6 +422,30 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `view_id` | `u64` |  Exact live Connections view identity. |
 | `enabled` | `bool` |  Whether declared accesses are painted over the static graph. |
+
+#### `SetConnectionSource`
+
+ Select the live scene or the focused USD document as the Connections source.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/workspace.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `active_scene` | `bool` |  True selects the live scene; false selects the focused USD document. |
+
+#### `SetConnectionWorkspace`
+
+ Configure one exact source-leased view.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/workspace.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `view_id` | `u64` |  Exact Connections view-document identity returned by InspectConnectionDiagram. |
+| `presentation` | `Option < String >` |  Optional presentation: topology, interface or bindings. |
+| `show_local_wires` | `Option < bool >` |  Reveal same-prim causal wires in the topology presentation. |
+| `live_values` | `Option < bool >` |  Request live port values in a scene view; document previews remain inert. |
+| `animate_changes` | `Option < bool >` |  Highlight observed value changes while the simulation advances. |
 
 #### `SetDiagnosticLayers`
 
@@ -4720,7 +4759,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 318 commands from the runtime schema; scanned 1105 .rs files for docs (0 parse failure(s) skipped).
+<!-- 321 commands from the runtime schema; scanned 1109 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

@@ -400,12 +400,16 @@ pub(super) fn project(state: &mut UsdCanvasSessionState) {
             rect,
             kind: projection::NODE_KIND.into(),
             data: Arc::new(projection::UsdPrimNodeData {
+                local_bindings_as_rows: false,
+                local_binding_count: 0,
+                icon_program: None,
+                modelica_icon: None,
                 group_id: Some(group.id.clone()),
                 group_ports: endpoints,
                 programs: Vec::new(),
                 accent: Some(projection::DiagramAccent::Package),
                 type_name: format!(
-                    "{} members · {} internal · {} feedback",
+                    "{} members · {} internal · {} same-prim",
                     group.members.len(),
                     group.internal_links,
                     group.feedback_links

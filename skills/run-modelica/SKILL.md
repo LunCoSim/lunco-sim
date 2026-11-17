@@ -1176,7 +1176,10 @@ curl -s -X POST $API -H "Content-Type: application/json" \
   Check `ListRuns` state first; a big sweep runs async.
 - **Unified opening**: prefer `Open{uri}`. `OpenClass` resolves a Modelica
   class through the source-aware document/library path; `OpenFile` resolves a
-  filesystem URI.
+  filesystem URI or registered `.mo` asset URI. Registered assets admit their
+  stable identity through `load_source_uri` before `SchemeRegistry` resolves
+  the captured load address on the file worker. Twin source opens must retain
+  that exact admitted Twin lifetime.
 - **File lifetime**: native file opens pin canonical local/replicated root ownership
   before installation; browser mounted files read OPFS, while picker/private saves
   have Application lifetime. Closing the admitted owner retires file work even

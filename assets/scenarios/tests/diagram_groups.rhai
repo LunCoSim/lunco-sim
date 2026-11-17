@@ -12,6 +12,11 @@ fn on_tick(me,ctx) {
         if q.groups.len()==0 {return;}
         let group=q.groups[0];for candidate in q.groups {if candidate.internal_links>group.internal_links {group=candidate;}}if group.collapsed {return;}
         this.group=group;this.scope=q.scope;this.view_id=q.view_id;this.count=q.connection_count;this.positions=#{};
+        this.rendered=q.rendered_connection_count;this.internal_rendered=0;
+        for link in q.connections {
+            if !link.visible {continue;}
+            if group.members.contains(link.source_key) && group.members.contains(link.target_key) {this.internal_rendered+=1;}
+        }
         for node in q.nodes {if group.members.contains(node.key) {this.positions[node.key]=#{x:node.x,y:node.y};}}
         this.checks.push(t_true(this.positions.len()==group.members.len(),"expanded group exposes every member"));
         cmd("SetConnectionGroupCollapsed",#{view_id:this.view_id,group_id:group.id,collapsed:true});this.phase=1;return;
@@ -21,7 +26,7 @@ fn on_tick(me,ctx) {
     if this.phase==1 {
         if summary==() {return;}
         this.checks.push(t_true(q.connection_count==this.count,"collapse preserves full USD connection count"));
-        this.checks.push(t_true(q.rendered_connection_count==this.count-this.group.internal_links,"collapse accounts for every internal and feedback edge"));
+        this.checks.push(t_true(q.rendered_connection_count==this.rendered-this.internal_rendered,"collapse removes drawn internal links while preserving other summaries"));
         for node in q.nodes {this.checks.push(t_true(!this.group.members.contains(node.key),"collapsed member is represented by summary"));}
         for port in summary.ports {let exact=false;for path in this.group.members {if port.name.starts_with(path+".") {exact=true;}}this.checks.push(t_true(exact,"summary ports retain exact member property identity"));}
         cmd("MoveConnectionGroup",#{view_id:this.view_id,group_id:this.group.id,dx:80.0,dy:40.0});this.phase=2;return;
@@ -38,6 +43,7 @@ fn on_tick(me,ctx) {
         let visible=0;for node in q.nodes {if this.group.members.contains(node.key) {visible+=1;}}
         if visible!=this.group.members.len() {return;}
         this.checks.push(t_true(q.connection_count==this.count && q.scope==this.scope,"expanding keeps USD topology and scope"));
+        this.checks.push(t_true(q.rendered_connection_count==this.rendered,"expansion restores the same drawn topology"));
         let rejected=cmd("SetConnectionGroup",#{view_id:this.view_id,group_id:"invalid-test",label:"Invalid",members:[this.group.members[0],"/absent/group/member"]});
         this.checks.push(t_true(rejected.ok==false,"missing USD membership is rejected"));
         cmd("UndoConnectionView",#{view_id:this.view_id,redo:false});this.phase=4;return;

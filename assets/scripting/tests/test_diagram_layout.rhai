@@ -69,5 +69,15 @@ let accents = #{};
 if styled.ok { for placement in styled.value { accents[placement.path] = placement.accent; } }
 checks.push(t_true(styled.ok && accents["/Model"] == "model" && accents["/Script"] == "block" && accents["/Python"] == "record", "language styles are authored schematic theme roles"));
 checks.push(t_true(styled.ok && accents["/Mixed"] == "package" && accents["/Invalid"] == "warning", "mixed and invalid programs remain distinguishable"));
+let visual = invoke_hook("diagram.layout", [#{nodes:[
+    #{path:"/Model",role:"prim",programs:["Modelica"],program_facts:[#{path:"/Model/Program",backend:"Modelica",source:"lunco://models/example.mo"}],width:250.0,height:96.0,rank:0},
+    #{path:"/Mixed",role:"prim",programs:["Modelica","Modelica"],program_facts:[#{path:"/Mixed/A",backend:"Modelica"},#{path:"/Mixed/B",backend:"Modelica"}],width:250.0,height:96.0,rank:0}
+],edges:[],scope:"/"}]);
+if visual.ok {
+    let by_path=#{};for placement in visual.value {by_path[placement.path]=placement;}
+    checks.push(t_true(by_path["/Model"].icon_program=="/Model/Program" && by_path["/Model"].local_bindings_as_rows,
+        "authored policy selects the exact Modelica facet and summarizes local bindings"));
+    checks.push(t_true(!by_path["/Mixed"].contains("icon_program"),"ambiguous model facets retain the composite card"));
+} else {checks.push(t_true(false,"visual presentation policy evaluates"));}
 checks.push(t_true(!invalid.ok, "bad layout facts fail visibly"));
 report_verdict(checks, "DIAGRAM LAYOUT", "DIAGRAM_LAYOUT");

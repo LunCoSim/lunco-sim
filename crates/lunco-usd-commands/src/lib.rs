@@ -507,13 +507,14 @@ fn on_open_usd_source_document(
             if !is_usd_path(&source) {
                 return Err("Choose an exact USD source".into());
             }
-            if let Some((name, _)) = lunco_assets_core::parse_twin_uri(&source)
-                && !roots
-                    .as_ref()
-                    .is_some_and(|roots| roots.root_for(name).ok().flatten().is_some())
-            {
-                return Err("The source Twin is not mounted".into());
-            }
+            let load_address = if lunco_assets_core::parse_twin_uri(&source).is_some() {
+                lunco_assets_core::asset_path::anchor_of(
+                    &lunco_assets_core::asset_path::load_source_uri(&source, roots.as_deref())
+                        .map_err(|error| error.to_string())?,
+                )
+            } else {
+                source.clone()
+            };
             let key = PathBuf::from(&source);
             if pending.tasks.iter().any(
                 |load| matches!(&load.request, UsdLoadRequest::File { path, .. } if path == &key),
@@ -531,9 +532,9 @@ fn on_open_usd_source_document(
             let resolver = resolver.clone();
             let task_admission = admission.clone();
             let task = AsyncComputeTaskPool::get().spawn(async move {
-                let path = if lunco_assets_core::has_scheme(&source) {
+                let path = if lunco_assets_core::has_scheme(&load_address) {
                     resolver
-                        .local_path(&source)
+                        .local_path(&load_address)
                         .map_err(|error| error.to_string())?
                         .ok_or_else(|| format!("USD source has no editable local file: {source}"))?
                 } else {

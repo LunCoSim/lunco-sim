@@ -4,34 +4,39 @@ use bevy_egui::egui;
 use lunco_doc::Document;
 use lunco_workbench_core::PanelCtx;
 
-pub(super) fn source_picker(ui: &mut egui::Ui, show_scene: &mut bool) {
+pub(super) fn source_picker(ui: &mut egui::Ui, ctx: &mut PanelCtx, show_scene: bool) {
+    let mut selected = show_scene;
     egui::ComboBox::from_id_salt("connection_source")
-        .selected_text(if *show_scene {
+        .selected_text(if show_scene {
             "Scene · Browse"
         } else {
             "Document · Edit"
         })
         .show_ui(ui, |ui| {
-            ui.selectable_value(show_scene, true, "Scene · Browse");
-            ui.selectable_value(show_scene, false, "Document · Edit");
+            ui.selectable_value(&mut selected, true, "Scene · Browse");
+            ui.selectable_value(&mut selected, false, "Document · Edit");
         });
+    if selected != show_scene {
+        ctx.trigger(super::workspace::SetConnectionSource {
+            active_scene: selected,
+        });
+    }
 }
 
-/// Returns a source switch requested by the user, after finishing the current borrow.
+/// Navigation and document controls dispatch the same typed actions as API clients.
 pub(super) fn render(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     state: &mut UsdCanvasSessionState,
     show_scene: bool,
-) -> Option<bool> {
-    let mut requested_source = show_scene;
+) {
     let mut requested_view = state.selected_view.clone();
     let previous_mode = state.diagram_mode;
     if show_scene {
         state.diagram_mode = true;
     }
     ui.horizontal_wrapped(|ui| {
-        source_picker(ui, &mut requested_source);
+        source_picker(ui, ctx, show_scene);
         if show_scene {
             let mut enabled = state.runtime_interactions.enabled;
             if ui.checkbox(&mut enabled, "Scenario access")
@@ -229,10 +234,16 @@ pub(super) fn render(
                 ctx.trigger(lunco_usd_core::commands::OpenUsdSourceDocument {
                     source: uri.clone(),
                 });
-                requested_source = false;
+                ctx.trigger(super::workspace::SetConnectionSource{active_scene:false});
             }
         }
         if !show_scene {
+            if let Some(doc_id)=state.doc {
+                if ui.button("Save USD").clicked() {ctx.trigger(lunco_doc_bevy::SaveDocument{doc_id});}
+                if ui.button("Undo USD").clicked() {ctx.trigger(lunco_doc_bevy::UndoDocument{doc_id});}
+                if ui.button("Redo USD").clicked() {ctx.trigger(lunco_doc_bevy::RedoDocument{doc_id});}
+                if ui.button("USD properties").clicked() {ctx.trigger(lunco_workbench_core::commands::FocusPanel{id:"sandbox_inspector".into()});}
+            }
             let dirty = state
                 .doc
                 .and_then(|id| {
@@ -299,9 +310,6 @@ pub(super) fn render(
             ui.label("Backend badges identify attached models even when their prims are nested.");
         });
     });
-    if requested_source != show_scene {
-        return Some(requested_source);
-    }
     if requested_view != state.selected_view {
         if let Some(host) = &state.view_document {
             let definition = &host.document().data().views[&requested_view];
@@ -459,5 +467,4 @@ pub(super) fn render(
         });
     });
     ui.separator();
-    None
 }

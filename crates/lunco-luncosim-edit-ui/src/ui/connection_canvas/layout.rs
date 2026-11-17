@@ -25,6 +25,8 @@ struct Placement {
     y: f64,
     label: Option<String>,
     accent: Option<super::projection::DiagramAccent>,
+    local_bindings_as_rows: bool,
+    icon_program: Option<String>,
 }
 type Placements = BTreeMap<String, Placement>;
 struct LayoutResult {
@@ -99,6 +101,7 @@ pub(super) fn request(state: &mut UsdCanvasSessionState) {
                                     .iter()
                                     .map(|p| {
                                         HookValue::map([
+                                            ("path", HookValue::str(&p.path)),
                                             ("backend", HookValue::str(&p.backend)),
                                             ("source", HookValue::str(&p.source)),
                                         ])
@@ -324,6 +327,47 @@ fn evaluate(mut facts: HookValue) -> Result<LayoutResult, String> {
                 Ok(label.to_string())
             })
             .transpose()?;
+        let local_bindings_as_rows = entry
+            .get("local_bindings_as_rows")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or("local_bindings_as_rows must be boolean")
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let icon_program = entry
+            .get("icon_program")
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .ok_or("icon_program must be a nonempty exact program path")
+            })
+            .transpose()?;
+        if let Some(program) = icon_program.as_deref() {
+            let available = nodes
+                .iter()
+                .find(|node| node.get("path").and_then(HookValue::as_str) == Some(path))
+                .and_then(|node| node.get("program_facts"))
+                .and_then(|value| {
+                    if let HookValue::Array(programs) = value {
+                        Some(programs)
+                    } else {
+                        None
+                    }
+                })
+                .is_some_and(|programs| {
+                    programs.iter().any(|fact| {
+                        fact.get("path").and_then(HookValue::as_str) == Some(program)
+                            && fact.get("backend").and_then(HookValue::as_str) == Some("Modelica")
+                    })
+                });
+            if !available {
+                return Err("Layout selected an unavailable Modelica program icon".into());
+            }
+        }
         let accent = entry
             .get("accent")
             .map(|value| {
@@ -352,6 +396,8 @@ fn evaluate(mut facts: HookValue) -> Result<LayoutResult, String> {
                         y,
                         label,
                         accent,
+                        local_bindings_as_rows,
+                        icon_program,
                     },
                 )
                 .is_some()
@@ -440,14 +486,17 @@ pub fn update_layouts(
                                     if let Some(label) = &placement.label {
                                         node.label.clone_from(label);
                                     }
-                                    if let Some(accent) = placement.accent {
-                                        if let Some(data) =
-                                            node.data.downcast_ref::<super::UsdPrimNodeData>()
-                                        {
-                                            let mut data = data.clone();
+                                    if let Some(data) =
+                                        node.data.downcast_ref::<super::UsdPrimNodeData>()
+                                    {
+                                        let mut data = data.clone();
+                                        data.icon_program.clone_from(&placement.icon_program);
+                                        data.local_bindings_as_rows =
+                                            placement.local_bindings_as_rows;
+                                        if let Some(accent) = placement.accent {
                                             data.accent = Some(accent);
-                                            node.data = std::sync::Arc::new(data);
                                         }
+                                        node.data = std::sync::Arc::new(data);
                                     }
                                 }
                             }

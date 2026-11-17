@@ -31,8 +31,11 @@
 //! full USD topology with cached hierarchy navigation; Authored schema mode
 //! edits explicitly marked boundaries through the document command owner.
 
+mod activity;
+mod authoring;
 mod drop_assets;
 mod groups;
+mod icons;
 mod inspection;
 mod layout;
 mod navigation;
@@ -41,7 +44,15 @@ mod runtime_interactions;
 mod toolbar;
 mod view_files;
 mod visuals;
+mod workspace;
+pub use activity::{sample as sample_activity, sample_due as activity_due};
+pub use authoring::{ApplyConnectionBinding, BindingEndpoint, BindingPair};
 pub use layout::{LayoutJobs, update_layouts};
+pub(super) fn init_workspace(app: &mut App) {
+    workspace::init(app);
+    authoring::init(app);
+    app.add_systems(Update, icons::refresh);
+}
 pub use view_files::{init_view_commands, poll_view_files, view_files_pending};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -77,6 +88,8 @@ fn build_registry() -> VisualRegistry {
     {
         Some(d) => visuals::node_visual(d),
         None => visuals::UsdPrimNodeVisual {
+            local_binding_count: 0,
+            icon: None,
             type_name: String::new(),
             programs: String::new(),
             accent: None,
@@ -142,6 +155,9 @@ pub struct UsdCanvasSessionState {
     source_nodes: Vec<PrimNode>,
     source_wires: Vec<Wire>,
     runtime_interactions: runtime_interactions::RuntimeInteractions,
+    workspace: workspace::Workspace,
+    activity: activity::Activity,
+    icons: icons::Icons,
     /// All composed prim paths, including prims without ECS projections.
     /// Structural deltas use this index to re-read only the affected subtree.
     source_prim_paths: BTreeSet<String>,
@@ -174,9 +190,11 @@ impl Default for UsdCanvasSessionState {
         // in one frame.  The connection view owns this scale policy because
         // it knows the scene is a document-sized graph, not a small sketch.
         canvas.viewport.config.zoom_min = 0.001;
-        canvas.tool = Box::new(lunco_canvas::DefaultTool::with_validator(
-            validate_connection,
-        ));
+        canvas.tool = Box::new(
+            lunco_canvas::DefaultTool::with_validator(validate_connection)
+                .with_geometry_refresh(projection::route_edges)
+                .without_waypoint_editing(),
+        );
         let mut edges = lunco_canvas::EdgesLayer::new(canvas.registry.clone());
         edges.trace_selection = true;
         canvas.layers[1] = Box::new(edges);
@@ -203,7 +221,7 @@ impl Default for UsdCanvasSessionState {
             layout_request: None,
             navigation_history: Vec::new(),
             navigation_restore: None,
-            details_open: true,
+            details_open: false,
             inspection: Default::default(),
             expanded_scene: None,
             group_plan: Vec::new(),
@@ -211,6 +229,9 @@ impl Default for UsdCanvasSessionState {
             source_nodes: Vec::new(),
             source_wires: Vec::new(),
             runtime_interactions: Default::default(),
+            workspace: Default::default(),
+            activity: Default::default(),
+            icons: Default::default(),
             source_prim_paths: BTreeSet::new(),
             pending_changes: CanvasStageChanges::default(),
             schema_roots: Vec::new(),
@@ -301,6 +322,8 @@ impl UsdCanvasSessionState {
         }
         projection::route_edges(&mut self.canvas.scene);
         groups::project(self);
+        workspace::refresh(self);
+        icons::apply(self);
         runtime_interactions::bind(self);
     }
 
@@ -497,6 +520,7 @@ fn sort_graph(nodes: &mut [PrimNode], wires: &mut [Wire]) {
 /// rebuilds its canvas scene when the topology changes. Runs on the main thread
 /// because `StageView` is `!Send`.
 pub fn produce_usd_canvas(
+    server: Res<AssetServer>,
     asset_roots: Option<Res<lunco_assets_core::TwinRoots>>,
     q: Query<(Entity, &UsdPrimPath)>,
     path_changes: Query<(Entity, &UsdPrimPath), Changed<UsdPrimPath>>,
@@ -556,6 +580,7 @@ pub fn produce_usd_canvas(
             &mut canonical,
             &mut views.scene,
             changes_by_stage.get(&path.stage_handle.id()),
+            &server,
         );
         runtime_interactions::refresh(
             &mut views.scene,
@@ -582,6 +607,7 @@ pub fn produce_usd_canvas(
             &mut canonical,
             state,
             changes_by_stage.get(&session.stage_handle().id()),
+            &server,
         );
     }
 }
@@ -601,6 +627,7 @@ fn produce_usd_canvas_session(
     canonical: &mut CanonicalStages,
     state: &mut UsdCanvasSessionState,
     changes: Option<&CanvasStageChanges>,
+    server: &AssetServer,
 ) {
     let stage_id = handle.id();
 
@@ -850,6 +877,14 @@ fn produce_usd_canvas_session(
     state.doc = doc;
     state.generation = generation;
     state.canonical_generation = Some(canonical_generation);
+    icons::prepare(
+        state,
+        server,
+        asset_roots,
+        stages
+            .get(&handle)
+            .and_then(|asset| canonical.native_asset_paths_for(stage_id, asset)),
+    );
     if bounds.is_some() {
         state.frame_request = Some(
             state
@@ -1135,13 +1170,13 @@ impl Panel for UsdCanvasPanel {
             let state = if show_scene {
                 &mut views.scene
             } else {
-                let Some(preview) = preview else { toolbar::source_picker(ui, &mut views.show_scene); ui.label("Choose a USD document in the Twin Browser."); return; };
+                let Some(preview) = preview else { toolbar::source_picker(ui, ctx, views.show_scene); ui.label("Choose a USD document in the Twin Browser."); return; };
                 if !projection_ready { ui.label("The selected USD preview is settling."); return; }
                 let Some(state) = views.sessions.get_mut(&preview) else { ui.label("The document is being projected."); return; };
                 state
             };
             if !state.built {
-                toolbar::source_picker(ui, &mut views.show_scene);
+                toolbar::source_picker(ui, ctx, views.show_scene);
                 if ctx.resource::<lunco_core::SceneMountState>().and_then(|scene| scene.active_root()).is_none() {
                     ui.label("No scene is open. Open a USD document or load a scene to inspect connections.");
                 } else {
@@ -1151,9 +1186,11 @@ impl Panel for UsdCanvasPanel {
             }
             let show_controls = ctx.resource::<lunco_theme::DiagramPresentationSettings>()
                 .is_none_or(|settings| settings.show_controls);
-            let requested_source = if show_controls { toolbar::render(ui, ctx, state, show_scene) } else { None };
-            if let Some(show_scene) = requested_source {
-                views.show_scene = show_scene;
+            if show_controls { toolbar::render(ui, ctx, state, show_scene); }
+            state.activity.requested.clear();
+            if show_controls { workspace::controls(ui, ctx, state); }
+            if state.workspace.mode != workspace::Presentation::Topology {
+                workspace::render(ui, ctx, state);
                 return;
             }
             if !state.diagram_mode && state.active_schema_root.is_none() {
@@ -1220,6 +1257,8 @@ impl Panel for UsdCanvasPanel {
             state.canvas_rect = Some(lunco_canvas::Rect::from_min_max(lunco_canvas::Pos::new(response.rect.min.x, response.rect.min.y), lunco_canvas::Pos::new(response.rect.max.x, response.rect.max.y)));
             groups::frames(ui, ctx, state, graph_rect);
             runtime_interactions::paint(ui, state, graph_rect);
+            let activity_time=ctx.resource::<Time<Real>>().map(|time|time.elapsed_secs_f64()).unwrap_or_default();
+            activity::paint(ui, state, graph_rect,activity_time);
             drop_assets::drop_ui(ui, &response, state, ctx);
             if show_controls { inspection::connection_guidance(ui, &response, state); }
             response.context_menu(|ui| inspection::context_menu(ui, ctx, state));

@@ -54,11 +54,12 @@ fn reveal(
     ctx: &mut PanelCtx,
     state: &UsdCanvasSessionState,
     endpoint: &PortRef,
+    scene: &Scene,
 ) {
     if ui.button("Go to").clicked() {
         if let (Some(host), Ok((node, name))) = (
             &state.view_document,
-            super::groups::endpoint(&state.canvas.scene, endpoint),
+            super::groups::endpoint(scene, endpoint),
         ) {
             if let Some(key) = projection::diagram_key(node) {
                 ctx.trigger(navigation::SelectConnectionElement {
@@ -73,7 +74,8 @@ fn reveal(
 }
 
 fn wire(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &UsdCanvasSessionState, id: EdgeId) {
-    let Some(edge) = state.canvas.scene.edge(id) else {
+    let scene = super::workspace::full_scene(state);
+    let Some(edge) = scene.edge(id) else {
         return;
     };
     let kind = edge
@@ -85,9 +87,27 @@ fn wire(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &UsdCanvasSessionState, id
         Some(projection::WireKind::Acausal) => "Acausal ↔",
         _ => "Joint ↔",
     });
+    if let Some(row) = state.workspace.rows.iter().find(|row| row.id == id) {
+        ui.label(lunco_core::humanize_identifier(
+            state.activity.status(state.doc.is_some(), row),
+        ));
+        if let Some(failure) = state.activity.failure(row) {
+            ui.colored_label(lunco_theme::active(ui.ctx()).tokens.warning, failure);
+        }
+        for (label, key) in [("Source", &row.source), ("Target", &row.target)] {
+            if let Some(sample) = state.activity.ports.get(key) {
+                ui.label(format!("{label}: {}", sample.display()));
+            }
+        }
+    }
     for endpoint in [&edge.from, &edge.to] {
-        ui.label(endpoint_label(state, endpoint));
-        reveal(ui, ctx, state, endpoint);
+        if let Ok((node, name)) = super::groups::endpoint(scene, endpoint) {
+            ui.label(format!(
+                "{}.{name}",
+                node.origin.as_deref().unwrap_or(&node.label)
+            ));
+        }
+        reveal(ui, ctx, state, endpoint, scene);
     }
     ui.separator();
 }
@@ -104,7 +124,7 @@ pub(super) fn render(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &mut UsdCanva
             ui.strong(&node.label);
             if let Some(group_id) = &data.group_id {
                 if let Some(group) = state.group_plan.iter().find(|g| &g.id == group_id) {
-                    ui.label(format!("{} members · {} internal links · {} feedback links",group.members.len(),group.internal_links,group.feedback_links));
+                    ui.label(format!("{} members · {} internal links · {} same-prim bindings",group.members.len(),group.internal_links,group.feedback_links));
                     ui.horizontal(|ui| {if ui.button("Expand group").clicked() {ctx.trigger(super::groups::SetConnectionGroupCollapsed {view_id,group_id:group_id.clone(),collapsed:false});} if ui.button("Ungroup").clicked() {ctx.trigger(super::groups::RemoveConnectionGroup {view_id,group_id:group_id.clone()});}});
                     ui.strong("Members");
                     for member in &group.members {if ui.button(member).clicked() {ctx.trigger(navigation::SelectConnectionElement {view_id,key:member.clone(),port:None,reveal:true});}}
@@ -148,7 +168,7 @@ pub(super) fn render(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &mut UsdCanva
             }
             for port in ports {
                 let endpoint = PortRef { node: id, port: port.id.clone() };
-                let count = state.inspection.edges(id).iter().filter(|edge| state.canvas.scene.edge(**edge).is_some_and(|edge| edge.from == endpoint || edge.to == endpoint)).count();
+                let count = state.workspace.rows.iter().filter(|row|row.from==endpoint || row.to==endpoint).count();
                 let selected = state.canvas.selection.port() == Some(&endpoint);
                 if ui.selectable_label(selected, format!("{} · {} · {} links", port.id.as_str(), port.kind, count)).clicked() {
                     ctx.trigger(navigation::SelectConnectionElement { view_id, key: data.view_key.clone(), port: Some(port.id.as_str().to_string()), reveal: false });
@@ -159,8 +179,8 @@ pub(super) fn render(ui: &mut egui::Ui, ctx: &mut PanelCtx, state: &mut UsdCanva
                 }
             }
             ui.separator(); ui.strong("Connected endpoints");
-            for edge in state.inspection.edges(id) {
-                if state.canvas.selection.port().is_none_or(|port| state.canvas.scene.edge(*edge).is_some_and(|e| e.from == *port || e.to == *port)) { wire(ui, ctx, state, *edge); }
+            for row in state.workspace.rows.iter().filter(|row|row.from.node==id || row.to.node==id) {
+                if state.canvas.selection.port().is_none_or(|port| row.from==*port || row.to==*port) { wire(ui, ctx, state, row.id); }
             }
         } else if let Some(SelectItem::Edge(id)) = state.canvas.selection.primary() {
             wire(ui, ctx, state, id);

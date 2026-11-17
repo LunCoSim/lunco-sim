@@ -270,6 +270,32 @@ The bundled-library browser consumes the asset manifest's revision, not a
 per-frame hash of all paths. The normal sample path reads live values
 through the registry rather than rerunning backend list/metadata callbacks.
 
+Connections offers **Topology**, **Interface** and **Bindings** over the same
+source graph. Select the scene/document with `SetConnectionSource`.
+Use `SetConnectionWorkspace` for mode, local-wire disclosure and
+live-value/highlight controls. Prefer the independent input/output lists and
+the local-binding table when examining one model; their rows do not imply
+input-to-output computation. Keep `local_bindings_as_rows` and exact
+`icon_program` selection in the existing Rhai `diagram.layout` policy, with
+typed validation at its owner. Render source-authored Modelica icons through
+`lunco-modelica-icon-ui`; preserve USD handles and the full attached-program
+list. Source icon facts come from the existing asynchronous Modelica asset
+loader, never parsing or filename-to-class inference in paint.
+Manual wiring, disconnect and explicit source replacement use the existing
+USD endpoint validator and journal lowering. Source Save/Undo/Redo are separate
+from layout history; model editing opens the established Modelica editor.
+Binding-form submissions use typed `ApplyConnectionBinding`, with the current
+`InspectConnectionDiagram.source_generation` and exact endpoint keys. An edit
+names its original pair so source/target changes remove that pair atomically,
+preserve unrelated fan-in and undo as one change. Stale generations and absent
+originals reject; terminal completion comes from `ApplyUsdOps`.
+Live status consumes the binding, hold, diagnostic and port owners at a bounded
+cadence for visible consumers. Highlight observed changes only while the fixed
+clock advances; a preview has document-only status and no live values.
+Run `scripts/api/test_connection_workspace.py --port <free-port>` for native
+wiring, preview isolation, icon, view, journal and runtime evidence; its verdicts
+are in `assets/scripting/tests/test_connection_workspace.rhai`.
+
 For USD topology, extend the existing Connections projector in
 `crates/lunco-luncosim-edit-ui/src/ui/connection_canvas/`. Default to the active
 `SceneMountState` mount; Editor document focus is an explicit alternate source.
@@ -358,6 +384,10 @@ for a full workspace Connections canvas; the Editor also exposes the same panel.
 Collapsed port captions resolve their original endpoints; generated group keys are never
 display labels. Repeated port names retain the member label for disambiguation.
 System framing includes routed feedback wires as well as node rectangles.
+Connections refreshes generated bends before drawing each changed drag
+position and when Escape restores the starting positions. Verify the route
+while the pointer is held through `InspectConnectionDiagram.connections[].route`
+and a native screenshot. A position commit remains a view-document edit.
 Ordinary and summary card widths are computed from endpoint captions at the
 renderer owner; right-side port anchors use the resulting card width. Summary
 geometry is passed as `summary_width` / `summary_height` in each layout group fact. The policy
@@ -376,7 +406,8 @@ unrelated links, and Save/Undo stay source-document-owned. Layout Undo/Redo
 belongs to the view document. `Canvas.movable_layout` permits node arrangement
 in read-only scene views. Consume `InspectConnectionDiagram` for exact source,
 view IDs, layouts, rendered ports, and logical screen coordinates. Verify scene
-inspection preserves same-prim feedback as edges. Drilling into a system
+inspection retains same-prim bindings in the full graph and local-binding rows;
+explicit Local wires reveals their routes. Drilling into a system
 shows input/output/acausal interface terminals and child prims. `nodes[].key`
 is the independent placement identity; `nodes[].path` stays the exact USD
 prim for authoring and selection. `nodes[].role` identifies boundary terminals;

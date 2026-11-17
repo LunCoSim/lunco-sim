@@ -66,6 +66,10 @@ pub(crate) enum WireKind {
 /// factory downcasts it.
 #[derive(Clone, Debug)]
 pub(crate) struct UsdPrimNodeData {
+    pub local_bindings_as_rows: bool,
+    pub local_binding_count: usize,
+    pub icon_program: Option<String>,
+    pub modelica_icon: Option<Arc<lunco_modelica_ast::annotations::Icon>>,
     pub group_id: Option<String>,
     pub group_ports: BTreeMap<String, super::groups::GroupEndpoint>,
     pub programs: Vec<ProgramFacet>,
@@ -173,6 +177,7 @@ pub(crate) struct PrimNode {
 /// Resolved authored program facts; this never starts an executor or reads source bytes.
 #[derive(Clone, Debug, Hash)]
 pub(crate) struct ProgramFacet {
+    pub modelica_class: Option<String>,
     pub path: String,
     pub backend: String,
     pub source: String,
@@ -323,9 +328,20 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
     }
 
     let programs = if view.has_api_schema(&p, "LunCoProgramAPI") {
-        use lunco_usd_bevy_core::program::{ProgramSource, resolve_program};
-        vec![match resolve_program(view, &p) {
-            Ok(program) => ProgramFacet {
+        use lunco_usd_bevy_core::program::{
+            ProgramBackend, ProgramSource, modelica_source_ref, resolve_program,
+        };
+        let resolved = resolve_program(view, &p).and_then(|program| {
+            let class = if program.backend == ProgramBackend::Modelica {
+                modelica_source_ref(view, &p)?.sub_identifier
+            } else {
+                None
+            };
+            Ok((program, class))
+        });
+        vec![match resolved {
+            Ok((program, modelica_class)) => ProgramFacet {
+                modelica_class,
                 path: path.into(),
                 backend: format!("{:?}", program.backend),
                 source: match program.source {
@@ -335,6 +351,7 @@ pub(crate) fn collect_prim(view: &StageView<'_>, path: &str) -> Option<PrimProje
                 issue: None,
             },
             Err(issue) => ProgramFacet {
+                modelica_class: None,
                 path: path.into(),
                 backend: "Invalid program".into(),
                 source: issue.property,
@@ -889,6 +906,10 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
             rect,
             kind: NODE_KIND.into(),
             data: Arc::new(UsdPrimNodeData {
+                local_bindings_as_rows: false,
+                local_binding_count: 0,
+                icon_program: None,
+                modelica_icon: None,
                 group_id: None,
                 group_ports: Default::default(),
                 programs: node.programs.clone(),
@@ -949,8 +970,44 @@ pub(crate) fn build_scene(nodes: Vec<PrimNode>, wires: Vec<Wire>) -> Scene {
         });
     }
 
+    let mut local_counts = HashMap::new();
+    for (_, edge) in scene
+        .edges()
+        .filter(|(_, edge)| is_local_binding(&scene, edge))
+    {
+        *local_counts.entry(edge.from.node).or_insert(0_usize) += 1;
+        if edge.to.node != edge.from.node {
+            *local_counts.entry(edge.to.node).or_insert(0_usize) += 1;
+        }
+    }
+    for (id, count) in local_counts {
+        if let Some(node) = scene.node_mut(id) {
+            if let Some(data) = node.data.downcast_ref::<UsdPrimNodeData>() {
+                let mut data = data.clone();
+                data.local_binding_count = count;
+                node.data = Arc::new(data);
+            }
+        }
+    }
     route_edges(&mut scene);
     scene
+}
+
+/// A same-prim causal binding is a property mapping; it does not establish a
+/// mathematical dependency between the host's programs or physics providers.
+pub(super) fn is_local_binding(scene: &Scene, edge: &Edge) -> bool {
+    edge.data
+        .downcast_ref::<UsdWireData>()
+        .is_some_and(|data| data.kind == WireKind::Dataflow)
+        && scene
+            .node(edge.from.node)
+            .and_then(|node| node.origin.as_deref())
+            .is_some_and(|source| {
+                scene
+                    .node(edge.to.node)
+                    .and_then(|node| node.origin.as_deref())
+                    == Some(source)
+            })
 }
 
 /// Route forward dataflow through the gap between endpoint columns.
@@ -1111,6 +1168,10 @@ mod tests {
         );
         let mut invalid = scene.clone();
         invalid.node_mut(edge.to.node).unwrap().data = Arc::new(UsdPrimNodeData {
+            local_bindings_as_rows: false,
+            local_binding_count: 0,
+            icon_program: None,
+            modelica_icon: None,
             group_id: None,
             group_ports: Default::default(),
             programs: Vec::new(),
@@ -1747,7 +1808,7 @@ pub(super) fn route_edges(scene: &mut Scene) {
             } else {
                 orthogonal_waypoints(from, to)
             };
-            Some((*id, route))
+            (edge.waypoints != route).then_some((*id, route))
         })
         .collect();
     for (id, route) in routes {

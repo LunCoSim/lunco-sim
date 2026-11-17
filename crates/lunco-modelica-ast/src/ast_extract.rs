@@ -49,6 +49,8 @@ fn parse(source: &str) -> Option<StoredDefinition> {
 /// takes, what it is tuned by.
 #[derive(Debug, Default, Clone)]
 pub struct ModelInterface {
+    /// Authored class graphics from this exact parsed source revision.
+    pub icons: HashMap<String, crate::annotations::Icon>,
     /// Selected class, relative to `within` and qualified by package nesting.
     pub model_name: Option<String>,
     /// The file's `within` clause — the package its classes actually live in.
@@ -142,7 +144,15 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
         Some((name, class)) => (Some(name), Some(class)),
         None => (None, None),
     };
-    project_model_interface(ast, model_name, class)
+    let mut interface = project_model_interface(ast, model_name, class);
+    for name in ast.declared_class_names() {
+        if let Some(class) = ast.get_class_by_qualified_name(&name) {
+            if let Some(icon) = crate::annotations::parsing::extract_icon(&class.annotation) {
+                interface.icons.insert(name, icon);
+            }
+        }
+    }
+    interface
 }
 
 /// Project one explicitly selected class through Rumoca's qualified AST lookup.
@@ -583,6 +593,24 @@ pub fn hash_content(source: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_interfaces_retain_exact_authored_class_icons() {
+        let interface = parse_model_interface(
+            "within Demo; model Probe output Real signal; equation signal=2; annotation(Icon(graphics={Rectangle(extent={{-80,60},{80,-60}})})); end Probe;",
+            "inline.mo",
+        );
+        assert_eq!(interface.model_name.as_deref(), Some("Probe"));
+        assert_eq!(interface.within.as_deref(), Some("Demo"));
+        assert_eq!(
+            interface
+                .icons
+                .get("Demo.Probe")
+                .map(|icon| icon.graphics.len()),
+            Some(1)
+        );
+        assert!(!interface.icons.contains_key("Probe"));
+    }
 
     #[test]
     fn model_selection_requires_a_runnable_declaration() {

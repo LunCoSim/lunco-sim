@@ -45,6 +45,8 @@ fn port_caption(node: &Node, port: &lunco_canvas::Port) -> String {
 
 /// Card visual for a `"usd.prim"` node.
 pub(crate) struct UsdPrimNodeVisual {
+    pub local_binding_count: usize,
+    pub icon: Option<std::sync::Arc<lunco_modelica_ast::annotations::Icon>>,
     pub type_name: String,
     pub programs: String,
     pub accent: Option<super::projection::DiagramAccent>,
@@ -64,6 +66,18 @@ impl NodeVisual for UsdPrimNodeVisual {
         let painter = ctx.ui.painter().clone().with_clip_rect(ctx.ui.clip_rect());
         let theme = lunco_theme::active(ctx.ui.ctx());
         let t = &theme.tokens;
+        let icon_rect = self
+            .icon
+            .as_ref()
+            .filter(|_| rect.width() > 140.0 && rect.height() > 55.0)
+            .map(|icon| {
+                let size = (36.0 * ctx.viewport.zoom).min(40.0);
+                let icon_rect = egui::Rect::from_min_size(
+                    rect.min + egui::vec2(6.0, 6.0),
+                    egui::vec2(size, size),
+                );
+                (icon, icon_rect)
+            });
         use super::projection::DiagramAccent;
         let program_color = match self.accent {
             Some(DiagramAccent::Model) => theme.schematic.class_model_badge,
@@ -130,19 +144,23 @@ impl NodeVisual for UsdPrimNodeVisual {
         // Titles and backend badges share a fixed screen-space header above
         // the authored port rows, including on tall multi-port cards.
         if rect.height() > 12.0 {
+            let mut header_rect = rect;
+            if let Some((_, icon_rect)) = icon_rect {
+                header_rect.min.x = icon_rect.max.x + 6.0;
+            }
             let card_painter = painter
                 .clone()
-                .with_clip_rect(rect.intersect(ctx.ui.clip_rect()));
+                .with_clip_rect(header_rect.intersect(ctx.ui.clip_rect()));
             let mut font = lunco_theme::TypographyRole::Label.font_id(ctx.ui.style().as_ref());
             font.size *= ctx.viewport.zoom.clamp(0.65, 1.0);
             card_painter.text(
-                egui::pos2(rect.center().x, rect.min.y + 6.0),
+                egui::pos2(header_rect.center().x, rect.min.y + 6.0),
                 egui::Align2::CENTER_TOP,
                 &node.label,
                 font,
                 t.text,
             );
-            if rect.height() > 40.0 && ctx.viewport.zoom >= 1.0 {
+            if rect.height() > 40.0 && ctx.viewport.zoom >= 1.0 && icon_rect.is_none() {
                 let caption = lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style().as_ref());
                 if node.ports.iter().any(|port| port.kind.as_str() == "input") {
                     let side = if self.is_boundary {
@@ -199,6 +217,27 @@ impl NodeVisual for UsdPrimNodeVisual {
                         );
                 }
             }
+        }
+
+        if let Some((icon, icon_rect)) = icon_rect {
+            paint_modelica_icon(&painter, icon_rect, icon, &node.label);
+        }
+        if self.local_binding_count > 0 && rect.height() > 60.0 && ctx.viewport.zoom >= 0.6 {
+            painter.text(
+                rect.left_bottom() + egui::vec2(9.0, -5.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!(
+                    "{} local {}",
+                    self.local_binding_count,
+                    if self.local_binding_count == 1 {
+                        "binding"
+                    } else {
+                        "bindings"
+                    }
+                ),
+                lunco_theme::TypographyRole::Caption.font_id(ctx.ui.style()),
+                t.text_subdued,
+            );
         }
 
         // Causal ports use circles; acausal connectors use hollow diamonds.
@@ -358,12 +397,37 @@ pub(crate) fn node_visual(data: &UsdPrimNodeData) -> UsdPrimNodeVisual {
         .collect();
     let features = backends.into_iter().collect::<Vec<_>>().join(" · ");
     UsdPrimNodeVisual {
+        local_binding_count: data.local_binding_count,
+        icon: data.modelica_icon.clone(),
         type_name: data.type_name.clone(),
         programs: features,
         accent: data.accent,
         is_body: data.is_body,
         is_boundary: data.boundary.is_some(),
     }
+}
+
+pub(super) fn paint_modelica_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    icon: &lunco_modelica_ast::annotations::Icon,
+    name: &str,
+) {
+    let theme = lunco_theme::diagram_icon_palette(painter.ctx());
+    let substitution = lunco_modelica_icon_ui::TextSubstitution {
+        name: Some(name),
+        ..Default::default()
+    };
+    lunco_modelica_icon_ui::paint_graphics_themed(
+        painter,
+        rect,
+        icon.coordinate_system,
+        lunco_modelica_icon_ui::IconOrientation::default(),
+        Some(&substitution),
+        None,
+        Some(&theme),
+        &icon.graphics,
+    );
 }
 
 /// Build the concrete edge visual from the typed payload (registry factory).

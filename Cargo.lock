@@ -9165,6 +9165,8 @@ dependencies = [
  "lunco-luncosim-edit-gizmo-ui",
  "lunco-materials",
  "lunco-mobility",
+ "lunco-modelica-ast",
+ "lunco-modelica-icon-ui",
  "lunco-modelica-runtime",
  "lunco-modelica-ui-core",
  "lunco-physics",

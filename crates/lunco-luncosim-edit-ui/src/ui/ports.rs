@@ -1056,7 +1056,8 @@ fn direction_label(direction: PortDirection) -> &'static str {
     }
 }
 
-fn format_value(value: Option<f64>) -> String {
+/// Shared scalar readout for runtime port and connection inspection.
+pub(super) fn format_value(value: Option<f64>) -> String {
     match value {
         Some(value) if value.is_finite() => {
             if value != 0.0 && !(0.0001..1_000_000.0).contains(&value.abs()) {

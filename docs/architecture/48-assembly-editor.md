@@ -286,7 +286,8 @@ neutral clear-color background.
   `Canvas.movable_layout` enables arrangement in read-only scene inspection.
   `InspectConnectionDiagram` exposes the actual source, named definitions,
   displayed nodes/ports, and their logical screen coordinates for automation.
-  Same-prim feedback remains a causal edge in overview. Drilling into a system
+  Same-prim bindings remain in the full topology and are summarized as local
+  rows by the presentation policy. Local wires explicitly reveals their routes. Drilling into a system
   presents its USD `inputs:`, `outputs:` and `connectors:` as separate interface
   terminals alongside child prims. Forwarding and feedback retain every property
   identity; terminal cards do not claim a runtime provider. Each card has a
@@ -1475,6 +1476,110 @@ incoming relationship blockers, then lowers socket clearing plus joint and
 component-subtree removal through the same one-change-set boundary. It never
 guesses a joint from a component name and never silently deletes external
 Modelica/electrical/data links. Undo restores the complete topology.
+
+## Connection authoring workspace
+
+The existing Connections panel has three presentations over one scoped composed
+graph. **Topology** shows models and cross-prim wiring. **Interface** browses one
+model's independent input, output and acausal lists, with each endpoint's exact
+peers and USD type. Wide panes show peer columns; narrow panes use counted
+interface tabs and one bounded scroll owner per list. **Bindings** provides virtualized, searchable rows, including
+same-prim mappings and edges inside collapsed groups. The **local bindings**
+count opens those mappings directly; it does not infer a computational
+dependency between a model's input and output columns. Scope and descendant
+disclosure retain their existing hierarchy contract.
+
+Individual cards retain a local-binding count while those mappings are
+summarized, so an input without a drawn wire does not appear silently unused.
+
+`SetConnectionSource` selects the live scene or focused USD document through the
+same command used by the native source picker. `SetConnectionWorkspace` selects
+`topology`, `interface` or `bindings` and controls
+local-wire disclosure, live values and observed-change highlights for the exact
+view identity. These transient choices and connection-editor drafts live in the
+existing source-leased `UsdCanvasSessionState`. Retired sources release them.
+The scene resource and preview/document teardown keep identical prim names in
+different sources isolated.
+
+Port dragging, the Interface **Connect** action and the Bindings endpoint pickers
+share the diagram's endpoint/type validation and `connect_op` lowering.
+The connection form opens on request, including from a port or binding row,
+so it cannot consume the list viewport before an edit starts. Endpoint captions
+retain their owner prefix and property suffix, with the full copyable identity
+in their hover details. Disconnect uses the existing edge-sink lowering and preserves unrelated source
+connections, including reciprocal acausal properties. **Replace existing sources**
+is explicit. All mutations dispatch `ApplyUsdOps` with the exact document
+generation and edit target. **Save USD**, **Undo USD** and **Redo USD** use the
+canonical source document; they remain independent of layout history.
+During a card drag, the canvas refreshes derived wire geometry as soon as the
+card rectangles move. Connections uses its existing orthogonal router before
+painting or hit testing the updated graph. Cancelling the drag restores both
+the original card positions and routes. Wire bends are generated geometry and
+the wires remain selectable. `InspectConnectionDiagram` exposes the visible
+route, including its endpoints, in world coordinates.
+The Bindings form dispatches typed `ApplyConnectionBinding` with exact endpoint
+keys, the inspected `source_generation`, and an optional original binding.
+**Apply edit** removes that exact original and installs the new endpoints in
+one USD journal batch. Changing a source on the same sink preserves its other
+sources; changing a target clears the old sink. An edit that selects an already
+connected source coalesces the existing connection. Missing originals and stale
+source generations reject without mutation. The command retains the caller's
+context through `ApplyUsdOps`, so completion is the USD owner's terminal result.
+Endpoint selection is explicit user intent; shared type/direction validation,
+operation lowering and journal application remain Rust mechanisms.
+The optional Inspector stays closed until requested, including in narrow docks.
+Changing the Interface model synchronizes the shared USD selection.
+The live **Edit connections** entry passes its stable source URI to
+`OpenUsdSourceDocument`. That owner admits Twin URIs through `load_source_uri`
+before its existing file worker runs, retaining the exact mounted lease through
+document preparation. Retired or unmounted sources reject instead of resolving
+through a different Twin.
+**USD properties** opens the existing inspector. **Edit Modelica model** uses
+`OpenConnectionNode` and its existing `diagram.open.plan` source/editor policy.
+Registered Modelica asset URIs admit their stable source identity through
+`load_source_uri`, then resolve through `SchemeRegistry`
+on the existing file worker and install through the same file-document
+admission as native paths. A Twin URI must still resolve to its captured Twin
+lifetime. It does not introduce another parser, source buffer or Modelica editor.
+
+`diagram.layout` also owns per-node presentation decisions. Its immutable
+`program_facts` include exact attached program paths and source identities.
+The optional `local_bindings_as_rows` boolean requests same-prim causal mappings
+as rows, while `icon_program` selects one exact Modelica facet for an authored
+icon. Rust validates both result types and the selected facet before applying
+the complete layout. The installed Rhai policy summarizes local mappings and
+selects an icon only for an unambiguous Modelica facet. Grouping and language
+accents stay in their existing Rhai policies. A user can explicitly reveal local
+wires without changing topology. The full scene retains these edges; the drawn
+and hit-test scene omits summarized wires, so invisible loops cannot intercept
+input. Policy installation, Application/Visualization/Preparation worker context,
+revision fencing and failure semantics are shared with the existing layout owner.
+The production policy test is `assets/scripting/tests/test_diagram_layout.rhai`.
+
+Modelica's existing asynchronous source asset prepares authored class `Icon`
+facts from the same parsed source revision as its interface. Connections resolves
+source assets through the stage asset owner and selects the exact authored
+`subIdentifier`, or the source owner's selected class. Asset events refresh the
+source-leased icon cache. The existing `lunco-modelica-icon-ui` renderer paints
+the symbol with the active schematic palette; USD port anchors and program
+identities remain visible. Source classes without a directly authored icon keep
+their standard card. Connections does not synthesize graphics or resolve
+external icon inheritance independently of the Modelica document owner.
+
+Live connection inspection reads `ConnectionBinding`, `PortHolds`,
+`CosimDiagnostics` and `PortRegistry` rather than interpreting authored links as
+successful execution. The bounded 10 Hz producer runs only for a visible live
+scene view. Port samples and units are requested only for visible rows, model
+ports or selected wires; no USD traversal or backend reads occur in paint.
+States distinguish document-only, structural, unprojected, pending, bound, held
+and failed links. Missing samples stay unavailable. Values at the source and
+target are independent, preserving unit conversion, transforms and fan-in.
+Highlights require an observed source-value change while the authoritative fixed
+clock advances, a bound edge and no overriding input hold. They stop during
+pause/hold and do not encode physical flow, packet traffic or transfer rates.
+Document previews never borrow a live scene's samples. The production driver is
+`scripts/api/test_connection_workspace.py`; verdicts are authored in
+`assets/scripting/tests/test_connection_workspace.rhai`.
 
 ## Diagram grouping
 

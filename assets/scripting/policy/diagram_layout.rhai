@@ -11,6 +11,16 @@ fn program_accent(programs) {
     if backends.contains("Python") { return "record"; }
     "class"
 }
+fn modelica_icon_program(programs) {
+    let selected = ""; let count = 0;
+    for program in programs {
+        if program.backend != "Modelica" { continue; }
+        if !program.contains("path") { continue; }
+        selected = program.path; count += 1;
+    }
+    if count == 1 { return selected; }
+    ""
+}
 fn pack_layer(nodes, start_x, target) {
     let x = start_x; let y = 40.0; let width = 0.0; let positions = [];
     for node in nodes {
@@ -18,6 +28,11 @@ fn pack_layer(nodes, start_x, target) {
             x += width + 100.0; y = 40.0; width = 0.0;
         }
         let placement = #{ path: node.path, x: x, y: y };
+        placement.local_bindings_as_rows = true;
+        if node.contains("program_facts") {
+            let icon_program = modelica_icon_program(node.program_facts);
+            if icon_program != "" { placement.icon_program = icon_program; }
+        }
         if node.role == "inputs" { placement.label = "System inputs"; }
         if node.role == "outputs" { placement.label = "System outputs"; }
         if node.role == "connectors" { placement.label = "System connectors"; }
