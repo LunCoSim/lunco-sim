@@ -387,3 +387,17 @@ Twin source hashes match the control. API ports 5410 and 5412 are released.
 The control had an additional active render process and accrued fixed debt.
 The frame timings establish the candidate's observed performance under its
 recorded workload. Stable 100 FPS remains open.
+
+The follow-up `history-rollover/tracy/retry/capture.tracy` contains
+30,027,665 zones over 109.5 s for owned PID 597859, using the same local Bevy
+cache and Twin source hashes. The executable SHA256 is
+`376c8a486ede7cea6102e880de0e401f285e0caadfbfe8d5106e3ba7962c547e`.
+Analysis uses the same 50-second window offset. Across 3,092 calls the
+Modelica retention p99 is 0.524 ms and maximum is 9.912 ms, compared with
+1.969 and 34.286 ms across 1,569 control calls. The candidate history contains
+425 ordered samples, including sample 256 at model time 56.383 s. The
+verified 1 ms CPU samples in the longest call include allocator work, with
+no deque-drain-to-vector copy. Host workloads and fixed debt differ between
+captures. The instrumented frame window averages 61.842 FPS, with queued fixed
+time below 0.014 s at both endpoints and zero clipping. The app and collector
+exit and release their ports after the capture.
