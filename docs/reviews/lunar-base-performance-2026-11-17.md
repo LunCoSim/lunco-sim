@@ -553,3 +553,35 @@ original bounds system averaged 0.311 ms across 2,751 landed frames,
 p99 0.632 ms and maximum 1.216 ms. The two replacement systems together
 averaged 0.014 ms across 2,651 frames, p99 0.031 ms and maximum 0.084 ms.
 These are CPU times for bounds maintenance in matching 50-second windows.
+
+## Synchronous telemetry recording after landing
+
+In `indexed-command-tracy/history-growth`, a single landed recording update
+expanded 8,099 history tails at the same 128-sample boundary. The allocator
+spans totaled 11.232 ms of its 18.378 ms wall time. The same 8,099 channels
+also grew together at earlier boundaries. The signal registry now phases its
+first chunk length by slot and reserves subsequent chunks on demand. This
+changes storage allocation only. Sample times, values, rate admission, and
+logical retention continue through the same recording path.
+
+In the corresponding 50-second window of `history-pages-progressive/tracy`,
+the largest growth group fell to 33. The longest retention call fell from
+18.378 to 3.254 ms. More updates now perform a small allocation. Mean retention
+time rose from 0.084 to 0.109 ms and p99 from 0.694 to 1.351 ms. Before the
+settled window, one candidate call took 64.269 ms. These results establish a
+reduction in synchronized growth after landing.
+
+Two runs per binary recorded 8,192 synchronous channels for 1,800 batches
+using the production allocator, and verified all 12,288,000 retained samples.
+Worst batch time was 3.529–3.811 ms before the change and 0.645–0.682 ms after
+it. Average batch time rose from 0.118–0.121 to 0.175–0.188 ms. Peak resident
+memory was 267–268 MiB and 280–281 MiB respectively. Four history tests passed,
+including a shared snapshot surviving resize, eviction and clearing. The
+windowed Modelica telemetry replacement scenario passed all ten authored checks.
+
+The combined uninstrumented release recorded 5,808 frames at 97.143 FPS,
+p95 14.588 ms, p99 16.166 ms, maximum 58.367 ms. 3,605 frames exceeded 10 ms.
+The 60.30-second polling window advanced 3,685 fixed ticks between qualification
+snapshots, with 181 terrain tiles drawn, 454 ordered torque samples, zero time
+clipping and clear runtime diagnostics. A second GPU client showed 8% activity
+at the final sample. The 100 FPS and frame-stability requirements remain open.

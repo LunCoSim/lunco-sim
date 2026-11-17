@@ -360,6 +360,8 @@ impl ScalarHistorySnapshot {
 pub struct ScalarHistory {
     chunks: VecDeque<Arc<VecDeque<ScalarSample>>>,
     first_chunk_offset: usize,
+    first_chunk_size: usize,
+    first_chunk_open: bool,
     tail: VecDeque<ScalarSample>,
     /// One fully expired buffer with no outstanding snapshot references.
     /// Reused when the active tail is sealed.
@@ -370,10 +372,19 @@ pub struct ScalarHistory {
 
 impl ScalarHistory {
     pub fn new(capacity: usize) -> Self {
+        Self::for_recording_slot(capacity, 0)
+    }
+
+    fn for_recording_slot(capacity: usize, slot: usize) -> Self {
         let capacity = capacity.max(1);
+        // Synchronously sampled channels share timestamps. Offset their first
+        // page boundaries so they can open subsequent pages independently.
+        let first_chunk_size = SCALAR_HISTORY_CHUNK_SIZE - slot % SCALAR_HISTORY_CHUNK_SIZE;
         Self {
             chunks: VecDeque::new(),
             first_chunk_offset: 0,
+            first_chunk_size,
+            first_chunk_open: true,
             tail: VecDeque::new(),
             spare_tail: VecDeque::new(),
             len: 0,
@@ -385,28 +396,42 @@ impl ScalarHistory {
         if self.len >= self.capacity {
             self.pop_front();
         }
-        let _span = (self.tail.len() == self.tail.capacity()).then(|| {
-            bevy::log::debug_span!(
+        let chunk_size = if self.first_chunk_open {
+            self.first_chunk_size
+        } else {
+            SCALAR_HISTORY_CHUNK_SIZE
+        };
+        if self.tail.len() == self.tail.capacity() {
+            let _span = bevy::log::debug_span!(
                 "signal_scalar_history_tail_growth",
                 retained = self.len,
                 tail_capacity = self.tail.capacity()
             )
-            .entered()
-        });
+            .entered();
+            let mut allocation = chunk_size.min(self.capacity);
+            if self.first_chunk_open {
+                // Start sparse histories small. Growing toward this slot's
+                // boundary also spreads first-page growth across sample ticks.
+                while allocation > 4 && allocation.div_ceil(4) > self.tail.capacity() {
+                    allocation = allocation.div_ceil(4);
+                }
+            }
+            self.tail
+                .reserve_exact(allocation.saturating_sub(self.tail.len()));
+        }
         self.tail.push_back(sample);
         self.len += 1;
-        if self.tail.len() == SCALAR_HISTORY_CHUNK_SIZE {
+        if self.tail.len() == chunk_size {
             let completed = std::mem::replace(&mut self.tail, std::mem::take(&mut self.spare_tail));
             self.chunks.push_back(Arc::new(completed));
+            self.first_chunk_open = false;
         }
     }
 
     fn pop_front(&mut self) {
-        if self.chunks.is_empty() {
-            self.tail.pop_front();
-        } else {
+        if let Some(front) = self.chunks.front() {
             self.first_chunk_offset += 1;
-            if self.first_chunk_offset == SCALAR_HISTORY_CHUNK_SIZE {
+            if self.first_chunk_offset == front.len() {
                 let completed = self.chunks.pop_front().expect("front chunk exists");
                 if self.capacity >= SCALAR_HISTORY_CHUNK_SIZE
                     && self.spare_tail.capacity() == 0
@@ -417,6 +442,8 @@ impl ScalarHistory {
                 }
                 self.first_chunk_offset = 0;
             }
+        } else {
+            self.tail.pop_front();
         }
         self.len -= 1;
     }
@@ -439,6 +466,7 @@ impl ScalarHistory {
     pub fn clear(&mut self) {
         self.chunks.clear();
         self.first_chunk_offset = 0;
+        self.first_chunk_open = true;
         self.tail.clear();
         self.spare_tail = VecDeque::new();
         self.len = 0;
@@ -635,7 +663,7 @@ impl SignalRegistry {
         let entry = self.entries[index].as_mut().expect("admitted signal");
         let new_history = entry.history.is_none();
         if new_history {
-            entry.history = Some(ScalarHistory::new(capacity));
+            entry.history = Some(ScalarHistory::for_recording_slot(capacity, index));
             self.scalar_count += 1;
         }
         if new_history || !entry.active {
@@ -1516,6 +1544,47 @@ mod tests {
         reg.push_scalar_with_capacity(s.clone(), 10.0, 10.0, 2);
         assert_eq!(reg.scalar_history(&s).unwrap().len(), 2);
         assert_eq!(reg.scalar_history(&s).unwrap().capacity, 2);
+    }
+
+    #[test]
+    fn history_partial_first_chunk_preserves_retention_and_shared_snapshots() {
+        let capacity = SCALAR_HISTORY_CHUNK_SIZE + 3;
+        for slot in [
+            0,
+            1,
+            SCALAR_HISTORY_CHUNK_SIZE - 1,
+            SCALAR_HISTORY_CHUNK_SIZE,
+        ] {
+            let mut history = ScalarHistory::for_recording_slot(capacity, slot);
+            let sample = |i: usize| ScalarSample {
+                time: i as f64,
+                value: -(i as f64),
+            };
+            for i in 0..capacity {
+                history.push(sample(i));
+            }
+            let snapshot = history.snapshot();
+            for i in capacity..3 * capacity {
+                history.push(sample(i));
+            }
+            history.set_capacity(3);
+            for (sample, expected) in history.iter().zip(3 * capacity - 3..3 * capacity) {
+                assert_eq!(sample.time, expected as f64);
+                assert_eq!(sample.value, -(expected as f64));
+            }
+            assert_eq!(history.len(), 3);
+            history.clear();
+            for i in 0..capacity {
+                history.push(sample(i));
+            }
+            assert_eq!(history.front().unwrap().time, (capacity - 3) as f64);
+            let retained = snapshot.into_samples();
+            assert_eq!(retained.len(), capacity);
+            for (i, value) in retained.iter().enumerate() {
+                assert_eq!(value.time.to_bits(), sample(i).time.to_bits());
+                assert_eq!(value.value.to_bits(), sample(i).value.to_bits());
+            }
+        }
     }
 
     #[test]

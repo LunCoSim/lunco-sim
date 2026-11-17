@@ -119,11 +119,16 @@ it checks live history existence so existing channels continue recording while
 new channels are rejected. Cached producer identities do not authorize a new
 history after removal, and lowering the limit does not evict existing history.
 
-`ScalarHistory` seals a full tail by moving its sample allocation into a
-shared immutable chunk. The history may retain one fully expired allocation as
-the next tail when no snapshot still references it. Snapshots share completed
-chunks and copy only the open tail. Logical retention, original sample values,
-and chronological order apply across both parts.
+`ScalarHistory` moves each completed tail into a shared immutable chunk.
+The registry slot sets the first chunk length between one and 256 samples.
+Synchronous channels therefore reach their subsequent 256-sample boundaries
+on different recording ticks. The first allocation holds at most four samples
+and grows toward that first boundary as samples arrive. Later tails reserve
+one chunk on first use, bounded by logical retention. A fully expired buffer
+can become the next tail when no snapshot references it. Snapshots share
+completed chunks and copy the open tail. Eviction observes each chunk's actual
+length and preserves the original samples in chronological order. Clearing a
+history restarts its first chunk.
 
 The telemetry browser owns a persistent presentation index. `SignalRegistryPlugin` publishes
 coalesced `SignalDescriptorsChanged` notifications for channel admission, metadata changes,

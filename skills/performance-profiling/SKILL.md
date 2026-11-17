@@ -2122,9 +2122,12 @@ the owner or its cadence.
 `signal_scalar_history_tail_growth` identifies appends that need tail capacity
 after bounded eviction. The signal registry owns metadata values, and the
 physics producer retains a publication flag. Full history chunks take ownership
-of the existing tail allocation. When profiling a long history run, check
-rollover and post-rollover growth separately and align both to the producer's
-simulation-time recording rate.
+of the existing tail allocation. Count growth spans nested on the same
+thread within each retention call. Report the largest group, its cumulative
+allocation time, and the producer's wall time. Include first publication and
+at least two chunk boundaries when comparing synchronous recorders. Registry
+slots spread chunk openings across recording ticks. Compare ordered samples,
+retention depth, resizing, and snapshots held through eviction.
 Enable these diagnostic spans with
 `RUST_LOG=info,lunco_modelica_core=debug,lunco_usd_sim_telemetry=debug,lunco_signal=debug`; they are
 disabled by the ordinary info-level filter.
