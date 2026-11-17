@@ -85,14 +85,22 @@ int run(int argc, char** argv) {
             intervals.resize(merged);
         }
     }
-    std::map<std::pair<uint64_t, uint32_t>, uint64_t> counts;
+    struct SelectedSample {
+        uint64_t tid;
+        uint64_t index;
+        int64_t time;
+        uint32_t stack;
+    };
+    std::vector<SelectedSample> samples;
     uint64_t selected = 0;
     uint64_t no_stack = 0;
     for (const auto* thread : worker.GetThreadData()) {
         if (selected_tid && thread->id != selected_tid) continue;
         const auto windows = zone_intervals.find(thread->id);
         if (!zone_name.empty() && windows == zone_intervals.end()) continue;
+        uint64_t sample_index = 0;
         for (const auto& sample : thread->samples) {
+            const auto index = sample_index++;
             const auto time = sample.time.Val();
             if (time < begin || time >= end) continue;
             if (!zone_name.empty()) {
@@ -105,7 +113,7 @@ int run(int argc, char** argv) {
             const auto stack = uint32_t(sample.callstack.Val());
             if (!stack) { ++no_stack; continue; }
             if (stack > worker.GetCallstackPayloadCount()) throw std::runtime_error("invalid sample callstack ID");
-            ++counts[{thread->id, stack}];
+            samples.push_back({thread->id, index, time, stack});
         }
     }
     std::cerr << "pid=" << worker.GetPid() << " period_ns=" << worker.GetSamplingPeriod()
@@ -113,10 +121,11 @@ int run(int argc, char** argv) {
               << " selected_samples=" << selected << " samples_without_stack=" << no_stack;
     if (!zone_name.empty()) std::cerr << " matched_zones=" << matched_zones;
     std::cerr << '\n';
-    if (counts.empty()) throw std::runtime_error("no CPU callstacks in the selected thread/time interval");
-    std::cout << "pid,tid,csv_thread,thread,callstack,frame,inline_frame,samples,address,frame_metadata_present,function,file,line,image\n";
-    for (const auto& [key, count] : counts) {
-        const auto [tid, stack_id] = key;
+    if (samples.empty()) throw std::runtime_error("no CPU callstacks in the selected thread/time interval");
+    std::cout << "pid,tid,csv_thread,thread,sample_index,time_ns,callstack,frame,inline_frame,address,frame_metadata_present,function,file,line,image\n";
+    for (const auto& sample : samples) {
+        const auto tid = sample.tid;
+        const auto stack_id = sample.stack;
         const auto csv_thread = worker.CompressThread(tid);
         const auto& stack = worker.GetCallstack(stack_id);
         size_t index = 0;
@@ -126,16 +135,16 @@ int run(int argc, char** argv) {
             const auto prefix = [&] {
                 std::cout << expected_pid << ',' << tid << ',' << csv_thread << ','
                           << std::quoted(worker.GetThreadName(tid), '"', '"') << ','
-                          << stack_id << ',' << index << ',';
+                          << sample.index << ',' << sample.time << ',' << stack_id << ',' << index << ',';
             };
             if (!frame || !frame->size) {
                 prefix();
-                std::cout << ',' << count << ',' << address << ",0,,,,\n";
+                std::cout << ',' << address << ",0,,,,\n";
             } else {
                 for (uint8_t inlined = 0; inlined < frame->size; ++inlined) {
                     const auto& symbol = frame->data[inlined];
                     prefix();
-                    std::cout << unsigned(inlined) << ',' << count << ',' << address << ",1,"
+                    std::cout << unsigned(inlined) << ',' << address << ",1,"
                               << std::quoted(worker.GetString(symbol.name), '"', '"') << ','
                               << std::quoted(worker.GetString(symbol.file), '"', '"') << ','
                               << symbol.line << ','

@@ -36,7 +36,6 @@ pub fn find_path(path: &str) -> i64 {
             .get_resource::<ApiEntityRegistry>()?
             .entities_unordered();
         pairs
-            .into_iter()
             .filter(|(_, entity)| {
                 world
                     .get::<lunco_usd_bevy_scene::UsdPrimPath>(*entity)

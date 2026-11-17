@@ -96,6 +96,11 @@ through the same atomic migration helper. For a physical entity, keep it under
 `ActivePhysicsFrame` and let
 `BigSpacePhysicsBridgePlugin` own the Avian f64 pose exchange. The shared
 `SimulationPoseQuery` (or immutable `SimulationPoseReadState` for API readers)
+uses the physics gate's World-owned query metadata. Borrow a short API
+`try_new(world)` lease, call `pose(entity)` or `position(entity)`, then release
+it before any World mutation or nested pose query. A missing or busy lease
+is unavailable and must retain the caller's diagnostic boundary. No sampled
+poses are cached. The shared reader
 composes mounts from their nearest seeded rigid body's native pose. Reuse that
 boundary for physical consumers, including mounted probes; do not compose
 through the body's presentation `Transform`. An unseeded parent makes a mount

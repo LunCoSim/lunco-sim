@@ -9,7 +9,6 @@
 //! The command uses the canonical API envelope:
 //! `{"type":"ExecuteCommand","command":"QueryEntity","params":{"id":…}}`.
 
-use bevy::ecs::query::QueryState;
 use bevy::prelude::*;
 use lunco_api::queries::{ApiQueryProvider, ApiQueryRegistry, SimulationQueryReadScope};
 use lunco_api::registry::ApiEntityRegistry;
@@ -56,21 +55,6 @@ impl ApiQueryProvider for QueryEntityProvider {
             ));
         };
 
-        let Some(mut q_meta) = QueryState::<(
-            Option<&Name>,
-            Option<&lunco_core::markers::Callsign>,
-            Has<lunco_control_core::ControlBinding>,
-            Option<&CelestialBody>,
-            Option<&Transform>,
-            Option<&CatalogEntryId>,
-            Option<&UsdPrimKind>,
-            Option<&UsdPrimPath>,
-        )>::try_new(world) else {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::InternalError,
-                "QueryEntity: world state unavailable",
-            ));
-        };
         let Some(mut poses) = lunco_physics::SimulationPoseReadState::try_new(world) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
@@ -78,10 +62,16 @@ impl ApiQueryProvider for QueryEntityProvider {
             ));
         };
 
-        let (name, callsign, accepts_commands, body, transform, catalog_id, usd_kind, prim_path) =
-            q_meta
-                .get(world, entity)
-                .unwrap_or((None, None, false, None, None, None, None, None));
+        let name = world.get::<Name>(entity);
+        let callsign = world.get::<lunco_core::markers::Callsign>(entity);
+        let accepts_commands = world
+            .get::<lunco_control_core::ControlBinding>(entity)
+            .is_some();
+        let body = world.get::<CelestialBody>(entity);
+        let transform = world.get::<Transform>(entity);
+        let catalog_id = world.get::<CatalogEntryId>(entity);
+        let usd_kind = world.get::<UsdPrimKind>(entity);
+        let prim_path = world.get::<UsdPrimPath>(entity);
         let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
         let origin = catalog_id
             .and_then(|id| {
@@ -91,7 +81,7 @@ impl ApiQueryProvider for QueryEntityProvider {
             })
             .map(|entry| entry.origin.as_api_value());
 
-        let Some((pos, rot)) = poses.pose(world, entity) else {
+        let Some((pos, rot)) = poses.pose(entity) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!("QueryEntity: entity {raw} is not connected to the active physics frame"),
@@ -129,21 +119,7 @@ impl ApiQueryProvider for QueryEntityProvider {
 /// scene verbs also answers `QueryEntity` — including the headless server.
 pub fn register(app: &mut App) {
     app.init_resource::<ApiQueryRegistry>();
-    let world = app.world_mut();
-    // `QueryState::try_new` needs every component in the query to be present
-    // in the world's component registry, including optional metadata. The
-    // provider owns this vocabulary; relying on a particular USD scene or
-    // another plugin to have spawned one of these components makes an absent
-    // optional field turn the entire query into an internal error.
-    world.register_component::<Name>();
-    world.register_component::<lunco_core::markers::Callsign>();
-    world.register_component::<lunco_control_core::ControlBinding>();
-    world.register_component::<CelestialBody>();
-    world.register_component::<Transform>();
-    world.register_component::<CatalogEntryId>();
-    world.register_component::<UsdPrimKind>();
-    world.register_component::<UsdPrimPath>();
-    world
+    app.world_mut()
         .resource_mut::<ApiQueryRegistry>()
         .register(QueryEntityProvider);
 }
