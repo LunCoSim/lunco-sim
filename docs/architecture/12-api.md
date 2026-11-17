@@ -11,6 +11,11 @@ lightweight in-process values and request/response types; `lunco-api` owns
 ECS execution and discovery; `lunco-api-codec` owns JSON conversion at wire
 boundaries; and `lunco-api-transport` exposes HTTP and browser adapters.
 
+Command dispatch looks up the short name in Bevy's type registry. Discovery
+and dispatch require a unique registered type with the command marker and
+reflected event data. Both apply the caller's visibility policy. Replacing
+the registration for one type preserves its identity.
+
 Command admission validates the supplied typed values and their concrete serde
 construction before triggering an event. This catches numeric overflow introduced
 by narrowing inside tagged enums or opaque native vectors. Every `Entity` input
