@@ -103,7 +103,13 @@ semantic f64 pose → target Grid::translation_to_grid → (CellCoord, Transform
 and camera-relative; it is never an ephemeris, telemetry, network, or physics
 source of truth. Physical runtime reads use
 `lunco-physics::SimulationPoseQuery` or `SimulationPoseReadState`. Both share
-one bounded ownership walk: the nearest rigid body supplies its seeded native
+one bounded ownership walk. The physics gate initializes immutable API reads
+with World-owned `SystemState<SimulationPoseQuery>` metadata. Each
+`SimulationPoseReadState` borrows that exact World and a non-blocking metadata
+lease; `pose(entity)` and `position(entity)` read its current components.
+Unavailable or contended metadata is a query miss, reported by the calling API.
+Only component/archetype access metadata survives a lease, so scene replacement
+does not retain poses or entity identities. The nearest rigid body supplies its seeded native
 f64 pose, and a mounted descendant composes only its local chain below that
 body. An unseeded body makes its mounts unavailable too. Entities without a
 native or prescribed ancestor use the BigSpace hierarchy. Analytical providers

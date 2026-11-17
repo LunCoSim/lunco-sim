@@ -964,7 +964,7 @@ fn query_record_value(
     stage_generation: Option<u64>,
     spawned: Option<Entity>,
     options: &UsdPrimQueryOptions,
-    poses: &mut Option<lunco_physics::SimulationPoseReadState>,
+    poses: &mut Option<lunco_physics::SimulationPoseReadState<'_>>,
 ) -> Result<ApiValue, ApiQueryError> {
     let (
         authored_position,
@@ -1076,7 +1076,7 @@ fn query_record_value(
                 "QueryUsdPrim: active physics frame is unavailable",
             ));
         };
-        let Some(pos) = poses.position(world, entity) else {
+        let Some(pos) = poses.position(entity) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 format!(

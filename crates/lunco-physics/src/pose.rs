@@ -14,8 +14,7 @@
 //! presentation state.
 
 use avian3d::prelude::{Position, RigidBody, Rotation};
-use bevy::ecs::query::QueryState;
-use bevy::ecs::system::SystemParam;
+use bevy::ecs::system::{SystemParam, SystemState};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_api::queries::{ApiQueryError, ApiQueryProvider, ApiQueryRegistry, ApiQueryResult};
@@ -25,6 +24,7 @@ use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_spatial::coords::{
     GridPos, GridRot, MAX_SPATIAL_HIERARCHY_DEPTH, grid_relative_pose, pose_in_grid,
 };
+use std::sync::{Mutex, MutexGuard};
 
 /// Pose prescribed by a non-integrating simulation provider, such as an
 /// ephemeris. The provider installs Pending when it takes ownership and
@@ -110,56 +110,57 @@ fn simulation_pose<F: bevy::ecs::query::QueryFilter>(
     None
 }
 
-/// Read-only query state for API and other non-system callers.
-///
-/// Bevy's [`SystemState`] is initialized from `&mut World`, which is correct
-/// for systems but incompatible with the API query contract. This state uses
-/// Bevy's immutable-world [`QueryState::try_new`] path and shares the
-/// ownership walk with [`SimulationPoseQuery`].
-pub struct SimulationPoseReadState {
-    bodies: QueryState<(), With<RigidBody>>,
-    physics: QueryState<
-        (&'static Position, &'static Rotation),
-        (With<RigidBody>, With<PhysicsPoseSeeded>),
-    >,
-    prescribed: QueryState<&'static PrescribedSimulationPose>,
-    parents: QueryState<&'static ChildOf>,
-    grids: QueryState<&'static Grid>,
-    spatial: QueryState<(Option<&'static CellCoord>, &'static Transform)>,
+/// World-owned access metadata for immutable simulation-pose queries.
+/// No scene entity, frame, pose value or tick is retained here.
+#[derive(Resource)]
+struct SimulationPoseReadCache(Mutex<SystemState<SimulationPoseQuery<'static, 'static>>>);
+
+impl FromWorld for SimulationPoseReadCache {
+    fn from_world(world: &mut World) -> Self {
+        Self(Mutex::new(SystemState::new(world)))
+    }
 }
 
-impl SimulationPoseReadState {
-    /// Build the query state without requiring mutable access to the world.
-    pub fn try_new(world: &World) -> Option<Self> {
-        Some(Self {
-            bodies: QueryState::try_new(world)?,
-            physics: QueryState::try_new(world)?,
-            prescribed: QueryState::try_new(world)?,
-            parents: QueryState::try_new(world)?,
-            grids: QueryState::try_new(world)?,
-            spatial: QueryState::try_new(world)?,
-        })
+/// Read-only pose access bound to one World and one query-metadata lease.
+///
+/// The physics gate initializes the same system parameter used by ECS readers.
+/// Each lease refreshes its archetype access and samples live component values;
+/// retaining metadata never retains scene state. The immutable World borrow
+/// prevents mutation while a lease is in use.
+pub struct SimulationPoseReadState<'w> {
+    world: &'w World,
+    state: MutexGuard<'w, SystemState<SimulationPoseQuery<'static, 'static>>>,
+}
+
+impl<'w> SimulationPoseReadState<'w> {
+    /// Borrow this World's initialized pose reader without constructing queries.
+    pub fn try_new(world: &'w World) -> Option<Self> {
+        let cache = world.get_resource::<SimulationPoseReadCache>()?;
+        let state = match cache.0.try_lock() {
+            Ok(state) => state,
+            Err(error) => {
+                warn!("[physics-pose] query metadata lease failed: {error}");
+                return None;
+            }
+        };
+        Some(Self { world, state })
     }
 
-    /// Resolve one entity in the active physics frame.
-    pub fn pose(&mut self, world: &World, entity: Entity) -> Option<(GridPos, GridRot)> {
-        let frame = world.get_resource::<lunco_spatial::ActivePhysicsFrame>()?.0;
-        simulation_pose(
-            entity,
-            frame,
-            &self.bodies.query(world),
-            &self.physics.query(world),
-            &self.prescribed.query(world),
-            world.get_resource::<lunco_core_runtime::SimTick>().copied(),
-            &self.parents.query(world),
-            &self.grids.query(world),
-            &self.spatial.query(world),
-        )
+    /// Resolve one entity in this reader's active physics frame.
+    pub fn pose(&mut self, entity: Entity) -> Option<(GridPos, GridRot)> {
+        let poses = match self.state.get(self.world) {
+            Ok(poses) => poses,
+            Err(error) => {
+                warn!("[physics-pose] live query is unavailable: {error}");
+                return None;
+            }
+        };
+        poses.pose(entity)
     }
 
     /// Resolve only an entity's active-frame position.
-    pub fn position(&mut self, world: &World, entity: Entity) -> Option<GridPos> {
-        self.pose(world, entity).map(|(position, _)| position)
+    pub fn position(&mut self, entity: Entity) -> Option<GridPos> {
+        self.pose(entity).map(|(position, _)| position)
     }
 }
 
@@ -271,7 +272,7 @@ impl ApiQueryProvider for NearestProvider {
             if exclude == Some(gid.get()) {
                 continue;
             }
-            let Some(position) = poses.position(world, entity) else {
+            let Some(position) = poses.position(entity) else {
                 continue;
             };
             let distance = position.0.distance(point);
@@ -320,10 +321,9 @@ impl ApiQueryProvider for EntitiesInRadiusProvider {
             ));
         };
         let mut ids: Vec<u64> = entities
-            .into_iter()
             .filter(|(gid, _)| exclude != Some(gid.get()))
             .filter_map(|(gid, entity)| {
-                (poses.position(world, entity)?.0.distance(point) <= radius).then_some(gid.get())
+                (poses.position(entity)?.0.distance(point) <= radius).then_some(gid.get())
             })
             .collect();
         ids.sort_unstable();
@@ -360,7 +360,8 @@ fn optional_u64(params: &ApiValue, name: &str, query: &str) -> Result<Option<u64
 pub fn register_spatial_query_providers(app: &mut App) {
     app.world_mut()
         .register_component::<PrescribedSimulationPose>();
-    app.init_resource::<ApiQueryRegistry>();
+    app.init_resource::<SimulationPoseReadCache>()
+        .init_resource::<ApiQueryRegistry>();
     let mut registry = app.world_mut().resource_mut::<ApiQueryRegistry>();
     registry.register(NearestProvider);
     registry.register(EntitiesInRadiusProvider);
@@ -369,7 +370,6 @@ pub fn register_spatial_query_providers(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::SystemState;
     use bevy::math::{DQuat, DVec3};
 
     fn read(world: &mut World, entity: Entity) -> Option<(GridPos, GridRot)> {
@@ -404,6 +404,59 @@ mod tests {
     }
 
     #[test]
+    fn cached_api_pose_metadata_tracks_live_values_and_entity_replacement() {
+        let mut world = World::new();
+        assert!(SimulationPoseReadState::try_new(&world).is_none());
+        world.init_resource::<SimulationPoseReadCache>();
+        let frame = world
+            .spawn(lunco_spatial::WorldGridConfig::default().grid())
+            .id();
+        world.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        let position = DVec3::new(0.123_456_789_012, 2.0, -3.0);
+        let body = world
+            .spawn((RigidBody::Dynamic, PhysicsPoseSeeded, Position(position)))
+            .id();
+        {
+            let mut state = SimulationPoseReadState::try_new(&world).unwrap();
+            assert_eq!(state.position(body), Some(GridPos(position)));
+            assert!(SimulationPoseReadState::try_new(&world).is_none());
+        }
+        let moved = position + DVec3::new(0.000_000_000_123, 4.0, 5.0);
+        world
+            .entity_mut(body)
+            .insert((Position(moved), Name::new("new archetype")));
+        assert_eq!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(body),
+            Some(GridPos(moved))
+        );
+        world.despawn(body);
+        assert!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(body)
+                .is_none()
+        );
+        let replacement = world
+            .spawn((RigidBody::Dynamic, PhysicsPoseSeeded, Position(position)))
+            .id();
+        assert_eq!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(replacement),
+            Some(GridPos(position))
+        );
+        world.remove_resource::<lunco_spatial::ActivePhysicsFrame>();
+        assert!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(replacement)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn mounted_pose_uses_native_ancestor_before_presentation_writeback() {
         let mut world = World::new();
         let frame = world
@@ -432,14 +485,29 @@ mod tests {
         let (actual, axes) = read(&mut world, child).expect("a mounted native pose");
         assert!((actual.0 - expected).length() < 1.0e-12);
         assert!(axes.0.dot(rotation).abs() > 1.0 - 1.0e-14);
-        let mut state = SimulationPoseReadState::try_new(&world).unwrap();
-        assert_eq!(state.position(&world, child), Some(actual));
+        world.init_resource::<SimulationPoseReadCache>();
+        assert_eq!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(child),
+            Some(actual)
+        );
         world.entity_mut(body).remove::<PhysicsPoseSeeded>();
         assert!(read(&mut world, child).is_none());
-        assert!(state.position(&world, child).is_none());
+        assert!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(child)
+                .is_none()
+        );
         world.remove_resource::<lunco_spatial::ActivePhysicsFrame>();
         assert!(read(&mut world, child).is_none());
-        assert!(state.position(&world, child).is_none());
+        assert!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .position(child)
+                .is_none()
+        );
     }
 
     #[test]
@@ -478,11 +546,21 @@ mod tests {
             mounted.0.0,
             position.0 + rotation.0 * DVec3::new(0.25, 0.5, -0.75)
         );
-        let mut state = SimulationPoseReadState::try_new(&world).unwrap();
-        assert_eq!(state.pose(&world, mount), Some(mounted));
+        world.init_resource::<SimulationPoseReadCache>();
+        assert_eq!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .pose(mount),
+            Some(mounted)
+        );
         world.resource_mut::<lunco_core_runtime::SimTick>().0 = 71;
         assert!(read(&mut world, mount).is_none());
-        assert!(state.pose(&world, source).is_none());
+        assert!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .pose(source)
+                .is_none()
+        );
         world.resource_mut::<lunco_core_runtime::SimTick>().0 = 70;
         let replacement = world
             .spawn(lunco_spatial::WorldGridConfig::default().grid())
@@ -494,7 +572,12 @@ mod tests {
             .entity_mut(source)
             .insert((RigidBody::Kinematic, PhysicsPoseSeeded));
         assert!(read(&mut world, source).is_none());
-        assert!(state.pose(&world, mount).is_none());
+        assert!(
+            SimulationPoseReadState::try_new(&world)
+                .unwrap()
+                .pose(mount)
+                .is_none()
+        );
     }
 
     #[test]
@@ -556,6 +639,7 @@ mod tests {
         world
             .resource_mut::<ApiEntityRegistry>()
             .assign(body, lunco_core::GlobalEntityId::from_raw(42));
+        world.init_resource::<SimulationPoseReadCache>();
 
         let data = NearestProvider
             .execute(&world, &api_value!({ "point": [12.0, -1901.0, -4.0] }))

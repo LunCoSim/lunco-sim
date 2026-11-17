@@ -1793,7 +1793,6 @@ pub fn find(name: &str) -> i64 {
         };
         registry
             .entities_unordered()
-            .into_iter()
             .filter(|(_, entity)| world.get::<Name>(*entity).map(|n| n.as_str()) == Some(name))
             .map(|(gid, _)| gid.get())
             .min()

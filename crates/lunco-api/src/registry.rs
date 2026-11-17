@@ -52,20 +52,20 @@ impl ApiEntityRegistry {
         self.bevy_to_api.get(&entity).copied()
     }
 
-    /// Snapshot registered identities without imposing a stable iteration
+    /// Borrow registered identities without imposing a stable iteration
     /// order. Callers that expose a batch or choose a first match must sort by
-    /// `GlobalEntityId` or use [`Self::entities_by_identity`].
-    pub fn entities_unordered(&self) -> Vec<(GlobalEntityId, Entity)> {
-        self.api_to_bevy
-            .iter()
-            .map(|(&id, &entity)| (id, entity))
-            .collect()
+    /// `GlobalEntityId` or use [`Self::entities_by_identity`]. No registry
+    /// snapshot is allocated for a read-only lookup or reduction.
+    pub fn entities_unordered(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (GlobalEntityId, Entity)> + '_ {
+        self.api_to_bevy.iter().map(|(&id, &entity)| (id, entity))
     }
 
     /// Snapshot registered identities in stable ascending `GlobalEntityId`
     /// order for observable batches and deterministic first-match selection.
     pub fn entities_by_identity(&self) -> Vec<(GlobalEntityId, Entity)> {
-        let mut entities = self.entities_unordered();
+        let mut entities: Vec<_> = self.entities_unordered().collect();
         entities.sort_unstable_by_key(|(id, _)| id.get());
         entities
     }

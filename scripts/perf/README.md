@@ -197,9 +197,14 @@ attribute that work to one child zone.
 
 `csv_thread` is Tracy's compressed thread ID used by the native zone CSV;
 `tid` is the OS thread ID. Select the constructor's thread as well as its time
-interval. Each stack contributes `samples` once, repeated on its frame rows;
-group by `(tid, callstack)` before counting samples. For inclusive function
-counts, count each function once per stack. Unknown symbols and absent frame
+interval. Each sampled stack retains its capture-relative `time_ns` and native
+per-thread `sample_index`, repeated on its frame rows. Group by
+`(tid, sample_index)` before counting samples; a repeated `callstack` can occur
+at many different times. For inclusive function counts, count each function
+once per sample. Join timestamps to complete native zone intervals on the same
+thread to identify the active instrumented system even when stack unwinding
+ends early. This establishes execution context, not missing stack frames.
+Unknown symbols and absent frame
 metadata remain explicit; source locations may still identify their owner.
 The `image` column retains Tracy's native module identity. For unresolved static
 symbols, resolve addresses only against the exact captured ELF and its recorded

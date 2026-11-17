@@ -236,6 +236,14 @@ metadata only, follows archetype changes and retires with its World. Every call
 reads the current active frame, hierarchy and physics components; it never
 retains a scene pose or requires another tick to invalidate a sampled value.
 
+Immutable API pose readers borrow the physics owner's World-bound system-state
+metadata through a non-blocking lease and consume the same `SimulationPoseQuery`.
+The World borrow fixes reader identity and prevents mutations during a lease;
+missing or busy metadata remains an explicit unavailable-query result. The
+registry's unordered entity traversal is borrowed rather than copied for name,
+USD-path and proximity reductions. Observable batches still collect and sort
+by canonical identity, and first-match reductions still choose the lowest id.
+
 Co-simulation endpoint lifecycle publication retains Bevy's native exclusive
 `QueryState` for changed `SimComponent` owners. Each pass updates archetype
 membership and reads live status with the same system change ticks, collects

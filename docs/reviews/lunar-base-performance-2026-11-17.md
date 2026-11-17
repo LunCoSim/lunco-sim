@@ -124,3 +124,45 @@ caller-complete evidence, then qualify an unchanged source cohort. Preserve
 numerical cadence and image quality.
 The outstanding acceptance requirement is a complete 60-second landed window
 at 100 FPS with every frame at or below 10 ms.
+
+## Immutable read-path optimization
+
+The physics gate initializes World-owned metadata for immutable API pose reads.
+`SimulationPoseReadState` borrows that World and its cached
+`SystemState<SimulationPoseQuery>` through a non-blocking lease. Every call reads
+live components; unavailable metadata, frames, native seeds and prescribed
+samples retain their rejection boundaries. Scene poses and identities are not
+cached. The immutable borrow prevents mutation during a lease. These are native
+engine read mechanisms, not lifecycle policy or hook candidates.
+
+`ApiEntityRegistry::entities_unordered()` borrows the registry for name, path
+and proximity reductions. Observable batches still collect and sort by identity;
+first-match reductions retain their lowest-id rule. `QueryEntity` reads one
+entity's optional metadata directly, without constructing an all-entity query.
+
+The regular release artifact is retained as `luncosim-query-metadata`, SHA256
+`6cd88b28457e82c5b3c80dff8132a1f5875b7e2d319ed05c874ae7ad74e1d284`.
+The completed build and exact runtime patch are recorded in
+`query-metadata-build.json`. It passes all eight focused physics-pose tests,
+the five registry lifecycle tests, and the production `transform_entity` scene's
+six authored checks (60 simulation ticks, exit zero).
+
+The `query-native-before`, `query-native-after` and
+`query-native-before-repeat` receipts retain equal before/after Twin hashes in
+each run. Five repetitions of 100 `QueryEntity` reads have median in-command
+elapsed times of 21.255, 1.268 and 31.546 ms respectively. This diagnostic uses
+Rhai's existing monotonic timestamp only in a command observation and excludes
+HTTP/frame-boundary latency. Corresponding `QueryUsdPrim` medians are 37.261,
+23.627 and 65.163 ms. The repeated baseline exposes changing machine load;
+these query timings do not establish a frame-rate gain. Frame-only diagnostic
+windows report 49.753, 29.792 and 17.298 FPS, with other simulator sessions
+changing during the sequence. None qualifies the 100 FPS target.
+
+The native sample reader now preserves each sample's timestamp and per-thread
+index. Re-exporting the existing View capture retains the same 348 PostUpdate
+samples and 233 zones. Joining timestamps to same-thread inclusive CPU intervals
+places all 83 samples bearing the ambiguous generic query leaf inside
+`bevy_light::check_dir_light_mesh_visibility` command application. This identifies
+their instrumented execution context; it does not reconstruct missing caller
+frames or make that bounded cost the dominant frame bottleneck. Native captures,
+the timestamp join and the diagnostic query drivers remain ignored evidence.

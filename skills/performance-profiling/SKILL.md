@@ -25,6 +25,12 @@ to improve a timing.
 
 ## Required separation
 
+- Immutable API pose reads use the physics gate's World-owned query metadata;
+  each short `SimulationPoseReadState` lease samples live values. Preserve
+  frame/tick/readiness rejection and non-blocking lease failure. Name/path and
+  proximity reductions borrow `ApiEntityRegistry::entities_unordered()`; collect
+  only when a consumer needs an owned, identity-ordered snapshot.
+
 - Use the root manifest's Bevy patches for ordinary measurements. Record each
   selected owner's revision and local diff with the executable, including a
   maintained path dependency when the manifest selects one. A command-line path
@@ -142,6 +148,9 @@ to improve a timing.
   can be narrowed to complete instances of one exact zone by appending its name
   to the sample export command; inspect `matched_zones` and the terminal result.
   Frame-wide samples include unrelated work outside the selected child zone.
+  Sample CSV rows retain `time_ns` and per-thread `sample_index`; count once per
+  `(tid, sample_index)` and join to same-thread zone intervals for execution
+  context. A zone match does not reconstruct missing callers in a partial stack.
   The native exporter supports `-e -u` for per-event self times. Match those
   rows to the inclusive export by source, thread and start before selecting a
   bounded window: self duration does not provide the event's original end.

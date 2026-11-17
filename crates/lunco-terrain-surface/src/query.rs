@@ -701,7 +701,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             };
             Some(query.iter(world).filter(|(_, _, _, visibility, disabled, _)| **visibility != Visibility::Hidden && !disabled)
                 .map(|(entity, _, name, _, _, tile)| {
-                    let pose = poses.pose(world, entity);
+                    let pose = poses.pose(entity);
                     api_value!({"entity": entity.to_bits(), "name": name.map(Name::as_str), "terrain_source": tile.map(|tile| tile.0.to_bits()), "position": pose.map(|(position, _)| position.0.to_array())})
                 }).collect::<Vec<_>>())
         } else {
@@ -757,7 +757,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                     mesh_entity.is_none_or(|wanted| wanted == entity.to_bits())
                     && !visibility.is_some_and(|v| *v == Visibility::Hidden))
                     .map(|(entity, owner, mesh, _)| {
-                        let pose = poses.pose(world, entity).map(|(p,r)| (p.0,r.0));
+                        let pose = poses.pose(entity).map(|(p,r)| (p.0,r.0));
                         let vertex_count = world.get_resource::<Assets<Mesh>>().and_then(|assets| assets.get(&mesh.0))
                             .and_then(|mesh| mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok())
                             .and_then(|p| p.as_float3()).map(|p| p.len());
@@ -841,7 +841,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             }).collect::<Vec<_>>());
             let vertex_count = mesh.and_then(|mesh| world.get_resource::<Assets<Mesh>>()?.get(&mesh.0)).map(|mesh| mesh.count_vertices());
             let oracle = world.get::<DemHeightField>(continuation.source).map(|field| field.0.as_ref());
-            let pose = poses.pose(world, entity);
+            let pose = poses.pose(entity);
             let inner_corners = mesh.and_then(|mesh| world.get_resource::<Assets<Mesh>>()?.get(&mesh.0))
                 .and_then(|mesh| mesh.try_attribute(Mesh::ATTRIBUTE_POSITION).ok())
                 .and_then(|positions| positions.as_float3())
