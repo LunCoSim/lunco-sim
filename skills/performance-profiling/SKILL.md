@@ -45,7 +45,11 @@ to improve a timing.
   desktop to isolate pointer input to the owned window without changing its
   visible shape or render target. It checks the active camera target throughout the
   window, rejects incomplete frame history, and requires mean FPS plus p95
-  frame time to meet the budget. Preserve its source, terrain, diagnostics and
+  frame time to meet the budget. The driver explicitly activates `sandbox_view`;
+  use `--perspective` when another workbench perspective is the intended workload.
+  Verify the active 3D camera as well: a persisted Systems view is a different
+  workload, even when physics and the application frame counter advance.
+  Preserve its source, terrain, diagnostics and
   advancing-physics gates. See `scripts/perf/README.md`; retain binary build
   provenance separately from the checkout revision.
 - Run one production session that you own for the product FPS number, launched
