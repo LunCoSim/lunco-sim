@@ -30,6 +30,11 @@ The existing readiness, exact camera target, terrain, source, complete-history
 and advancing-physics checks remain mandatory. These are measurement controls;
 they do not change runtime policy.
 
+The driver explicitly activates and verifies the requested workbench perspective
+(`sandbox_view` by default). Its active-camera and physical-target checks still
+apply. A persisted Systems perspective must not silently substitute a workload
+without the intended 3D view.
+
 ## Observed evidence
 
 Receipts and captures are in ignored `.cache/perf/lunar-100fps/`.
@@ -77,8 +82,45 @@ and Tracy port 8342, were released.
 - `cargo build --release -p lunco-luncosim -j 4`: passed.
 - Skill catalogue validation and Python compilation: passed.
 
-Continue with a fresh, symbol-preserving Tracy capture of the current source,
-including native load maps, and attribute the remaining application/physics
-and render preparation costs. Preserve numerical cadence and image quality.
+## Subsequent attribution and measurement checks
+
+`tracy-release-view/capture.tracy` is a fresh optimized Tracy capture with a
+retained symbol-bearing ELF, native load maps and JIT maps. The matching native
+exporter reads 8,234,831 zones over 62.9 seconds. Owned PID 2708197 used API 5410
+and Tracy 8343. Source hashes match before and after. The camera audit confirms
+one active 2560×1440 Griffin tracking camera in View. Its attempted acceptance
+window stopped on terrain `selection_pending=1`; this is diagnostic evidence.
+
+In its 54–60 second interval, mean main update is 25.672 ms, the native render
+handoff is 6.787 ms, the fixed loop is 8.526 ms, and PostUpdate is 4.502 ms.
+These inclusive intervals overlap other threads and contain waits. Native
+self-time export reports 3.075 ms of PostUpdate schedule time outside its
+main-thread child zones; that alone does not distinguish executor overhead
+from waiting for worker systems. The exact PostUpdate sample selection contains
+348 samples across 233 zones at a verified 1 ms sampling period. Many optimized
+stacks contain only a generic query leaf, so they do not establish its caller.
+Do not attribute merged query symbols to a particular application system.
+
+Recorded mean GPU opaque time is 2.148 ms, directional-shadow parent 1.716 ms,
+and prepass 0.870 ms. These are separate recorded passes, not a complete GPU
+frame total. Nested GPU zones must not be summed with their parents.
+
+A same-session observer diagnostic (`probe-comparison/receipt.json`) brackets
+frame-only polling with the benchmark's full inspection polling. The three
+10-second windows measure 39.755, 45.666 and 43.048 FPS respectively; worst
+frames are 48.014, 35.700 and 40.424 ms. This shows observer perturbation, not
+a runtime optimization or acceptance. Sources are unchanged, but other simulator
+processes run concurrently, so the difference is not an isolated speedup.
+
+The later retained-render-handoff comparison is unqualified: the Twin manifest
+changed externally during its run, and another simulator consumed GPU time.
+It cannot justify retaining the scheduling experiment. Runtime scheduling
+remains unchanged; the current source retains the native First handoff and
+normal schedule executors. All task-owned sessions and collectors exited.
+The unrelated simulator on API 4293 was left untouched.
+
+Attribute the remaining application/physics and render preparation costs with
+caller-complete evidence, then qualify an unchanged source cohort. Preserve
+numerical cadence and image quality.
 The outstanding acceptance requirement is a complete 60-second landed window
 at 100 FPS with every frame at or below 10 ms.

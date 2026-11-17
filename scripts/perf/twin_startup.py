@@ -123,6 +123,8 @@ def main():
     parser.add_argument("--twin-name", required=True)
     parser.add_argument("--scene", type=Path,
                         help="explicit Twin-relative scene, opened through OpenFile")
+    parser.add_argument("--perspective", default="sandbox_view",
+                        help="explicit workbench perspective for the measured scene (default: sandbox_view)")
     parser.add_argument("--source-root", type=Path, required=True)
     parser.add_argument("--body", required=True)
     parser.add_argument("--handoff-property")
@@ -209,6 +211,7 @@ def main():
         "pointer_passthrough": args.pointer_passthrough,
         "measurement_seconds": args.measurement_seconds,
         "max_frame_ms": args.max_frame_ms,
+        "perspective": args.perspective,
     }
     frames = {}
     started = time.monotonic()
@@ -295,6 +298,10 @@ def main():
                         raise RuntimeError(f"invalid readiness probe result: {status!r}")
                     receipt["first_scene_ready_s"] = time.monotonic() - opened
                     receipt["first_ready_body"] = int(status.split()[1])
+                    command(session, "ActivatePerspective", {"id": args.perspective})
+                    receipt["workbench"] = command(session, "InspectWorkbench")
+                    assert receipt["workbench"]["active_perspective"] == args.perspective, \
+                        "requested benchmark perspective did not activate"
                     print("SCENE_READY", receipt["first_scene_ready_s"], flush=True)
                     receipt["first_ready_workloads"] = workloads()
                     receipt["first_ready_engine"] = command(session, "EnginePerformance")

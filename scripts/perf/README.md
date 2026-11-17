@@ -56,6 +56,9 @@ profiling and product acceptance in separate processes. A binary hash identifies
 the measured artifact; the checkout HEAD alone does not prove how a retained
 binary was built.
 By default the driver opens the Twin's current default scene with `OpenTwin`.
+It explicitly activates and verifies `sandbox_view` after scene readiness;
+use `--perspective` to measure another authored workbench perspective. A saved
+Systems layout must not silently replace the intended 3D rendering workload.
 Use `--scene scenes/example.usda` to open an exact Twin-relative scene through
 `OpenFile`, which mounts its owning Twin without changing the manifest. Receipts
 record the command and path; keep them consistent when comparing runs.
