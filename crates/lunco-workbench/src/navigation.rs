@@ -416,7 +416,7 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
             let mut query = search.query.clone();
             let field = ui.add(
                 text_editor::singleline(&mut query)
-                    .hint_text("Find files, scenes, libraries, or actions…")
+                    .hint_text("Find files, scenes, tutorials, libraries, or actions…")
                     .desired_width(f32::INFINITY),
             );
             if search.focus {
@@ -427,7 +427,7 @@ pub(super) fn render_search(ctx: &egui::Context, world: &mut World) {
                 changed = Some((query, search.category.clone()));
             }
             ui.horizontal(|ui| {
-                for category in ["", "Twin", "Libraries", "Scenes", "Actions"] {
+                for category in ["", "Twin", "Libraries", "Scenes", "Tutorials", "Actions"] {
                     if ui
                         .selectable_label(
                             search.category == category,

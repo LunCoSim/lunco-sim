@@ -452,6 +452,12 @@ and Twin lifetime validation as menu actions. Their buttons stay disabled until
 the current Rhai tool endpoint is available, then resolve and validate it again
 at selection.
 
+When no Twin is active, the application empty state also offers a Tutorials
+button. It opens the existing quick-navigation window filtered to Tutorials;
+the catalog policy supplies each result from the same typed action used by the
+Scenarios → Tutorials menu. The button stays visible but disabled until the
+application catalog has published its entries.
+
 The application-required `application.scenarios.menu` Rhai policy owns the
 complete Scenarios tree: library and Twin groups, test-scene visibility,
 current-scene selection, restart, section dividers, downloaded Twin entries, and their typed
@@ -471,11 +477,12 @@ under each Twin's **Test Scenes** submenu. A Rhai checkbox changes that
 preference through the existing typed settings command.
 
 Tutorial catalogs use the same replaceable menu provider and live under
-Scenarios → Tutorials → track → lesson. Catalog policy can mark one lesson as
-the empty viewport's featured action; application-scope featured lessons are
-visible only while no Twin is active. **Explore demo sandbox** is also an
-authored policy action; **Open Twin** is the generic shell entry point when no
-Twin is active.
+Scenarios → Tutorials → track → lesson. Rhai also publishes their existing
+lesson actions as Tutorials quick-navigation entries. Catalog policy can mark
+one lesson as the empty viewport's featured action; application-scope featured
+lessons are visible only while no Twin is active. **Explore demo sandbox** is
+also an authored policy action; **Open Twin** is the generic shell entry point
+when no Twin is active.
 The shared `tutorials` Rhai tool owns tour cursors and continuation. Domain
 exercises retain their own authoritative state checks. See [classroom
 onboarding](../tutorials/06-classroom-onboarding.md) for the report/save
@@ -911,10 +918,12 @@ read it; the panel system re-renders on change.
 
 View → Find files and Ctrl/Cmd+P open quick navigation. Empty search starts with
 active-Twin files; typing or explicit scopes finds library sources, scenes and
-actions. Ctrl/Cmd+Shift+P opens panel/perspective actions. Scene results say Load
-and identify world replacement; scene menus and search read admitted indexed
-inventories. Rhai owns the Scenarios tree and supplies the scene destinations
-to quick navigation from the same policy result.
+actions. The Tutorials category reads catalog-backed lesson entries. The
+empty-viewport Tutorials button opens quick navigation in that category;
+Ctrl/Cmd+Shift+P opens panel/perspective actions. Scene results say Load and
+identify world replacement; scene menus and search read admitted indexed
+inventories. Rhai owns the Scenarios tree and supplies scene and tutorial
+destinations to quick navigation from the same policy result.
 
 Editor owners publish exact URI/purpose through `InstancePanel::navigation_source`.
 Document tab tooltips expose it, and the tab context menu offers Reveal in Twin.

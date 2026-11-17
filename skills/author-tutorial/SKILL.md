@@ -11,9 +11,12 @@ description: >
 
 A lesson is a file-backed Rhai scenario with optional standard USD scene
 content. The application Rhai policy reads generic JSON asset snapshots,
-selects the tutorial catalog, and builds the workbench menu and optional
-empty-viewport quick action. The shared Rust asset and UI layers know only text
-assets, typed generic menu trees, and generic viewport actions.
+selects the tutorial catalog, and builds the workbench menu, quick-navigation
+entries, and optional empty-viewport quick-start action. The empty-viewport
+Tutorials button opens the existing quick-navigation surface filtered to those
+catalog entries. The shell provides that category launcher; shared asset and
+workbench layers carry typed generic menu and navigation actions. The lesson
+catalog and selection logic remain in Rhai.
 The lesson does not need a Rust type, registry, lifecycle owner, or custom USD
 schema.
 
@@ -40,7 +43,8 @@ examples under `assets/tutorials/`.
 }
 ```
 
-The `track` value determines the submenu under **Scenarios → Tutorials**. Set
+Each catalog entry must have a unique `source_asset`. The `track` value
+determines the submenu under **Scenarios → Tutorials**. Set
 `featured: true` on at most one entry to expose it on the empty viewport, and
 use optional `featured_description` for a short button summary. Reuse an
 existing track when the lesson belongs to that learning path. The Rhai policy
@@ -49,6 +53,9 @@ marked catalog from generic asset-scope events and uses the shared `parse_json`
 function; do not add tutorial-specific Rust loading or menu code. The reserved
 experiment-results namespace is classified by the asset owner and excluded by
 the menu policy before parsing. Keep catalogs in authored source directories.
+The same policy result supplies the Tutorials quick-navigation entries and
+their existing lesson actions; do not author a second list for the startup
+button.
 The `application_json_catalogs` production gate covers catalog selection,
 result exclusion, similar directory names and malformed authored entries.
 

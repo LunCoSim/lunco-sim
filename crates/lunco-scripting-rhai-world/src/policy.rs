@@ -1120,7 +1120,7 @@ fn apply_application_asset_policy(
         &[HookValue::str(event.to_owned()), context],
     );
     let actions = match result {
-        None => Ok((Vec::new(), Vec::new(), Vec::new(), Vec::new())),
+        None => Ok((Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())),
         Some(Ok(value @ HookValue::Map(_))) => parse_application_asset_actions(&value),
         Some(Ok(value)) => Err(format!(
             "asset lifecycle policy returned {}, expected map",
@@ -1128,17 +1128,18 @@ fn apply_application_asset_policy(
         )),
         Some(Err(error)) => Err(error.to_string()),
     };
-    let (menus, settings_submenus, viewport_actions, dataset_text_artifacts) = match actions {
-        Ok(actions) => actions,
-        Err(error) => {
-            warn!("[application-assets] `{provider}` policy failed: {error}");
-            commands.trigger(lunco_core::RuntimeError {
-                name: "application-asset-lifecycle-policy-failed".into(),
-                message: format!("{scope_name}: {error}"),
-            });
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new())
-        }
-    };
+    let (menus, settings_submenus, viewport_actions, navigation_entries, dataset_text_artifacts) =
+        match actions {
+            Ok(actions) => actions,
+            Err(error) => {
+                warn!("[application-assets] `{provider}` policy failed: {error}");
+                commands.trigger(lunco_core::RuntimeError {
+                    name: "application-asset-lifecycle-policy-failed".into(),
+                    message: format!("{scope_name}: {error}"),
+                });
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new())
+            }
+        };
     commands.trigger(
         lunco_scripting_rhai_core::ui_bridge::ScriptUiRequest::WorkbenchMenus {
             provider: provider.to_owned(),
@@ -1147,7 +1148,7 @@ fn apply_application_asset_policy(
             settings_submenus,
             viewport_actions,
             viewport_guidance: None,
-            navigation_entries: Vec::new(),
+            navigation_entries,
         },
     );
     for id in dataset_text_artifacts {
@@ -1162,6 +1163,7 @@ fn parse_application_asset_actions(
         Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
         Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchMenu>,
         Vec<lunco_scripting_rhai_core::ui_bridge::ScriptViewportAction>,
+        Vec<lunco_scripting_rhai_core::ui_bridge::ScriptWorkbenchNavigationEntry>,
         Vec<String>,
     ),
     String,
@@ -1169,6 +1171,7 @@ fn parse_application_asset_actions(
     let menus = parse_script_workbench_menus(value)?;
     let settings_submenus = parse_script_workbench_settings_submenus(value)?;
     let viewport_actions = parse_script_viewport_actions(value)?;
+    let navigation_entries = parse_script_workbench_navigation_entries(value)?;
     let artifacts = match value.get("dataset_text_artifacts") {
         None => Vec::new(),
         Some(HookValue::Array(items)) => {
@@ -1200,7 +1203,13 @@ fn parse_application_asset_actions(
             ));
         }
     };
-    Ok((menus, settings_submenus, viewport_actions, artifacts))
+    Ok((
+        menus,
+        settings_submenus,
+        viewport_actions,
+        navigation_entries,
+        artifacts,
+    ))
 }
 
 fn parse_script_viewport_actions(

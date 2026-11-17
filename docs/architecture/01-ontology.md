@@ -275,7 +275,7 @@ A named task-specific UI configuration. Each Perspective has its own default pan
 The 3D world view — NOT a panel, NOT a tile. Structurally persistent as the central area of the workbench window. Docks are arranged around the Viewport, never on top of it. This is a first-class architectural primitive, distinct from panels.
 
 ### Command Palette
-Keyboard-invoked quick navigation (Ctrl/Cmd+P) for contributed Twin files, library sources, scenes, panels, and perspectives. Ctrl/Cmd+Shift+P selects panel/perspective actions. Domain providers reuse their existing inventories and typed operations; this surface does not execute arbitrary parameterized commands.
+Keyboard-invoked quick navigation (Ctrl/Cmd+P) for contributed Twin files, library sources, scenes, tutorials, panels, and perspectives. Ctrl/Cmd+Shift+P selects panel/perspective actions. Domain providers reuse their existing inventories and typed operations; this surface does not execute arbitrary parameterized commands.
 
 ---
 
