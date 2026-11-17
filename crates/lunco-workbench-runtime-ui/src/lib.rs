@@ -97,7 +97,7 @@ pub struct RuntimeUiForms {
 struct RuntimeUiFormState {
     values: BTreeMap<String, String>,
     status: String,
-    needs_projection: bool,
+    pending_fields: HashSet<String>,
 }
 
 #[derive(Component, Clone, Debug)]
@@ -415,12 +415,11 @@ fn sync_runtime_ui_html_classes(
     nodes: Query<(Entity, &Tags), Changed<Tags>>,
 ) {
     for (entity, tags) in &nodes {
+        // HUI may replace a template node before deferred styling is applied.
+        // The replacement receives its own Tags change.
         if let Some(classes) = tags.tags().get("class") {
-            commands.entity(entity).insert(ClassList::new(classes));
+            commands.entity(entity).try_insert(ClassList::new(classes));
         } else {
-            // HUI can despawn a template node after this query but before the
-            // deferred class sync is applied. Treat that teardown race as a
-            // normal no-op instead of logging a stale-entity warning.
             commands.entity(entity).try_remove::<ClassList>();
         }
     }
@@ -482,8 +481,8 @@ fn on_set_runtime_ui_form_values(
         forms.owner_twin_id = Some(owner);
     }
     let form = forms.forms.entry(event.form_id.clone()).or_default();
+    form.pending_fields.extend(event.values.keys().cloned());
     form.values.extend(event.values.clone());
-    form.needs_projection = true;
     Ok(Ack::new(OpId::new()))
 }
 
@@ -997,18 +996,20 @@ fn apply_runtime_ui_form_values(
         return;
     }
     for (form_id, form) in &mut forms.forms {
-        if !form.needs_projection {
+        if form.pending_fields.is_empty() {
             continue;
         }
         for (input, mut editable) in &mut inputs {
             if input.owner_twin_id != owner || &input.form_id != form_id {
                 continue;
             }
-            if let Some(value) = form.values.get(&input.field_id) {
+            if form.pending_fields.contains(&input.field_id)
+                && let Some(value) = form.values.get(&input.field_id)
+            {
                 editable.editor_mut().set_text(value);
             }
         }
-        form.needs_projection = false;
+        form.pending_fields.clear();
     }
 }
 
@@ -1035,8 +1036,13 @@ fn store_runtime_ui_form_input_changes(
         let Some(form) = forms.forms.get_mut(&input.form_id) else {
             continue;
         };
-        form.values
-            .insert(input.field_id.clone(), editable.value().to_string());
+        // The layout system can mark an editable field changed even when its
+        // text is from the prior frame. Preserve the newly authored value
+        // until the next Update has projected it into this widget.
+        if !form.pending_fields.contains(&input.field_id) {
+            form.values
+                .insert(input.field_id.clone(), editable.value().to_string());
+        }
     }
 }
 
@@ -4704,6 +4710,28 @@ mod tests {
     }
 
     #[test]
+    fn queued_class_sync_tolerates_template_teardown() {
+        use super::*;
+
+        let mut app = App::new();
+        let mut tags = Tags::default();
+        tags.insert("class".to_owned(), "section-title".to_owned());
+        let entity = app.world_mut().spawn(tags).id();
+        app.add_systems(
+            Update,
+            (
+                move |mut commands: Commands| {
+                    commands.entity(entity).despawn();
+                },
+                sync_runtime_ui_html_classes,
+            )
+                .chain_ignore_deferred(),
+        );
+        app.update();
+        assert!(app.world().get_entity(entity).is_err());
+    }
+
+    #[test]
     fn authored_action_includes_current_form_values_and_button_tags() {
         use super::*;
         let mut tags = Tags::default();
@@ -4762,7 +4790,7 @@ mod tests {
             RuntimeUiFormState {
                 values: BTreeMap::from([("mixer".to_owned(), "Paddle".to_owned())]),
                 status: "Ready to run".to_owned(),
-                needs_projection: false,
+                pending_fields: HashSet::new(),
             },
         );
         app.insert_resource(forms);
@@ -5094,7 +5122,7 @@ mod tests {
             "factory_recipe".to_owned(),
             RuntimeUiFormState {
                 values: BTreeMap::from([("batch_kg".to_owned(), "750.0".to_owned())]),
-                needs_projection: true,
+                pending_fields: HashSet::from(["batch_kg".to_owned()]),
                 ..default()
             },
         );
@@ -5110,6 +5138,8 @@ mod tests {
                 EditableText::new("1000.0"),
             ))
             .id();
+        // A layout/write-back pass can run between the command and projection.
+        app.add_systems(PreUpdate, store_runtime_ui_form_input_changes);
         app.add_systems(Update, apply_runtime_ui_form_values);
         app.update();
 
@@ -5117,7 +5147,11 @@ mod tests {
             app.world().get::<EditableText>(entity).unwrap().value(),
             "750.0"
         );
-        assert!(!app.world().resource::<RuntimeUiForms>().forms["factory_recipe"].needs_projection);
+        assert!(
+            app.world().resource::<RuntimeUiForms>().forms["factory_recipe"]
+                .pending_fields
+                .is_empty()
+        );
     }
 
     #[test]
