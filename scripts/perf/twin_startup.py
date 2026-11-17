@@ -137,7 +137,15 @@ def main():
                         help="make the owned X11 window click-through; requires --window-size")
     parser.add_argument("--min-fps", type=float,
                         help="require mean FPS and 95 percent of frame times to meet this budget")
+    parser.add_argument("--measurement-seconds", type=float, default=10,
+                        help="duration of the sustained qualified frame window (default: 10)")
+    parser.add_argument("--max-frame-ms", type=float,
+                        help="reject the window if any measured frame exceeds this duration")
     args = parser.parse_args()
+    if not math.isfinite(args.measurement_seconds) or args.measurement_seconds <= 0:
+        parser.error("--measurement-seconds must be finite and greater than zero")
+    if args.max_frame_ms is not None and (not math.isfinite(args.max_frame_ms) or args.max_frame_ms <= 0):
+        parser.error("--max-frame-ms must be finite and greater than zero")
     if args.pointer_passthrough and args.window_size is None:
         parser.error("--pointer-passthrough requires --window-size")
     if args.max_load_seconds is not None and (
@@ -147,6 +155,8 @@ def main():
         parser.error("--min-fps must be finite and greater than zero")
     if args.min_fps is not None and args.tracy_port is not None:
         parser.error("FPS acceptance requires a separate run without Tracy")
+    if args.max_frame_ms is not None and args.tracy_port is not None:
+        parser.error("frame stability acceptance requires a separate run without Tracy")
     window_size = None
     if args.window_size is not None:
         try:
@@ -197,6 +207,8 @@ def main():
         "max_load_seconds": args.max_load_seconds,
         "required_camera_size": window_size, "min_fps": args.min_fps,
         "pointer_passthrough": args.pointer_passthrough,
+        "measurement_seconds": args.measurement_seconds,
+        "max_frame_ms": args.max_frame_ms,
     }
     frames = {}
     started = time.monotonic()
@@ -367,7 +379,7 @@ def main():
                                                    "EngineHealthExposures": command(session, "ReadExposures", {"surface": "engine-health"}),
                                                    "camera": camera,
                                                    "qualification": qualification})
-                        if time.monotonic() - measurement >= 10 and timing["fixed_tick"]["ticks_total"] - initial_tick >= 240:
+                        if time.monotonic() - measurement >= args.measurement_seconds and timing["fixed_tick"]["ticks_total"] - initial_tick >= 240:
                             break
                 time.sleep(0.25 if measurement is None else 0.5)
             else:
@@ -392,11 +404,13 @@ def main():
         if args.tracy_port is None:
             receipt["frame_summary"] = {"count": len(values), "p50_ms": statistics.median(values),
                                         "p95_ms": values[min(len(values) - 1, int(.95 * len(values)))],
+                                        "p99_ms": values[min(len(values) - 1, int(.99 * len(values)))],
                                         "mean_fps": 1000 / statistics.mean(values), "max_ms": max(values)}
         receipt["fixed_tick_summary"] = receipt["samples"][-1]["SimulationTimingProfile"]["fixed_tick"]
         if args.min_fps is not None:
             budget = 1000 / args.min_fps
             receipt["frame_summary"]["within_budget_percent"] = 100 * sum(v <= budget for v in values) / len(values)
+            receipt["frame_summary"]["frames_over_budget"] = sum(v > budget for v in values)
             receipt["fps_budget_passed"] = (receipt["frame_summary"]["mean_fps"] >= args.min_fps
                                              and receipt["frame_summary"]["p95_ms"] <= budget)
             if not receipt["fps_budget_passed"]:
@@ -407,6 +421,10 @@ def main():
                 raise RuntimeError(
                     f"Twin load took {receipt['first_scene_ready_s']:.3f}s; "
                     f"required less than {args.max_load_seconds:.3f}s")
+        if args.max_frame_ms is not None:
+            receipt["frame_stability_passed"] = receipt["frame_summary"]["max_ms"] <= args.max_frame_ms
+            if not receipt["frame_stability_passed"]:
+                raise RuntimeError(f"frame stability budget failed: {receipt['frame_summary']}; maximum {args.max_frame_ms} ms")
         if args.tracy_port is None:
             print("COMPLETE", receipt["first_scene_ready_s"], receipt["frame_summary"], receipt["fixed_tick_summary"], flush=True)
         else:

@@ -251,6 +251,13 @@ to improve a timing.
   an earlier tail in a later run does not prove a fix. Record visible popup/UI
   state alongside camera and graphics settings.
 
+For script pose hotspots, keep position, rotation, forward and navigation reads
+on the bridge's World-owned cached `SimulationPoseQuery` system. Reuse query
+metadata, never sampled poses; qualify live value changes, archetype admission,
+entity retirement and missing active-frame behavior. In authored presentation
+adapters, index immutable scalar snapshots once before reading many vectors.
+Preserve the exact geometry and presentation cadence when measuring that change.
+
 For JSON-scope stalls, distinguish authored source catalogs from completed
 experiment histories. The asset/Twin owner publishes
 `JsonAssetContent::PersistedResult` as identity-only metadata, projecting the

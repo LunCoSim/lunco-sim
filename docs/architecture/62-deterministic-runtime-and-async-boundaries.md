@@ -230,6 +230,12 @@ invariant, not a scenario policy hook. The authored `joint_detach_clock` and
 `joint_detach_paused` observers qualify the public command path through
 `scripts/api/test_joint_detach_clock.py`.
 
+Script position, rotation, forward and navigation reads share one World-owned
+cached Bevy system over `SimulationPoseQuery`. The cache retains query access
+metadata only, follows archetype changes and retires with its World. Every call
+reads the current active frame, hierarchy and physics components; it never
+retains a scene pose or requires another tick to invalidate a sampled value.
+
 Co-simulation endpoint lifecycle publication retains Bevy's native exclusive
 `QueryState` for changed `SimComponent` owners. Each pass updates archetype
 membership and reads live status with the same system change ticks, collects
