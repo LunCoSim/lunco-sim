@@ -2106,10 +2106,12 @@ retention from kinematics/contact collection and marks metadata discovery with
 the owner or its cadence.
 `physics_telemetry_channel_metadata` covers first or changed descriptions;
 `signal_scalar_channel_create` covers initial history/map publication, and
-`signal_scalar_history_tail_growth` covers tail allocations. The signal registry
-owns metadata values; the physics producer retains only a publication flag.
-The tail span selects a full tail before bounded eviction and append, so a
-capped non-allocating append can also appear. It is not an allocation counter.
+`signal_scalar_history_tail_growth` identifies appends that need tail capacity
+after bounded eviction. The signal registry owns metadata values, and the
+physics producer retains a publication flag. Full history chunks take ownership
+of the existing tail allocation. When profiling a long history run, check
+rollover and post-rollover growth separately and align both to the producer's
+simulation-time recording rate.
 Enable these diagnostic spans with
 `RUST_LOG=info,lunco_modelica_core=debug,lunco_usd_sim_telemetry=debug,lunco_signal=debug`; they are
 disabled by the ordinary info-level filter.

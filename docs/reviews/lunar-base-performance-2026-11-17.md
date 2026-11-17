@@ -325,3 +325,65 @@ The application revisions and competing host workloads differ. This comparison
 supports the observed frame timings and does not isolate a whole-frame gain
 from the yield change. Terrain selection is pending at the sampled endpoints,
 so the stricter complete-readiness acceptance also remains open.
+
+## Landed frame tails and scalar-history rollover
+
+`tracy-integrated-f907/capture.tracy` profiles simulator `f907ccab3` with
+the local visibility query cache `400fa336e` and model `ccd7e22`. It contains
+17,040,555 zones over 122.9 s for owned PID 510210. In the same 50-second
+analysis window after View activation, deferred directional visibility
+commands average 0.033 ms with p99 0.091 ms. The previous render-frame
+receipt averages 0.099 ms. The worst host period is 70.624 ms with 0.201 ms
+outside the app update. Its two complete fixed cycles take 30.398 ms in
+total and its PostUpdate takes 16.869 ms. The instrumented window also drains
+queued fixed time, so it only diagnoses costs.
+
+The corresponding uninstrumented local-cache build has SHA256
+`3c3cec899695ce00320df16c73ee111d06375de8144fa9d842047d3973b70d81`.
+The 60.33-second landed window records 2,445 frames at 40.904 FPS, p99
+51.762 ms, and maximum 65.993 ms. Queued fixed time increases from 0.010 to
+0.779 s and delta clipping stays zero. Other render workloads share the
+host. This window misses the goal and the workload differs from the earlier
+81.488 FPS diagnostic.
+
+A native audit after the timing window identifies four active cascades for
+`WorkbenchEguiHost`, each with 1,040 caster candidates, in addition to the
+four cascades for the Griffin tracking view. The native PBR light preparation
+consumes only 3D views. The audit of 40 consecutive frames in the Tracy run
+also finds that every matching 3D cascade clip matrix changes, including the
+two maps with empty caster lists.
+
+The second-longest host period is 62.403 ms. It includes a 34.286 ms
+`retain_modelica_runtime_state` call inside Update, against p99 1.969 ms
+across 1,569 calls. The capture has a 1 ms CPU sample period. Samples on
+that worker in the long call resolve against the captured executable's
+native address map to the deque-drain-to-vector copy and allocator work.
+The scalar history in `lunco-signal` owns chunk sealing. It transfers the
+live tail allocation into a shared chunk and recycles one fully expired
+buffer when no snapshot holds it. Telemetry producers use the same storage
+API, configured rate, and logical retention. This is a shared storage
+mechanism with no authored policy hook.
+
+The storage test verifies allocation transfer, snapshot-held expiration,
+recycling of an unshared chunk, and exact retained values across resize and
+clear. Three existing signal tests also pass for capacity, recording rate,
+and time reversal. The release candidate applies the same local Bevy cache as
+the control and has SHA256
+`45ff266e72400a40f3da0f2f1d54972b2bee8e659286b2c25af3c4fabf10cebc`.
+The windowed production `modelica_telemetry_replacement` fixture passes all
+10 checks and releases API port 5412. The suite wrapper hit a source-scope
+error while discovering another fixture, so the targeted editor runner opened
+`modelica_telemetry_replacement.usda` directly.
+
+`history-rollover/landed` records 5,108 frames over 60.31 s at **85.407 FPS**,
+p95 **14.372 ms**, p99 **18.122 ms**, and maximum **23.187 ms**. 4,669
+frames exceed 10 ms. Queued fixed time at the endpoints is 0.008 and 0.009 s,
+with zero clipping and zero runtime diagnostics. The 2560×1440 High tracking
+view has all 181 selected terrain tiles drawn and terrain readiness at both
+endpoints. The native shadow audit reports the same cascade counts and caster
+totals as the control. The production history API reads 451 finite, strictly
+ordered samples across a rollover, within the configured 1,500-sample limit.
+Twin source hashes match the control. API ports 5410 and 5412 are released.
+The control had an additional active render process and accrued fixed debt.
+The frame timings establish the candidate's observed performance under its
+recorded workload. Stable 100 FPS remains open.

@@ -117,6 +117,12 @@ it checks live history existence so existing channels continue recording while
 new channels are rejected. Cached producer identities do not authorize a new
 history after removal, and lowering the limit does not evict existing history.
 
+`ScalarHistory` seals a full tail by moving its sample allocation into a
+shared immutable chunk. The history may retain one fully expired allocation as
+the next tail when no snapshot still references it. Snapshots share completed
+chunks and copy only the open tail. Logical retention, original sample values,
+and chronological order apply across both parts.
+
 The telemetry browser owns a persistent presentation index. `SignalRegistryPlugin` publishes
 coalesced `SignalDescriptorsChanged` notifications for channel admission, metadata changes,
 activation/archive transitions, and removal. Samples and API owner association do not dirty

@@ -325,7 +325,7 @@ const SCALAR_HISTORY_CHUNK_SIZE: usize = 256;
 /// worker without copying the full retention window on the caller's thread.
 #[derive(Debug, Clone)]
 pub struct ScalarHistorySnapshot {
-    chunks: Vec<Arc<[ScalarSample]>>,
+    chunks: Vec<Arc<VecDeque<ScalarSample>>>,
     first_chunk_offset: usize,
     tail: Arc<[ScalarSample]>,
     len: usize,
@@ -343,7 +343,7 @@ impl ScalarHistorySnapshot {
         let mut samples = Vec::with_capacity(len);
         for (index, chunk) in chunks.iter().enumerate() {
             let offset = if index == 0 { first_chunk_offset } else { 0 };
-            samples.extend_from_slice(&chunk[offset..]);
+            samples.extend(chunk.iter().skip(offset).copied());
         }
         samples.extend_from_slice(&tail);
         samples
@@ -353,14 +353,17 @@ impl ScalarHistorySnapshot {
 /// Chunked ring-buffer history for one scalar signal.
 ///
 /// `capacity` is the logical retention limit. Completed sample chunks are
-/// immutable and shared with plot workers; only the bounded tail remains
-/// mutable. The live iteration order and retention semantics match a ring
-/// buffer while snapshots avoid copying the full history on the UI thread.
+/// immutable and shared with plot workers. Sealing transfers the tail's
+/// allocation to a chunk, and a fully expired unshared allocation can become
+/// the next tail. Snapshots copy only the bounded open tail.
 #[derive(Debug, Clone)]
 pub struct ScalarHistory {
-    chunks: VecDeque<Arc<[ScalarSample]>>,
+    chunks: VecDeque<Arc<VecDeque<ScalarSample>>>,
     first_chunk_offset: usize,
     tail: VecDeque<ScalarSample>,
+    /// One fully expired buffer with no outstanding snapshot references.
+    /// Reused when the active tail is sealed.
+    spare_tail: VecDeque<ScalarSample>,
     len: usize,
     pub capacity: usize,
 }
@@ -372,12 +375,16 @@ impl ScalarHistory {
             chunks: VecDeque::new(),
             first_chunk_offset: 0,
             tail: VecDeque::new(),
+            spare_tail: VecDeque::new(),
             len: 0,
             capacity,
         }
     }
 
     pub fn push(&mut self, sample: ScalarSample) {
+        if self.len >= self.capacity {
+            self.pop_front();
+        }
         let _span = (self.tail.len() == self.tail.capacity()).then(|| {
             bevy::log::debug_span!(
                 "signal_scalar_history_tail_growth",
@@ -386,26 +393,30 @@ impl ScalarHistory {
             )
             .entered()
         });
-        if self.len >= self.capacity {
-            self.pop_front();
-        }
         self.tail.push_back(sample);
         self.len += 1;
         if self.tail.len() == SCALAR_HISTORY_CHUNK_SIZE {
-            let samples: Vec<_> = self.tail.drain(..).collect();
-            self.chunks.push_back(Arc::from(samples));
+            let completed = std::mem::replace(&mut self.tail, std::mem::take(&mut self.spare_tail));
+            self.chunks.push_back(Arc::new(completed));
         }
     }
 
     fn pop_front(&mut self) {
-        if let Some(chunk) = self.chunks.front() {
+        if self.chunks.is_empty() {
+            self.tail.pop_front();
+        } else {
             self.first_chunk_offset += 1;
-            if self.first_chunk_offset == chunk.len() {
-                self.chunks.pop_front();
+            if self.first_chunk_offset == SCALAR_HISTORY_CHUNK_SIZE {
+                let completed = self.chunks.pop_front().expect("front chunk exists");
+                if self.capacity >= SCALAR_HISTORY_CHUNK_SIZE
+                    && self.spare_tail.capacity() == 0
+                    && let Ok(mut samples) = Arc::try_unwrap(completed)
+                {
+                    samples.clear();
+                    self.spare_tail = samples;
+                }
                 self.first_chunk_offset = 0;
             }
-        } else {
-            self.tail.pop_front();
         }
         self.len -= 1;
     }
@@ -417,6 +428,9 @@ impl ScalarHistory {
     /// zero-length buffer.
     pub fn set_capacity(&mut self, capacity: usize) {
         self.capacity = capacity.max(1);
+        if self.capacity < SCALAR_HISTORY_CHUNK_SIZE {
+            self.spare_tail = VecDeque::new();
+        }
         while self.len > self.capacity {
             self.pop_front();
         }
@@ -426,6 +440,7 @@ impl ScalarHistory {
         self.chunks.clear();
         self.first_chunk_offset = 0;
         self.tail.clear();
+        self.spare_tail = VecDeque::new();
         self.len = 0;
     }
 
@@ -436,7 +451,7 @@ impl ScalarHistory {
             .enumerate()
             .flat_map(move |(index, chunk)| {
                 let offset = if index == 0 { first_chunk_offset } else { 0 };
-                chunk.get(offset..).unwrap_or(&[]).iter()
+                chunk.iter().skip(offset)
             })
             .chain(self.tail.iter())
     }
@@ -459,13 +474,13 @@ impl ScalarHistory {
     pub fn back(&self) -> Option<&ScalarSample> {
         self.tail
             .back()
-            .or_else(|| self.chunks.back().and_then(|chunk| chunk.last()))
+            .or_else(|| self.chunks.back().and_then(|chunk| chunk.back()))
     }
 
     /// Capture shared completed chunks and a bounded copy of the mutable tail.
     pub fn snapshot(&self) -> ScalarHistorySnapshot {
         let chunks = self.chunks.iter().cloned().collect();
-        let tail = Arc::from(self.tail.iter().copied().collect::<Vec<_>>());
+        let tail = self.tail.iter().copied().collect();
         ScalarHistorySnapshot {
             chunks,
             first_chunk_offset: self.first_chunk_offset,
@@ -1501,6 +1516,62 @@ mod tests {
         reg.push_scalar_with_capacity(s.clone(), 10.0, 10.0, 2);
         assert_eq!(reg.scalar_history(&s).unwrap().len(), 2);
         assert_eq!(reg.scalar_history(&s).unwrap().capacity, 2);
+    }
+
+    #[test]
+    fn history_transfers_and_reuses_chunk_storage_without_mutating_snapshots() {
+        let chunk_size = SCALAR_HISTORY_CHUNK_SIZE;
+        let mut history = ScalarHistory::new(chunk_size);
+        let sample = |index: usize| ScalarSample {
+            time: index as f64,
+            value: -(index as f64),
+        };
+
+        for index in 0..chunk_size - 1 {
+            history.push(sample(index));
+        }
+        history.tail.reserve(1);
+        let allocation = std::ptr::from_ref(history.front().unwrap());
+        history.push(sample(chunk_size - 1));
+        assert_eq!(std::ptr::from_ref(history.front().unwrap()), allocation);
+
+        for index in chunk_size..chunk_size + 3 {
+            history.push(sample(index));
+        }
+        let snapshot = history.snapshot();
+        for index in chunk_size + 3..2 * chunk_size {
+            history.push(sample(index));
+        }
+        assert_eq!(
+            history.tail.capacity(),
+            0,
+            "the snapshot owns the expired chunk"
+        );
+
+        for index in 2 * chunk_size..3 * chunk_size {
+            history.push(sample(index));
+        }
+        assert!(
+            history.tail.capacity() >= chunk_size,
+            "the unshared expired chunk supplies the next tail"
+        );
+        history.set_capacity(3);
+        assert_eq!(
+            history
+                .iter()
+                .map(|sample| sample.time as usize)
+                .collect::<Vec<_>>(),
+            (3 * chunk_size - 3..3 * chunk_size).collect::<Vec<_>>()
+        );
+        history.clear();
+        assert!(history.is_empty());
+        let samples = snapshot.into_samples();
+        assert_eq!(samples.len(), chunk_size);
+        for (index, retained) in (3..chunk_size + 3).zip(samples) {
+            let expected = sample(index);
+            assert_eq!(retained.time, expected.time);
+            assert_eq!(retained.value, expected.value);
+        }
     }
 
     #[test]

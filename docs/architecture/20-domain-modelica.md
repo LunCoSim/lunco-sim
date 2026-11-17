@@ -914,8 +914,9 @@ shared recording-rate, channel-limit and retention settings.
 `TelemetryRetentionPlugin` installs that settings/storage plane once for both
 standalone Modelica hosts and the full mission sampler. Its chunked
 `ScalarHistory` owns history and immutable plot snapshots for native and browser
-consumers. History length never adds an entire per-variable copy before a step
-result can cross the communication barrier.
+consumers. Full sample chunks can be shared with plot workers without copying
+their contents during recording. History length never adds an entire
+per-variable copy before a step result can cross the communication barrier.
 
 The shared compiler owns native diagnostic heartbeat threads per compile.
 An RAII guard closes their stop channel and joins them on normal return,
