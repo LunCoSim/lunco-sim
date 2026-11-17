@@ -131,6 +131,7 @@ register_commands!(
     lifecycle::on_open,
     lifecycle::on_open_class,
     lifecycle::on_open_file,
+    lifecycle::on_open_modelica_source,
     lifecycle::on_open_in_new_view,
     nav::on_pan_canvas,
     doc::on_redo,

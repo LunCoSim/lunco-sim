@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_cosim_core::{ConnectionBinding, CosimDiagnostics, PortHolds, SimConnection};
 use lunco_port_core::ports::PortRegistry;
+use lunco_usd_sim_core::UsdWiredConnection;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
@@ -102,9 +103,9 @@ pub fn sample(world: &mut World) {
         .get_resource::<Time<Virtual>>()
         .is_some_and(|t| !t.is_paused() && t.relative_speed_f64() > 0.0);
     let specs: Vec<_> = world
-        .query::<(&SimConnection, &ConnectionBinding)>()
+        .query::<(&UsdWiredConnection, &SimConnection, &ConnectionBinding)>()
         .iter(world)
-        .map(|(spec, binding)| (spec.clone(), binding.clone()))
+        .map(|(authored, spec, binding)| (authored.clone(), spec.clone(), binding.clone()))
         .collect();
     world.resource_scope(|world, mut views: Mut<UsdCanvasState>| {
         let state = &mut views.scene;
@@ -114,18 +115,13 @@ pub fn sample(world: &mut World) {
                 .fixed_time
                 .is_some_and(|previous| fixed > previous);
         let mut bindings = HashMap::new();
-        for (spec, binding) in specs {
-            let Some(source) = world.get::<lunco_usd_bevy_scene::UsdPrimPath>(spec.start_element)
-            else {
+        let requested = std::mem::take(&mut state.activity.requested);
+        let mut resolved = HashMap::<String, Option<(Entity, String, bool)>>::new();
+        for (authored, spec, binding) in specs {
+            let Some((owner, _)) = authored.target.rsplit_once('.') else {
                 continue;
             };
-            let Some(target) = world.get::<lunco_usd_bevy_scene::UsdPrimPath>(spec.end_element)
-            else {
-                continue;
-            };
-            if state.entities.get(&source.path) != Some(&spec.start_element)
-                || state.entities.get(&target.path) != Some(&spec.end_element)
-            {
+            if state.entities.get(owner) != Some(&authored.owner) {
                 continue;
             }
             let held = world
@@ -136,20 +132,36 @@ pub fn sample(world: &mut World) {
                 .and_then(|d| d.faults.get(&spec.end_element))
                 .and_then(|ports| ports.get(spec.end_connector.as_str()))
                 .and_then(|fault| fault.failure.clone());
-            bindings.insert(
+            for (key, address) in [
                 (
-                    format!(
-                        "{}.{}:{}",
-                        source.path,
-                        if spec.start_is_input {
-                            "inputs"
-                        } else {
-                            "outputs"
-                        },
-                        spec.start_connector
+                    &authored.source,
+                    (
+                        spec.start_element,
+                        spec.start_connector,
+                        spec.start_is_input,
                     ),
-                    format!("{}.inputs:{}", target.path, spec.end_connector),
                 ),
+                (
+                    &authored.target,
+                    (spec.end_element, spec.end_connector, true),
+                ),
+            ] {
+                if requested.contains(key) {
+                    // An authored property used as both a forwarded sink and a source
+                    // can have two runtime addresses. In that case sample its own
+                    // public port instead of choosing an address by iteration order.
+                    resolved
+                        .entry(key.clone())
+                        .and_modify(|existing| {
+                            if existing.as_ref() != Some(&address) {
+                                *existing = None;
+                            }
+                        })
+                        .or_insert(Some(address));
+                }
+            }
+            bindings.insert(
+                (authored.source, authored.target),
                 Binding {
                     state: binding,
                     held,
@@ -158,31 +170,33 @@ pub fn sample(world: &mut World) {
             );
         }
         state.activity.bindings = bindings;
-        let requested = std::mem::take(&mut state.activity.requested);
         state
             .activity
             .ports
             .retain(|key, _| requested.contains(key));
         for key in requested {
-            let Some((path, property)) = key.rsplit_once('.') else {
+            let address = resolved.remove(&key).flatten().or_else(|| {
+                let (path, property) = key.rsplit_once('.')?;
+                let (namespace, name) = property.split_once(':')?;
+                let entity = *state.entities.get(path)?;
+                match namespace {
+                    "inputs" => Some((entity, name.to_owned(), true)),
+                    "outputs" => Some((entity, name.to_owned(), false)),
+                    _ => None,
+                }
+            });
+            let Some((entity, name, input)) = address else {
                 continue;
             };
-            let Some((namespace, name)) = property.split_once(':') else {
-                continue;
-            };
-            let Some(entity) = state.entities.get(path).copied() else {
-                continue;
-            };
-            let (value, metadata) = match namespace {
-                "inputs" => (
-                    registry.read_input_port(world, entity, name),
-                    registry.input_port_metadata(world, entity, name),
+            let (value, metadata) = match input {
+                true => (
+                    registry.read_input_port(world, entity, &name),
+                    registry.input_port_metadata(world, entity, &name),
                 ),
-                "outputs" => (
-                    registry.read_output_port(world, entity, name),
-                    registry.output_port_metadata(world, entity, name),
+                false => (
+                    registry.read_output_port(world, entity, &name),
+                    registry.output_port_metadata(world, entity, &name),
                 ),
-                _ => continue,
             };
             let unit = metadata
                 .and_then(|m| m.unit)

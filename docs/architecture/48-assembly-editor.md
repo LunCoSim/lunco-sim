@@ -1519,6 +1519,8 @@ the wires remain selectable. `InspectConnectionDiagram` exposes the visible
 route, including its endpoints, in world coordinates.
 The Bindings form dispatches typed `ApplyConnectionBinding` with exact endpoint
 keys, the inspected `source_generation`, and an optional original binding.
+Its draft keeps those identities through layout and disclosure refreshes.
+An authored USD revision invalidates the draft before it can be applied.
 **Apply edit** removes that exact original and installs the new endpoints in
 one USD journal batch. Changing a source on the same sink preserves its other
 sources; changing a target clears the old sink. An edit that selects an already
@@ -1536,7 +1538,10 @@ document preparation. Retired or unmounted sources reject instead of resolving
 through a different Twin.
 **USD properties** opens the existing inspector. **Edit Modelica model** uses
 `OpenConnectionNode` and its existing `diagram.open.plan` source/editor policy.
-Registered Modelica asset URIs admit their stable source identity through
+The approved Modelica facet passes its exact asset URI and optional authored
+class to `OpenModelicaSource`. The standalone USD co-simulation owner also
+uses this selection when admitting and compiling the source. Registered asset
+URIs admit their identity through
 `load_source_uri`, then resolve through `SchemeRegistry`
 on the existing file worker and install through the same file-document
 admission as native paths. A Twin URI must still resolve to its captured Twin
@@ -1562,13 +1567,14 @@ source assets through the stage asset owner and selects the exact authored
 `subIdentifier`, or the source owner's selected class. Asset events refresh the
 source-leased icon cache. The existing `lunco-modelica-icon-ui` renderer paints
 the symbol with the active schematic palette; USD port anchors and program
-identities remain visible. Source classes without a directly authored icon keep
-their standard card. Connections does not synthesize graphics or resolve
-external icon inheritance independently of the Modelica document owner.
+identities remain visible. Rumoca resolves inherited icon graphics within the
+loaded source, using the same projection as the Modelica editor. A class without
+available graphics keeps its standard card.
 
-Live connection inspection reads `ConnectionBinding`, `PortHolds`,
-`CosimDiagnostics` and `PortRegistry` rather than interpreting authored links as
-successful execution. The bounded 10 Hz producer runs only for a visible live
+Live connection inspection joins the authored property pair and its exact stage
+owner to `UsdWiredConnection`. It reads `ConnectionBinding`, `PortHolds`,
+`CosimDiagnostics` and `PortRegistry` at the resolved runtime endpoints, including
+output forwarding and child ports. The bounded 10 Hz producer runs only for a visible live
 scene view. Port samples and units are requested only for visible rows, model
 ports or selected wires; no USD traversal or backend reads occur in paint.
 States distinguish document-only, structural, unprojected, pending, bound, held

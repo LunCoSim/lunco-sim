@@ -122,6 +122,58 @@ pub fn extract_experiment(annotations: &[Expression]) -> Option<Experiment> {
 // Inheritance logic
 // ---------------------------------------------------------------------------
 
+/// Resolve a class icon against the exact source set admitted to Rumoca.
+pub fn project_session_icon(
+    session: &mut rumoca_compile::Session,
+    qualified: &str,
+) -> Option<Icon> {
+    use rumoca_core::{PredefinedComponentType, Variability};
+    let members = session.class_component_declarations_query(qualified)?;
+    let falsy_params = members
+        .iter()
+        .filter_map(|member| {
+            let component = &member.component;
+            if !matches!(component.variability, Variability::Parameter(_))
+                || member.scalar_type != Some(PredefinedComponentType::Boolean)
+                || member.has_type_dimensions
+                || !component.shape.is_empty()
+                || !component.shape_expr.is_empty()
+            {
+                return None;
+            }
+            let value = component
+                .binding
+                .as_ref()
+                .map(ToString::to_string)
+                .or_else(|| {
+                    component
+                        .start_is_modification
+                        .then(|| component.start.to_string())
+                });
+            (value.as_deref() == Some("false")).then(|| component.name.clone())
+        })
+        .collect();
+    let top = session.class_definition_query(qualified)?.clone();
+    let mut resolver = |scope: &str, reference: &str| {
+        session
+            .class_type_resolution_candidates_in_class_query(scope, reference)
+            .into_iter()
+            .find_map(|candidate| {
+                let resolved = session.class_lookup_query(&candidate)?;
+                (resolved == candidate).then_some(())?;
+                let class = session.class_definition_query(&resolved)?.clone();
+                Some((resolved, Arc::new(class)))
+            })
+    };
+    project_inherited_icon(
+        qualified,
+        &top,
+        &mut resolver,
+        &falsy_params,
+        &mut HashSet::new(),
+    )
+}
+
 /// Walk a class's `extends` chain and merge inherited + local icon
 /// graphics into a single [`Icon`]. The merge algorithm (recurse into
 /// bases first, append local graphics last, inherit the coordinate

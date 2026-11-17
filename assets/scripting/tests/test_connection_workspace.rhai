@@ -68,17 +68,17 @@ fn connection_workspace_rejection(before) {
     ], "CONNECTION REJECTION", "CONNECTION_WORKSPACE");
 }
 
-fn connection_workspace_live(previous) {
+fn connection_workspace_live(previous, minimum, maximum) {
     let d=query("InspectConnectionDiagram");
     let bound=true;let values=[];let finite=true;
     for link in d.connections {
         bound=bound && link.status=="bound";
         values.push(link.source_value);
-        finite=finite && link.source_value!=() && link.source_value>=1.0 && link.source_value<=3.0;
+        finite=finite && link.source_value!=() && link.source_value>=minimum && link.source_value<=maximum;
     }
     report_verdict([
         t_true(d.active_scene && bound,"runtime binding state comes from the live owner"),
-        t_true(finite && values!=previous,"bounded Modelica source samples advance"),
+        t_true(finite && values!=previous,"the selected Modelica class supplies advancing source samples"),
     ],"CONNECTION LIVE VALUES","CONNECTION_WORKSPACE");
 }
 
@@ -87,6 +87,19 @@ fn connection_workspace_paused() {
     let stopped=true;for link in d.connections {stopped=stopped && !link.animating;}
     report_verdict([t_true(stopped,"paused simulation has no observed-change animation")],
         "CONNECTION PAUSED","CONNECTION_WORKSPACE");
+}
+
+fn connection_workspace_forwarded() {
+    let d = query("InspectConnectionDiagram");
+    let bound = false;
+    for link in d.connections {
+        if link.target == "/World/Relay" && link.target_port == "outputs:forwarded" {
+            bound = link.status == "bound" && link.target_value != () &&
+                link.target_value >= 5.0 && link.target_value <= 7.0;
+        }
+    }
+    report_verdict([t_true(bound, "an authored output forward shows its resolved runtime status and sample")],
+        "CONNECTION FORWARDED OUTPUT", "CONNECTION_WORKSPACE");
 }
 
 fn connection_workspace_held() {
@@ -114,6 +127,13 @@ fn connection_workspace_model_source(doc, marker) {
     report_verdict([t_true(source.source.contains(marker),
         "the existing Modelica document owner applies and restores source edits")],
         "CONNECTION MODEL EDITOR","CONNECTION_WORKSPACE");
+}
+
+fn connection_workspace_model_class(doc, expected) {
+    let model = query("CompileStatus", #{doc_id: doc});
+    report_verdict([t_true(model.drilled_in_class == expected,
+        "opening an attached program selects the exact class authored in USD")],
+        "CONNECTION MODEL CLASS", "CONNECTION_WORKSPACE");
 }
 
 fn connection_workspace_grouped(rendered) {

@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use lunco_core::{Command, on_command};
 use lunco_doc::{DocumentId, DocumentOrigin};
 use lunco_doc_bevy::{CloseDocument, DocumentSaved, NewDocument, OpenFile};
-use lunco_modelica_ui_core::{ClassAction, OpenClass};
+use lunco_modelica_ui_core::{ClassAction, OpenClass, OpenModelicaSource};
 use std::sync::Arc;
 
 use crate::model_tabs::ModelTabs;
@@ -916,25 +916,54 @@ pub fn on_open_in_new_view(trigger: On<OpenInNewView>, mut commands: Commands) {
     });
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct ModelicaFileOpenContext<'w> {
+    registry: Res<'w, ModelicaDocuments>,
+    workspace: Option<Res<'w, lunco_workspace::WorkspaceResource>>,
+    connection: Option<Res<'w, lunco_core_session::ClientConnection>>,
+    replica: Option<Res<'w, lunco_core_session::ReplicatedScene>>,
+    schemes: Option<Res<'w, lunco_assets_core::SchemeRegistry>>,
+    roots: Option<Res<'w, lunco_assets_core::TwinRoots>>,
+}
+
 #[on_command(OpenFile)]
-pub fn on_open_file(
+pub(super) fn on_open_file(
     trigger: On<OpenFile>,
     mut commands: Commands,
-    registry: Res<ModelicaDocuments>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    connection: Option<Res<lunco_core_session::ClientConnection>>,
-    replica: Option<Res<lunco_core_session::ReplicatedScene>>,
-    schemes: Option<Res<lunco_assets_core::SchemeRegistry>>,
-    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    context: ModelicaFileOpenContext,
 ) {
-    let path = trigger.event().path.clone();
-    let schemes = schemes.as_deref().cloned();
-    let roots = roots.as_deref().cloned();
-    let replication =
-        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    queue_open_modelica_file(trigger.path.clone(), None, &mut commands, context);
+}
+
+#[on_command(OpenModelicaSource)]
+pub(super) fn on_open_modelica_source(
+    trigger: On<OpenModelicaSource>,
+    mut commands: Commands,
+    context: ModelicaFileOpenContext,
+) {
+    queue_open_modelica_file(
+        trigger.source.clone(),
+        trigger.class.clone(),
+        &mut commands,
+        context,
+    );
+}
+
+fn queue_open_modelica_file(
+    path: String,
+    class: Option<String>,
+    commands: &mut Commands,
+    context: ModelicaFileOpenContext,
+) {
+    let schemes = context.schemes.as_deref().cloned();
+    let roots = context.roots.as_deref().cloned();
+    let replication = lunco_core_session::current_replication_owner(
+        context.connection.as_deref(),
+        context.replica.as_deref(),
+    );
     let admission = crate::ui::document_openings::FileOpenAdmission::capture(
-        &registry,
-        workspace.as_deref().map(|workspace| &workspace.0),
+        &context.registry,
+        context.workspace.as_deref().map(|workspace| &workspace.0),
         replication.as_ref(),
     );
     commands.queue(move |world: &mut World| {
@@ -978,7 +1007,7 @@ pub fn on_open_file(
 
         // Native file URIs and class-tree identities use the class owner.
         // Registered asset references use the admitted file worker below.
-        if let Some(native_path) = native_file_path {
+        if let Some(native_path) = native_file_path.as_ref().filter(|_| class.is_none()) {
             if !native_path
                 .extension()
                 .and_then(|extension| extension.to_str())
@@ -988,7 +1017,7 @@ pub fn on_open_file(
             }
             crate::ui::panels::package_browser::open_class(
                 world,
-                crate::class_ref::ClassRef::user_file(native_path, Vec::<String>::new()),
+                crate::class_ref::ClassRef::user_file(native_path.clone(), Vec::<String>::new()),
                 true,
                 admission,
             );
@@ -1011,12 +1040,15 @@ pub fn on_open_file(
             .extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("mo"));
-        if !registered_asset && let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path) {
+        if class.is_none()
+            && !registered_asset
+            && let Some(class) = crate::class_ref::ClassRef::parse_tree_id(&path)
+        {
             crate::ui::panels::package_browser::open_class(world, class, true, admission);
             return;
         }
 
-        let is_modelica = std::path::Path::new(&path)
+        let is_modelica = filesystem_path
             .extension()
             .and_then(|s| s.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("mo"));
@@ -1024,7 +1056,7 @@ pub fn on_open_file(
             return;
         }
 
-        let path_buf = std::path::PathBuf::from(&path);
+        let path_buf = native_file_path.unwrap_or_else(|| std::path::PathBuf::from(&path));
         let asset_address = if registered_asset {
             match lunco_assets_core::asset_path::load_source_uri(&path, roots.as_ref()) {
                 Ok(address) => Some(lunco_assets_core::asset_path::anchor_of(&address)),
@@ -1080,6 +1112,7 @@ pub fn on_open_file(
                 .await;
                 let _ = open_file_result_tx().send(OpenFileResult {
                     requested_path: path_buf,
+                    class,
                     admission,
                     read_result,
                 });
@@ -1202,6 +1235,7 @@ fn open_file_result_tx() -> &'static std::sync::mpsc::Sender<OpenFileResult> {
 struct OpenFileResult {
     admission: crate::ui::document_openings::FileOpenAdmission,
     requested_path: std::path::PathBuf,
+    class: Option<String>,
     read_result: Result<(lunco_workspace::ResolvedFileDocument, String), String>,
 }
 
@@ -1369,7 +1403,7 @@ pub fn drain_open_file_results(world: &mut bevy::prelude::World) {
             );
         }
         let mut tabs = world.resource_mut::<ModelTabs>();
-        let tab_id = tabs.ensure_for(doc_id, None);
+        let tab_id = tabs.ensure_for(doc_id, result.class);
         if let Some(tab) = tabs.get_mut(tab_id) {
             tab.view_mode = crate::model_tabs_types::ModelViewMode::Canvas;
         }

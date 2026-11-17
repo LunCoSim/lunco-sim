@@ -2,11 +2,6 @@ use super::*;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdSceneAwaitingStage};
 use std::collections::HashSet;
 
-/// (as opposed to authored some other way). [`rewire_usd_connections`] reconciles
-/// tagged edges against composed USD wiring, preserving unchanged runtime edges.
-#[derive(Component, Default)]
-pub struct UsdWiredConnection;
-
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct WiringFactsKey {
     stage: bevy::asset::AssetId<UsdStageAsset>,
@@ -50,7 +45,7 @@ struct ConnectionIdentity {
 struct PreviousWiredEdge {
     entity: Entity,
     connection: SimConnection,
-    name: Option<String>,
+    authored: UsdWiredConnection,
 }
 
 fn connection_identity(connection: &SimConnection) -> ConnectionIdentity {
@@ -158,9 +153,8 @@ pub(super) struct WiringQueries<'w, 's> {
         (
             Entity,
             Option<&'static SimConnection>,
-            Option<&'static Name>,
+            &'static UsdWiredConnection,
         ),
-        With<UsdWiredConnection>,
     >,
     global_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
     provenance: Query<'w, 's, &'static lunco_core::Provenance>,
@@ -654,7 +648,7 @@ pub(super) fn rewire_usd_connections(
         HashMap::new();
     {
         let _span = bevy::log::info_span!("usd_cosim_wiring_index_existing_edges").entered();
-        for (entity, connection, name) in wiring.edges.iter() {
+        for (entity, connection, authored) in wiring.edges.iter() {
             let Some(connection) = connection else {
                 commands.entity(entity).try_despawn();
                 continue;
@@ -665,7 +659,7 @@ pub(super) fn rewire_usd_connections(
                 .push_back(PreviousWiredEdge {
                     entity,
                     connection: connection.clone(),
-                    name: name.map(|name| name.as_str().to_string()),
+                    authored: authored.clone(),
                 });
         }
     }
@@ -1064,14 +1058,19 @@ pub(super) fn rewire_usd_connections(
                         scale,
                         offset,
                     };
-                    let name = format!("UsdWire {src} -> {}.{sink_conn}", prim_path.path);
+                    let authored = UsdWiredConnection {
+                        owner: entity,
+                        source: src.to_string(),
+                        target: format!("{}.{attr}", prim_path.path),
+                    };
+                    let name = format!("UsdWire {} -> {}", authored.source, authored.target);
                     let identity = connection_identity(&connection);
                     if let Some(previous) = previous_edges
                         .get_mut(&identity)
                         .and_then(std::collections::VecDeque::pop_front)
                     {
                         if same_connection(&previous.connection, &connection)
-                            && previous.name.as_deref() == Some(name.as_str())
+                            && previous.authored == authored
                         {
                             continue;
                         }
@@ -1079,7 +1078,7 @@ pub(super) fn rewire_usd_connections(
                     }
                     commands.spawn((
                         connection,
-                        UsdWiredConnection,
+                        authored,
                         // Keep the immutable USD fact on the derived runtime edge.
                         // The generic binder has no USD dependency, but its terminal
                         // diagnostics still need to name the authored source and

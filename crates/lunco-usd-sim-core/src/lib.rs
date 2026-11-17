@@ -37,6 +37,18 @@ pub enum UsdSimSet {
 #[derive(Component)]
 pub struct UsdSimProcessed;
 
+/// Composed property connection represented by a derived `SimConnection`.
+/// The runtime ports may belong to forwarding or generated entities.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct UsdWiredConnection {
+    /// Projected prim owning the authored sink property, scoped to its stage instance.
+    pub owner: Entity,
+    /// Exact authored source property path.
+    pub source: String,
+    /// Exact authored target property path, including its namespace.
+    pub target: String,
+}
+
 /// Coalesced entity work shared by independent USD simulation projectors.
 ///
 /// Each owner keeps its own instance so one projector cannot consume another

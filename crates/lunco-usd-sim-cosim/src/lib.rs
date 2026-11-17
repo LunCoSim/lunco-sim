@@ -53,7 +53,7 @@ use lunco_usd_bevy_stage::{
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use lunco_usd_sim_core::{PendingDifferential, PendingEntityWork, UsdSimSet};
+use lunco_usd_sim_core::{PendingDifferential, PendingEntityWork, UsdSimSet, UsdWiredConnection};
 use lunco_usd_sim_domain::{GeneratedModelicaSource, UsdModelicaPortContract, UsdModelicaSchedule};
 
 /// Installs USD-authored co-simulation participant and connection projection.
@@ -68,9 +68,7 @@ pub mod readiness;
 pub mod sync;
 mod wiring;
 
-pub use wiring::{
-    BindingEpochWait, UsdWiredConnection, install_wiring_system, modelica_models_terminal,
-};
+pub use wiring::{BindingEpochWait, install_wiring_system, modelica_models_terminal};
 use wiring::{
     BindingModelStatuses, WiringFactsCache, causal_participants_changed,
     derive_causal_barrier_participants, forget_binding_model_status,
@@ -349,6 +347,8 @@ pub struct PendingModelicaSource {
     /// Asset-relative path, copied into the generated source's stable compiler
     /// URI and diagnostics metadata.
     pub asset_path: String,
+    /// Exact class selected by the USD program, with validation from the USD owner.
+    class: Result<Option<String>, String>,
     /// Modelica worker session for this source load. Recompile requests carry
     /// a newer session so results from the superseded solver are fenced.
     pub session_id: u64,
@@ -1566,6 +1566,9 @@ fn process_usd_cosim_prim_read(
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(source_load_path.clone()),
             asset_path: lunco_assets_core::asset_path::anchor_of(&source_load_path),
+            class: lunco_usd_bevy_core::program::modelica_source_ref(reader, sdf_path)
+                .map(|reference| reference.sub_identifier)
+                .map_err(|issue| format!("{}: {}", issue.property, issue.message)),
             session_id: 0,
             resume_after_compile: true,
         });
@@ -2299,6 +2302,7 @@ pub(crate) fn request_modelica_parameter_recompile(
         commands.entity(entity).try_insert(PendingModelicaSource {
             handle: asset_server.load(load_path),
             asset_path,
+            class: Ok(Some(model.model_name.clone())),
             session_id,
             resume_after_compile,
         });

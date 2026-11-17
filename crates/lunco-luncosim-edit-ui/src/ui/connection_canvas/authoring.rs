@@ -6,7 +6,7 @@ use lunco_core::{ActiveCommandId, Command, CommandOutcome, on_command, register_
 use lunco_usd_document::document::{LayerId, UsdOp};
 
 /// Exact presentation key and authored property, including boundary terminals.
-#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Reflect, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingEndpoint {
     /// Exact node key returned by InspectConnectionDiagram, including boundary roles.
@@ -36,7 +36,7 @@ impl BindingEndpoint {
         })
     }
 
-    fn resolve(&self, scene: &Scene) -> Result<PortRef, String> {
+    pub(super) fn resolve(&self, scene: &Scene) -> Result<PortRef, String> {
         let (id, node) = scene
             .nodes()
             .find(|(_, node)| projection::diagram_key(node) == Some(self.key.as_str()))

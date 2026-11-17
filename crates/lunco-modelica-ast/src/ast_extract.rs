@@ -49,7 +49,7 @@ fn parse(source: &str) -> Option<StoredDefinition> {
 /// takes, what it is tuned by.
 #[derive(Debug, Default, Clone)]
 pub struct ModelInterface {
-    /// Authored class graphics from this exact parsed source revision.
+    /// Authored class graphics, including bases resolved in this exact source.
     pub icons: HashMap<String, crate::annotations::Icon>,
     /// Selected class, relative to `within` and qualified by package nesting.
     pub model_name: Option<String>,
@@ -145,9 +145,22 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
         None => (None, None),
     };
     let mut interface = project_model_interface(ast, model_name, class);
+    let mut session = None;
     for name in ast.declared_class_names() {
         if let Some(class) = ast.get_class_by_qualified_name(&name) {
-            if let Some(icon) = crate::annotations::parsing::extract_icon(&class.annotation) {
+            let icon = if class.extends.is_empty() {
+                None
+            } else {
+                let session = session.get_or_insert_with(|| {
+                    let mut session = rumoca_compile::Session::default();
+                    session
+                        .add_parsed_batch(vec![("inmemory://source-icons.mo".into(), ast.clone())]);
+                    session
+                });
+                crate::annotations::project_session_icon(session, &name)
+            };
+            if let Some(icon) = icon.or_else(|| crate::annotations::extract_icon(&class.annotation))
+            {
                 interface.icons.insert(name, icon);
             }
         }

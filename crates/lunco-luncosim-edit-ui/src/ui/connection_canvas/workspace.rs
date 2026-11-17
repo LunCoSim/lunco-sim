@@ -1,4 +1,5 @@
 //! Source-scoped interface and binding views over the existing diagram projection.
+use super::authoring::{ApplyConnectionBinding, BindingEndpoint, BindingPair};
 use super::{UsdCanvasSessionState, UsdCanvasState, UsdPrimNodeData, navigation, projection};
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -74,12 +75,37 @@ pub(super) struct Workspace {
     model: String,
     filter: String,
     local_only: bool,
-    from: Option<PortRef>,
-    to: Option<PortRef>,
-    replace: bool,
-    editor_open: bool,
-    editing: Option<super::authoring::BindingPair>,
+    draft: Option<BindingDraft>,
     interface_tab: InterfaceTab,
+}
+
+struct BindingDraft {
+    generation: u64,
+    from: Option<BindingEndpoint>,
+    to: Option<BindingEndpoint>,
+    previous: Option<BindingPair>,
+    replace_sources: bool,
+}
+
+impl BindingDraft {
+    fn new(generation: u64) -> Self {
+        Self {
+            generation,
+            from: None,
+            to: None,
+            previous: None,
+            replace_sources: false,
+        }
+    }
+
+    fn edit(generation: u64, pair: BindingPair) -> Self {
+        Self {
+            from: Some(pair.from.clone()),
+            to: Some(pair.to.clone()),
+            previous: Some(pair),
+            ..Self::new(generation)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -154,6 +180,15 @@ struct InterfacePort {
     name: String,
     kind: String,
     usd_type: Option<String>,
+}
+
+impl InterfacePort {
+    fn binding_endpoint(&self) -> BindingEndpoint {
+        BindingEndpoint {
+            key: self.key.clone(),
+            port: self.name.clone(),
+        }
+    }
 }
 
 /// Select the live scene or the focused USD document as the Connections source.
@@ -317,10 +352,6 @@ pub(super) fn refresh(state: &mut UsdCanvasSessionState) {
         }
     }
     state.workspace.filter_key = None;
-    state.workspace.from = None;
-    state.workspace.to = None;
-    state.workspace.editing = None;
-    state.workspace.replace = false;
     for id in hidden {
         state.canvas.scene.remove_edge(id);
         state
@@ -601,14 +632,13 @@ fn port_column(
                         state.workspace.mode = Presentation::Bindings;
                     }
                     if state.doc.is_some() && ui.small_button("Connect…").clicked() {
-                        state.workspace.editing = None;
-                        state.workspace.replace = false;
-                        state.workspace.from = Some(port.endpoint.clone());
-                        state.workspace.to = None;
+                        state.workspace.draft = Some(BindingDraft {
+                            from: Some(port.binding_endpoint()),
+                            ..BindingDraft::new(state.generation)
+                        });
                         state.workspace.filter = format!("{}.{}", port.path, port.name);
                         state.workspace.local_only = false;
                         state.workspace.mode = Presentation::Bindings;
-                        state.workspace.editor_open = true;
                     }
                 });
                 ui.add_space(
@@ -622,22 +652,28 @@ fn editor(
     ui: &mut egui::Ui,
     ctx: &mut lunco_workbench_core::PanelCtx,
     state: &mut UsdCanvasSessionState,
-) {
-    if state.doc.is_none() {
-        ui.weak("Use Edit connections to author this source document.");
-        return;
+    draft: &mut BindingDraft,
+) -> bool {
+    // Keep the original document generation even when the projection is rebuilt.
+    if draft.generation != state.generation {
+        ui.label("The USD source changed. Start a new binding edit to use the current source.");
+        return ui.small_button("Dismiss").clicked();
     }
-    let caption = |value: &Option<PortRef>| {
-        state
+    let scene = full_scene(state);
+    let caption = |value: &Option<BindingEndpoint>| {
+        let Some(endpoint) = value else {
+            return "Choose port…".into();
+        };
+        let path = state
             .workspace
             .ports
             .iter()
-            .find(|p| Some(&p.endpoint) == value.as_ref())
-            .map(|p| format!("{} · {}", p.path, p.name))
-            .unwrap_or_else(|| "Choose port…".into())
+            .find(|port| port.key == endpoint.key && port.name == endpoint.port)
+            .map_or(endpoint.key.as_str(), |port| port.path.as_str());
+        format!("{path} · {}", endpoint.port)
     };
-    let from_caption = caption(&state.workspace.from);
-    let to_caption = caption(&state.workspace.to);
+    let from_caption = caption(&draft.from);
+    let to_caption = caption(&draft.to);
     ui.columns(2, |columns| {
         columns[0].label("Port");
         egui::ComboBox::from_id_salt("binding_source")
@@ -648,18 +684,22 @@ fn editor(
                 for port in &state.workspace.ports {
                     if ui
                         .selectable_value(
-                            &mut state.workspace.from,
-                            Some(port.endpoint.clone()),
+                            &mut draft.from,
+                            Some(port.binding_endpoint()),
                             format!("{} · {}", port.path, port.name),
                         )
                         .changed()
                     {
-                        state.workspace.to = None;
+                        draft.to = None;
                     }
                 }
             })
             .response
             .on_hover_text(&from_caption);
+        let source = draft
+            .from
+            .as_ref()
+            .and_then(|endpoint| endpoint.resolve(scene).ok());
         columns[1].label("Connect to");
         egui::ComboBox::from_id_salt("binding_target")
             .selected_text(&to_caption)
@@ -667,12 +707,12 @@ fn editor(
             .truncate()
             .show_ui(&mut columns[1], |ui| {
                 for port in &state.workspace.ports {
-                    if state.workspace.from.as_ref().is_some_and(|from| {
-                        super::validate_connection(full_scene(state), from, &port.endpoint).is_ok()
+                    if source.as_ref().is_some_and(|from| {
+                        super::validate_connection(scene, from, &port.endpoint).is_ok()
                     }) {
                         ui.selectable_value(
-                            &mut state.workspace.to,
-                            Some(port.endpoint.clone()),
+                            &mut draft.to,
+                            Some(port.binding_endpoint()),
                             format!("{} · {}", port.path, port.name),
                         );
                     }
@@ -681,54 +721,45 @@ fn editor(
             .response
             .on_hover_text(&to_caption);
     });
+    let validation = draft
+        .from
+        .as_ref()
+        .zip(draft.to.as_ref())
+        .map(|(from, to)| {
+            super::validate_connection(scene, &from.resolve(scene)?, &to.resolve(scene)?)
+        });
     ui.horizontal_wrapped(|ui| {
-        ui.checkbox(&mut state.workspace.replace, "Replace existing sources");
-        let validation = state
-            .workspace
-            .from
-            .as_ref()
-            .zip(state.workspace.to.as_ref())
-            .map(|(a, b)| super::validate_connection(full_scene(state), a, b));
-        if ui
+        ui.checkbox(&mut draft.replace_sources, "Replace existing sources");
+        let apply = ui
             .add_enabled(
                 validation.as_ref().is_some_and(Result::is_ok),
-                egui::Button::new(if state.workspace.editing.is_some() {
+                egui::Button::new(if draft.previous.is_some() {
                     "Apply edit"
                 } else {
                     "Connect"
                 }),
             )
-            .clicked()
+            .clicked();
+        if apply
+            && let (Some(from), Some(to), Some(host)) =
+                (&draft.from, &draft.to, &state.view_document)
         {
-            if let (Some(from), Some(to), Some(host)) = (
-                &state.workspace.from,
-                &state.workspace.to,
-                &state.view_document,
-            ) {
-                match super::authoring::BindingPair::capture(full_scene(state), from, to) {
-                    Ok(pair) => ctx.trigger(super::authoring::ApplyConnectionBinding {
-                        view_id: host.document().id().raw(),
-                        parent_gen: state.generation,
-                        from: pair.from,
-                        to: pair.to,
-                        previous: state.workspace.editing.clone(),
-                        replace_sources: state.workspace.replace,
-                    }),
-                    Err(error) => state.last_error = Some(error),
-                }
-            }
-        }
-        if ui.small_button("Cancel").clicked() {
-            state.workspace.editor_open = false;
-            state.workspace.editing = None;
-            state.workspace.replace = false;
-            state.workspace.from = None;
-            state.workspace.to = None;
+            ctx.trigger(ApplyConnectionBinding {
+                view_id: host.document().id().raw(),
+                parent_gen: draft.generation,
+                from: from.clone(),
+                to: to.clone(),
+                previous: draft.previous.clone(),
+                replace_sources: draft.replace_sources,
+            });
+            return true;
         }
         if let Some(Err(error)) = validation {
             ui.colored_label(lunco_theme::active(ui.ctx()).tokens.warning, error);
         }
-    });
+        ui.small_button("Cancel").clicked()
+    })
+    .inner
 }
 
 /// Keep both the owner prefix and the distinguishing property suffix in view.
@@ -783,24 +814,24 @@ fn bindings(
     state: &mut UsdCanvasSessionState,
 ) {
     if state.doc.is_some() {
-        if ui
-            .toggle_value(
-                &mut state.workspace.editor_open,
-                if state.workspace.editing.is_some() {
-                    "Edit binding"
-                } else {
-                    "Connect ports"
-                },
-            )
-            .changed()
+        let mut open = state.workspace.draft.is_some();
+        let label = if state
+            .workspace
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.previous.is_some())
         {
-            state.workspace.editing = None;
-            state.workspace.replace = false;
-            state.workspace.from = None;
-            state.workspace.to = None;
+            "Edit binding"
+        } else {
+            "Connect ports"
+        };
+        if ui.toggle_value(&mut open, label).changed() {
+            state.workspace.draft = open.then(|| BindingDraft::new(state.generation));
         }
-        if state.workspace.editor_open {
-            editor(ui, ctx, state);
+        if let Some(mut draft) = state.workspace.draft.take() {
+            if !editor(ui, ctx, state, &mut draft) {
+                state.workspace.draft = Some(draft);
+            }
         }
     } else {
         ui.weak("Use Edit connections to author this source document.");
@@ -879,11 +910,8 @@ fn bindings(
                                         &row.to,
                                     ) {
                                         Ok(pair) => {
-                                            state.workspace.from = Some(row.from.clone());
-                                            state.workspace.to = Some(row.to.clone());
-                                            state.workspace.editing = Some(pair);
-                                            state.workspace.replace = false;
-                                            state.workspace.editor_open = true;
+                                            state.workspace.draft =
+                                                Some(BindingDraft::edit(state.generation, pair));
                                         }
                                         Err(error) => state.last_error = Some(error),
                                     }
