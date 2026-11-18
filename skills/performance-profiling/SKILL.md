@@ -436,7 +436,10 @@ precedence checks. Initial handoff and live exchange use `input_transaction`:
 immutable staging and commit share one exclusive world borrow, so each eligible
 target is validated once. Returning an error rejects the staged batch. A
 retained command preparation has no such borrow guarantee and must still be
-revalidated at commit. Do not replace either proof with a revision-only cache.
+revalidated at commit. Test compiled wiring with several distinct endpoints
+per entity. In one transaction, admit a fresh locator and reject a stale
+locator for the same entity and topology revision after its backend keys
+change. Verify that rejection discards earlier staged writes.
 The scoped transaction's Bevy hash table stores indexes into its staged writes;
 duplicate checks compare full identities without cloning the port names again.
 Its compact records retain only the admitted callback, entity, name, slot and

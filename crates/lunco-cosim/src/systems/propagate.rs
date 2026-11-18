@@ -367,6 +367,16 @@ impl CompiledWiring {
         for (_, entity, name) in held {
             self.target_index(world, &registry, entity, &name);
         }
+        ResolvedPort::share_contract_keys(
+            self.sources
+                .iter_mut()
+                .filter_map(|source| source.src_resolved.as_mut())
+                .chain(
+                    self.targets
+                        .iter_mut()
+                        .filter_map(|target| target.resolved.as_mut()),
+                ),
+        );
         // Wires and explicit holds have stable source order before dense slots
         // are assigned. The tick does no sorting.
         self.detect_force_feedback_loops(world);

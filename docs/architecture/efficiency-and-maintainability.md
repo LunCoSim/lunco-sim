@@ -417,8 +417,12 @@ survives into another point. Source reads and target preflight share one
 owner-precedence prefix is evaluated once in that scope. The transaction
 samples the topology revision once and proves entity liveness on the first
 read or write of that entity. Each locator must match the registry, World,
-entity, revision and its complete captured prefix. Proofs reset before and
-after the transaction, including rejection. Resolved locators retain the
+entity, revision and its complete captured prefix. During wiring rebuild,
+locators with equal backend key sequences share one immutable allocation.
+Within the transaction, each entity compares that allocation's contents to
+its live prefix on first use. Later locators for the same entity and allocation
+can reuse this comparison. A different allocation requires a content check.
+The transaction releases these proofs on both commit and rejection. Resolved locators retain the
 metadata validation from name admission. Each numeric write checks
 writability and range before staging commit data. Retained
 `PreparedPortWrite` batches revalidate against their later World.
