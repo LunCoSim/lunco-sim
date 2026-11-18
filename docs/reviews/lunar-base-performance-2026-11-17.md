@@ -930,3 +930,17 @@ Twin sources matched and each run ended with zero runtime diagnostics. The
 camera-navigation suite passed all 58 authored checks across follow, rapid
 motion, free flight, capacity, rebasing, policy and zoom. Receipts and the
 Tracy capture are under `borrowed-camera-filter/` in the performance cache.
+
+A same-session recording diagnostic at engine `31da349e9` kept the Griffin
+tracking view, main High profile and physical time running across three
+consecutive one-minute windows. With recording active, suspended and restored,
+the means were 72.181, 110.844 and 111.537 FPS. The corresponding p99 values
+were 40.342, 15.315 and 13.932 ms, and the maxima were 65.938, 22.576 and
+26.038 ms. The tether-torque history grew from 136 to 431 samples, stayed at
+431 through suspension, then grew from 436 to 723 in the restored window.
+The restored window still contained 3,217 of 6,662 frames over budget.
+Linux charged the process 12,538, 765 and 254 major faults respectively.
+Host swap activity also varied sharply across the windows, so the first
+transition cannot isolate the cost of recording. All three ended with zero
+clock clipping or runtime findings. The final output check verified all 312
+public values. The receipt is in `borrowed-camera-filter/recording-aba/`.
