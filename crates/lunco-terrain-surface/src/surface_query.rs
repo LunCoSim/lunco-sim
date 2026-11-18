@@ -350,10 +350,9 @@ impl GridSurfaceQuery<'_, '_> {
         Some(TerrainSurfaceSnapshot { frame, terrains })
     }
 
-    /// Native terrain entities excluded from camera prop queries. Camera terrain
-    /// collision is supplied exactly once by the immutable oracle sweep.
-    pub fn native_terrain_colliders(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.all_terrains.iter().chain(self.native_tiles.iter())
+    /// Whether the composed terrain sweep owns this native collider.
+    pub fn is_native_terrain_collider(&self, entity: Entity) -> bool {
+        self.all_terrains.contains(entity) || self.native_tiles.contains(entity)
     }
 
     /// Sweep a camera sphere against every composed terrain in the active frame.

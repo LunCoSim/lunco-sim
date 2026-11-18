@@ -35,9 +35,11 @@ the owners of their respective camera modes; this seam tunes the spring arm.
 
 The solver sweeps the lens-centred camera sphere along the focus offset, boom
 and actual damped movement. Native prop casts exclude the followed articulated
-assembly and native DEM realizations. The terrain owner sweeps the full composed
-source independently of physical support residency. The camera envelope encloses
-the near-plane corners; source overlap and unavailable work remain explicit.
+assembly using its cached vessel filter. Avian tests each broad-phase candidate
+against the terrain owner's DEM roots and support tiles. The terrain owner
+sweeps the full composed source independently of physical support residency.
+The camera envelope encloses the near-plane corners. Source overlap and
+unavailable work remain explicit.
 Movement casts the physical sphere and applies skin as a directional pullback
 from an approaching contact, matching Avian's movement mechanism. The margin is
 not an enlarged colliding shell, so clear tangent travel remains possible.

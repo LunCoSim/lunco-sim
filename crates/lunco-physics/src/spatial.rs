@@ -245,6 +245,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         distance: f64,
         skin_m: f64,
         filter: &SpatialQueryFilter,
+        predicate: &dyn Fn(bevy::prelude::Entity) -> bool,
     ) -> Result<Option<ShapeHitData>, String> {
         if self.physics_frame.is_none() {
             return Err("shape cast has no active physics frame".into());
@@ -269,9 +270,9 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             compute_contact_on_penetration: true,
             ignore_origin_penetration: true,
         };
-        Ok(self
-            .spatial
-            .cast_shape(shape, origin.0, rotation, direction, &config, filter))
+        Ok(self.spatial.cast_shape_predicate(
+            shape, origin.0, rotation, direction, &config, filter, predicate,
+        ))
     }
 
     /// Shape cast from a source Grid, returning native hit facts in the active
@@ -286,6 +287,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
         distance: f64,
         skin_m: f64,
         filter: &SpatialQueryFilter,
+        predicate: &dyn Fn(bevy::prelude::Entity) -> bool,
     ) -> Result<Option<ShapeHitData>, String> {
         let frame = self
             .physics_frame
@@ -309,6 +311,7 @@ impl<'w, 's> GridSpatialQuery<'w, 's> {
             distance,
             skin_m,
             filter,
+            predicate,
         )
     }
 }

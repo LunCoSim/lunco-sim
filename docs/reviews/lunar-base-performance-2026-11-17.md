@@ -58,7 +58,7 @@ The separate diagnostic used `../tracy/capture/build/tracy-capture-0.14.1`
 and the matching native CSV exporter, with 1 kHz CPU sampling. Owned PID 2386403
 used API 5410 and Tracy 8342. The capture contains 8,444,839 zones across
 68.1 seconds and exports successfully. Its exact development ELF is retained
-as `luncosim-tracy-baseline`, SHA256
+in `luncosim-tracy-baseline.zst`, uncompressed SHA256
 `06ea10e4b50d7e43d2c657e38a7f7a3507e5f8bb03a35fb31e90522f957fdebb`.
 The 54–66 second GPU event window reports mean opaque-pass time 2.193 ms,
 directional-shadow parent 1.837 ms and early prepass 0.781 ms. Nested events
@@ -881,3 +881,52 @@ The strict receipts are under `identified-globe-foci/strict-main-assets/`
 and `identified-globe-foci/local-visibility/acceptance/` in the performance
 cache. The ordered frames and per-thread observations are in
 `identified-globe-foci/scheduling/`.
+
+## Native faults during landed camera and telemetry work
+
+With main's High profile and the released dependency pin, a 150-second
+diagnostic recorded 15,168 consecutive frames at 101.156 FPS. The 37.858 ms
+frame coincided with one failed synchronous compaction and a huge-page fault
+falling back to smaller pages. In a 21.37 ms interval the kernel scanned
+409,833 migration pages and 198,085 free pages. A 27.188 ms frame showed
+another failed compaction. These Linux VM counters cover the whole machine.
+A second launch with huge pages disabled only for that process recorded
+13,761 frames at 92.031 FPS and a 22.513 ms maximum. Both passed the same
+312 public-output checks at High 2560×1440. This experiment changed no product
+or system setting.
+
+Linux perf sampled 53,572 minor faults on the eight Bevy compute workers of
+the symbol-bearing release. At 13,165 faults the instruction pointer was in
+the entity hash-set clone. All 13,165 stacks contained the same return address
+56 bytes from the stack pointer. The preceding direct call in the spring-arm
+system targets that clone. Other samples included allocator growth during
+Modelica scalar recording. The worst frame in this run was 26.447 ms. The
+samples establish sources of repeated faults. Attribution of the prior
+60 ms frames to a particular call remains open.
+
+The native prop sweep borrows the jointed vessel filter already retained by
+the camera. Avian tests its existing mask and vessel membership, then asks
+the terrain query about each candidate's exact entity. The terrain query uses
+the same DEM root and collider-tile components as the source sweep. This
+changes allocation and traversal at the geometry boundary. The follow policy
+continues to receive the same obstruction-distance contract. Native receipts
+and fault samples are in `identified-globe-foci/scheduling/` under the
+performance cache.
+
+The corresponding 25-second Tracy windows contain 1,431 spring-arm calls
+before the change and 1,417 after. Mean cost fell from 0.138 to 0.130 ms and
+median from 0.132 to 0.123 ms. P99 measured 0.242 and 0.245 ms respectively.
+The longest sampled call decreased from 0.711 to 0.420 ms. The candidate
+capture contains 25,188,288 zones. Both windows used the worktree High profile.
+
+On main's High profile at 2560×1440 the separate release candidate recorded
+5,580 consecutive frames at 92.525 FPS, p99 17.132 ms and worst 67.442 ms.
+Of these, 3,687 exceeded 10 ms. Repeating the control on the same desktop
+recorded 5,136 frames at 84.957 FPS, p99 39.941 ms and worst 81.587 ms.
+Both windows ran with two other simulator processes. The variation in whole
+frames exceeds the isolated camera cost. Every terrain sample passed (95 and 91
+respectively), the fixed clock reported zero delta clipping, the admitted
+Twin sources matched and each run ended with zero runtime diagnostics. The
+camera-navigation suite passed all 58 authored checks across follow, rapid
+motion, free flight, capacity, rebasing, policy and zoom. Receipts and the
+Tracy capture are under `borrowed-camera-filter/` in the performance cache.

@@ -453,6 +453,7 @@ pub(crate) fn cast_camera_source_step(
         cast_length,
         0.0,
         filter,
+        &|entity| !terrain.is_native_terrain_collider(entity),
     )?;
     if let Some(hit) = &prop {
         let separation = (hit.point2 - hit.point1).dot(hit.normal1.as_dvec3());
@@ -562,9 +563,6 @@ pub(crate) fn move_avatar_with_collision(
     )
     .ok_or("camera movement cannot resolve its source frame")?;
     let mut filter = SpatialQueryFilter::from_excluded_entities([avatar]);
-    filter
-        .excluded_entities
-        .extend(terrain.native_terrain_colliders());
     filter.mask = avian3d::prelude::LayerMask(!NON_PHYSICAL_QUERY_LAYERS);
     let terrain_work = if terrain.has_terrain() {
         terrain_budget.ok_or("camera movement has no terrain sweep work budget")?
