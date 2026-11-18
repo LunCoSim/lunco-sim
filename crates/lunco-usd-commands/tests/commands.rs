@@ -42,30 +42,17 @@ fn plugin_boots_and_registers_kind() {
         .expect("usd kind registered");
     assert_eq!(meta.display_name, "USD Stage");
     assert_eq!(meta.extensions, vec!["usda", "usdc", "usd"]);
-    assert!(
-        app.world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .authorities()
-            .any(|name| name == "InspectUsdDocument")
-    );
-    assert!(
-        app.world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .authorities()
-            .any(|name| name == "InspectUsdEditSession")
-    );
-    assert!(
-        app.world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .authorities()
-            .any(|name| name == "ResolveUsdTarget")
-    );
-    assert!(
-        app.world()
-            .resource::<lunco_api::queries::ApiQueryRegistry>()
-            .authorities()
-            .any(|name| name == "SyncUsdDocument")
-    );
+    let queries = app
+        .world()
+        .resource::<lunco_api::queries::ApiQueryRegistry>();
+    for name in [
+        "InspectUsdDocument",
+        "InspectUsdEditSession",
+        "ResolveUsdTarget",
+        "SyncUsdDocument",
+    ] {
+        assert!(queries.get(name).is_some(), "missing USD query {name}");
+    }
 }
 
 fn proposal_test_op(name: &str) -> UsdOp {

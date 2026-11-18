@@ -1022,14 +1022,14 @@ mod tests {
                     path: "/Rover".to_string(),
                 },
                 RigidBody::Dynamic,
-                LinearVelocity(DVec3::ZERO),
-                AngularVelocity(DVec3::ZERO),
+                LinearVelocity(Vec3::ZERO),
+                AngularVelocity(Vec3::ZERO),
                 SolvedBodyAcceleration::default(),
                 Position::from_xyz(2.0, 3.0, 4.0),
-                Rotation(bevy::math::DQuat::from_rotation_y(0.25)),
+                Rotation(Quat::from_rotation_y(0.25)),
                 ComputedMass::new(2.0),
                 ComputedCenterOfMass::new(0.1, 0.2, 0.3),
-                ComputedAngularInertia::new(DVec3::splat(3.0)),
+                ComputedAngularInertia::new(Vec3::splat(3.0)),
             ))
             .id();
 
@@ -1046,7 +1046,7 @@ mod tests {
             "a fixed step before the configured telemetry rate must not rebuild a batch"
         );
         app.world_mut().resource_mut::<SimTick>().0 = 6;
-        app.world_mut().get_mut::<LinearVelocity>(body).unwrap().0 = DVec3::X;
+        app.world_mut().get_mut::<LinearVelocity>(body).unwrap().0 = Vec3::X;
         {
             let mut sample = app
                 .world_mut()
@@ -1106,8 +1106,8 @@ mod tests {
                     path: "/Rover".to_string(),
                 },
                 RigidBody::Dynamic,
-                LinearVelocity(DVec3::X),
-                AngularVelocity(DVec3::ZERO),
+                LinearVelocity(Vec3::X),
+                AngularVelocity(Vec3::ZERO),
             ))
             .id();
 
