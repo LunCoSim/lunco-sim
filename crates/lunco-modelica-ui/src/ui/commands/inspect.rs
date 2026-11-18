@@ -72,3 +72,45 @@ pub fn on_inspect_active_doc(_trigger: On<InspectActiveDoc>, mut commands: Comma
         }
     });
 }
+
+/// Project the selected component identity from the document's visible diagram tab.
+pub(crate) struct InspectDiagramSelection;
+
+impl lunco_api::ApiQueryProvider for InspectDiagramSelection {
+    fn name(&self) -> &'static str {
+        "InspectDiagramSelection"
+    }
+
+    fn execute(&self, world: &World, params: &lunco_hooks::HookValue) -> lunco_api::ApiQueryResult {
+        use lunco_hooks::HookValue;
+        let raw = lunco_api::queries::api_param_u64(params, "doc_id")
+            .filter(|id| *id != 0)
+            .ok_or_else(|| {
+                lunco_api::ApiQueryError::new(
+                    lunco_api_core::ApiErrorCode::DeserializationError,
+                    "doc_id must identify a Modelica document",
+                )
+            })?;
+        let doc = lunco_doc::DocumentId::new(raw);
+        let state = world.get_resource::<crate::ui::panels::canvas_diagram::CanvasDiagramState>();
+        let view = super::nav::visible_tab_for_doc(world, doc)
+            .zip(state)
+            .map(|(tab, state)| state.get_for_tab(tab));
+        let primary = view.and_then(|view| match view.canvas.selection.primary() {
+            Some(lunco_canvas::SelectItem::Node(id)) => {
+                view.canvas.scene.node(id)?.origin.as_deref()
+            }
+            _ => None,
+        });
+        Ok(Some(HookValue::map([
+            ("doc_id", HookValue::UInt(raw)),
+            (
+                "class",
+                view.and_then(|view| view.last_seen_target.as_deref())
+                    .map(HookValue::str)
+                    .unwrap_or_default(),
+            ),
+            ("component", primary.map(HookValue::str).unwrap_or_default()),
+        ])))
+    }
+}

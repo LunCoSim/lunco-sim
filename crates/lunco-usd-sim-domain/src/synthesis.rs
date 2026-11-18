@@ -1405,6 +1405,7 @@ pub fn network_facts(
                     ModelicaParameterValue::Real(value) => H::Float(*value),
                     ModelicaParameterValue::Integer(value) => H::Int(i64::from(*value)),
                     ModelicaParameterValue::Boolean(value) => H::Bool(*value),
+                    ModelicaParameterValue::String(value) => H::str(value.clone()),
                 };
                 if modifications.insert(name.clone(), value).is_some() {
                     return Err(format!(

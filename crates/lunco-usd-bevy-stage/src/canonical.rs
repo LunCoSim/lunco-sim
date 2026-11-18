@@ -702,22 +702,26 @@ impl CanonicalStage {
         reference_prim_path: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::anyhow;
-        let mut reference = if asset_path.is_empty() {
-            if reference_prim_path.is_none() {
-                return Err(anyhow!(
-                    "an internal reference requires an explicit prim target"
-                ));
+        let explicit_target = reference_prim_path.is_some();
+        let reference = if let Some(target) = reference_prim_path {
+            if !asset_path.is_empty()
+                && !self.has_layer_bytes(&self.canonical_reference_id(asset_path)?)
+            {
+                return Err(anyhow!("reference source `{asset_path}` is not loaded"));
             }
-            openusd::sdf::Reference::default()
+            openusd::sdf::Reference {
+                asset_path: asset_path.to_owned(),
+                prim_path: SdfPath::new(target)
+                    .map_err(|e| anyhow!("invalid referenced prim path `{target}`: {e}"))?,
+                ..Default::default()
+            }
+        } else if asset_path.is_empty() {
+            return Err(anyhow!(
+                "an internal reference requires an explicit prim target"
+            ));
         } else {
             self.reference_for_loaded_asset(asset_path)?
         };
-        let explicit_target = reference_prim_path.is_some();
-        if let Some(reference_prim_path) = reference_prim_path {
-            reference.prim_path = SdfPath::new(reference_prim_path).map_err(|e| {
-                anyhow!("invalid referenced prim path `{reference_prim_path}`: {e}")
-            })?;
-        }
         let references = if explicit_target {
             openusd::sdf::ReferenceListOp::prepended([reference])
         } else {
@@ -2312,6 +2316,25 @@ mod authoring_tests {
         assert!(
             cs.view().has_api_schema(&spawn, "PhysicsRigidBodyAPI"),
             "the runtime reference root must retain its applied schemas"
+        );
+    }
+
+    #[test]
+    fn explicit_reference_selects_a_member_of_a_library_without_a_default_prim() {
+        let recipe = StageRecipe::from_source("scene.usda", SCENE);
+        let mut stage = CanonicalStage::from_recipe(&recipe).unwrap();
+        let library =
+            b"#usda 1.0\ndef Scope \"Mixer\" {}\ndef Scope \"Cart\" { def Cube \"Deck\" {} }\n";
+        let id = stage.canonical_reference_id("machines.usda").unwrap();
+        stage.add_layer_bytes(HashMap::from([(id, library.to_vec().into())]));
+        let instance = SdfPath::new("/World/cart").unwrap();
+        stage
+            .author_referenced_prim(&instance, None, "machines.usda", Some("/Cart"))
+            .unwrap();
+        assert!(
+            stage
+                .view()
+                .has_prim(&SdfPath::new("/World/cart/Deck").unwrap())
         );
     }
 

@@ -55,6 +55,8 @@ pub struct FocusComponent {
     pub name: String,
     /// Margin in canvas units to leave around the component.
     pub padding: f32,
+    /// Also select this instance in the component inspector.
+    pub select: bool,
 }
 
 /// Pan the diagram canvas by an offset, leaving zoom alone.
@@ -207,6 +209,7 @@ pub fn on_set_zoom(trigger: On<SetZoom>, mut commands: Commands) {
 pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
     let raw = trigger.event().doc_id;
     let name = trigger.event().name.clone();
+    let select = trigger.event().select;
     let padding = if trigger.event().padding > 0.0 {
         trigger.event().padding
     } else {
@@ -227,25 +230,7 @@ pub fn on_focus_component(trigger: On<FocusComponent>, mut commands: Commands) {
             return;
         };
         let docstate = state.get_mut_for_tab(tab_id, doc);
-        let target = docstate
-            .canvas
-            .scene
-            .nodes()
-            .find(|(_, n)| n.label == name)
-            .map(|(_, n)| n.rect);
-        let Some(rect) = target else {
-            bevy::log::warn!("[FocusComponent] no node named `{}` on canvas", name);
-            return;
-        };
-        let sr = super::approx_screen_rect();
-        let viewport_dim = sr.width().min(sr.height());
-        let world_dim = rect.width().max(rect.height()).max(1e-3);
-        let zoom = (viewport_dim * padding) / world_dim;
-        let centre = lunco_canvas::Pos::new(
-            (rect.min.x + rect.max.x) * 0.5,
-            (rect.min.y + rect.max.y) * 0.5,
-        );
-        docstate.canvas.viewport.set_target(centre, zoom);
+        docstate.pending_component = Some((name, padding, select));
     });
 }
 

@@ -1675,10 +1675,21 @@ fn component_binding(name, value) {
     binding
 }
 
+fn parameter_literal(parameter) {
+    if type_of(parameter) != "string" { return parameter.to_string(); }
+    let value = parameter;
+    value.replace("\\", "\\\\");
+    value.replace("\"", "\\\"");
+    value.replace("\n", "\\n");
+    value.replace("\r", "\\r");
+    value.replace("\t", "\\t");
+    string_literal(value)
+}
+
 fn component_declaration(component, positions, net, members) {
     let bindings = [];
     for modification in component.modifications {
-        let value = modification.value.to_string();
+        let value = parameter_literal(modification.value);
         let binding = #{name: modification.name, value: value};
         bindings.push(binding);
     }

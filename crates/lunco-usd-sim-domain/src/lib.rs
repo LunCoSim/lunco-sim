@@ -444,6 +444,7 @@ pub enum ModelicaParameterValue {
     Real(f64),
     Integer(i32),
     Boolean(bool),
+    String(String),
 }
 
 #[derive(SystemParam)]

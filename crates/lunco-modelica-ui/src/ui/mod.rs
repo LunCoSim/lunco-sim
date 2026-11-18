@@ -446,6 +446,10 @@ pub struct ModelicaUiPlugin;
 impl Plugin for ModelicaUiPlugin {
     fn build(&self, app: &mut App) {
         panels::csv_export::install(app);
+        app.init_resource::<lunco_api::ApiQueryRegistry>()
+            .world_mut()
+            .resource_mut::<lunco_api::ApiQueryRegistry>()
+            .register(commands::inspect::InspectDiagramSelection);
         // Reserve this domain's canonical plot before any other native view
         // allocates user plots. Lazy first-paint seeding can otherwise adopt
         // an unrelated plot that already received the same numeric identity.

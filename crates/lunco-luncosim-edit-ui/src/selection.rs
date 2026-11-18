@@ -8,8 +8,6 @@ use bevy::picking::mesh_picking::ray_cast::{MeshRayCast, MeshRayCastSettings, Ra
 use bevy::prelude::*;
 
 use bevy::camera::primitives::Aabb;
-use bevy::math::Isometry3d;
-use bevy::shape::Cuboid;
 
 use lunco_control_core::ControlLink;
 use lunco_core::{Command, on_command, register_commands};
@@ -709,13 +707,13 @@ pub fn compute_selection_aabb(
     if has_aabb { Some((min, max)) } else { None }
 }
 
-/// Draws body-frame bounds for objects explicitly selected for gizmo editing.
-///
-/// Control focus (`Selected`) is deliberately not sufficient: possession keeps
-/// the controlled vessel visible in the Inspector without turning control into
-/// an editor operation or drawing an AABB.
-pub fn draw_selection_bounds(
-    q_selected: Query<(Entity, &GlobalTransform), With<GizmoSelected>>,
+/// Render an authored scene selection independently of edit handles or possession.
+/// Rhai selects the subject through SelectSceneEntity; the existing scene owner
+/// resolves it again if USD replaces its rendered entity.
+pub(crate) fn draw_selection_bounds(
+    selected: Option<Res<SelectedEntities>>,
+    edit_targets: Query<Entity, With<GizmoSelected>>,
+    transforms: Query<&GlobalTransform>,
     q_aabb: Query<
         (&GlobalTransform, &Aabb),
         (
@@ -747,7 +745,16 @@ pub fn draw_selection_bounds(
         a as f32 / 255.0,
     );
 
-    for (selected_ent, body_transform) in q_selected.iter() {
+    let authored = selected
+        .as_deref()
+        .filter(|selection| !selection.stable_paths.is_empty())
+        .into_iter()
+        .flat_map(|selection| selection.entities.iter().copied())
+        .filter(|entity| !edit_targets.contains(*entity));
+    for selected_ent in edit_targets.iter().chain(authored) {
+        let Ok(body_transform) = transforms.get(selected_ent) else {
+            continue;
+        };
         if let Some((min, max)) = compute_selection_aabb(
             selected_ent,
             body_transform,
@@ -756,16 +763,11 @@ pub fn draw_selection_bounds(
             &q_skip_tree,
             &mut queue,
         ) {
-            let center = body_transform.affine().transform_point3((min + max) * 0.5);
-            let size = max - min;
-            let (_, rotation, _) = body_transform.to_scale_rotation_translation();
-            gizmos.primitive_3d(
-                &Cuboid {
-                    half_size: size * 0.5,
-                },
-                Isometry3d::new(center, rotation),
-                color,
-            );
+            let bounds = bevy::shape::Aabb3d {
+                min: min.into(),
+                max: max.into(),
+            };
+            gizmos.aabb_3d(bounds, *body_transform, color);
         }
     }
 }
