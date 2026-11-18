@@ -70,6 +70,7 @@
 //!   `PanelRects` and reserves the space; the 3D camera does the
 //!   actual painting.
 
+use bevy::picking::{PickingSystems, backend::ray::RayMap};
 use bevy::prelude::*;
 // `bevy::camera::*` re-exports work on *both* native and
 // `--no-default-features` wasm builds. `bevy::render::camera::*` only
@@ -100,6 +101,12 @@ pub struct WorkbenchEguiHost;
 #[derive(Resource, Default)]
 struct InputBindingsStatus {
     unavailable: bool,
+}
+
+/// The chrome backend consumes window coordinates. Only world views supply
+/// rays to spatial picking backends, including offscreen preview views.
+fn exclude_egui_host_rays(mut rays: ResMut<RayMap>, hosts: Query<(), With<WorkbenchEguiHost>>) {
+    rays.map.retain(|id, _| !hosts.contains(id.camera));
 }
 
 /// Measurement emitted by the transparent viewport panel after it has read
@@ -796,6 +803,13 @@ impl Plugin for WorkbenchViewportPlugin {
             .init_resource::<InputBindingsStatus>()
             .add_observer(apply_viewport_panel_measurement)
             .add_systems(Startup, ensure_egui_host)
+            .add_systems(
+                PreUpdate,
+                exclude_egui_host_rays
+                    .after(RayMap::repopulate)
+                    .in_set(PickingSystems::ProcessInput)
+                    .run_if(resource_exists::<RayMap>),
+            )
             .add_systems(
                 PreUpdate,
                 reserve_scene_context_actions
