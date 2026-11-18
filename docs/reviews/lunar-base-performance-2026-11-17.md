@@ -759,3 +759,39 @@ matched their full maps. The independent strict run stopped after 37 samples
 with a terrain selection pending, 181 tiles resident and no pending presentation.
 The 100 FPS and 10 ms maximum remain open. The two other simulator sessions
 remained running through validation.
+
+## Committed globe contact cover and indexed HUD program lookup
+
+The globe collision owner retains a replacement selection until it has admitted
+every selected tile and the native collider bounds are valid. It then releases
+the selection and uses the resident map for the continuing near-contact bounds
+check. A demand change starts another replacement. The runtime HUD resolves
+direct child programs and relationship targets against the existing stage
+index and checks the primary mount for each candidate.
+
+Across matched 25-second landed Tracy windows, globe collision preparation
+averaged 0.220 ms before and 0.118 ms after (1,430 and 1,492 calls).
+Median time fell from 0.150 to 0.045 ms. Its p99 was 1.119 and 1.184 ms.
+Across the full captures, the HUD surface-root refresh p99 was 2.212 and
+1.462 ms. The settled HUD cache hits averaged under 1 µs in both builds.
+
+The native planetary flight/collar gate passed all 14 checks at tick 8,103
+and produced identical numeric flight evidence on both releases. Griffin's
+nine checks passed at tick 8,756. The windowed Griffin and FLIP HUDs matched
+all 27 control program records including source, action, path and status.
+All 312 public output samples agreed with the corresponding participant data.
+
+The separate release run on the checked-in dependency versions measured
+96.983 FPS across 5,801 consecutive landed frames at High 2560×1440.
+Median, p95, p99 and worst were 11.054, 13.438, 15.805 and 26.118 ms.
+3,610 frames exceeded 10 ms. The scene advanced 3,685 fixed ticks between
+checks. Runtime diagnostics were clear. The strict driver lost qualification
+after 37 samples with one pending terrain selection, all 181 wanted tiles
+resident and zero presentation work pending. The 100 FPS frame budget is open.
+
+In the separately filtered control capture, the worst 62.421 ms frame spent
+46.821 ms at render extraction. The prior frame's opaque pass finished before
+the stall and the next directional shadow pass started 61.284 ms into the
+frame. These GPU timestamps locate the gap in submissions. They do not
+identify the reason for the renderer's wait. Captures and receipts are under
+`.cache/perf/lunar-100fps/committed-globe-cover/` and `landed-critical/`.

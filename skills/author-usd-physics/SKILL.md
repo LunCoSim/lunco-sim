@@ -811,7 +811,8 @@ body-demanded globe cover. It consumes the same f64 cutout/collar geometry and
 surface datum as rendering; the celestial picking sphere is not a ground
 collider. A valid site scene's flight domain is unbounded, independently of its
 resident terrain footprint. Diagnose `globe-collision-ready` through readiness
-before a drop, and use the authored `planetary_flight_surface` gate to exercise
+before a drop. A committed globe cover still validates resident native collider
+bounds on approach. Use the authored `planetary_flight_surface` gate to exercise
 cell-crossing flight plus fast contact outside and at the local crop boundary.
 
 Initial poses are admitted against the live terrain after the USD pose bridge has

@@ -61,7 +61,9 @@ acceptance tests.
 
 Twin-authored actions are open-ended semantic identifiers. The reusable
 `program-browser` surface publishes typed arrays of records; its HUI row
-template is reconciled by the generic keyed collection host. A surface may also
+template is reconciled by the generic keyed collection host. To diagnose a
+program row, check the composed child or `programs` target and its live
+projection under the primary scene mount. A surface may also
 declare a generic dropdown: the manifest supplies the trigger, option source,
 key/label/action field names, and Rhai-owned width/max-height sources. The
 compact `camera-status` surface is one consumer of that primitive, not a

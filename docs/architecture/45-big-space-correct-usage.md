@@ -422,7 +422,10 @@ visible cutout, datum and collar. The celestial picking sphere stays pick-only.
 
 Collider cooking runs asynchronously with a bounded admission budget. Results
 publish in source-key order; replacement native AABBs must be live before old
-cover retires. Near contact, `globe-collision-ready` and the typed
+cover retires. The committed resident map then owns the exact selected keys.
+Near contact its collider bounds are checked on every preparation update,
+including during steady flight. A new selection reopens replacement admission.
+The `globe-collision-ready` hold and the typed
 `GlobeColliderAdmission` progress owner keep physics at the preparation boundary
 until support exists. Scene teardown retires generated entities, tasks and that
 progress lease. Invalid settings or native geometry raise structured faults.
