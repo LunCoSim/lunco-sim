@@ -207,6 +207,8 @@ bounded async admission in the same headless and windowed owner. Use
 one Rhai entry returning `#{visible: bool, properties: map}`; the owner validates
 and publishes both together. Do not split visibility/properties into separate
 hook calls or pass the complete rich fact map to by-value formatting helpers.
+Participant output samples retain their slot order and immutable names across admission.
+The worker builds both the complete and authored public output maps from the same samples.
 Camera surfaces use the same decision with their captured Presentation context.
 Use
 `ReadExposures` to wait for `state == "ready"` before asserting their properties.

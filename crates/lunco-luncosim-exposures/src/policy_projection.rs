@@ -33,7 +33,7 @@ impl InputIdentity {
 pub(super) struct ProjectionInput {
     pub namespace: String,
     pub identity: InputIdentity,
-    pub facts: HookValue,
+    pub facts: ProjectionFacts,
     pub context: lunco_core::RuntimeExecutionContext,
     pub telemetry: Vec<PublicTelemetryValue>,
     pub driven: Option<DrivenVessel>,
@@ -402,8 +402,9 @@ fn invoke(
     input: &ProjectionInput,
 ) -> Result<HookValue, String> {
     let hook = hook.ok_or_else(|| format!("no policy is registered for {id}"))?;
+    let facts = input.facts.hook_value();
     hook.invoke(&HookInvocation::with_context(
-        std::slice::from_ref(&input.facts),
+        std::slice::from_ref(facts.as_ref()),
         input.context,
     ))
     .map_err(|error| error.to_string())
@@ -466,7 +467,7 @@ mod tests {
         ProjectionInput {
             namespace: "view".into(),
             identity,
-            facts: HookValue::map([] as [(&str, HookValue); 0]),
+            facts: ProjectionFacts::Ready(HookValue::map([] as [(&str, HookValue); 0])),
             context: presentation_execution_context(
                 &Time::<Real>::default(),
                 lunco_core::RuntimePhase::Event,
@@ -545,7 +546,7 @@ mod tests {
             "current"
         );
         let mut changed = initial.clone();
-        changed.facts = HookValue::map([("value", HookValue::Float(1.0))]);
+        changed.facts = ProjectionFacts::Ready(HookValue::map([("value", HookValue::Float(1.0))]));
         assert!(
             !initial.same_source(&changed),
             "a changed source requires a new projection"

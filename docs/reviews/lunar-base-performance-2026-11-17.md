@@ -700,3 +700,41 @@ strict run lost terrain qualification with one selection pending and all
 181 tiles resident. Reproducible lookup savings have yet to yield the
 requested sustained frame budget. Receipts are in
 `.cache/perf/lunar-100fps/projected-path-index/`.
+
+## Griffin tether routing and runtime UI output capture
+
+Model commit `b4de8d5` reads the six routing coordinates needed to draw both
+tethers. The physical controller still consumes all 42 required outputs. Five
+same-tick comparisons checked all six selected values against the complete
+valid snapshot and rejected a missing coordinate. Ten visual reads took a
+median 0.287 ms, compared with 2.116 ms for ten full reads. In
+`routing-port-selection/qualified`, both curves advanced during the 60.32 s
+landed window. It averaged 96.675 FPS with p99 15.542 ms and maximum 70.273 ms.
+The separate strict run stopped on a pending terrain selection while all 181
+tiles were drawn and resident.
+
+The runtime UI producer captures live participant output values in slot order
+and retains their immutable names. Its existing worker constructs the full and
+authored public hook maps from that single sample. The mechanism changes
+presentation data ownership and preserves the installed Rhai hook, its sampling
+clock and its scene and subject checks. A landed Griffin probe inspected all
+8,255 samples across 19 participant entries on the two surfaces. All 312 public
+values matched their corresponding full-map values.
+
+The separate uninstrumented `ui-output-snapshot/landed/frame-result.json`
+contains 5,698 consecutive frames over 60.33 s. It averaged 95.243 FPS with p95
+13.661 ms, p99 16.224 ms and a 41.857 ms maximum. Of these, 3,604 exceeded
+10 ms. The process incurred no major page faults during that window. The two
+other simulator sessions remained active. Both the mean and worst frame exceeded the 10 ms budget.
+
+The 25 s Tracy windows begin 5 s after activating the tracking perspective.
+The `shared-layer-analysis` capture recorded 998 surface fact captures at
+0.518 ms mean and 1.277 ms p99. The candidate recorded 1,000 at 0.138 ms mean
+and 0.357 ms p99. The worker policy span averaged 1.912 ms and 1.968 ms
+respectively. The different engine and Twin revisions limit this comparison to the observed
+owner timings.
+The headless and windowed UI gates each passed 13 preparation and 20 scene
+checks. All nine Griffin surface-operations requirements passed at tick 8,756.
+The strict UI-candidate run qualified at 44.08 s, then stopped after 31 samples
+when the terrain owner reported one pending selection. Its 181 wanted tiles
+were resident, presentation had no pending work, and the source hashes matched.
