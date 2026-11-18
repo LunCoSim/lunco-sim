@@ -19,6 +19,11 @@ from runtime import (BINARY, ROOT, ProductionSession, assert_render_log_clean,
 from run_editor_scene_test import wait_for_scene, wait_for_scene_time_selection
 
 
+def file_sha256(path):
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
 def source_snapshot(root):
     names = subprocess.check_output(
         ["git", "-C", str(root), "ls-files", "-co", "--exclude-standard", "-z"]
@@ -26,7 +31,7 @@ def source_snapshot(root):
     suffixes = {".mo", ".rhai", ".usd", ".usda", ".usdc", ".toml", ".sysml",
                 ".kerml", ".wesl", ".gltf", ".glb", ".obj", ".png", ".jpg", ".ktx2",
                 ".json", ".html", ".css"}
-    return {name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+    return {name: file_sha256(root / name)
             for name in sorted(set(names))
             if name and (root / name).is_file() and Path(name).suffix.lower() in suffixes}
 
@@ -196,8 +201,8 @@ def main():
         if os.environ.get(flag):
             parser.error(f"product measurements cannot use {flag}")
     receipt = {
-        "binary_sha256": hashlib.sha256(BINARY.read_bytes()).hexdigest(),
-        "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "binary_sha256": file_sha256(BINARY),
+        "driver_sha256": file_sha256(Path(__file__)),
         "application_head": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "application_diff_sha256": hashlib.sha256(subprocess.check_output(["git", "diff"])).hexdigest(),
         "model_head": subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip(),

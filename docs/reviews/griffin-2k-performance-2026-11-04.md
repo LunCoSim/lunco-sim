@@ -975,3 +975,34 @@ not authorized. No commits, merge or push are made.
 
 Modelica remains the active optimization owner. Clean 150 FPS evidence must
 cover powered descent as well as the settled landing window.
+
+## Parked Griffin desktop measurement, 2026-11-18
+
+The release build at simulator `49c65de76` ran the Griffin surface operations
+Twin at lunar-base-model `dcc2eb915`, on AC power with High graphics and the
+authored tracking camera at 2560 × 1440. Three consecutive host samples before
+launch found no compiler processes. The preceding run of this same executable
+and identical Twin sources averaged 12.85 FPS with six to seven concurrent
+compiler processes during the sampled interval. Host conditions differed
+between runs, so their ratio cannot establish a code speedup.
+
+| Transport and window | Frames | Mean FPS | p95 frame time |
+| --- | ---: | ---: | ---: |
+| Running, 60.58 s of frames | 2,895 | 47.79 | 35.67 ms |
+| Paused, 20 s control | 1,617 | 81.33 | 17.48 ms |
+| Resumed, 20 s control | 1,138 | 57.14 | 30.05 ms |
+
+All 78 running snapshots reported 181 terrain tiles wanted, drawn and resident.
+Physics advanced from tick 2,008 to 5,774 across the 61.21 s between endpoint
+samples. Pending simulation time fell from 1.075 s to 0.013 s with zero time
+clipped. The paused control held tick 5,799 throughout. The resumed control
+advanced from tick 5,897 to 7,108 with the same camera and tile count. Pausing
+removes a measurable cost, but the paused application itself still exceeded
+the 10 ms frame budget. The running release missed the 100 FPS target.
+
+The release reported zero runtime warnings and errors. The binary and Twin
+source digests matched the preceding run. The three parked ribbon checks passed
+on this revision, and the nine full-mission checks matched the preceding
+mission run. The benchmark now streams file hashes. Two paired Griffin manifest
+checks produced the same digest across 591 files and reduced peak benchmark
+process memory from about 243 MiB to 18 MiB.
