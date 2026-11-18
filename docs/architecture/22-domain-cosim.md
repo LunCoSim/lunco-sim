@@ -34,10 +34,13 @@ its owner. Reads and writes reject replaced registries/entities/contracts before
 slot access. Registry-table replacement invalidates `CompiledWiring` before
 its next exchange; Twin teardown drops its retained bindings. A backend's structural key must include every fact affecting its
 names, direction, metadata or permission and exclude live samples. Cached writes
-validate the retained engineering contract and complete live lease without
-named declaration/metadata callbacks. Named commands resolve through the same
-owner. Duplicate writes are identified by entity, backend and storage slot, so
-two aliases cannot modify one physical endpoint in an atomic batch.
+validate the immutable engineering metadata at resolution. Each numerical
+write checks its value and live lease. An uninterrupted transaction captures
+the World topology revision once and checks each entity's liveness before
+sampling its exact owner-precedence keys. These proofs expire before any
+commit can mutate the World. Named commands resolve through the same owner.
+Duplicate writes are identified by entity, backend and storage slot, so two
+aliases cannot modify one physical endpoint in an atomic batch.
 
 `DeclaredOutputPorts` admits its immutable name inventory and structural key
 together. Its private storage exposes named inspection and a constant-time key
