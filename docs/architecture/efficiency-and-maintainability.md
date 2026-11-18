@@ -414,11 +414,14 @@ handle. Distinct source endpoints are sampled once per communication point,
 then wires accumulate in their original deterministic order. A sample never
 survives into another point. Source reads and target preflight share one
 `PortRegistry::input_transaction` immutable World borrow: each entity's exact
-owner-precedence prefix is evaluated once in that scope. Every locator still
-validates registry, World, entity, topology revision and its complete captured
-prefix. Proofs reset before and after the transaction, including rejection.
-Resolved writes borrow admitted metadata and stage only numeric commit data;
-retained `PreparedPortWrite` batches still revalidate against their later World.
+owner-precedence prefix is evaluated once in that scope. The transaction
+samples the topology revision once and proves entity liveness on the first
+read or write of that entity. Each locator must match the registry, World,
+entity, revision and its complete captured prefix. Proofs reset before and
+after the transaction, including rejection. Resolved locators retain the
+metadata validation from name admission. Each numeric write checks
+writability and range before staging commit data. Retained
+`PreparedPortWrite` batches revalidate against their later World.
 One-shot name callers (API `Get`/`SetPorts`, scripting, the inspector) are
 unchanged — they don't need resolution and pay no migration cost.
 

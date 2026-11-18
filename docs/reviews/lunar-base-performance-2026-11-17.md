@@ -979,3 +979,40 @@ zero runtime findings. The final public-output comparison matched all 312
 values. The paused window still had 142 of 3,082 frames over 10 ms. These
 results distinguish sustained fixed-cycle cost from presentation spikes.
 The app and collector released their owned ports.
+
+## Co-simulation port admission and transaction scope
+
+The port registry now captures the World and its topology revision once
+for each immutable input transaction. The first access to each entity checks
+liveness and samples its precedence keys. Each locator still matches those
+keys, the registry, the World, the entity generation and the shared revision.
+Resolved locators retain the validation result for their immutable metadata,
+including malformed metadata. Every staged value still needs a writable
+contract and must pass finite and range checks. Atomic validation, duplicate
+storage-slot rejection, source sampling, and wire reduction order remain at
+their existing owners.
+
+Fifteen alternating release benchmarks each staged and committed 262,144
+resolved input writes. Median time fell from 17.758 to 13.417 ms. All 32
+focused port tests passed, including stale owner precedence, atomic
+rejection and malformed metadata. In two 25-second landed Griffin Tracy
+windows, each containing 1,500 fixed exchanges, mean propagation time fell
+from 0.496 to 0.475 ms and median from 0.463 to 0.430 ms. P99 measured
+0.940 and 1.045 ms. The candidate capture contains 22,253,745 zones.
+Both captures used the worktree High profile. The benchmark isolates registry
+work, while the complete Tracy span includes live backend work.
+
+The locked release passes all 45 Modelica initialization-network checks,
+12 port-owner collision checks, and nine authored Griffin tether-descent
+requirements through tick 8,756. The optional Python amplifier fixture
+fails the same gain-scaled output assertion in both release binaries.
+
+The uninstrumented 60-second landed run uses the committed High profile
+at 2560×1440. It records 5,359 consecutive frame periods at 89.018 FPS,
+with p99 of 17.774 ms and a maximum of 28.317 ms. Of these, 3,679 exceed
+10 ms. Readiness holds at all 94 checks, all 181 selected tiles are drawn
+at the final check, and the clock reports zero clipped time. The source
+hashes match admission, the runtime reports zero findings, and the
+owned app releases its port. Two independent simulator processes are
+listed at qualification. The receipt is in
+`fixed-exchange-attribution/strict/session.json`.

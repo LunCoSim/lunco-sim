@@ -15,9 +15,11 @@ For name-processing hotspots, distinguish named admission from numerical executi
 storage and `ReflectReadOnly` contract must remain intact. `ResolvedPort` validates
 its complete lease without named declaration/metadata callbacks; owner contract-key
 callbacks remain part of liveness cost and must be profiled. A scalar exchange
-shares their exact per-entity precedence proofs only inside one immutable input
-transaction. Distinct sources are freshly sampled once at each communication
-point; wire accumulation order remains authoritative. `DeclaredOutputPorts`
+samples the World topology revision once and shares exact per-entity liveness
+and precedence proofs within one immutable input transaction. A resolved slot
+retains its metadata validation. Range and finite-value checks still apply to
+every write. Distinct sources are freshly sampled once at each communication
+point, and wire accumulation order remains authoritative. `DeclaredOutputPorts`
 admits its immutable names and structural key together; numerical readers consume
 that key without rehashing the declaration inventory. Never remove those
 checks or weaken duplicate-alias, non-finite, stale-session or atomic-write gates
