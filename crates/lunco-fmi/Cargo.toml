@@ -23,7 +23,7 @@ serde.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Schema interpretation and generated native bindings have separate owners.
 fmi-sys = { git = "https://github.com/jondo2010/rust-fmi", rev = "452193ed44324b23bba6ca48203f3ef0c7b4ba72", default-features = false, features = ["fmi3"] }
-fmi-rs = { version = "=0.3.1", default-features = false, features = ["zip"] }
+fmi-rs = { version = "=0.3.3", default-features = false, features = ["zip"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 tempfile.workspace = true
 roxmltree = "0.21.1"
