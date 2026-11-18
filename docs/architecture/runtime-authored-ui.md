@@ -689,7 +689,9 @@ remain terminal until the source or identity changes. Native synchronous domain
 producers publish `ready` views through the same registry.
 
 Participant output capture copies sampled scalar values in live slot order and
-shares immutable port names and authored public-name sets with the worker.
+shares one immutable name array per port layout with the worker. Samples retain
+their original names through value changes, removal and compaction. The authored
+public-name set accompanies each participant.
 The worker constructs the ordered `outputs` and `public_outputs` maps from
 that capture. A later port write, removal or scene replacement cannot change
 the values supplied to an admitted invocation. Unsampled ports appear in neither map.

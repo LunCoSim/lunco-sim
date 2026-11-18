@@ -48,8 +48,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::{Deref, Index, IndexMut};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use crate::InputPorts;
 use lunco_engineering_values::{CoordinateFrameId, UnitReference};
@@ -119,6 +119,32 @@ struct PortMapSlot<T: Copy> {
     value: Option<T>,
 }
 
+/// Immutable sampled values in declaration order. Captures of the same port
+/// layout share their names while retaining their own numerical values.
+#[derive(Clone, Debug)]
+pub struct PortSampleSnapshot<T> {
+    names: Arc<[Arc<str>]>,
+    samples: Vec<(usize, T)>,
+}
+
+impl<T> PortSampleSnapshot<T> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &T)> {
+        self.samples
+            .iter()
+            .map(|(index, value)| (self.names[*index].as_ref(), value))
+    }
+}
+
+impl<T: PartialEq> PartialEq for PortSampleSnapshot<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if Arc::ptr_eq(&self.names, &other.names) {
+            self.samples == other.samples
+        } else {
+            self.iter().eq(other.iter())
+        }
+    }
+}
+
 static NEXT_PORT_MAP_LAYOUT_ID: AtomicU32 = AtomicU32::new(1);
 
 fn next_port_map_layout_id() -> u32 {
@@ -141,6 +167,7 @@ pub struct PortMap<T: Copy> {
     retired_slots: usize,
     names: PortNameSetKey,
     topology_version: u64,
+    snapshot_names: OnceLock<Arc<[Arc<str>]>>,
     layout_id: u32,
 }
 
@@ -152,6 +179,7 @@ impl<T: Copy> Clone for PortMap<T> {
             retired_slots: self.retired_slots,
             names: self.names,
             topology_version: self.topology_version,
+            snapshot_names: self.snapshot_names.clone(),
             layout_id: next_port_map_layout_id(),
         }
     }
@@ -165,6 +193,7 @@ impl<T: Copy> Default for PortMap<T> {
             retired_slots: 0,
             names: PortNameSetKey::default(),
             topology_version: 0,
+            snapshot_names: OnceLock::new(),
             layout_id: next_port_map_layout_id(),
         }
     }
@@ -180,6 +209,11 @@ impl<T: Copy + PartialEq> PartialEq for PortMap<T> {
 }
 
 impl<T: Copy> PortMap<T> {
+    fn topology_changed(&mut self) {
+        self.topology_version = self.topology_version.wrapping_add(1);
+        self.snapshot_names.take();
+    }
+
     /// Declare a port without inventing its first sample. A declaration retains
     /// its slot through initial sample publication; reads remain unavailable.
     pub fn declare(&mut self, name: String) -> bool {
@@ -194,7 +228,7 @@ impl<T: Copy> PortMap<T> {
             value: None,
         });
         self.by_name.insert(name, index);
-        self.topology_version = self.topology_version.wrapping_add(1);
+        self.topology_changed();
         true
     }
 
@@ -210,7 +244,7 @@ impl<T: Copy> PortMap<T> {
         self.names.insert(&name);
         let index = self.allocate_slot(Arc::clone(&name), value);
         self.by_name.insert(name, index);
-        self.topology_version = self.topology_version.wrapping_add(1);
+        self.topology_changed();
         None
     }
 
@@ -344,7 +378,7 @@ impl<T: Copy> PortMap<T> {
         let value = slot.value.take();
         self.names.remove(&removed_name);
         self.retired_slots += 1;
-        self.topology_version = self.topology_version.wrapping_add(1);
+        self.topology_changed();
         if self.retired_slots >= 64 && self.retired_slots > self.by_name.len() {
             self.compact();
         }
@@ -380,7 +414,7 @@ impl<T: Copy> PortMap<T> {
         self.names = PortNameSetKey::default();
         self.slots.clear();
         self.retired_slots = 0;
-        self.topology_version = self.topology_version.wrapping_add(1);
+        self.topology_changed();
         self.layout_id = next_port_map_layout_id();
     }
 
@@ -424,13 +458,28 @@ impl<T: Copy> PortMap<T> {
 
     /// Capture available samples in slot order for readers outside the world.
     /// The capture owns its values and shares the immutable names with their slots.
-    pub fn snapshot_samples(&self) -> Vec<(Arc<str>, T)> {
+    pub fn snapshot_samples(&self) -> PortSampleSnapshot<T> {
+        let names = self.snapshot_names.get_or_init(|| {
+            self.slots
+                .iter()
+                .filter_map(|slot| slot.name.clone())
+                .collect()
+        });
         let mut samples = Vec::with_capacity(self.len());
-        samples.extend(self.slots.iter().filter_map(|slot| {
-            let value = slot.value?;
-            Some((Arc::clone(slot.name.as_ref()?), value))
-        }));
-        samples
+        for (index, slot) in self
+            .slots
+            .iter()
+            .filter(|slot| slot.name.is_some())
+            .enumerate()
+        {
+            if let Some(value) = slot.value {
+                samples.push((index, value));
+            }
+        }
+        PortSampleSnapshot {
+            names: Arc::clone(names),
+            samples,
+        }
     }
 
     /// Mutably iterate live values.
@@ -3226,6 +3275,38 @@ mod tests {
         assert_eq!(ports.remove("pending"), None);
         assert!(!ports.contains_key("pending"));
         assert_eq!(ports.set_slot_existing(pending_slot, 4.0), None);
+    }
+
+    #[test]
+    fn immutable_snapshots_share_names_and_preserve_sample_membership() {
+        let mut ports = ScalarPortMap::default();
+        ports.declare("pending".into());
+        ports.insert("speed".into(), 4.0);
+        let first = ports.snapshot_samples();
+        ports.insert("pending".into(), -0.0);
+        let second = ports.snapshot_samples();
+        assert!(Arc::ptr_eq(&first.names, &second.names));
+        assert_ne!(first, second);
+
+        ports.remove("speed");
+        ports.insert("torque".into(), 6.0);
+        let replaced = ports.snapshot_samples();
+        assert!(!Arc::ptr_eq(&second.names, &replaced.names));
+        assert_eq!(
+            replaced.iter().collect::<Vec<_>>(),
+            [("pending", &-0.0), ("torque", &6.0)]
+        );
+        assert_eq!(
+            second.iter().next().unwrap().1.to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        assert_eq!(first.iter().collect::<Vec<_>>(), [("speed", &4.0)]);
+
+        ports.clear();
+        ports.insert("speed".into(), 4.0);
+        assert_eq!(first, ports.snapshot_samples());
+        ports.invalidate_samples();
+        assert_eq!(ports.snapshot_samples().iter().len(), 0);
     }
 
     #[test]

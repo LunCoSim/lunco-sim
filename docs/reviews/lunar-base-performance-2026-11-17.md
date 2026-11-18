@@ -1099,5 +1099,127 @@ Their measured velocity magnitudes are below the native sleep thresholds.
 The admitted rover brake is held, delivered motor torques are zero, and
 main-engine thrust decays below the native force representation. The
 authored brake-release helper is rejected in the external command context.
-The native wake cause remains open. The probe receipt is under
+The control probe receipt is under
 `landed-sleep-wake/`.
+
+## Parked Griffin, fixed ticks and HUD preparation
+
+The November 18 production control averaged 26.86 FPS over 1,618 frames at
+High 2560×1440 with the tracking camera active. P95 was 69.97 ms. A separate
+Tracy capture of the same scene recorded 394 fixed ticks across 205 frames
+in its 94–105 s window. The fixed-step loop took 22.82 ms per frame at the
+median. One complete tick took 11.51 ms, including a 5.05 ms native physics
+schedule. On the GPU the median opaque pass took 1.98 ms, the directional
+shadow pass 1.72 ms and the depth prepass 0.75 ms. Merging overlapping GPU
+timestamps across all 3,551 recorded zones gives 1.200 s over the 11 s
+window, or 5.85 ms per rendered frame on average. Uninstrumented GPU work
+is outside that measurement. The application and render schedules overlap.
+
+The axle owner now wakes the body pair on drive effort or a brake change.
+Held-brake friction and bearing drag use the native non-waking force path.
+After landing, the lander and all four rover wheels reached native sleep.
+The velocity-relaxation pass fell from 0.773 ms while awake to 0.005 ms at
+the next sample. The mixed-tire fixture failed the zero-drive, held-brake
+sleep check on the control and passed all six checks on the change, including
+wake on release. FLIP passed eight parking checks, with 5.71 mm drift over
+60 simulated seconds and 2.39 m of travel after release and drive. Griffin
+passed all nine mission checks at tick 8,756 with identical structured
+evidence to the earlier control.
+
+The uninstrumented sleep change measured 18.46 FPS across 1,126 frames
+under concurrent desktop workloads. In a separate same-view run, the
+playing, paused and resumed windows averaged 21.78, 29.77 and 41.81 FPS.
+The paused window advanced zero ticks. Pending simulation time grew during
+the first playing window and shrank after resume. These windows do not
+isolate a frame-rate effect from native sleep. Linux recorded more than
+2.5 GiB of process swap during the run.
+
+The control trace also recorded 388 HUD policy evaluations on background
+workers in the 205-frame window. The built-in policy passed the complete
+participant map to a visibility predicate that reads four scalars. In an
+alternating production-interpreter benchmark with 8,000 participant values,
+40 calls took 15–53 ms with the complete map and 0.14–0.17 ms with the four
+scalars. Both forms returned the same verdict on every call. The installed
+policy now passes those four fields. The lander controls scene passed all
+26 checks.
+
+The combined release recorded 10.97 FPS across 666 frames in its minute,
+with p95 128.55 ms. All 39 samples retained scene readiness. The final
+terrain sample reported 181 wanted and resident tiles, diagnostics were
+clear and the fixed clock clipped zero time. Pending simulation time grew
+from 102.51 to 148.17 s. During a 20 s process sample, the operating system
+accounted 5.75 s of runnable wait on the main thread and about 2.5 GiB
+of process swap. Other simulator sessions and compilers were running.
+These conditions prevent attribution of the frame-rate difference to the
+HUD change. Receipts, the trace and its CPU/GPU exports are under
+`.cache/perf/lunar-100fps/griffin-current-100/`.
+
+## Landed port snapshots and CPU placement
+
+The 94–105 s control window yielded 6,318 main-thread CPU samples. Of
+187 samples inside `publish_exposure`, 148 fell inside surface fact capture.
+The HUD took a reference-counted copy of each sampled output name every time
+it captured the numerical values. The port map now shares one immutable name
+sequence per topology. Each capture owns its sampled indices and values,
+including the distinction between a declared port and its first sample.
+The presentation worker still constructs both complete and public hook maps.
+
+Four consecutive 25 s landed windows tested CPU placement in one release
+process. The unrestricted, first shared-L3 group, second shared-L3 group
+and restored unrestricted phases averaged 22.15, 25.00, 17.23 and 18.75 FPS.
+Their p95 frame times were 77.87, 74.37, 90.66 and 85.88 ms. Every phase
+incurred over 1,200 major page faults. These runs do not establish a reliable
+benefit from choosing a particular core group. The product uses the ordinary
+OS scheduler. The receipt is in `griffin-current-100/locality/`.
+
+The rebuilt release at engine `3474af2f1` plus worktree changes exposed
+8,255 output samples on the two Griffin surfaces. All 312 public values
+matched their complete maps. Its nine mission checks produced exactly the
+same structured evidence at tick 8,756 as the control.
+
+After a host restart, the release rendered 2,333 consecutive landed frames
+at High 2560×1440 in the timing window. It averaged 38.58 FPS, with median
+23.79 ms, p95 43.10 ms and maximum 99.16 ms. All 73 scene checks qualified.
+The pending simulation duration decreased from 2.736 s to 0.013 s across
+3,786 ticks. At the end all 181 requested terrain tiles were resident and
+runtime diagnostics were clear. Linux recorded nice 12 throughout the run
+and more than 2 GiB of process swap. Concurrent workloads differed from
+the pre-restart runs. This result fails the 100 FPS gate. The source hashes,
+frame series, scheduling observations and mission evidence are under
+`griffin-current-100/snapshot-layout/`.
+
+A separate 40.46 s landed capture instrumented major page faults on 26
+threads, including the main thread. Both the kernel's process counter and
+the sampled event count recorded zero new major faults. At the start,
+3.09 GiB of the allocator's private writable mappings were resident. The
+next uninstrumented run used the identical executable and Twin sources.
+Across 3,694 frames it averaged 61.45 FPS, with median 13.24 ms, p95
+36.94 ms and maximum 64.38 ms. Of these frames 3,031 exceeded 10 ms.
+All 82 scene checks qualified and 181 tiles were resident at the end.
+The separate fault capture establishes that memory pressure varies between
+launches. It cannot attribute the repeat's frame times.
+
+## Griffin tether task callback
+
+The tether task uses a named Rhai predicate. The task dispatcher already
+binds the actor's persistent state to a named callback. The controller reads
+that state and returns the completion flag directly. The error handler,
+physics tick, and visual submission conditions stay with the controller.
+
+An isolated copy of the Griffin Twin alternated the two callback forms on
+the same live actor in 120-tick blocks. The native Tracy export measured
+complete landed blocks and excluded 100 ms around each phase transition.
+Without a curve submission, the median fell from 337.09 µs (388 calls) to
+253.01 µs (377 calls). Across three adjacent named/closure block pairs the
+median ratios were 0.762, 0.706 and 0.785. With two curve submissions, the
+medians were 2.332 ms and 2.164 ms respectively, with 76 calls each.
+
+On the actual Twin both tether curves continued publishing. The uninstrumented
+release produced identical structured evidence for all nine mission checks
+at tick 8,756. In its 60 s landed window the same release averaged 47.69 FPS
+over 2,895 frames, with median 19.71 ms, p95 27.96 ms and maximum 43.17 ms.
+All 80 scene checks qualified. The physics clock advanced 3,638 ticks with
+pending time below one tick at both endpoints. The 100 FPS gate remains open.
+The paired trace is under `griffin-current-100/callback-paired/`. The actual
+Twin trace, timing run and mission verdict are under
+`griffin-current-100/named-tether/`.

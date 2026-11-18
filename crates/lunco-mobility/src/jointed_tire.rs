@@ -668,17 +668,15 @@ pub fn apply_jointed_tire_forces(
                                 - lat * contact.v_lat);
                     }
                 }
-                // A zero-torque tire patch is a persistent contact reaction,
-                // not a wake-up event. Preserve the command bit with the
-                // pending force so a real drive or brake command can wake a
-                // sleeping wheel island through Avian's regular accumulator.
+                // The axle owner wakes the island when the brake changes.
+                // A held brake supplies a passive contact reaction on both bodies.
                 pending.push(lunco_physics::BodyForce {
                     local_force: DVec3::ZERO,
                     body: wheel,
                     force,
                     point: Some(lunco_spatial::coords::GridPos(contact.point)),
                     torque: DVec3::ZERO,
-                    wake: drive_torque != 0.0 || braking,
+                    wake: drive_torque != 0.0,
                 });
                 // A dynamic support receives the opposite tangential force at
                 // the identical world point. Static, kinematic and disabled
@@ -695,7 +693,7 @@ pub fn apply_jointed_tire_forces(
                         force: -force,
                         point: Some(lunco_spatial::coords::GridPos(contact.point)),
                         torque: DVec3::ZERO,
-                        wake: drive_torque != 0.0 || braking,
+                        wake: drive_torque != 0.0,
                     });
                 }
             }

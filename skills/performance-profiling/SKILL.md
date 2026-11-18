@@ -1679,7 +1679,9 @@ setters. Every owner that can change a declared surface publishes the shared
 `PortTopologyRevision`; compiled wire handles are rebuilt on that revision or
 on connection changes, and a stale slot is never
 retried through a name lookup. Numeric samples do not invalidate the compiled
-fabric. Do not re-hash every map when `SimComponent` changes for ordinary
+fabric. For HUD preparation, measure port snapshot capture separately from the
+worker policy. Check sampled values and their order after a declaration,
+removal or replacement. Do not re-hash every map when `SimComponent` changes for ordinary
 physics values. `PortHolds` advances its own revision only for effective intent
 changes; rebuild its target-index projection on that revision or wiring changes
 and reuse the aligned value buffer on steady ticks. Do not probe every target
@@ -1924,7 +1926,10 @@ an isolated evaluator benchmark does not establish a complete-tick gain. See
 Profile the installed Avian 0.8 systems for joint preparation, native XPBD,
 contact generation, contact recycling, constraint solving and swept CCD.
 `PhysicsPerformance` exposes native solver and collision durations alongside
-complete step samples. Validate graph endpoints after scene replacement before
+complete step samples. For parked vehicles, compare the native sleep count with
+the wheel and support timers from `QueryPhysicsState`. Check held-brake sleep
+and release through the production `mixed_tire_parking` scene.
+Validate graph endpoints after scene replacement before
 attributing contact cost to active geometry. Record source hashes, ordered
 inputs, collider counts, CCD filters, substeps and iteration settings for each
 comparison. Rerun the production joint, drive, gear and continuous-contact gates

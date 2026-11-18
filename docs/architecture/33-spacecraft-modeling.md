@@ -500,6 +500,10 @@ Their passive brake is a capped native zero-speed velocity motor. Its free-axis
 row participates in contact/joint relaxation, with one accumulated torque budget
 per substep. Native measured motor impulse supplies brake heat; the co-simulation
 boundary does not add a second spin-down torque.
+The axle owner wakes a sleeping island on a brake transition or delivered drive
+torque. Bearing drag and a held brake's tire reactions use Avian's non-waking
+force path, including the opposite force on a dynamic support. Avian decides
+when the complete contact island has settled.
 `physics_joint_velocity_iterations()` and
 `set_physics_joint_velocity_iterations(n)` read/write the native relaxation
 budget (1..255), independently of `set_physics_substeps(n)`. Authored numerical

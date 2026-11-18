@@ -588,7 +588,7 @@ fn runtime_program_facts(
 
 #[derive(Clone, PartialEq)]
 struct OutputSamples {
-    samples: Vec<(Arc<str>, f64)>,
+    samples: lunco_port_core::ports::PortSampleSnapshot<f64>,
     public_names: Option<Arc<HashSet<String>>>,
 }
 
@@ -601,13 +601,14 @@ impl OutputSamples {
     }
 
     fn hook_maps(&self) -> (HookValue, HookValue) {
-        let mut all = Vec::with_capacity(self.samples.len());
+        let samples = self.samples.iter();
+        let mut all = Vec::with_capacity(samples.len());
         let mut public = Vec::new();
-        for (name, value) in &self.samples {
+        for (name, value) in samples {
             if self
                 .public_names
                 .as_ref()
-                .is_some_and(|names| names.contains(name.as_ref()))
+                .is_some_and(|names| names.contains(name))
             {
                 public.push((name.to_string(), HookValue::Float(*value)));
             }
