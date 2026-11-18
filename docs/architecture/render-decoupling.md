@@ -802,6 +802,24 @@ and a stationary Sun in one view while another camera tilts. The explicit
 balanced preset bounds concurrent GPU allocations for this gate.
 
 
+## Directional shadow reference frames
+
+A leased scene camera selects the BigSpace grid of its source. The active orbital
+view uses its target body's fixed frame. Observation and capture mirrors use
+their own finalized viewpoints. Preview studios use their private render world.
+After BigSpace propagation, the camera binder presents the nearby grid cell
+centre, its absolute grid coordinates and its render orientation to Bevy's
+`DirectionalShadowReference`.
+
+The native cascade fitter transports the light-plane axes with the Sun direction
+in that rigid frame. When the view crosses a cell boundary, it projects the
+cell displacement onto those axes and carries the fractional phase into each
+cascade. Fitting uses patch-relative coordinates and returns native cascade
+matrices to culling, receiver cropping, shadow rendering and lighting. The
+atlas size, pass count and physical clock come from their existing owners.
+The light crate's reference-grid test exercises render translation, rotation,
+patch handoff, frustum coverage and a Sun crossing the orientation pole.
+
 ## Directional shadow receiver raster bounds
 
 `lunco-render-bevy::shadow_receiver_crop` owns conservative raster culling for

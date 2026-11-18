@@ -8,6 +8,7 @@
 
 use bevy::camera::{ClearColorConfig, Hdr};
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass, NormalPrepass};
+use bevy::light::cascade::DirectionalShadowReference;
 use bevy::light::{ClusteredDecal, LightProbe, PointLight, SpotLight, cluster::ClusterConfig};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -60,6 +61,13 @@ pub(crate) fn build(app: &mut App) {
         )
         .add_systems(
             PostUpdate,
+            publish_directional_shadow_references
+                .after(SceneViewDemandSet::Publish)
+                .after(big_space::prelude::BigSpaceSystems::PropagateLowPrecision)
+                .before(bevy::light::SimulationLightSystems::UpdateDirectionalLightCascades),
+        )
+        .add_systems(
+            PostUpdate,
             (
                 publish_main_view_demand,
                 retire_removed_scene_view_demands,
@@ -72,6 +80,72 @@ pub(crate) fn build(app: &mut App) {
                 .after(bevy::camera::CameraUpdateSystems)
                 .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
         );
+}
+
+/// A view samples the same BigSpace cell as the geometry it observes. Mirror
+/// cameras select the grid from their leased source and the cell from their
+/// actual finalized viewpoint. Studio previews have a private, static world.
+fn publish_directional_shadow_references(
+    mut commands: Commands,
+    views: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&SceneViewDemand>,
+            Option<&DirectionalShadowReference>,
+        ),
+        Or<(With<SceneViewDemand>, With<DirectionalShadowReference>)>,
+    >,
+    parents: Query<&ChildOf>,
+    grids: Query<&big_space::prelude::Grid>,
+    viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
+    orbit: Option<Res<lunco_celestial_spatial_core::OrbitalViewPin>>,
+    frames: Option<Res<lunco_celestial_spatial_core::ReferenceFrameIndex>>,
+) {
+    use lunco_spatial::coords::{RenderPos, ancestor_grid, render_to_grid_absolute};
+    for (camera, view, demand, previous) in &views {
+        let reference = demand.and_then(|demand| {
+            if matches!(demand.output, SceneViewOutput::Preview { .. }) {
+                return None;
+            }
+            let orbital_target = orbit.as_ref().filter(|pin| {
+                pin.active
+                    && viewport
+                        .as_ref()
+                        .is_some_and(|v| v.active_camera == Some(demand.source))
+            });
+            let (frame, grid) = if let Some(pin) = orbital_target {
+                let frame = frames
+                    .as_ref()?
+                    .resolve(lunco_celestial::ReferenceFrame::BodyFixed { body: pin.body })?;
+                (frame, grids.get(frame).ok()?)
+            } else {
+                ancestor_grid(demand.source, &parents, &grids)?
+            };
+            let position =
+                render_to_grid_absolute(grid, RenderPos::from_render_f32(view.translation()));
+            let (cell, _) = grid.translation_to_grid(position.0);
+            let origin = grid.global_transform(&cell, &Transform::IDENTITY);
+            Some(DirectionalShadowReference {
+                frame,
+                rotation: origin.rotation(),
+                render_origin: origin.translation(),
+                frame_origin: grid.cell_to_float(&cell),
+            })
+        });
+        if previous != reference.as_ref() {
+            match reference {
+                Some(reference) => {
+                    commands.entity(camera).insert(reference);
+                }
+                None => {
+                    commands
+                        .entity(camera)
+                        .remove::<DirectionalShadowReference>();
+                }
+            }
+        }
+    }
 }
 
 #[derive(Component)]

@@ -2062,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "bevy_light"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=8671dfe743d284f074587862e03bcd3e0b79ecc6#8671dfe743d284f074587862e03bcd3e0b79ecc6"
+source = "git+https://github.com/LunCoSim/bevy?rev=6fee2ce9e9361377bb2e6a2138c70dfb7f9bb1cf#6fee2ce9e9361377bb2e6a2138c70dfb7f9bb1cf"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -10273,6 +10273,7 @@ dependencies = [
  "big_space",
  "lunco-assets-core",
  "lunco-assets-runtime",
+ "lunco-celestial",
  "lunco-celestial-spatial-core",
  "lunco-core",
  "lunco-environment",

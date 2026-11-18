@@ -142,9 +142,9 @@ geometry.
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
 `hf_size` describes the independent shadow heightfield and must not choose
-material scale. The High profile uses Hardware 2×2 shadow filtering with a
-2.0-texel normal bias and 0.005 m depth bias. The normal offset must cover the
-filter footprint so grazing-angle terrain does not sample its own surface.
+material scale. The High profile reconstructs a smooth shadow map edge using Bevy’s Gaussian
+PCF filter, with a 2.0-texel normal bias and 0.005 m depth bias. Verify thin
+contacts and terrain self-shadowing under grazing light when tuning either bias.
 
 ### USD-authored DEM-to-globe continuation
 
@@ -477,8 +477,11 @@ through `RunScenarioAsset`, with the wired environment probe's `probe_id`. Its
 checks every demanded solar sample, physical elapsed time and transport rate.
 
 Equipment optical proxies are explicitly selected with standard
-`CollectionAPI:occluders` on the probe. Members must expose an admitted collision
-shape and pose. The physics owner supplies a reusable f64 Parry BVH; neither
+`CollectionAPI:occluders` on the probe. Members resolve within the probe's composed stage through the USD prim index.
+An authored shape selects its cooked Avian colliders through the physics source
+relationship. Selecting an entire rigid body selects its attached colliders.
+Each native shape appears once per probe and uses its physical pose. A probe
+can include a standard USD collection published by a referenced assembly. The physics owner supplies a reusable f64 Parry BVH; neither
 camera LOD nor streamed DEM colliders select physical terrain visibility.
 Omitting the collection selects no equipment proxies. Authors must select
 geometry that represents their optical occluders; collision geometry does not
@@ -504,7 +507,7 @@ occlusion beyond that geometry. The terrain shader's below-horizon check remains
 necessary for its finite heightfield domain; it is not a global Sun-hide rule.
 
 Production gates: `terrain_solar_visibility` exercises raised, partially shaded,
-moving-proxy, fully terrain-shaded and clear panel states through Modelica;
+moving-proxy, selected and unselected compound siblings, fully terrain-shaded and clear panel states through Modelica;
 `terrain_solar_visibility_night` verifies below-surface sunlight with a panel
 that faces the Sun; `terrain_solar_visibility_invalid_admission` declares the expected runtime fault
 before loading `terrain_solar_visibility_invalid`, then requires the terminal

@@ -301,10 +301,12 @@ stale projection with an offset or another per-frame transform writer. The
 projection is change-gated by the selected source revision and changed BigSpace
 ancestor chains, so stable frames do not rebuild f64 poses.
 
-The render backend samples the resulting cascades with Bevy's hardware 2x2
-comparison filter in standard and high profiles. Keep that choice separate from
-the semantic sun angle and the authored cascade/range/bias policy; do not introduce
-a Gaussian/PCSS blur or tune physical light state to hide a filtering artifact.
+Native directional cascades take their sampling frame from the receiving
+view’s BigSpace grid. The camera’s selected Graphics profile controls edge
+filtering. Compare fractional shadow coordinates at a fixed physical receiver
+across a celestial seek to measure drift. Compare a diagonal shadow edge at a
+fixed epoch to evaluate spatial filtering. See
+`docs/architecture/render-decoupling.md#directional-shadow-reference-frames`.
 
 ## Do not patch symptoms
 
@@ -327,7 +329,7 @@ Add the smallest real regression at the owning boundary:
   active-Twin teardown;
 - the selected camera projects through the persistent `WorldGrid` into the sole
   `OriginAnchor`, while duplicate or missing world-shell entities fail closed.
-- a standard render camera receives the hardware 2x2 shadow filter exactly once;
+- a standard render camera receives the selected Graphics filter at admission;
   fast mode remains unlit and does not attach it.
 
 Run focused checks first:

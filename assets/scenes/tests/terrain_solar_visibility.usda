@@ -10,7 +10,7 @@ def Xform "TerrainSolarVisibility" (
 )
 {
     def Xform "Power" (
-        prepend apiSchemas = "CollectionAPI:components"
+        prepend apiSchemas = ["CollectionAPI:components"]
     )
     {
         custom rel collection:components:includes = [</TerrainSolarVisibility/Power/Panel>, </TerrainSolarVisibility/Power/Battery>]
@@ -50,10 +50,10 @@ def Xform "TerrainSolarVisibility" (
             custom double inputs:target_mount_z
             double inputs:target_mount_z.connect = </TerrainSolarVisibility/Power.inputs:target_mount_z>
             def Points "Environment" (
-                prepend apiSchemas = "CollectionAPI:occluders"
+                prepend apiSchemas = ["CollectionAPI:occluders"]
             )
             {
-                custom rel collection:occluders:includes = </TerrainSolarVisibility/Blocker>
+                custom rel collection:occluders:includes = [</TerrainSolarVisibility/Blocker>, </TerrainSolarVisibility/Equipment/Plate>]
                 token collection:occluders:expansionRule = "explicitOnly"
             }
         }
@@ -75,7 +75,7 @@ def Xform "TerrainSolarVisibility" (
         }
     }
     def Cube "Blocker" (
-        prepend apiSchemas = "PhysicsCollisionAPI"
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
     )
     {
         double size = 1.0
@@ -83,5 +83,32 @@ def Xform "TerrainSolarVisibility" (
         double3 xformOp:scale = (1.0, 1.0, 0.1)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
         bool physics:collisionEnabled = true
+    }
+    def Xform "Equipment" (
+        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    )
+    {
+        float physics:mass = 1.0
+        bool physics:kinematicEnabled = true
+        custom double3 xformOp:translate = (-20.0, -1799.7, 2.0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+        def Cube "Plate" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            custom double3 xformOp:translate = (0.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            custom double3 xformOp:scale = (1.0, 1.0, 0.1)
+        }
+        def Cube "UnselectedPlate" (
+            prepend apiSchemas = ["PhysicsCollisionAPI"]
+        )
+        {
+            double size = 1.0
+            custom double3 xformOp:translate = (2.0, 0.0, 0.0)
+            uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+            custom double3 xformOp:scale = (1.0, 1.0, 0.1)
+        }
     }
 }

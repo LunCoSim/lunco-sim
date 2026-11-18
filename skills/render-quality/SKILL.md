@@ -39,6 +39,14 @@ through `SceneCameraAudit` before comparing screenshots or FPS. Read the settled
 active camera pose through `QueryEntity` before and after an FPS window; startup
 view restoration can replace an early camera command.
 
+For apparent motion of stationary geometry, freeze both the physical pose and
+celestial epoch, then vary the render origin and compare the fractional shadow
+coordinates of the same physical points. Repeat at advancing celestial time.
+Compare GPU and uninstrumented frame times at the same quality and camera pose.
+See [directional shadow reference frames](../../docs/architecture/render-decoupling.md#directional-shadow-reference-frames).
+For instrument shade, run the `terrain_solar_visibility` production scene gate.
+It checks available electrical power for DEM shade and a moving compound blocker.
+
 Directional shadow raster bounds are owned by `lunco-render-bevy`; see
 [the receiver contract](../../docs/architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds).
 Only sources satisfying that complete contract declare
@@ -83,8 +91,8 @@ GPU acceptance still require the rendered fixture and a clean process log.
    For regular grain ripples, verify that DEM UVs and their derivatives use
    `terrain_half_extent`, independently of the shadow heightfield's `hf_size`.
    Compare settled frames with procedural relief and native shadow reception
-   isolated separately. High uses 4096-pixel directional maps, a narrow
-   Hardware 2×2 filter, a 0.005 m depth bias and a 2.0-texel normal bias.
+   isolated separately. High uses 4096-pixel directional maps, Bevy’s Gaussian comparison filter,
+   a 0.005 m depth bias and a 2.0-texel normal bias.
    The normal offset must cover the selected filter footprint; test grazing
    sunlight for acne and wheel/ground separation before changing it.
    The 2 GiB logical ceiling covers all declared caster limits (including
@@ -93,7 +101,7 @@ GPU acceptance still require the rendered fixture and a clean process log.
    and terrain unchanged. On shadow-map OOM, the renderer retries at a lower
    power-of-two resolution and records the effective size in Recent Events; it
    does not rewrite the saved setting.
-   Balanced retains its smaller budget and smoother filter. Existing custom
+   Balanced uses the same filter with a smaller map budget. Existing custom
    saved values remain authoritative; select High to apply the new defaults.
    Inspect the live light bias as well as the preset: saved Graphics values
    override changed preset defaults. For diagonal boundaries in close grain,

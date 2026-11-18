@@ -36,6 +36,15 @@ pub(crate) struct VisibilityMemo {
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SolarGeometry<'w, 's> {
+    prims: Res<'w, lunco_usd_bevy_scene::prim_index::UsdPrimIndex>,
+    sources: Query<
+        'w,
+        's,
+        (
+            Option<&'static avian3d::prelude::RigidBodyColliders>,
+            Option<&'static lunco_physics::SourceColliders>,
+        ),
+    >,
     colliders: Query<
         'w,
         's,
@@ -44,7 +53,6 @@ pub(crate) struct SolarGeometry<'w, 's> {
             &'static avian3d::prelude::Collider,
             &'static avian3d::prelude::Position,
             &'static avian3d::prelude::Rotation,
-            &'static lunco_usd_bevy_scene::UsdPrimPath,
         ),
         (
             Without<avian3d::prelude::Sensor>,
@@ -88,14 +96,19 @@ pub(crate) fn initialization_sample_ready(
 }
 
 fn solar_sample_demanded(probe: Entity, connections: &Query<&SimConnection>) -> bool {
-    connections.iter().any(|wire| {
-        wire.start_element == probe
-            && !wire.start_is_input
-            && matches!(
-                wire.start_connector.as_str(),
-                SUN_VISIBILITY_SOURCE_CONNECTOR | SUN_IRRADIANCE_SOURCE_CONNECTOR
-            )
-    })
+    connections
+        .iter()
+        .filter_map(solar_wire_probe)
+        .any(|source| source == probe)
+}
+
+fn solar_wire_probe(wire: &SimConnection) -> Option<Entity> {
+    (!wire.start_is_input
+        && matches!(
+            wire.start_connector.as_str(),
+            SUN_VISIBILITY_SOURCE_CONNECTOR | SUN_IRRADIANCE_SOURCE_CONNECTOR
+        ))
+    .then_some(wire.start_element)
 }
 
 /// Publish only demanded visibility ports, before cosimulation propagates wires.
@@ -139,24 +152,64 @@ pub(crate) fn publish_sun_visibility(
     for cache in memo.terrain_bounds.values_mut() {
         cache.begin_batch();
     }
-    let selected_paths: std::collections::HashSet<_> = probes
-        .iter()
-        .flat_map(|(_, _, paths, _)| paths.0.iter().cloned())
-        .collect();
-    let shapes = geometry
-        .colliders
-        .iter()
-        .filter(|(_, _, _, _, path)| selected_paths.contains(&path.path))
-        .map(|(entity, collider, position, rotation, _)| {
-            lunco_physics::occlusion::CollisionOccluder {
-                entity,
-                position: position.0,
-                rotation: rotation.0.as_dquat(),
-                shape: collider.shape_scaled().clone(),
+    let demanded_probes: std::collections::HashSet<_> =
+        connections.iter().filter_map(solar_wire_probe).collect();
+    let mut participants = std::collections::HashMap::new();
+    let mut shapes = std::collections::HashMap::new();
+    for (probe, _, paths, _) in &probes {
+        if !demanded_probes.contains(&probe) {
+            continue;
+        }
+        let Ok(identity) = identities.get(probe) else {
+            continue;
+        };
+        let members = (|| {
+            let mut selected = Vec::new();
+            for path in &paths.0 {
+                let mut matched_source = false;
+                for &source in geometry.prims.in_stage(identity.stage_handle.id(), path) {
+                    let Ok((body, cooked)) = geometry.sources.get(source) else {
+                        continue;
+                    };
+                    let count = selected.len();
+                    for native in lunco_physics::collider_candidates(source, body, cooked) {
+                        let Ok((entity, collider, position, rotation)) =
+                            geometry.colliders.get(native)
+                        else {
+                            continue;
+                        };
+                        shapes.entry(entity).or_insert_with(|| {
+                            lunco_physics::occlusion::CollisionOccluder {
+                                entity,
+                                position: position.0,
+                                rotation: rotation.0.as_dquat(),
+                                shape: collider.shape_scaled().clone(),
+                            }
+                        });
+                        selected.push(entity);
+                    }
+                    if selected.len() != count {
+                        if matched_source {
+                            return Err(format!(
+                                "optical proxy '{path}' has multiple admitted sources"
+                            ));
+                        }
+                        matched_source = true;
+                    }
+                }
+                if !matched_source {
+                    return Err(format!(
+                        "optical proxy '{path}' has no admitted collision shape and pose"
+                    ));
+                }
             }
-        })
-        .collect();
-    let geometry_sample = memo.geometry_index.update(shapes);
+            selected.sort_unstable();
+            selected.dedup();
+            Ok(selected)
+        })();
+        participants.insert(probe, members);
+    }
+    let geometry_sample = memo.geometry_index.update(shapes.into_values().collect());
     let mut probe_order = Vec::new();
     let mut paths = std::collections::BTreeSet::new();
     for (entity, _, _, _) in &probes {
@@ -183,11 +236,11 @@ pub(crate) fn publish_sun_visibility(
     }
     probe_order.sort_by(|a, b| a.0.cmp(&b.0));
     for (_, entity) in probe_order {
-        let Ok((probe, sampling, occluder_paths, mut sim)) = probes.get_mut(entity) else {
+        let Ok((probe, sampling, _, mut sim)) = probes.get_mut(entity) else {
             continue;
         };
 
-        let demanded = solar_sample_demanded(probe, &connections);
+        let demanded = demanded_probes.contains(&probe);
         if !demanded {
             memo.samples.remove(&probe);
             if sim
@@ -223,21 +276,9 @@ pub(crate) fn publish_sun_visibility(
                     resolve_direction_for_frame(&source, probe, rays.as_deref(), &targets, &poses)
                         .map_err(|reason| format!("Sun direction unavailable: {reason:?}"))?;
                 geometry_sample.clone()?;
-                let mut occluders = Vec::with_capacity(occluder_paths.0.len());
-                for path in &occluder_paths.0 {
-                    let entity = geometry
-                        .colliders
-                        .iter()
-                        .find(|(_, _, _, _, prim)| &prim.path == path)
-                        .map(|(entity, _, _, _, _)| entity)
-                        .ok_or_else(|| {
-                            format!(
-                                "optical proxy '{path}' has no admitted collision shape and pose"
-                            )
-                        })?;
-                    occluders.push(entity);
-                }
-                occluders.sort_unstable();
+                let occluders = participants
+                    .remove(&probe)
+                    .ok_or_else(|| "demanded probe has no admitted USD identity".to_string())??;
                 if sampling.0.is_empty()
                     || sampling.0.len() > 64
                     || sampling.0.iter().any(|p| !p.is_finite())

@@ -7,7 +7,7 @@ const PROBE = POWER + "/Panel/Environment";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(POWER)],
-       entity_reads: [find_path(PROBE)], entity_writes: [find_path(POWER), find_path(ROOT + "/Blocker")],
+       entity_reads: [find_path(PROBE)], entity_writes: [find_path(POWER), find_path(ROOT + "/Blocker"), find_path(ROOT + "/Equipment")],
        query_reads: ["TerrainHeight", "TerrainRaycast"], required_inputs: [] }
 }
 
@@ -24,6 +24,7 @@ fn on_start(me, ctx) {
     this.results = [];
     this.raised_power = ();
     this.blocker = find_path(ROOT + "/Blocker");
+    this.equipment = find_path(ROOT + "/Equipment");
 }
 
 fn move_panel(position, phase) {
@@ -96,6 +97,18 @@ fn on_tick(me, ctx) {
     } else if this.phase == "unblocked" {
         this.results.push(t_true(visibility == 1.0 && abs(available - this.raised_power) < 1.0e-6,
             "moving the optical proxy must invalidate the shadow snapshot and restore generation"));
+        cmd("MoveEntity", #{entity_id: this.equipment, translation: [this.shadow[0] - 2.0, -1799.7, this.shadow[2] + 2.0]});
+        this.phase = "equipment";
+        this.phase_time = 0.0;
+    } else if this.phase == "equipment" {
+        this.results.push(t_true(abs(visibility - 2.0/3.0) < 1.0e-9 && abs(available - this.raised_power * 2.0/3.0) < 1.0e-6,
+            "only the selected cooked plate on a moving assembly shades the panel"));
+        cmd("MoveEntity", #{entity_id: this.equipment, translation: [-20.0, -1799.7, 2.0]});
+        this.phase = "equipment_clear";
+        this.phase_time = 0.0;
+    } else if this.phase == "equipment_clear" {
+        this.results.push(t_true(visibility == 1.0 && abs(available - this.raised_power) < 1.0e-6,
+            "leaving equipment shade restores the electrical supply"));
         this.move_panel(this.shadow, "shadow");
     } else if this.phase == "shadow" {
         this.results.push(t_true(visibility == 0.0 && abs(available) < 1.0e-6,

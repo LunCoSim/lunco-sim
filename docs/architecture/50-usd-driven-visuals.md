@@ -599,3 +599,15 @@ Their child traversal, schema indexes and projection facts expose only active
 prims. Physics refresh decisions also inspect current composed rigid-body and
 collision schemas when a previously inert shape becomes physical; existing
 Avian components alone do not prove the complete participation contract.
+
+
+### Displaced globe sunlight
+
+The globe shader measures the skyline along the local solar azimuth in body
+coordinates. It computes the curvature drop from the sample angle and the
+height difference before combining the two. The authored displacement range
+bounds the height of unvisited terrain and permits early exit. The apparent
+solar radius comes from the same light uniform as the sky. At a ridge, direct
+visibility is the fraction of a uniform disc above the local straight skyline.
+This approximation resolves relief along one azimuth within the globe height
+texture. Object-to-ground shadows use the view's native cascades.

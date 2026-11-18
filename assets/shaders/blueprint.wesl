@@ -142,6 +142,7 @@ fn vertex(vertex: GlobeVertex) -> prepass_io::VertexOutput {
 //!@engine  site_blend_widths_m
 //!@default site_blend_widths_m 1.0,1.0,1.0,1.0
 //!@engine sun_dir_world
+//!@engine sun_tan_radius
 //!@engine site_photometry
 //!@default site_photometry 0,1,1,0
 //!@engine  site_base_color
@@ -199,6 +200,7 @@ struct Material {
     site_base_color: vec4<f32>,
     site_photometry: vec4<f32>,
     sun_dir_world: vec3<f32>,
+    sun_tan_radius: f32,
     reflectance: f32,
     displacement_scale_m: f32,
     displacement_offset_m: f32,
@@ -281,16 +283,46 @@ var displacement_smp: sampler;
 
 @if((LUNCO_GLOBE_DIRECTION)) fn spherical_sun_visibility(d: vec3<f32>, sun: vec3<f32>) -> f32 {
     if (mat.displacement_shadow_on <= 0.0) { return 1.0; }
-    let origin = d * (mat.displacement_radius_m + spherical_height(d) + 1.0);
-    let posting = mat.displacement_radius_m * 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
+    let radius = mat.displacement_radius_m;
+    let height = spherical_height(d) + 1.0;
+    let min_radius = radius + mat.displacement_offset_m;
+    let rise_bound = max(0.0, mat.displacement_offset_m + mat.displacement_scale_m - height);
+    let sin_elevation = clamp(dot(d, sun), -1.0, 1.0);
+    let tangent = sun - d * sin_elevation;
+    let horizontal = length(tangent);
+    if (horizontal < 1e-6) { return select(0.0, 1.0, sin_elevation > 0.0); }
+    let azimuth = tangent / horizontal;
+    let elevation = atan2(sin_elevation, horizontal);
+    let solar_radius = atan(mat.sun_tan_radius);
+    // Angular bounds avoid trigonometry inside the heightfield loop.
+    let lower = tan(max(-1.570795, elevation - solar_radius));
+    let upper = tan(min(1.570795, elevation + solar_radius));
+    // Even outside the sampled terrain, the solid inner sphere blocks sunlight.
+    let clearance = max(0.0, height - mat.displacement_offset_m);
+    var skyline = -sqrt(clearance * (2.0 * min_radius + clearance)) / min_radius;
+    let posting = radius * 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
     var distance = posting * 0.5;
     for (var i=0; i<64; i+=1) {
-        let point = origin + distance * sun;
-        let radial = length(point);
-        if (radial < mat.displacement_radius_m + spherical_height(point/radial)) { return 0.0; }
+        if (skyline >= upper) { return 0.0; }
+        let u = distance / radius;
+        let cosine = inverseSqrt(1.0 + u*u);
+        let sine = u * cosine;
+        let remaining_bound = rise_bound / (min_radius * sine);
+        if (skyline <= lower && remaining_bound <= lower) { return 1.0; }
+        if (remaining_bound <= skyline) { break; }
+        let blocker = spherical_height((d + u * azimuth) * cosine);
+        let r = radius + blocker;
+        // cos(angle)-1 = -sin(angle)^2/(1+cos(angle)). Retain metre-scale
+        // relief without subtracting two nearly equal planetary radii.
+        let relative_height = (blocker - height) - r * sine*sine / (1.0 + cosine);
+        skyline = max(skyline, relative_height / (r * sine));
         distance += posting * (1.0 + 0.06*f32(i));
     }
-    return 1.0;
+    if (skyline >= upper) { return 0.0; }
+    if (skyline <= lower) { return 1.0; }
+    // Fraction of a uniform solar disc above the locally straight skyline.
+    let x = clamp((elevation - atan(skyline)) / solar_radius, -1.0, 1.0);
+    return (acos(-x) + x * sqrt(max(0.0, 1.0 - x*x))) / 3.141592653589793;
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(12)

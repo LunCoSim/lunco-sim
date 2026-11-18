@@ -407,36 +407,32 @@ pub struct SourceColliders(Vec<Entity>);
 /// Body observations include every attached shape; a source observes only its
 /// own cooked geometry. Nested rigid bodies remain separate owners.
 pub fn collider_entities(world: &World, entity: Entity) -> impl Iterator<Item = Entity> + '_ {
-    let body_colliders = world.get::<avian3d::prelude::RigidBodyColliders>(entity);
+    collider_candidates(entity, world.get(entity), world.get(entity)).filter(move |candidate| {
+        world
+            .get::<avian3d::prelude::Collider>(*candidate)
+            .is_some()
+    })
+}
+
+/// Source-to-native membership shared by World and scheduled query consumers.
+/// The caller selects admitted shapes from these candidates.
+pub fn collider_candidates<'a>(
+    entity: Entity,
+    body: Option<&'a avian3d::prelude::RigidBodyColliders>,
+    source: Option<&'a SourceColliders>,
+) -> impl Iterator<Item = Entity> + 'a {
     std::iter::once(entity)
-        .filter(move |candidate| {
-            world
-                .get::<avian3d::prelude::Collider>(*candidate)
-                .is_some()
-        })
         .chain(
-            body_colliders
-                .into_iter()
-                .flat_map(|colliders| colliders.iter())
-                .filter(move |candidate| {
-                    *candidate != entity
-                        && world
-                            .get::<avian3d::prelude::Collider>(*candidate)
-                            .is_some()
-                }),
+            body.into_iter()
+                .flat_map(|members| members.iter())
+                .filter(move |id| *id != entity),
         )
         .chain(
-            world
-                .get::<SourceColliders>(entity)
+            source
                 .into_iter()
-                .filter(move |_| body_colliders.is_none())
-                .flat_map(|sources| sources.0.iter().copied())
-                .filter(move |candidate| {
-                    *candidate != entity
-                        && world
-                            .get::<avian3d::prelude::Collider>(*candidate)
-                            .is_some()
-                }),
+                .filter(move |_| body.is_none())
+                .flat_map(|members| members.0.iter().copied())
+                .filter(move |id| *id != entity),
         )
 }
 
