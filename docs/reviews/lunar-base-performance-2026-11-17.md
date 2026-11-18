@@ -1016,3 +1016,39 @@ hashes match admission, the runtime reports zero findings, and the
 owned app releases its port. Two independent simulator processes are
 listed at qualification. The receipt is in
 `fixed-exchange-attribution/strict/session.json`.
+
+## Prepare tether guide geometry once per scenario
+
+The Griffin observer prepares the authored lander-local anchors and ramp-local
+guide vectors when its scenario starts. The live routing pass transforms
+those vectors using the current lander, ramp and wheel poses. The solver and
+the visual adapter share that sample. The visual adapter keeps its existing
+six-coordinate Modelica input and mesh submission cadence.
+
+The symbolized control and candidate use the same optimized Tracy executable,
+the same High profile at 2560×1440, and two 25-second landed windows. The
+scenario is the only hashed source change between captures. Each window
+contains 1,500 observer calls. The 250 calls that submit both curves take
+0.925 ms at the median and 1.594 ms at p99 in the control, then 0.825 ms
+and 1.495 ms in the candidate. Their maxima are 1.932 and 1.998 ms.
+Calls without a curve submission have medians of 0.148 and 0.148 ms.
+The control's curve-submitting calls show Rhai function resolution and
+allocator activity in the native samples. The 500 native update callbacks
+take 3.13 ms in aggregate, including trace overhead. The engine and
+collector released their owned ports. Analysis and process maps are under
+`tether-visual-attribution/` and `tether-visual-candidate/`.
+
+The uninstrumented production parity probe matches all 92 ordered solver
+inputs and every point and normal of both ribbons on the same landed state.
+Both curve revisions advance over two seconds, and both latest revisions
+settle and apply with no errors after pausing.
+The production descent passes the same nine requirements and emits identical
+structured evidence at tick 8,756 on both source revisions.
+
+The separate uninstrumented run at High 2560×1440 records 5,262 consecutive
+frames at 87.005 FPS. P99 is 17.797 ms and the worst frame is 28.992 ms.
+Of these, 3,698 exceed 10 ms. The app is ready at all 94 checks with all 181
+selected terrain tiles drawn at the final check, zero clipped time, zero
+runtime findings and matching source hashes. The paused parity probe and
+the landed run both release their API port. This run misses both performance
+limits. The receipt is in `tether-visual-candidate/strict/session.json`.
