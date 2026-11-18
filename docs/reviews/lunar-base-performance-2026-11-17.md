@@ -851,3 +851,33 @@ frame-history-only run averaged 101.599 FPS across 6,068 frames. Its p99 was
 15.357 ms, its maximum was 57.017 ms, and 3,588 frames exceeded 10 ms. Both
 used the same High 2560×1440 worktree profile and tracked the landed Griffin.
 Receipts are in `.cache/perf/lunar-100fps/identified-globe-foci/`.
+
+## Integrated release, local Bevy and scheduler measurements
+
+Engine `456deba91` and the checked-in dependency pin recorded 94.997 FPS
+across 5,707 frames with local main's asset root and High 2560×1440. In the
+strict driver's minute, p99 was 16.679 ms, worst was 25.493 ms and 3,672 frames
+exceeded 10 ms. All 95 terrain samples were current with 181 wanted, resident
+and drawn tiles. The release using the worktree High preset and local Bevy
+lighting `400fa336e` recorded 96.771 FPS across 5,847 frames, p99 16.474 ms
+and worst 22.010 ms. All 96 terrain samples were current. Both source checks
+passed and both sessions reported zero runtime warnings or errors. The Bevy
+patch is local. The simulator retains its published dependency pin.
+
+A 150-second frame-history run with the main asset root recorded 14,967
+consecutive frames, 99.809 FPS, p99 15.427 ms and worst 62.760 ms. Linux
+scheduler readings put 42.99 ms of CPU time on one Bevy compute-pool worker
+during a 49.18 ms portion of that frame. The main thread used 1.94 ms of CPU
+and the render thread 2.90 ms across the same scheduler samples. During a
+42.12 ms frame another compute-pool worker used 17.84 ms across 21.93 ms
+of sampled time. A second 150-second run recorded 40.19 ms on a compute
+worker in a 60.91 ms frame. Linux charged that worker four 10 ms ticks of
+kernel time, zero user ticks, 64 minor faults and zero major faults across the
+sampled interval. A 53.80 ms frame likewise registered three kernel ticks, zero
+user ticks and 116 minor faults on its busiest worker. These counters establish
+where time accrued. They do not identify the allocating subsystem.
+
+The strict receipts are under `identified-globe-foci/strict-main-assets/`
+and `identified-globe-foci/local-visibility/acceptance/` in the performance
+cache. The ordered frames and per-thread observations are in
+`identified-globe-foci/scheduling/`.
