@@ -101,7 +101,9 @@ struct BodyCover {
     resident: BTreeMap<SurfaceKey, Option<Entity>>,
     pending: BTreeMap<SurfaceKey, Task<Result<Option<PreparedSurface>, String>>>,
     retired: Vec<Entity>,
-    desired: BTreeSet<SurfaceKey>,
+    /// Present while a replacement cover is being admitted. Once committed,
+    /// the resident map contains exactly the selected keys.
+    replacement: Option<BTreeSet<SurfaceKey>>,
     last_foci: Vec<DVec3>,
     geometry_settings: Option<(u32, u64, u32)>,
     selection_factor: Option<u64>,
@@ -420,17 +422,13 @@ fn prepare_globe_collision(
                 a.distance_squared(*b) > (settings.contact_tile_span_m / 16.0).powi(2)
             });
         let selection_factor = settings.refinement_distance_factor.to_bits();
-        if moved
-            || changed
-            || cover.desired.is_empty()
-            || cover.selection_factor != Some(selection_factor)
-        {
+        if moved || changed || cover.selection_factor != Some(selection_factor) {
             let resident = cover
                 .resident
                 .keys()
                 .filter_map(|key| key.coord(body))
                 .collect();
-            cover.desired = desired_cover(
+            let mut desired = desired_cover(
                 body,
                 radius,
                 &foci,
@@ -439,11 +437,28 @@ fn prepare_globe_collision(
                 settings.refinement_distance_factor,
             );
             if handoff.is_some() {
-                cover.desired.insert(SurfaceKey::Collar);
+                desired.insert(SurfaceKey::Collar);
             }
+            cover.replacement = Some(desired);
             cover.last_foci = foci;
             cover.selection_factor = Some(selection_factor);
         }
+        let collider_ready = |entity: Entity| {
+            live.get(entity).is_ok_and(|aabb| {
+                lunco_physics::avian_backend_aabb_is_valid(aabb.min.as_dvec3(), aabb.max.as_dvec3())
+            })
+        };
+        let Some(desired) = &cover.replacement else {
+            // Near contact the native bounds must still be valid on this update.
+            waiting |= contact_near
+                && !cover
+                    .resident
+                    .values()
+                    .flatten()
+                    .copied()
+                    .all(collider_ready);
+            continue;
+        };
         // Commit worker results in source-key order, independent of completion
         // timing. Native collider insertion order must not depend on worker races.
         let mut completed = Vec::new();
@@ -501,7 +516,7 @@ fn prepare_globe_collision(
                 }
             }
         }
-        for key in cover.desired.iter().copied() {
+        for key in desired.iter().copied() {
             if budget == 0 {
                 break;
             }
@@ -543,17 +558,11 @@ fn prepare_globe_collision(
             cover.pending.insert(key, task);
             budget -= 1;
         }
-        let complete = cover.desired.iter().all(|key| {
-            cover.resident.get(key).is_some_and(|entity| {
-                entity.is_none_or(|entity| {
-                    live.get(entity).is_ok_and(|aabb| {
-                        lunco_physics::avian_backend_aabb_is_valid(
-                            aabb.min.as_dvec3(),
-                            aabb.max.as_dvec3(),
-                        )
-                    })
-                })
-            })
+        let complete = desired.iter().all(|key| {
+            cover
+                .resident
+                .get(key)
+                .is_some_and(|entity| entity.is_none_or(collider_ready))
         });
         waiting |= !complete && contact_near;
         if complete {
@@ -561,7 +570,7 @@ fn prepare_globe_collision(
                 commands.entity(entity).try_despawn();
             }
             cover.resident.retain(|key, entity| {
-                if cover.desired.contains(key) {
+                if desired.contains(key) {
                     return true;
                 }
                 if let Some(entity) = entity {
@@ -569,7 +578,8 @@ fn prepare_globe_collision(
                 }
                 false
             });
-            cover.pending.retain(|key, _| cover.desired.contains(key));
+            cover.pending.retain(|key, _| desired.contains(key));
+            cover.replacement = None;
         }
     }
     if holds.holds(HOLD) != waiting {

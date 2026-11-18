@@ -188,7 +188,9 @@ vehicle counts. A Twin may author, override, or omit this metadata on its
 scene-level opinions. Keep these fields on a prim with `LunCoUiSchemaAPI`.
 Live edits invalidate authored-surface discovery at the USD stage-revision
 boundary; they do not recreate the prim subtree or reset simulation state below
-the same scene scope.
+the same scene scope. Direct program children and targets of the authored
+`programs` relationship resolve through the stage-scoped USD prim index. Only
+a projection under the current primary mount can supply its runtime state.
 
 ## Where to work
 

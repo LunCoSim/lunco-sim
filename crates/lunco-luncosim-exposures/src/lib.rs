@@ -34,6 +34,7 @@ use lunco_mobility::WheelRaycast;
 use lunco_port_core::{InputPorts, ScalarPortMap};
 use lunco_scene_selection::SelectedEntities;
 use lunco_signal::{SignalRef, SignalRegistry, SignalType};
+use lunco_usd_bevy_scene::prim_index::{UsdPrimIndex, UsdPrimIndexPlugin};
 use lunco_usd_bevy_scene::scene_root_ancestor;
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
@@ -64,6 +65,9 @@ impl Plugin for RuntimeExposuresPlugin {
         }
         if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
+        if !app.is_plugin_added::<UsdPrimIndexPlugin>() {
+            app.add_plugins(UsdPrimIndexPlugin);
         }
         install_exposure_state(app);
         app.add_systems(Startup, publish_initial_camera_exposure)
@@ -1851,6 +1855,7 @@ pub(crate) struct ExposureRuntime<'w, 's> {
     signals: Res<'w, SignalRegistry>,
     selected: Res<'w, SelectedEntities>,
     scene_mount: Res<'w, SceneMountState>,
+    prim_index: Res<'w, UsdPrimIndex>,
     local_avatar: Res<'w, TheLocalEmbodiment>,
     sessions: Res<'w, lunco_core_session::SessionRegistry>,
     local_session: Res<'w, lunco_core_session::LocalSession>,
@@ -1954,6 +1959,7 @@ pub(crate) fn publish_exposure(
             runtime_surface_roots.refresh(
                 revision,
                 &runtime.scene_mount,
+                &runtime.prim_index,
                 &queries.usd_paths,
                 &queries.parents,
                 &queries.scene_roots,
@@ -2521,6 +2527,7 @@ impl RuntimeSurfaceRootCache {
         &mut self,
         revision: Option<u64>,
         scene_mount: &SceneMountState,
+        prim_index: &UsdPrimIndex,
         q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
         q_parents: &Query<&ChildOf>,
         q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
@@ -2539,6 +2546,7 @@ impl RuntimeSurfaceRootCache {
             .collect::<HashSet<_>>();
         self.roots = authored_runtime_surfaces(
             scene_mount,
+            prim_index,
             q_paths,
             q_parents,
             q_scene_roots,
@@ -2744,6 +2752,7 @@ fn queue_runtime_surface(
 /// registered runtime surface without an engine change.
 fn authored_runtime_surfaces(
     scene_mount: &SceneMountState,
+    prim_index: &UsdPrimIndex,
     q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
     q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
@@ -2800,7 +2809,7 @@ fn authored_runtime_surfaces(
                 prim_path.stage_handle.id(),
                 reader,
                 &path,
-                q_paths,
+                prim_index,
                 scene_mount,
                 q_parents,
                 q_scene_roots,
@@ -2874,7 +2883,7 @@ fn authored_runtime_programs(
     stage_id: AssetId<UsdStageAsset>,
     reader: &dyn UsdReadObject,
     root: &SdfPath,
-    q_paths: &Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
+    prim_index: &UsdPrimIndex,
     scene_mount: &SceneMountState,
     q_parents: &Query<&ChildOf>,
     q_scene_roots: &Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
@@ -2896,15 +2905,6 @@ fn authored_runtime_programs(
         }
     }
 
-    let mut program_entities = HashMap::new();
-    for (entity, prim) in q_paths.iter() {
-        if prim.stage_handle.id() == stage_id
-            && is_active_scene_entity(entity, scene_mount, q_parents, q_scene_roots, q_entities)
-        {
-            program_entities.entry(prim.path.clone()).or_insert(entity);
-        }
-    }
-
     let mut programs = program_paths
         .into_iter()
         .map(|path| {
@@ -2917,7 +2917,19 @@ fn authored_runtime_programs(
                 .or_else(|| reader.text(&path, "info:id"))
                 .or_else(|| reader.text(&path, "info:sourceCode"))
                 .unwrap_or_default();
-            let entity = program_entities.get(&path_text).copied();
+            let entity = prim_index
+                .in_stage(stage_id, &path_text)
+                .iter()
+                .copied()
+                .find(|&candidate| {
+                    is_active_scene_entity(
+                        candidate,
+                        scene_mount,
+                        q_parents,
+                        q_scene_roots,
+                        q_entities,
+                    )
+                });
             AuthoredRuntimeProgram {
                 path: path_text,
                 entity,
