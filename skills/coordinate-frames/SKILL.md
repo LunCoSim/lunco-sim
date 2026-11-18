@@ -359,9 +359,10 @@ per vessel without a Rust vessel-type dispatch. See
 
 Free-flight movement, scroll transit and follow booms sweep a lens-centred sphere
 against the full composed terrain in the active physics frame and shape-cast
-native props. Native DEM collider realizations are excluded from this camera
-query. Cast the physical radius and apply skin as a directional contact pullback;
-an enlarged collision shell can block clear tangent departure. Recast every
+native props. Borrow the vessel filter for follow casts and check native DEM
+membership on each broad-phase candidate through the terrain query. Cast the
+physical radius and apply skin as a directional contact pullback. An enlarged
+collision shell can block clear tangent departure. Recast every
 projected slide against all sources and props. Source-safe travel also checks the retained presented mesh, stitch and
 morph context. Pending geometry holds the pose and requests refinement; invalid
 geometry or exhausted capacity rejects motion visibly. Lateral input adds no

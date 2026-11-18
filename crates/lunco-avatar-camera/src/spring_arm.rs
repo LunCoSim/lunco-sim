@@ -144,12 +144,7 @@ pub(crate) fn spring_arm_system(
             200.0,
         );
 
-        let mut filter = collision_filters
-            .filter_for(arm.target, &q_children)
-            .clone();
-        filter
-            .excluded_entities
-            .extend(policy.terrain.native_terrain_colliders());
+        let filter = collision_filters.filter_for(arm.target, &q_children);
         let radius = match policy.collision_settings.camera_radius(projection) {
             Ok(radius) => radius,
             Err(error) => {
@@ -201,7 +196,8 @@ pub(crate) fn spring_arm_system(
             probe,
             arm.distance,
             policy.collision_settings.skin_m,
-            &filter,
+            filter,
+            &|entity| !policy.terrain.is_native_terrain_collider(entity),
         ) {
             Ok(hit) => hit.map(|hit| f64::from(hit.distance)),
             Err(error) => {
@@ -367,7 +363,7 @@ pub(crate) fn spring_arm_system(
                         .as_deref()
                         .map_or(0, |budget| budget.max_intervals),
                     native,
-                    &filter,
+                    filter,
                 )
                 .map(|motion| to_source.transform_position(motion.position))
             };
@@ -399,7 +395,7 @@ pub(crate) fn spring_arm_system(
                 &policy.drawn,
                 &mut policy.targets,
                 native,
-                &filter,
+                filter,
             )
             .map(|point| to_source.transform_position(point))
         })();
