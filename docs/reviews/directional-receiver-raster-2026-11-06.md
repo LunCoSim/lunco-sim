@@ -138,8 +138,7 @@ than one percent mean FPS change and worse tails; the Rust trial/tests/docs are
 removed. Zero-Fresnel dispatch, Schlick multiplication and equivalent roughness
 or half-angle rewrites establish no GPU gain. Removing noise saves roughly a
 millisecond but removes detail and is rejected. A standalone four-map 8192²
-hierarchy reduction costs roughly 3.81 ms; High uses Hardware2x2 comparison,
-while Balanced selects Gaussian. None of those trial implementations remains.
+hierarchy reduction cost roughly 3.81 ms in that trial. None of those trial implementations remains.
 
 The follow-up `target/perf/fps-20261106/material-detail/` assay uses the
 qualified diagnostic executable, paused at tick 1600. Transient shader-source

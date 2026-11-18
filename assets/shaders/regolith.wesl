@@ -7,7 +7,7 @@ import bevy_pbr::render::{
     mesh_bindings::mesh,
     mesh_view_bindings::view,
 };
-import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+import super::horizon_march::terrain_horizon_visibility;
 import super::lunar_brdf::regolith_factor;
 import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position};
 
@@ -90,7 +90,7 @@ import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, la
 //!@engine  hf_res
 //!@engine  csm_far
 //!@engine  shadow_cache_on
-//!@engine  horizon_march_steps
+//!@engine  horizon_march
 struct Material {
     albedo:            vec3<f32>,
     macro_clump_scale: f32,
@@ -109,9 +109,9 @@ struct Material {
     sun_dir_world:     vec3<f32>,  // engine-filled: world-space to-sun (lunar BRDF)
     hf_size:           vec2<f32>,  // engine-filled: heightfield extent (m)
     hf_res:            f32,  // engine-filled: heightfield resolution
-    csm_far:           f32,  // engine-filled: CSM far bound (m); march fades in beyond
+    csm_far:           f32,  // engine-filled: native CSM reach (m); zero selects site visibility throughout
     shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
-    horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
+    horizon_march: vec4<f32>, // engine-filled: configured live ray-march iterations
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
@@ -160,7 +160,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var albedo = mat.albedo;
 
     let world_p = in.world_position.xyz;
-    let dist = distance(view.world_position, world_p);
     var detail_p = world_p;
     var detail_n = normalize(in.world_normal);
     @if((VERTEX_UVS_A)) detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
@@ -243,22 +242,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // Ray-marched heightfield sun shadow (the mesh gains planar UVs once
     // the horizon bake lands; before that this branch compiles out). The
     // terrain receives native CSM for mesh-accurate near and dynamic-object
-    // shadows, so the march fades in just outside the cascade range rather
+    // shadows, so the horizon takes over inside the last cascade rather
     // than multiplying a second terrain-shadow term over the CSM result.
-    @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
-    @if((VERTEX_UVS_A)) let march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
-    @if((VERTEX_UVS_A)) var sun_vis = 1.0;
-    @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
-        sun_vis = sun_visibility_resolved(
-            shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
-            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
-            mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-    }
-    @if((!(VERTEX_UVS_A))) let sun_vis = 1.0;
-    @if((!(VERTEX_UVS_A))) let march_blend = 0.0;
-
+    var sun_vis = 1.0;
+    @if((VERTEX_UVS_A)) sun_vis = terrain_horizon_visibility(in.world_position.xyz, mat.csm_far,
+        shadow_cache, shadow_cache_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
+        mat.sun_tan_radius, mat.horizon_march, mat.hf_size, mat.hf_res);
     terrain_set_sun_response(
-        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, 1.0);
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);

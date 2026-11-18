@@ -22,11 +22,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         mix(textureLoad(cache, lo, 0).r, textureLoad(cache, vec2(hi.x, lo.y), 0).r, f.x),
         mix(textureLoad(cache, vec2(lo.x, hi.y), 0).r, textureLoad(cache, hi, 0).r, f.x), f.y);
     let actual = sun_visibility_resolved(cache, cache_sampler, 1.0, cache, uv,
-        vec3(0.0, 1.0, 0.0), 0.0046, 48.0, vec2(100.0), 4.0);
+        vec3(0.0, 1.0, 0.0), 0.0046, vec4(48.0, 0.35, 1.18, 0.5), vec2(100.0), 4.0, 1.0);
     let night = sun_visibility_resolved(cache, cache_sampler, 1.0, cache, uv,
-        vec3(1.0, -0.00001, 0.0), 0.0046, 48.0, vec2(100.0), 4.0);
+        vec3(1.0, -0.01, 0.0), 0.0046, vec4(48.0, 0.35, 1.18, 0.5), vec2(100.0), 4.0, 1.0);
     let unbound = sun_visibility_resolved(cache, cache_sampler, 0.0, cache, uv,
-        vec3(1.0, -0.00001, 0.0), 0.0046, 48.0, vec2(100.0), 0.0);
+        vec3(1.0, -0.01, 0.0), 0.0046, vec4(48.0, 0.35, 1.18, 0.5), vec2(100.0), 0.0, 1.0);
     // Allow two 8-bit code values for hardware filtering precision.
     // Site and continuation both use this transfer: derived AO has a 0.4
     // floor, while an authored surface map retains its supplied visibility.
@@ -36,7 +36,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let zero_ao = terrain_surface_occlusion(surface, 0.0, 0.0);
     let valid = all(dimensions == vec2(4, 3)) && abs(actual - expected) < 2.0 / 255.0
         && night == 0.0 && unbound == 1.0
-        && horizon_shadow_blend(1.0, 3000.0, vec3(1.0, -0.00001, 0.0), 4.0) == 1.0
+        && horizon_shadow_blend(1.0, 3000.0) == 0.0
+        && horizon_shadow_blend(3000.0, 3000.0) == 1.0
+        && abs(horizon_shadow_blend(2850.0, 3000.0) - 0.5) < 0.00001
+        && abs(sun_visibility_resolved(cache, cache_sampler, 0.0, cache, uv,
+            vec3(1.0, 0.0, 0.0), 0.0046, vec4(48.0, 0.35, 1.18, 0.5), vec2(100.0), 4.0, 0.0) - 0.5) < 0.00001
+        && abs(sun_visibility_resolved(cache, cache_sampler, 0.0, cache, vec2(1.0), vec3(1.0, 0.0, 0.0),
+            0.0046, vec4(48.0, 0.35, 1.18, 0.5), vec2(100.0), 4.0, 1.0) - 0.5) < 0.00001
+        && sun_visibility_resolved(cache, cache_sampler, 0.0, cache, vec2(1.0), vec3(1.0, 0.0, 0.0),
+            0.0, vec4(48.0, 0.35, 1.18, 0.5), vec2(100.0), 4.0, 1.0) == 0.0
         && abs(derived_ao - 0.55) < 0.00001
         && abs(authored_ao - 0.25) < 0.00001 && zero_ao == 1.0
         && terrain_local_overlap_weight(vec2(0.5), 100.0, vec4(20.0), 0.5) == 1.0

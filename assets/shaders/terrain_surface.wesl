@@ -205,7 +205,7 @@ fn terrain_surface_occlusion(
 /// Configure lunar photometry and heightfield visibility for the selected Sun.
 /// Native PBR owns its one BRDF/shadow evaluation, exposure and accumulation;
 /// every unmatched directional light, transmission and indirect light keep
-/// their native response. Direction matching follows the engine's Sun owner.
+/// their native response.
 fn terrain_set_sun_response(
     input: ptr<function, pbr_types::PbrInput>,
     sun_dir_world: vec3<f32>,
@@ -218,16 +218,10 @@ fn terrain_set_sun_response(
     if (dot(sun_dir_world, sun_dir_world) < 0.25) {
         return;
     }
-    let sun_dir = normalize(sun_dir_world);
     let terrain_visibility = mix(1.0, clamp(visibility, 0.0, 1.0), clamp(blend, 0.0, 1.0));
     let response = clamp(lunar_factor, 0.0, 8.0) * terrain_visibility;
     (*input).directional_light_scale = response;
-    (*input).directional_light_scale_mask = 0u;
-    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
-        if (dot(normalize(lights.directional_lights[i].direction_to_light), sun_dir) >= 0.9995) {
-            (*input).directional_light_scale_mask |= 1u << i;
-        }
-    }
+    (*input).directional_light_scale_mask = lights.material_response_light_mask;
 }
 
 /// Decode the normal-map convention shared by the DEM baker and terrain

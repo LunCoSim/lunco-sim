@@ -19,9 +19,11 @@ fn on_start(me, ctx) {
         #{SetAttribute: #{edit_target: "@view@", path: "/World/Fill",
             name: "inputs:intensity", type_name: "float", value: "64000"}},
         #{SetAttribute: #{edit_target: "@view@", path: "/World/Fill",
+            name: "inputs:color", type_name: "color3f", value: "(0.25, 1, 0.25)"}},
+        #{SetAttribute: #{edit_target: "@view@", path: "/World/Fill",
             name: "inputs:angle", type_name: "float", value: "0"}},
         #{SetAttribute: #{edit_target: "@view@", path: "/World/Fill",
-            name: "xformOp:rotateXYZ", type_name: "double3", value: "(-40, -40, 0)"}},
+            name: "xformOp:rotateXYZ", type_name: "double3", value: "(-17.2, 28.65, 0)"}},
         #{SetAttribute: #{edit_target: "@view@", path: "/World/Fill",
             name: "xformOpOrder", type_name: "token[]", value: "[\"xformOp:rotateXYZ\"]"}},
     ]});

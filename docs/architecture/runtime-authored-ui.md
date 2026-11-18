@@ -1069,6 +1069,9 @@ an interactive surface or removing callbacks retires the menu entry, native node
 and tab stop. Authored `tag:ui_tab_index` is preserved when a control is enabled
 again; omitted button indices use the shared zero-order navigation group.
 
+Keyboard routing and the focus outline query the primary egui context directly.
+Windowless recordings can run the same surface systems without an egui camera.
+
 The workbench enables egui's maintained AccessKit integration; the GUI host
 also enables Bevy's Unix platform adapter (`accesskit_unix`). Its adapter owns
 the platform tree while egui is active; Bevy and egui trees are not merged by

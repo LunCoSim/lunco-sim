@@ -42,7 +42,7 @@ struct TerrainEngineInputs {
     terrain_geometry_on: f32,
     csm_far: f32,
     shadow_cache_on: f32,
-    horizon_march_steps: f32,
+    horizon_march: Vec4,
 }
 
 fn terrain_material_needs_engine_inputs(
@@ -55,9 +55,12 @@ fn terrain_material_needs_engine_inputs(
             .get_scalar("shadow_cache_on")
             .is_none_or(|value| (value - inputs.shadow_cache_on).abs() > 1.0e-3)
         || material.get_vec3("sun_dir").is_none_or(|value| {
-            // The local horizon is a shader branch, so crossing it must
-            // publish even when the angular change is visually subpixel.
-            (value.y <= 0.0) != (inputs.sun_dir.y <= 0.0)
+            // A small elevation change at sunrise resolves a visible fraction
+            // of the disc. Publish it at the native render precision.
+            let near_horizon = inputs.sun_dir.y.abs()
+                <= inputs.sun_tan_radius * inputs.sun_dir.xz().length() + SUN_DIR_EPSILON;
+            (near_horizon && value.y != inputs.sun_dir.y)
+                || (value.y <= 0.0) != (inputs.sun_dir.y <= 0.0)
                 || (value - inputs.sun_dir).length() > SUN_DIR_EPSILON
         })
         || material
@@ -83,8 +86,8 @@ fn terrain_material_needs_engine_inputs(
             .get_scalar("csm_far")
             .is_none_or(|value| (value - inputs.csm_far).abs() > 1.0e-3)
         || material
-            .get_scalar("horizon_march_steps")
-            .is_none_or(|value| (value - inputs.horizon_march_steps).abs() > 1.0e-3)
+            .get_vec4("horizon_march")
+            .is_none_or(|value| value != inputs.horizon_march)
 }
 
 fn write_terrain_engine_inputs(material: &mut ShaderMaterial, inputs: &TerrainEngineInputs) {
@@ -113,8 +116,8 @@ fn write_terrain_engine_inputs(material: &mut ShaderMaterial, inputs: &TerrainEn
         ("csm_far", ParamValue::F32(inputs.csm_far)),
         ("shadow_cache_on", ParamValue::F32(inputs.shadow_cache_on)),
         (
-            "horizon_march_steps",
-            ParamValue::F32(inputs.horizon_march_steps),
+            "horizon_march",
+            ParamValue::Vec4(inputs.horizon_march.to_array()),
         ),
     ]);
 }
@@ -138,6 +141,15 @@ pub(crate) fn build(app: &mut App) {
     // `EnvironmentPlugin` also inits this (it drives the bake); `init_resource` is a
     // no-op when it is already there. Doing it here too means adding the render
     // plugin without the environment plugin cannot fail system-param validation.
+    app.init_resource::<bevy::light::MaterialResponseLight>();
+    app.add_systems(
+        Last,
+        |sun: SunQuery, mut selected: ResMut<bevy::light::MaterialResponseLight>| {
+            selected.set_if_neq(bevy::light::MaterialResponseLight(
+                pick_sun(&sun).map(|(entity, ..)| entity),
+            ));
+        },
+    );
     app.init_resource::<HorizonShadowCacheConfig>();
     app.init_resource::<lunco_render::RenderingQualitySettings>();
     app.add_systems(
@@ -363,7 +375,7 @@ pub fn wire_terrain_materials(
         } else {
             0.0
         };
-        let horizon_march_steps = cfg.march_steps as f32;
+        let horizon_march = lunco_environment::horizon_march_parameters(cfg.march_steps);
 
         // Named engine uniforms consumed by the terrain shaders (regolith /
         // terrain_shadow declare these in their `Material` struct; the engine
@@ -384,7 +396,7 @@ pub fn wire_terrain_materials(
             terrain_geometry_on: f32::from(map.is_some()),
             csm_far,
             shadow_cache_on,
-            horizon_march_steps,
+            horizon_march,
         };
 
         // Compare before `get_mut`: this is a change-driven material feed even

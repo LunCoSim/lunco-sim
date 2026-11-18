@@ -489,8 +489,9 @@ Press activation uses one exact-entity admission owner for pointer, keyboard,
 Controls menu and native assistive actions. Reparenting outside a live interactive
 surface or removing callbacks retires accessibility/menu/tab membership. Labels
 track current hierarchy/text/tags, and `tag:ui_tab_index` survives disable/enable.
-Use the generic callback-lease test plus the Linux native accessibility driver
-when changing this boundary.
+Use the generic callback-lease test and the Linux native accessibility driver
+when changing this boundary. For focus presentation, also run a windowless
+recording to check the host with no primary egui context.
 
 `interactive: true` enables input ownership for visible HUI controls that carry
 an authored `on_press` action. The runtime adds `Pickable` to those visible

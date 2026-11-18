@@ -71,7 +71,7 @@ struct Material {
     terrain_geometry_on: f32,
     csm_far:           f32,
     shadow_cache_on:   f32,
-    horizon_march_steps: f32,
+    horizon_march: vec4<f32>,
     map_texel_size_m:  f32,
     derived_surface_on: f32,
     derived_normal_on:  f32,

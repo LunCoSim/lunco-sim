@@ -350,8 +350,10 @@ native front-surface BRDF. No material policy or scene identity enters Bevy.
 
 Application shaders configure the response through the shared
 `terrain_set_sun_response` before calling `apply_pbr_lighting`. The material
-owner bounds photometry and visibility and matches the engine-selected Sun
-direction, including all matching native indices. Cascade-debug rendering
+owner bounds photometry and visibility. The scene Sun query publishes its identity
+in `MaterialResponseLight`. During per-view light packing the renderer sets
+`material_response_light_mask` for that entity after render-layer filtering and
+the native light limit. Two coincident directional lights retain distinct responses. Cascade-debug rendering
 retains native visualization. The response is fragment-local numerical data;
 it has no scene cache or teardown state. The root workspace manifest selects
 the maintained native source required by these shader consumers.
@@ -585,10 +587,12 @@ would let a look reflect like diamond and refract like glass, and would need to 
 ### Shadow filtering ownership
 
 `lunco-render-bevy` owns the backend choice for sampling the cascaded shadow maps.
+Planar tent filtering uses four hardware depth comparisons for a phase-correct
+3×3 kernel and uses hardware comparison on cubemaps. Gaussian uses nine
+comparisons on planar maps.
 Every non-fast `Camera3d`, including one projected asynchronously from USD, receives
-the selected Graphics shadow filter unless its owner already supplied one. The
-`Balanced` and `High` use Bevy's Gaussian filter for smoother map edges; `Low` uses
-`Hardware2x2` to reduce sampling cost. Graphics edits update only filters that
+the selected Graphics shadow filter unless its owner already supplied one.
+`High` uses the 3×3 tent, `Balanced` uses Gaussian and `Low` uses the hardware 2×2 filter. Graphics edits update only filters that
 Graphics supplied. Temporal filtering is not offered because scene cameras do not use
 temporal anti-aliasing, and PCSS remains behind Bevy's experimental feature. The
 physical `UsdLuxDistantLight.inputs:angle` remains owned by USD and the horizon-shadow
@@ -614,7 +618,7 @@ settings table or default choice.
 | --- | --- | --- | --- | --- |
 | Low | 512 px · 1 · 20 m · 600 m | 512 px · 1 / 2 / 2 | Hardware2x2 | 15 / 32 MiB |
 | Balanced | 2048 px · 3 · 40 m · 1500 m | 1024 px · 1 / 4 / 4 | Gaussian | 208 / 256 MiB |
-| High | 4096 px · 4 · 30 m · 3000 m | 2048 px · 2 / 8 / 8 | Gaussian | 1792 / 2048 MiB |
+| High | 4096 px · 4 · 30 m · 3000 m | 2048 px · 2 / 8 / 8 | Tent 3×3 | 1792 / 2048 MiB |
 
 Estimates cover the configured maximum caster counts and Depth32Float map textures;
 spot maps use the directional map size. The ceiling is a logical shadow-allocation
@@ -811,12 +815,15 @@ After BigSpace propagation, the camera binder presents the nearby grid cell
 centre, its absolute grid coordinates and its render orientation to Bevy's
 `DirectionalShadowReference`.
 
-The native cascade fitter transports the light-plane axes with the Sun direction
-in that rigid frame. When the view crosses a cell boundary, it projects the
-cell displacement onto those axes and carries the fractional phase into each
-cascade. Fitting uses patch-relative coordinates and returns native cascade
-matrices to culling, receiver cropping, shadow rendering and lighting. The
-atlas size, pass count and physical clock come from their existing owners.
+The native fitter transports the light-plane axes with the Sun in the receiving
+frame. The first active view establishes a nearby physical datum for that light
+and frame. Simultaneously admitted views use stable entity order. Each view
+projects its cell displacement from the shared datum in double precision and
+reduces the result modulo its own cascade pitch. Closing or reopening a view
+preserves the datum while its light and receiving frame live. The fitter
+reserves space for the centre snap, effective normal offset and filter support
+in XY, and for normal and depth bias in Z. Culling, cropping and lighting use
+the published projection.
 The light crate's reference-grid test exercises render translation, rotation,
 patch handoff, frustum coverage and a Sun crossing the orientation pole.
 
@@ -828,7 +835,7 @@ the unchanged native cascade, then applies an outward scissor rectangle around
 all possible receiver reads. Casters, projection matrices, texel density, depth
 bias, cascade overlap, material shading and shadow filtering remain native.
 The error envelope includes f32 matrix cancellation, normal/depth bias and the
-entire Hardware2x2 or Gaussian footprint. Perspective coverage includes the
+native fixed filter footprint, including the four-comparison tent. Perspective coverage includes the
 apex; orthographic coverage starts at the actual near plane.
 
 A native StandardMaterial is eligible when unlit or without diffuse

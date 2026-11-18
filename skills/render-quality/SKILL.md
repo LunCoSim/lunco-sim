@@ -43,6 +43,12 @@ For apparent motion of stationary geometry, freeze both the physical pose and
 celestial epoch, then vary the render origin and compare the fractional shadow
 coordinates of the same physical points. Repeat at advancing celestial time.
 Compare GPU and uninstrumented frame times at the same quality and camera pose.
+For sharpness, capture the same ground edge with the Sun shadow enabled,
+disabled and restored. Report edge width and scalloping separately. Include
+a second camera opened after a cell crossing, an off-axis horizon handoff
+and a scoped fill beside the Sun. `test_directional_light_response.py`
+checks the fill’s independent native response. The `shadow_cache_sampling`
+graphics gate exercises the horizon handoff and finite-disc boundary.
 See [directional shadow reference frames](../../docs/architecture/render-decoupling.md#directional-shadow-reference-frames).
 For instrument shade, run the `terrain_solar_visibility` production scene gate.
 It checks available electrical power for DEM shade and a moving compound blocker.
@@ -91,7 +97,7 @@ GPU acceptance still require the rendered fixture and a clean process log.
    For regular grain ripples, verify that DEM UVs and their derivatives use
    `terrain_half_extent`, independently of the shadow heightfield's `hf_size`.
    Compare settled frames with procedural relief and native shadow reception
-   isolated separately. High uses 4096-pixel directional maps, Bevy’s Gaussian comparison filter,
+   isolated separately. High uses 4096-pixel directional maps, the four-comparison 3×3 tent filter,
    a 0.005 m depth bias and a 2.0-texel normal bias.
    The normal offset must cover the selected filter footprint; test grazing
    sunlight for acne and wheel/ground separation before changing it.

@@ -308,7 +308,7 @@ read the same list.
 | `display_color` | the prim's composed `primvars:displayColor` **element 0** | ✅ |
 | `sun_vis` | horizon ray-march visibility | ✅ |
 | `sun_dir`, `sun_dir_world`, `sun_tan_radius` | sun direction / angular radius | ❌ |
-| `hf_size`, `hf_res`, `csm_far`, `shadow_cache_on` | terrain heightfield + shadow state | ❌ |
+| `hf_size`, `hf_res`, `csm_far`, `shadow_cache_on`, `horizon_march` | terrain heightfield, shadow state and march parameters | ❌ |
 
 **The colour contract: author `primvars:displayColor`, the shader consumes it.**
 

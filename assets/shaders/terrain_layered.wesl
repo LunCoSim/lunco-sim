@@ -8,7 +8,7 @@ import bevy_pbr::render::{
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 };
-import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+import super::horizon_march::terrain_horizon_visibility;
 import super::lunar_brdf::regolith_factor;
 import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_local_overlap_weight, terrain_map_weights, terrain_authored_normal_weight, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
 
@@ -107,7 +107,7 @@ import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter
 //!@engine  hf_res
 //!@engine  csm_far
 //!@engine  shadow_cache_on
-//!@engine  horizon_march_steps
+//!@engine  horizon_march
 //!@default map_texel_size_m 1.0
 //!@default derived_surface_on 0
 //!@default derived_normal_on  0
@@ -183,7 +183,7 @@ struct Material {
     terrain_geometry_on: f32, // engine-filled: measured DEM owns relief
     csm_far:           f32,  // engine-filled: native terrain shadow range; 0 = heightfield everywhere
     shadow_cache_on:   f32,  // engine-filled: 1 = sample pre-baked shadow cache, 0 = ray-march
-    horizon_march_steps: f32, // engine-filled: configured live ray-march iterations
+    horizon_march: vec4<f32>, // engine-filled: configured live ray-march iterations
     map_texel_size_m:  f32,  // engine-filled: level-zero map spacing (m)
     derived_surface_on: f32, // engine-filled: derived surface is active
     derived_normal_on:  f32, // engine-filled: derived normal is active
@@ -335,7 +335,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var site_material_weight = 0.0;
 
     let world_p = in.world_position.xyz;
-    let dist = distance(view.world_position, world_p);
     var detail_p = world_p;
     var detail_n = normalize(in.world_normal);
     @if((VERTEX_UVS_A)) detail_p = terrain_detail_position(in.uv, mat.terrain_half_extent);
@@ -569,20 +568,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.material.reflectance = vec3(0.0);
 
     var sun_vis = 1.0;
-    var march_blend = 0.0;
-
-    @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
-    @if((VERTEX_UVS_A)) march_blend = horizon_shadow_blend(dist, csm_far, mat.sun_dir, mat.hf_res);
-    @if((VERTEX_UVS_A)) march_blend *= local_map_weight;
-    @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
-        sun_vis = sun_visibility_resolved(
-            shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
-            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
-            mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-    }
-
+    @if((VERTEX_UVS_A)) sun_vis = terrain_horizon_visibility(in.world_position.xyz, mat.csm_far,
+        shadow_cache, shadow_cache_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
+        mat.sun_tan_radius, mat.horizon_march, mat.hf_size, mat.hf_res);
     terrain_set_sun_response(
-        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, local_map_weight);
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     // ── Overlay plane (UNLIT, doc 18 §4): the mineral/classification drape

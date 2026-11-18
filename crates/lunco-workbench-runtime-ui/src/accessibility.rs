@@ -57,14 +57,14 @@ fn activate_control(
 
 fn key_activate(
     mut event: On<FocusedInput<KeyboardInput>>,
-    mut contexts: bevy_egui::EguiContexts,
+    mut contexts: Query<&mut bevy_egui::EguiContext, With<bevy_egui::PrimaryEguiContext>>,
     controls: Query<(), With<RuntimeUiPressCallbacks>>,
     mut commands: Commands,
 ) {
     let input = &event.input;
     if contexts
-        .ctx_mut()
-        .is_ok_and(|context| context.egui_wants_keyboard_input())
+        .single_mut()
+        .is_ok_and(|mut context| context.get_mut().egui_wants_keyboard_input())
     {
         return;
     }
@@ -263,7 +263,7 @@ fn sync_nodes(
 }
 
 fn show_focus(
-    mut contexts: bevy_egui::EguiContexts,
+    mut contexts: Query<&mut bevy_egui::EguiContext, With<bevy_egui::PrimaryEguiContext>>,
     focus: Res<InputFocus>,
     visible: Res<InputFocusVisible>,
     controls: Query<
@@ -287,9 +287,10 @@ fn show_focus(
     let Some(rect) = runtime_ui_input_rect(node, transform) else {
         return;
     };
-    let Ok(ctx) = contexts.ctx_mut() else {
+    let Ok(mut context) = contexts.single_mut() else {
         return;
     };
+    let ctx = context.get_mut();
     if ctx.egui_wants_keyboard_input() {
         return;
     }

@@ -273,8 +273,8 @@ impl EngineParams {
                           so the shader samples it instead of marching.",
                 },
                 EngineParam {
-                    name: "horizon_march_steps",
-                    ty: ParamType::F32,
+                    name: "horizon_march",
+                    ty: ParamType::Vec4,
                     source: Runtime,
                     prop_fillable: false,
                     doc: "Configured live horizon-shadow ray-march iteration count.",

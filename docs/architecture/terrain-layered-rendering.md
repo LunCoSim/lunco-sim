@@ -142,8 +142,8 @@ geometry.
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
 `hf_size` describes the independent shadow heightfield and must not choose
-material scale. The High profile reconstructs a smooth shadow map edge using Bevy’s Gaussian
-PCF filter, with a 2.0-texel normal bias and 0.005 m depth bias. Verify thin
+material scale. The High profile reconstructs a smooth shadow map edge using the four-comparison
+3×3 tent filter, with a 2.0-texel normal bias and 0.005 m depth bias. Verify thin
 contacts and terrain self-shadowing under grazing light when tuning either bias.
 
 ### USD-authored DEM-to-globe continuation
@@ -481,8 +481,10 @@ Equipment optical proxies are explicitly selected with standard
 An authored shape selects its cooked Avian colliders through the physics source
 relationship. Selecting an entire rigid body selects its attached colliders.
 Each native shape appears once per probe and uses its physical pose. A probe
-can include a standard USD collection published by a referenced assembly. The physics owner supplies a reusable f64 Parry BVH; neither
-camera LOD nor streamed DEM colliders select physical terrain visibility.
+can include a standard USD collection published by a referenced assembly. The fixed-step sampler retains admitted membership across ticks. Changed wiring,
+authored membership, USD stage identity and collider eligibility invalidate it.
+The physics owner rebuilds its f64 Parry BVH on membership changes and refits
+changed leaves on pose or shape changes. Scene teardown releases both caches.
 Omitting the collection selects no equipment proxies. Authors must select
 geometry that represents their optical occluders; collision geometry does not
 imply opacity. Each sampling ray tests the union of terrain and its selected
@@ -503,8 +505,19 @@ fault. `RequiredOutputSamples` prevents the generic exchange from substituting
 zero, and the Modelica worker does not dispatch another step after an earlier
 fault in the same fixed transaction. Physical queries cover admitted finite DEMs
 and explicitly selected proxies; they do not establish whole-body eclipse or
-occlusion beyond that geometry. The terrain shader's below-horizon check remains
-necessary for its finite heightfield domain; it is not a global Sun-hide rule.
+occlusion beyond that geometry. The site renderer bounds the visible solar disc against its horizontal plane
+and the sampled terrain skyline. The globe supplies a curvature-aware skyline
+to the same shader disc-area function. Clear sunrise on a level site exposes
+half a disc when the solar centre crosses the horizontal. The R8 cache stores
+terrain transmission conditional on the above-horizon area at bake time. Each
+frame applies the current above-horizon fraction, including between bakes. The site cache and
+live sampler receive identical physical lift, step growth and step advance
+from the environment owner. Native static terrain hands over to the heightfield
+in the final tenth of the selected light’s per-view forward depth range.
+Cached streamed terrain uses its heightfield at every distance. A globe
+fragment entirely covered by site continuation skips its displacement-normal
+and solar-skyline samples. The globe compares terrain slopes with the rise and
+run of each solar limb. Only a partly visible disc needs angular conversion.
 
 Production gates: `terrain_solar_visibility` exercises raised, partially shaded,
 moving-proxy, selected and unselected compound siblings, fully terrain-shaded and clear panel states through Modelica;
@@ -515,8 +528,8 @@ before loading `terrain_solar_visibility_invalid`, then requires the terminal
 
 The canonical fragment applies lunar photometry and heightfield visibility
 only to the selected Sun's direct contribution, using Bevy's directional BRDF
-and native shadow for that term. The shared `terrain_set_sun_response` selects
-the native light indices using the engine-supplied Sun direction and configures
+and native shadow for that term. The shared `terrain_set_sun_response` reads the
+selected Sun’s per-view light mask and configures
 `PbrInput.directional_light_scale_mask` and `directional_light_scale` before
 lighting. Native PBR evaluates, shadows and accumulates each contribution once;
 the material does not multiply `base_color` or the completed PBR result.

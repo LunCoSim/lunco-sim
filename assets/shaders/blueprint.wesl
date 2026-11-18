@@ -7,6 +7,7 @@ import bevy_pbr::render::{
 @if((!PREPASS_PIPELINE))
 import super::pbr_lit::lit_n_occluded_sun_response;
 import super::lunar_brdf::regolith_factor;
+import super::solar_disc::disc_above_skyline;
 import super::terrain_surface::{terrain_continuation_gradients, terrain_continuation_weight, terrain_surface_occlusion};
 import bevy_pbr::render::{pbr_functions, mesh_view_bindings::view};
 @if((PREPASS_PIPELINE))
@@ -256,13 +257,13 @@ var displacement_smp: sampler;
     var weight = 1.0;
     @if((VERTEX_UVS_A)) weight -= mat.site_base_color.a * terrain_continuation_weight(
         vertex.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
+    if (weight <= 0.0) { return vertex.position; }
     let d = normalize(vertex.globe_direction);
     return vertex.position + d * (spherical_height(d) - mat.displacement_datum_m) * weight;
 }
 
 // Great-circle samples avoid the polar longitude singularity.
-@if((LUNCO_GLOBE_DIRECTION)) fn spherical_slopes(d: vec3<f32>, angle: f32) -> vec2<f32> {
-    let basis = spherical_basis(d);
+@if((LUNCO_GLOBE_DIRECTION)) fn spherical_slopes(d: vec3<f32>, angle: f32, basis: mat2x3<f32>) -> vec2<f32> {
     let ca = cos(angle); let sa = sin(angle);
     let east = spherical_height(normalize(d*ca+basis[0]*sa)) - spherical_height(normalize(d*ca-basis[0]*sa));
     let north = spherical_height(normalize(d*ca+basis[1]*sa)) - spherical_height(normalize(d*ca-basis[1]*sa));
@@ -271,13 +272,14 @@ var displacement_smp: sampler;
 
 @if((LUNCO_GLOBE_DIRECTION)) fn displaced_globe_normal(vertex: GlobeVertex) -> vec3<f32> {
     if (mat.displacement_scale_m <= 0.0) { return vertex.normal; }
-    let d = normalize(vertex.globe_direction);
-    let basis = spherical_basis(d);
-    let angle = 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
-    let slopes = spherical_slopes(d, angle);
     var weight = 1.0;
     @if((VERTEX_UVS_A)) weight -= mat.site_base_color.a * terrain_continuation_weight(
         vertex.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
+    if (weight <= 0.0) { return vertex.normal; }
+    let d = normalize(vertex.globe_direction);
+    let basis = spherical_basis(d);
+    let angle = 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
+    let slopes = spherical_slopes(d, angle, basis);
     return normalize(mix(vertex.normal,normalize(d-basis[0]*slopes.x-basis[1]*slopes.y),weight));
 }
 
@@ -286,43 +288,49 @@ var displacement_smp: sampler;
     let radius = mat.displacement_radius_m;
     let height = spherical_height(d) + 1.0;
     let min_radius = radius + mat.displacement_offset_m;
-    let rise_bound = max(0.0, mat.displacement_offset_m + mat.displacement_scale_m - height);
+    let outer_height = max(height, mat.displacement_offset_m + mat.displacement_scale_m);
+    let outer_radius = radius + outer_height;
+    let rise_bound = outer_height - height;
     let sin_elevation = clamp(dot(d, sun), -1.0, 1.0);
     let tangent = sun - d * sin_elevation;
     let horizontal = length(tangent);
     if (horizontal < 1e-6) { return select(0.0, 1.0, sin_elevation > 0.0); }
     let azimuth = tangent / horizontal;
-    let elevation = atan2(sin_elevation, horizontal);
-    let solar_radius = atan(mat.sun_tan_radius);
-    // Angular bounds avoid trigonometry inside the heightfield loop.
-    let lower = tan(max(-1.570795, elevation - solar_radius));
-    let upper = tan(min(1.570795, elevation + solar_radius));
+    // Rotate the ray to each solar limb. Compare rise/run directly so that
+    // only a partly visible disc needs angles. A limb beyond vertical has
+    // zero run and bounds every finite skyline on that side.
+    let offset = horizontal * mat.sun_tan_radius;
+    let limb_rise = vec2(sin_elevation - offset, sin_elevation + offset);
+    let turn = sin_elevation * mat.sun_tan_radius;
+    let limb_run = max(vec2(0.0), vec2(horizontal + turn, horizontal - turn));
+    let relative_rise_bound = rise_bound / outer_radius;
     // Even outside the sampled terrain, the solid inner sphere blocks sunlight.
     let clearance = max(0.0, height - mat.displacement_offset_m);
     var skyline = -sqrt(clearance * (2.0 * min_radius + clearance)) / min_radius;
     let posting = radius * 3.141592653589793 / f32(textureDimensions(displacement_tex).y);
     var distance = posting * 0.5;
     for (var i=0; i<64; i+=1) {
-        if (skyline >= upper) { return 0.0; }
+        if (skyline * limb_run.y >= limb_rise.y) { return 0.0; }
         let u = distance / radius;
         let cosine = inverseSqrt(1.0 + u*u);
         let sine = u * cosine;
-        let remaining_bound = rise_bound / (min_radius * sine);
-        if (skyline <= lower && remaining_bound <= lower) { return 1.0; }
-        if (remaining_bound <= skyline) { break; }
+        // The outer sphere bounds every remaining height sample. Its sightline
+        // slope decreases with arc distance for a receiver on or inside it.
+        let curvature_drop = sine * sine / (1.0 + cosine);
+        let remaining_rise = relative_rise_bound - curvature_drop;
+        if (skyline * limb_run.x <= limb_rise.x && remaining_rise * limb_run.x <= limb_rise.x * sine) { return 1.0; }
+        if (remaining_rise <= skyline * sine) { break; }
         let blocker = spherical_height((d + u * azimuth) * cosine);
         let r = radius + blocker;
         // cos(angle)-1 = -sin(angle)^2/(1+cos(angle)). Retain metre-scale
         // relief without subtracting two nearly equal planetary radii.
-        let relative_height = (blocker - height) - r * sine*sine / (1.0 + cosine);
+        let relative_height = (blocker - height) - r * curvature_drop;
         skyline = max(skyline, relative_height / (r * sine));
         distance += posting * (1.0 + 0.06*f32(i));
     }
-    if (skyline >= upper) { return 0.0; }
-    if (skyline <= lower) { return 1.0; }
-    // Fraction of a uniform solar disc above the locally straight skyline.
-    let x = clamp((elevation - atan(skyline)) / solar_radius, -1.0, 1.0);
-    return (acos(-x) + x * sqrt(max(0.0, 1.0 - x*x))) / 3.141592653589793;
+    if (skyline * limb_run.y >= limb_rise.y) { return 0.0; }
+    if (skyline * limb_run.x <= limb_rise.x) { return 1.0; }
+    return disc_above_skyline(atan2(sin_elevation, horizontal), atan(mat.sun_tan_radius), atan(skyline));
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(12)
@@ -490,16 +498,18 @@ fn fragment(in: GlobeVertexOutput, @builtin(front_facing) is_front: bool) -> @lo
         let radial = normalize(cross(east,north));
         let angle = max(3.141592653589793 / f32(textureDimensions(displacement_tex).y),
             max(length(dpdx(d)),length(dpdy(d))));
-        let slopes = spherical_slopes(d, angle);
         var weight = 1.0;
         @if((VERTEX_UVS_A)) weight -= mat.site_base_color.a * terrain_continuation_weight(
             in.uv, mat.terrain_half_extent, mat.site_blend_widths_m);
-        n = normalize(mix(n, normalize(radial-east*slopes.x-north*slopes.y), weight));
-        if (dot(mat.sun_dir_world,mat.sun_dir_world)>0.25) {
-            let sun = normalize(mat.sun_dir_world);
+        if (weight > 0.0) {
             let basis = spherical_basis(d);
-            let sun_body = d*dot(sun,radial)+basis[0]*dot(sun,east)+basis[1]*dot(sun,north);
-            visibility = mix(1.0,spherical_sun_visibility(d,sun_body),weight);
+            let slopes = spherical_slopes(d, angle, basis);
+            n = normalize(mix(n, normalize(radial-east*slopes.x-north*slopes.y), weight));
+            if (dot(mat.sun_dir_world,mat.sun_dir_world)>0.25) {
+                let sun = normalize(mat.sun_dir_world);
+                let sun_body = d*dot(sun,radial)+basis[0]*dot(sun,east)+basis[1]*dot(sun,north);
+                visibility = mix(1.0,spherical_sun_visibility(d,sun_body),weight);
+            }
         }
     }
     return shade(globe_pbr_input(in), is_front, in.globe_direction, n, visibility);

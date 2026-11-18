@@ -2,7 +2,25 @@
 
 FLIP’s cast shadow needs a sampling grid fixed to its lunar site. The camera determines which part of that grid a cascade covers. BigSpace determines which coordinates reach the GPU. The physical Sun determines the projection direction. Each can change independently. A change in coordinate representation alone should leave shadow visibility at a physical point invariant.
 
-The baseline uses LunCoSim `3474af2f1`, BigSpace `581295f9` and Bevy `8671dfe7`. The FLIP measurements use the windowed release executable with the High preset. The native receiver-frame implementation is published in [LunCoSim/bevy at 6fee2ce9](https://github.com/LunCoSim/bevy/commit/6fee2ce9e9361377bb2e6a2138c70dfb7f9bb1cf). The runtime integration contract lives in [render decoupling](../architecture/render-decoupling.md#directional-shadow-reference-frames).
+The baseline uses LunCoSim `3474af2f1`, BigSpace `581295f9` and Bevy `8671dfe7`. The FLIP measurements use the windowed release executable with the High preset. The first receiver-frame comparison used Bevy `6fee2ce9`. The current implementation shares a physical grid datum across views, reserves room for the selected filter and receiver bias, and identifies the scene Sun after per-view light packing. [Published Bevy revision](https://github.com/LunCoSim/bevy/commit/daed5647147acc49df25d827aa7b1d4fb7e2e122) · [Runtime contract](../architecture/render-decoupling.md#directional-shadow-reference-frames)
+
+
+## Filter cost
+
+A native Vulkan timestamp test ran the production comparison-filter functions on an RTX 5060 Laptop GPU over 1600 × 1000 pixels with a 4096-pixel depth texture. Median filter-pass times were 0.0933 ms for Gaussian and 0.0538 ms for the phase-correct 3×3 tent. Four bilinear comparisons reconstruct the tent, including its fractional texel weights. A CPU check against direct convolution over 10,000 random silhouettes had a maximum absolute difference below 3.4 × 10⁻¹⁶. These timings cover the sampling pass alone. [Separable comparison filtering](https://www.ludicon.com/castano/blog/articles/shadow-mapping-summary-part-1/)
+
+The same FLIP edge at 1600 × 1000 measured 11.43 pixels wide with Gaussian and 9.13–9.29 with the tent across two parked runs. The measurement uses the median 10–90% transition across 35 columns, normalized to a shadow-disabled capture. Edge ripple about a fitted straight line measured 0.70 and 0.68 pixels RMS, respectively. Both filters reproduced the frozen crop exactly. With the tent and celestial time running, zero of 3,249 parked crop pixels changed by more than 10 levels over three seconds. On the final release, a moving-camera test measured 0.0133 texel of maximum grid-phase error across 54.93 m of rover travel and 1,800.42 m of render-coordinate displacement.
+
+Two warmed 1600 × 1000 X11 sessions also compared the previous local-main release (`8aa772d8c`) with the new High preset on the same GPU. Only one session ran at a time. Five-second blocks alternated execution order. Concurrent compilation and terrain preparation affected the full-frame timings.
+
+| View | Paired blocks | Median paired change in frame time | Range across pairs |
+|---|---:|---:|---:|
+| Parked FLIP | 3 | −9.1% | −19.8% to +3.7% |
+| FLIP driving | 4 | +7.5% | −2.2% to +295.5% |
+| Moon orbit | 5 | −1.1% | −33.6% to +15.6% |
+| Earth orbit | 4 | +13.7% | −27.4% to +49.7% |
+
+The moving rover traversed different distances during individual wall-clock blocks. These runs establish full-frame variability and do not isolate the cost of shadows. The Vulkan timestamps above isolate the filter. Orbital screenshots use the active avatar camera after selecting the target. Its distances from the Moon and Earth centres were 5,212,200 m and 19,113,000 m. The offscreen render gate produced identical full-map and cropped pixels. The physical FLIP panel delivered 49.6 W in the clear, 0 W behind the Griffin bus, and 52.5 W after clearing it.
 
 ## Production checks on FLIP
 

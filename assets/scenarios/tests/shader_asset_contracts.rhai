@@ -229,8 +229,8 @@ fn on_tick(me, ctx) {
             path + " failed standalone WESL schema validation"));
         failures.push(t_true(has_param(report, "shadow_cache_on", "F32"),
             path + " is missing shadow_cache_on"));
-        failures.push(t_true(has_param(report, "horizon_march_steps", "F32"),
-            path + " is missing horizon_march_steps"));
+        failures.push(t_true(has_param(report, "horizon_march", "Vec4"),
+            path + " is missing horizon_march"));
     }
     for failure in shader_interface_policy_checks() { failures.push(failure); }
 

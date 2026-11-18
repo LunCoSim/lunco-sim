@@ -103,7 +103,7 @@ def main():
         if not capture("night"):
             raise RuntimeError("night GPU control failed")
         execute(session, "SetEnvironmentLight", sun_pitch=-.00001)
-        wait_cache(lambda cache: 0 < cache["sampled_sun_local"][1] < .0001 and cache["uploads"])
+        wait_cache(lambda cache: abs(cache["sampled_sun_local"][1]) < .0001 and cache["uploads"])
         capture("tiny-sunrise")
         doc = execute(session, "QueryUsdPrim", path="/World/Sun")["doc_id"]
         for name, angle, sky_red in [("positive-angle", "0.000001", True), ("zero-angle", "0", False)]:

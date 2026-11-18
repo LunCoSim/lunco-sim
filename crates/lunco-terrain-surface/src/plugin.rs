@@ -53,11 +53,7 @@ impl Plugin for TerrainSurfacePlugin {
         crate::terrain::register(app);
         crate::collider_ring::register_all_commands(app);
         app.init_resource::<crate::SurfaceOcclusionBudget>();
-        app.init_resource::<crate::solar_visibility::VisibilityMemo>();
-        app.add_systems(
-            lunco_core::SceneTeardown,
-            crate::solar_visibility::clear_solar_visibility,
-        );
+        crate::solar_visibility::register_solar_membership(app);
         app.add_systems(
             FixedUpdate,
             crate::solar_visibility::publish_sun_visibility

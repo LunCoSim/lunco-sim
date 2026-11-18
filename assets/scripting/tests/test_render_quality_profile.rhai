@@ -9,7 +9,7 @@ checks.push(t_true(high_profile.ok == true
         && high_profile.value.shadow_budget_bytes == 2 * 1024 * 1024 * 1024
         && high_profile.value.shadow_first_cascade_far_bound == 30.0
         && high_profile.value.shadow_maximum_distance == 3000.0
-        && high_profile.value.shadow_filtering_quality == "gaussian"
+        && high_profile.value.shadow_filtering_quality == "tent3x3"
         && high_profile.value.shadow_normal_bias == 2.0
         && high_profile.value.terrain_lod_max_depth == 9
         && high_profile.value.terrain_lod_tile_budget == 256

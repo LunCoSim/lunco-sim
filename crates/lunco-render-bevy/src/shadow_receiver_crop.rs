@@ -217,11 +217,9 @@ fn project_receiver_bounds(
     ) in &mut cameras
     {
         let mut status = DirectionalShadowRaster::default();
-        let radius = match filtering.copied().unwrap_or_default() {
-            ShadowFilteringMethod::Hardware2x2 => Some(1.0),
-            ShadowFilteringMethod::Gaussian => Some(3.0),
-            ShadowFilteringMethod::Temporal => None,
-        };
+        let radius =
+            bevy::light::directional_shadow_filter_radius(filtering.copied().unwrap_or_default())
+                .map(|r| r as f32);
         let near = match projection {
             // Include the apex, even when the cascade configuration starts
             // farther away than the actual camera near plane.
@@ -367,7 +365,7 @@ fn receiver_rect(
         lo = lo.min(uv - error);
         hi = hi.max(uv + error);
     }
-    let bias_world = f64::from(light.shadow_normal_bias.abs()) * f64::from(cascade.texel_size)
+    let bias_world = f64::from(light.receiver_normal_bias().abs()) * f64::from(cascade.texel_size)
         + f64::from(light.shadow_depth_bias.abs());
     let scale = DVec2::new(
         matrix.row(0).truncate().as_dvec3().length(),

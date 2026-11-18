@@ -389,6 +389,9 @@ fn bevy_shadow_filter(
         lunco_render::ShadowFilteringQuality::Hardware2x2 => {
             bevy::light::ShadowFilteringMethod::Hardware2x2
         }
+        lunco_render::ShadowFilteringQuality::Tent3x3 => {
+            bevy::light::ShadowFilteringMethod::Tent3x3
+        }
         lunco_render::ShadowFilteringQuality::Gaussian => {
             bevy::light::ShadowFilteringMethod::Gaussian
         }

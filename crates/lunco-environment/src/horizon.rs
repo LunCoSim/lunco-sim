@@ -39,7 +39,7 @@
 //!
 //!    The terrain stays a **CSM caster**: within the sun's cascade range the
 //!    shadow map renders the actual mesh, giving mesh-accurate self-shadow
-//!    and contact shadows. The march fades in just outside the cascade range
+//!    and contact shadows. The horizon takes over within the final tenth of forward cascade depth
 //!    (`csm_far` carries the CSM far bound), so its heightfield-texel-quantized
 //!    edges never show up close and near pixels skip the march entirely.
 //! 2b. **Shadow cache** (sun-driven, off-thread on native): the per-pixel
@@ -151,87 +151,31 @@ impl HeightField {
         top + (bot - top) * fy
     }
 
-    /// Sun visibility 0..1 at a terrain-local XZ position — the CPU mirror
-    /// of `horizon_march.wesl::sun_visibility` (keep the two in sync!).
-    /// `None` outside the heightfield bounds.
-    pub fn sun_visibility(
-        &self,
-        local_xz: Vec2,
-        sun_local: Vec3,
-        tan_sun_r: f32,
-        march_steps: usize,
-    ) -> Option<f32> {
-        if march_steps == 0 {
-            return None;
-        }
+    fn sun_visibility(&self, local_xz: Vec2, sun: &HorizonSun, march: Vec4) -> Option<f32> {
         let p0 = local_xz - self.min;
-        if p0.x < 0.0 || p0.y < 0.0 || p0.x > self.size.x || p0.y > self.size.y {
+        if p0.min_element() < 0.0 || p0.x > self.size.x || p0.y > self.size.y {
             return None;
         }
-        if sun_local.y <= 0.0 {
-            return Some(0.0);
+        if sun.upper <= 0.0 || sun.horizontal == Vec2::ZERO {
+            return Some(sun.visible_above(0.0));
         }
-        let horiz = Vec2::new(sun_local.x, sun_local.z);
-        let hl = horiz.length();
-        if hl < 1e-4 {
-            return Some(1.0);
-        }
-        let dir = horiz / hl;
-        let slope = sun_local.y / hl;
         let to_grid = (self.resolution - 1) as f32 / self.size;
-        let h0 = self.height_at(p0 * to_grid) + 0.35;
+        let receiver = self.height_at(p0 * to_grid) + march.y;
         let texel = self.size.min_element() / (self.resolution - 1) as f32;
-        let max_t = self.size.length() * 1.42;
-        let mut vis: f32 = 1.0;
-        let mut t = texel;
-        for _ in 0..march_steps {
-            let p = p0 + dir * t;
-            if p.x < 0.0 || p.y < 0.0 || p.x > self.size.x || p.y > self.size.y {
+        let mut distance = texel;
+        let mut skyline = 0.0_f32;
+        for _ in 0..march.x as usize {
+            let p = p0 + sun.horizontal * distance;
+            if p.min_element() < 0.0 || p.x > self.size.x || p.y > self.size.y {
                 break;
             }
-            let h = self.height_at(p * to_grid);
-            // Penumbra width floored at ONE heightfield texel: the physical width
-            // `t * tan_sun_r` collapses far below a texel for near casters at grazing sun
-            // (at lunar `tan_sun_r ≈ 0.0046` it is centimetres), quantizing the stored
-            // visibility into a hard 0/1 staircase. The floor keeps the gradient
-            // resolvable at the sampling rate.
-            //
-            // ONE texel, not two. The floor is the width of the shadow's soft EDGE, so it
-            // also sets how far above the ray an occluder must stand to reach full umbra.
-            // At two texels nothing ever got properly dark — a 5 m ridge 6 m away leaves
-            // its own shadow only ~82% deep — which is why the deep-umbra tests demanded a
-            // hard 0 and did not get one. One texel still spans the ramp across a sample,
-            // and the configured supersample in `bake_visibility_cache` does the
-            // anti-aliasing the wider floor was over-compensating for.
-            let width = (t * tan_sun_r).max(texel);
-            // How far the terrain rises ABOVE the ray, measured in penumbra widths — the
-            // ONLY thing that may darken a sample. `1.0 - rise` is the visibility it
-            // implies: `1` while the ray is clear (`h <= ray`), fading to `0` once the
-            // occluder stands a full penumbra width above it.
-            //
-            // The obvious-looking `(ray - h) / width` is WRONG, and was the bug: it
-            // demanded the ray clear the terrain by a WHOLE penumbra width to read fully
-            // lit, so once the 2-texel floor dominates (it does almost everywhere — at
-            // lunar `tan_sun_r ≈ 0.0046` the physical width is centimetres) even perfectly
-            // FLAT ground came back ~32% lit. The floor is a sampling-resolution device
-            // for the shadow's soft EDGE; it must never dim ground that has no occluder.
-            // Keep in sync with `horizon_march.wesl`, which marches the same formula.
-            let rise = (h - (h0 + slope * t)) / width;
-            // Match horizon_march.wesl: a continuous cubic edge prevents each
-            // one-texel crater rim from becoming a saw-toothed shadow boundary.
-            let edge = smoothstep01(rise.clamp(0.0, 1.0));
-            vis = vis.min(1.0 - edge);
-            if vis <= 0.0 {
+            skyline = skyline.max((self.height_at(p * to_grid) - receiver) / distance);
+            if skyline >= sun.upper {
                 return Some(0.0);
             }
-            t = t * 1.18 + texel * 0.5;
-            if t > max_t {
-                break;
-            }
+            distance = distance * march.z + texel * march.w;
         }
-        // Linear penumbra — no terminal smoothstep: it steepened the already
-        // texel-narrow transition band back into a near-binary edge.
-        Some(vis.clamp(0.0, 1.0))
+        Some(sun.visible_above(skyline))
     }
 
     /// Side length of the heightfield grid (texels per edge).
@@ -251,7 +195,7 @@ impl HeightField {
     }
 
     /// Bakes the sun-visibility cache — a `target_res²` grid of `u8` values
-    /// (0..255 ← 0..1 visibility) sampled from [`sun_visibility`] over the
+    /// (0..255 for the terrain transmission of the above-horizon disc) over the
     /// heightfield footprint, for the given terrain-local sun direction.
     ///
     /// This is the CPU side of the **horizon shadow cache**: the result is
@@ -260,11 +204,10 @@ impl HeightField {
     /// horizon march per pixel. `target_res` may differ from the heightfield's
     /// own resolution (a coarser cache on memory-constrained targets); each
     /// cache texel maps to `min + (frac) * size` and marches against the
-    /// full-resolution heightfield, so the cache is always geometrically
-    /// correct regardless of its own sampling rate.
+    /// full-resolution heightfield. Cache resolution controls the distance between
+    /// stored samples.
     ///
-    /// Reuses [`sun_visibility`] — the SAME algorithm the shader runs — so the
-    /// cache and any live fallback march can never disagree. Off-thread on
+    /// Uses the same skyline and solar-disc model as the live GPU march. Off-thread on
     /// native (`AsyncComputeTaskPool`); inline on wasm (see
     /// [`start_shadow_cache_bake`]).
     ///
@@ -291,6 +234,12 @@ impl HeightField {
             return Vec::new();
         }
         let max_g = (res - 1) as f32;
+        let sun = HorizonSun::new(sun_local, tan_sun_r);
+        let open = sun.visible_above(0.0);
+        if open <= 0.0 {
+            return bytes;
+        }
+        let march = horizon_march_parameters(march_steps);
         for y in 0..res {
             for x in 0..res {
                 let mut vis = 0.0;
@@ -306,16 +255,14 @@ impl HeightField {
                         let g = (Vec2::new(x as f32, y as f32) + offset)
                             .clamp(Vec2::ZERO, Vec2::splat(max_g));
                         let local_xz = self.min + g * inv * self.size;
-                        let Some(visibility) =
-                            self.sun_visibility(local_xz, sun_local, tan_sun_r, march_steps)
-                        else {
+                        let Some(visibility) = self.sun_visibility(local_xz, &sun, march) else {
                             return Vec::new();
                         };
                         vis += visibility;
                     }
                 }
                 bytes[(y as usize) * (res as usize) + (x as usize)] =
-                    (vis / sample_count as f32 * 255.0)
+                    (vis / (sample_count as f32 * open) * 255.0)
                         .round()
                         .clamp(0.0, 255.0) as u8;
             }
@@ -324,9 +271,52 @@ impl HeightField {
     }
 }
 
-#[inline]
-fn smoothstep01(x: f32) -> f32 {
-    x * x * (3.0 - 2.0 * x)
+/// Site march contract shared with the terrain shader: step count, receiver
+/// lift in metres, step growth, and additive advance in heightfield texels.
+pub fn horizon_march_parameters(steps: usize) -> Vec4 {
+    Vec4::new(steps as f32, 0.35, 1.18, 0.5)
+}
+
+struct HorizonSun {
+    horizontal: Vec2,
+    elevation: f32,
+    radius: f32,
+    upper: f32,
+    lower: f32,
+}
+
+impl HorizonSun {
+    fn new(direction: Vec3, tan_radius: f32) -> Self {
+        let horizontal = Vec2::new(direction.x, direction.z);
+        let elevation = direction.y.atan2(horizontal.length());
+        let radius = tan_radius.atan();
+        let slope = |angle: f32| {
+            if angle >= std::f32::consts::FRAC_PI_2 {
+                f32::INFINITY
+            } else if angle <= -std::f32::consts::FRAC_PI_2 {
+                f32::NEG_INFINITY
+            } else {
+                angle.tan()
+            }
+        };
+        Self {
+            horizontal: horizontal.normalize_or_zero(),
+            elevation,
+            radius,
+            upper: slope(elevation + radius),
+            lower: slope(elevation - radius),
+        }
+    }
+    fn visible_above(&self, skyline: f32) -> f32 {
+        if skyline >= self.upper {
+            return 0.0;
+        }
+        if skyline <= self.lower {
+            return 1.0;
+        }
+        let x = ((self.elevation - skyline.atan()) / self.radius).clamp(-1.0, 1.0);
+        ((-x).acos() + x * (1.0 - x * x).max(0.0).sqrt()) / std::f32::consts::PI
+    }
 }
 
 /// Baked heightfield living on the terrain entity: CPU copy for entity
@@ -966,8 +956,8 @@ pub fn start_shadow_cache_bake(
             to_sun_world,
             render_sun.revision,
         );
-        // No sun / sun below horizon → the march handles it cheaply; no bake.
-        if sun_local.y <= 0.0 {
+        // The shader resolves a fully set solar disc without a terrain sample.
+        if HorizonSun::new(sun_local, tan_r).upper <= 0.0 {
             continue;
         }
         // Within the threshold of the last bake → cache still valid.
@@ -1195,6 +1185,7 @@ pub type SunQuery<'w, 's> = Query<
     'w,
     's,
     (
+        Entity,
         &'static DirectionalLight,
         Option<&'static SunAngularDiameter>,
         Option<&'static CascadeShadowConfig>,
@@ -1202,26 +1193,10 @@ pub type SunQuery<'w, 's> = Query<
     (Without<RenderLayers>, Without<crate::Earthshine>),
 >;
 
-/// The single sun all horizon systems agree on.
-///
-/// ## No brightness heuristic
-///
-/// This used to take the BRIGHTEST `DirectionalLight`, which is a guess dressed
-/// as a rule: it silently picks when a scene has two suns, and with equal
-/// illuminance it picks by archetype iteration order — i.e. not deterministically
-/// at all. That guess is what let a duplicate engine-spawned sun steal the
-/// ephemeris aim while the scene's own sun stayed frozen.
-///
-/// The sun is now identified structurally by [`SunQuery`]'s filters, so a
-/// correctly-authored scene has exactly one candidate and there is nothing to
-/// choose between. More than one means the SCENE is ambiguous — two authored
-/// `DistantLight`s — and that is reported rather than papered over, because no
-/// tiebreak here can know which one the author meant.
-///
-/// Returns the authored light's render metadata, tan(angular radius), and the
-/// CSM far bound in metres (0 when the sun casts no cascade shadows — the
-/// march then covers the whole range). Direction comes from [`SunRenderState`].
-pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a DirectionalLight, f32, f32)> {
+/// Resolve the unique scene Sun used by the horizon cache, sky and material lighting.
+/// Return its entity, tangent of its angular radius, and farthest native shadow depth
+/// in metres. A zero depth gives the horizon renderer the entire view.
+pub fn pick_sun(sun: &SunQuery) -> Option<(Entity, f32, f32)> {
     let mut it = sun.iter();
     let first = it.next()?;
     if it.next().is_some() {
@@ -1234,19 +1209,19 @@ pub fn pick_sun<'a>(sun: &'a SunQuery) -> Option<(&'a DirectionalLight, f32, f32
         );
         return None;
     }
-    let (light, ang, csm) = first;
+    let (entity, light, ang, csm) = first;
     let csm_far = if light.shadow_maps_enabled {
         csm.and_then(|c| c.bounds.last().copied()).unwrap_or(0.0)
     } else {
         0.0
     };
     let Some(diameter_deg) = sun_diameter_deg(ang) else {
-        warn!(
+        warn_once!(
             "[environment] authored `SunAngularDiameter` is invalid; refusing the sun until it is finite and in [0, 180] degrees"
         );
         return None;
     };
-    Some((light, tan_sun_radius(diameter_deg), csm_far))
+    Some((entity, tan_sun_radius(diameter_deg), csm_far))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1433,9 +1408,6 @@ mod tests {
         }
     }
 
-    /// Zenith sun (straight up): every texel is fully lit — the march
-    /// short-circuits to 1.0 in its `hl < 1e-4` branch, so the whole cache
-    /// bakes to 255.
     #[test]
     fn bake_cache_zenith_all_lit() {
         let field = make_field(4, Vec2::ZERO, Vec2::splat(3.0), vec![0.0; 16]);
@@ -1443,9 +1415,6 @@ mod tests {
         assert!(bytes.iter().all(|&b| b == 255), "zenith sun → all 255");
     }
 
-    /// Sun below the horizon: every texel is fully shadowed — the march
-    /// short-circuits to 0.0 in its `sun_local.y <= 0.0` branch, so the whole
-    /// cache bakes to 0.
     #[test]
     fn bake_cache_below_horizon_all_shadow() {
         let field = make_field(4, Vec2::ZERO, Vec2::splat(3.0), vec![0.0; 16]);
@@ -1453,8 +1422,23 @@ mod tests {
         assert!(bytes.iter().all(|&b| b == 0), "below-horizon sun → all 0");
     }
 
-    /// A flat heightfield never occludes — the march finds no higher terrain
-    /// in any direction, so visibility stays 1.0 for any above-horizon sun.
+    #[test]
+    fn sunrise_resolves_the_disc_and_point_source_limit() {
+        let field = make_field(4, Vec2::ZERO, Vec2::splat(3.0), vec![0.0; 16]);
+        for (elevation, radius, expected) in
+            [(0.0, 0.0046, 128u8), (0.0, 0.0, 0), (0.00001, 0.0, 255)]
+        {
+            let bytes =
+                field.bake_visibility_cache(Vec3::new(1.0, elevation, 0.0), radius, 4, 48, 2);
+            let open = HorizonSun::new(Vec3::new(1.0, elevation, 0.0), radius).visible_above(0.0);
+            assert!(
+                bytes
+                    .iter()
+                    .all(|&value| (f32::from(value) * open).round() as u8 == expected)
+            );
+        }
+    }
+
     #[test]
     fn bake_cache_flat_terrain_all_lit() {
         let field = make_field(8, Vec2::ZERO, Vec2::splat(7.0), vec![1.5; 64]);

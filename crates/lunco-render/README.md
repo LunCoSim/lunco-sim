@@ -17,11 +17,9 @@ pipeline into the slim web / Modelica binaries.
   split + shadow-map atlas + depth/normal biases). Shared by the sandbox,
   celestial, and USD render paths; callers construct it from the authoritative
   Graphics profile and may then apply authored scene overrides.
-- Shadow filtering follows the Graphics preset: `Low` uses Bevy's fast
-  `Hardware2x2` filter, while `Balanced` and `High` use its Gaussian filter for
-  better edge quality when temporal anti-aliasing is off. The physical sun angle
-  remains an authored USD/horizon-shadow concern, not a renderer-wide blur
-  setting.
+- Graphics selects hardware 2×2 filtering for Low, Gaussian for Balanced and a
+  four-comparison 3×3 tent for High. USD supplies the physical solar angle used
+  in the terrain and globe horizon calculations.
 - **`RenderQualityPolicyPlugin`** — registers the settings section and resolves
   the complete typed profile catalog from Rhai before quality-dependent scene
   projection. The shared plugin runs in graphical and headless hosts; GPU

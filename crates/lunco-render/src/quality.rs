@@ -107,12 +107,13 @@ const PROFILE_FIELD_NAMES: [&str; 67] = [
 
 /// Shadow-map sampling quality selected by the Graphics settings.
 ///
-/// `Gaussian` uses Bevy's nine-sample filter and is the highest-quality mode
-/// without temporal anti-aliasing. `Hardware2x2` is the lower-cost option.
+/// Fixed-footprint comparison filters for native shadow maps.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ShadowFilteringQuality {
-    /// Four comparison samples with hardware filtering.
+    /// One hardware-filtered comparison.
     Hardware2x2,
+    /// A phase-correct 3×3 tent with four hardware comparisons on planar maps.
+    Tent3x3,
     /// A Gaussian filter with a wider nine-sample footprint.
     #[default]
     Gaussian,
@@ -123,13 +124,14 @@ impl ShadowFilteringQuality {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Hardware2x2 => "Hardware 2×2 (fast)",
+            Self::Tent3x3 => "Tent 3×3",
             Self::Gaussian => "Gaussian 5×5 (high quality)",
         }
     }
 
     /// Every selectable filter in menu order.
-    pub const fn all() -> [Self; 2] {
-        [Self::Hardware2x2, Self::Gaussian]
+    pub const fn all() -> [Self; 3] {
+        [Self::Hardware2x2, Self::Tent3x3, Self::Gaussian]
     }
 }
 
@@ -370,6 +372,7 @@ impl RenderQualityProfile {
             directional_cascades: unsigned!(directional_cascades, usize),
             shadow_filtering_quality: match profile_string(entries, "shadow_filtering_quality")? {
                 "hardware2x2" => ShadowFilteringQuality::Hardware2x2,
+                "tent3x3" => ShadowFilteringQuality::Tent3x3,
                 "gaussian" => ShadowFilteringQuality::Gaussian,
                 value => {
                     return Err(format!(

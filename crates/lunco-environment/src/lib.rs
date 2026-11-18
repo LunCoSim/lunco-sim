@@ -107,7 +107,7 @@ pub struct ProbeOccluderPaths(pub Vec<String>);
 pub mod horizon;
 pub use horizon::{
     HeightField, HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig, HorizonShadowPlugin,
-    SunQuery, install_horizon_map_from_field, pick_sun,
+    SunQuery, horizon_march_parameters, install_horizon_map_from_field, pick_sun,
 };
 
 /// System sets for environment computation and consumption.

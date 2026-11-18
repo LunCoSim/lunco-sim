@@ -12,8 +12,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (lights.n_directional_lights != 2u) {
         return vec4(1.0, 0.0, 0.0, 1.0);
     }
-    let sun = normalize(lights.directional_lights[0].direction_to_light);
-    let fill = normalize(lights.directional_lights[1].direction_to_light);
+    let mask = lights.material_response_light_mask;
+    if (mask != 1u && mask != 2u) { return vec4(1.0, 0.0, 0.0, 1.0); }
+    let index = firstTrailingBit(mask);
+    let sun = normalize(lights.directional_lights[index].direction_to_light);
+    let fill = normalize(lights.directional_lights[1u - index].direction_to_light);
+    // The authored fill is green and the Sun is white. This also catches a
+    // one-bit mask that names the wrong light after per-view packing.
+    let sun_color = lights.directional_lights[index].color.rgb;
+    let fill_color = lights.directional_lights[1u - index].color.rgb;
+    let authored_sun = sun_color.r > 0.8 * sun_color.g && fill_color.g > 1.5 * fill_color.r;
     var input = pbr_types::pbr_input_new();
     input.world_position = in.world_position;
     input.frag_coord = in.position;
@@ -25,7 +33,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let default_identity = input.directional_light_scale_mask == 0u
         && input.directional_light_scale == 1.0;
     let full = pbr_functions::apply_pbr_lighting(input).rgb;
-    input.directional_light_scale_mask = 1u;
+    input.directional_light_scale_mask = mask;
     input.directional_light_scale = 0.0;
     let without_sun = pbr_functions::apply_pbr_lighting(input).rgb;
     input.directional_light_scale_mask = 3u;
@@ -35,7 +43,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     input.directional_light_scale = 1.0;
     terrain_set_sun_response(&input, sun, 0.25, 1.0, 0.0);
     let selected = input.directional_light_scale == 0.25
-        && input.directional_light_scale_mask == 1u;
+        && input.directional_light_scale_mask == mask;
     let quarter = pbr_functions::apply_pbr_lighting(input).rgb;
     let expected = without_sun + 0.25 * (full - without_sun);
     let tolerance = 0.00001 * max(vec3(1.0), abs(expected));
@@ -52,7 +60,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let hidden = input.directional_light_scale == 0.0;
     terrain_set_sun_response(&input, sun, 20.0, 2.0, 2.0);
     let bounded = input.directional_light_scale == 8.0;
-    let valid = default_identity && selected && linear && both_visible && missing_unchanged
+    let valid = authored_sun && default_identity && selected && linear && both_visible && missing_unchanged
         && negative_clamped && hidden && bounded;
     let pass_color = select(vec4(0.0, 1.0, 0.0, 1.0),
         vec4(0.0, 1.0, 1.0, 1.0), in.position.x >= 320.0);

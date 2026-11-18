@@ -3,7 +3,7 @@
 //! consumers use the continuous height oracle separately from streamed colliders.
 use avian3d::parry::{
     math::Pose,
-    partitioning::{Bvh, BvhBuildStrategy},
+    partitioning::{Bvh, BvhBuildStrategy, BvhWorkspace},
     query::Ray,
     shape::SharedShape,
 };
@@ -28,6 +28,7 @@ impl CollisionOccluder {
 pub struct CollisionOcclusionIndex {
     shapes: Vec<CollisionOccluder>,
     tree: Bvh,
+    workspace: BvhWorkspace,
     revision: u64,
 }
 impl CollisionOcclusionIndex {
@@ -40,27 +41,42 @@ impl CollisionOcclusionIndex {
         {
             return Err("occluder has an invalid canonical pose".into());
         }
-        if self.shapes.len() == shapes.len()
-            && self.shapes.iter().zip(&shapes).all(|(a, b)| {
-                a.entity == b.entity
-                    && a.position == b.position
-                    && a.rotation == b.rotation
-                    && std::sync::Arc::ptr_eq(&a.shape.0, &b.shape.0)
-            })
-        {
-            return Ok(());
+        let same_members = self.shapes.len() == shapes.len()
+            && self
+                .shapes
+                .iter()
+                .zip(&shapes)
+                .all(|(a, b)| a.entity == b.entity);
+        let mut changed = Vec::new();
+        for (index, shape) in shapes.iter().enumerate() {
+            if same_members {
+                let before = &self.shapes[index];
+                if before.position == shape.position
+                    && before.rotation == shape.rotation
+                    && std::sync::Arc::ptr_eq(&before.shape.0, &shape.shape.0)
+                {
+                    continue;
+                }
+            }
+            let bounds = shape.shape.compute_aabb(&shape.pose());
+            if !bounds.mins.is_finite() || !bounds.maxs.is_finite() {
+                return Err("occluder has invalid geometric bounds".into());
+            }
+            changed.push((index, bounds));
         }
-        let bounds: Vec<_> = shapes
-            .iter()
-            .map(|s| s.shape.compute_aabb(&s.pose()))
-            .collect();
-        if bounds
-            .iter()
-            .any(|b| !b.mins.is_finite() || !b.maxs.is_finite())
-        {
-            return Err("occluder has invalid geometric bounds".into());
+        if same_members {
+            if changed.is_empty() {
+                return Ok(());
+            }
+            for (index, bounds) in changed {
+                self.tree
+                    .insert_or_update_partially(bounds, index as u32, 0.0);
+            }
+            self.tree.refit(&mut self.workspace);
+        } else {
+            let bounds: Vec<_> = changed.into_iter().map(|(_, bounds)| bounds).collect();
+            self.tree = Bvh::from_leaves(BvhBuildStrategy::default(), &bounds);
         }
-        self.tree = Bvh::from_leaves(BvhBuildStrategy::default(), &bounds);
         self.shapes = shapes;
         self.revision = self.revision.wrapping_add(1);
         Ok(())

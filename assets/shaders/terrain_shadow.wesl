@@ -7,7 +7,7 @@ import bevy_pbr::render::{
     mesh_view_bindings::view,
     mesh_view_bindings::lights,
 };
-import super::horizon_march::{sun_visibility_resolved, horizon_shadow_blend};
+import super::horizon_march::terrain_horizon_visibility;
 import super::lunar_brdf::regolith_factor;
 import super::terrain_surface::terrain_set_sun_response;
 
@@ -46,7 +46,7 @@ import super::terrain_surface::terrain_set_sun_response;
 //!@engine  hf_res
 //!@engine  csm_far
 //!@engine  shadow_cache_on
-//!@engine  horizon_march_steps
+//!@engine  horizon_march
 struct Material {
     albedo:         vec3<f32>,
     sun_tan_radius: f32,
@@ -59,7 +59,7 @@ struct Material {
     hf_res:         f32,
     csm_far:        f32,
     shadow_cache_on: f32,  // engine: 1 = sample pre-baked shadow cache, 0 = ray-march
-    horizon_march_steps: f32, // engine: configured live ray-march iterations
+    horizon_march: vec4<f32>, // engine: configured live ray-march iterations
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
@@ -106,20 +106,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     pbr_input.material.reflectance = vec3(0.0);
 
     var sun_vis = 1.0;
-    var march_blend = 0.0;
-
-    @if((VERTEX_UVS_A)) let csm_far = mat.csm_far;
-    @if((VERTEX_UVS_A)) march_blend = horizon_shadow_blend(
-        distance(view.world_position, in.world_position.xyz), csm_far, mat.sun_dir, mat.hf_res);
-    @if((VERTEX_UVS_A)) if (march_blend > 0.0) {
-        sun_vis = sun_visibility_resolved(
-            shadow_cache, shadow_cache_sampler, mat.shadow_cache_on,
-            height_map, in.uv, mat.sun_dir, mat.sun_tan_radius,
-            mat.horizon_march_steps, mat.hf_size, mat.hf_res);
-    }
-
+    @if((VERTEX_UVS_A)) sun_vis = terrain_horizon_visibility(in.world_position.xyz, mat.csm_far,
+        shadow_cache, shadow_cache_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
+        mat.sun_tan_radius, mat.horizon_march, mat.hf_size, mat.hf_res);
     terrain_set_sun_response(
-        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, march_blend);
+        &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, 1.0);
     var color = pbr_functions::apply_pbr_lighting(pbr_input);
 
     color = pbr_functions::main_pass_post_lighting_processing(pbr_input, color);

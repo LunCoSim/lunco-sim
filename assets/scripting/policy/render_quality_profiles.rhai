@@ -152,7 +152,7 @@ fn render_quality_profile(id) {
             directional_shadow_map_size: 4096,
             point_shadow_map_size: 2048,
             directional_cascades: 4,
-            shadow_filtering_quality: "gaussian",
+            shadow_filtering_quality: "tent3x3",
             max_directional_shadow_casters: 2,
             max_point_shadow_casters: 8,
             max_spot_shadow_casters: 8,

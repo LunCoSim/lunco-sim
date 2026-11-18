@@ -1,14 +1,6 @@
-
-// Heightfield sun-shadow ray-march, shared by every terrain shader
-// (regolith.wesl, terrain_shadow.wesl) via WESL import. The CPU mirror
-// (`HeightField::sun_visibility` in lunco-environment) implements the SAME
-// algorithm so per-entity shading agrees with per-pixel terrain shading.
-//
-// Physically-scaled soft shadows: at each march step the occlusion factor is
-//   (ray_height - terrain_height) / (distance * tan(sun_angular_radius))
-// so the penumbra is razor-sharp next to the casting crest and widens
-// linearly with caster distance — the real behaviour of sun shadows.
-
+import bevy_pbr::render::view_transformations::position_world_to_view;
+import bevy_pbr::render::{mesh_view_bindings::lights, mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT};
+import super::solar_disc::disc_above_skyline;
 
 // Bilinear heightfield fetch via textureLoad (R32Float is non-filterable in
 // core WebGPU). `g` is in texel coordinates [0, res-1].
@@ -24,120 +16,75 @@ fn hf_height(tex: texture_2d<f32>, g: vec2<f32>, res: i32) -> f32 {
     return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
 }
 
-// Sun visibility 0..1 at a surface point.
-//   uv        — planar [0,1]² over the heightfield footprint
-//   sun_local — unit to-sun direction in terrain-local space
-//   tan_sun_r — tan of the sun's angular RADIUS (≈0.0046 for Sol at 1 AU)
-//   size      — heightfield world extent (metres)
-//   res       — heightfield texel resolution (side length)
-fn sun_visibility(
-    tex: texture_2d<f32>,
-    uv: vec2<f32>,
-    sun_local: vec3<f32>,
-    tan_sun_r: f32,
-    march_steps: f32,
-    size: vec2<f32>,
-    res: f32,
-) -> f32 {
-    if (res < 2.0) { return 1.0; } // no heightfield bound
-    if (march_steps < 1.0) { return 0.0; } // invalid quality input, never invent light
-    let horiz = vec2(sun_local.x, sun_local.z);
-    let hl = length(horiz);
-    if (sun_local.y <= 0.0) { return 0.0; }     // sun below horizontal
-    if (hl < 1e-4) { return 1.0; }              // sun at zenith
-    let dir = horiz / hl;
-    let slope = sun_local.y / hl;               // ray dh per metre travelled
-    let ri = i32(res);
-    let to_grid = (res - 1.0) / size;
+// Site coordinates use a horizontal zero skyline. The globe supplies its curved skyline.
+fn sun_visibility(tex: texture_2d<f32>, uv: vec2<f32>, sun: vec3<f32>, radius: f32,
+    march: vec4<f32>, size: vec2<f32>, res: f32, elevation: f32) -> f32 {
+    let horizontal = sun.xz;
+    let length_xz = length(horizontal);
+    if (length_xz == 0.0) { return disc_above_skyline(elevation, radius, 0.0); }
+    let dir = horizontal / length_xz;
     let p0 = uv * size;
-    // Small lift against self-shadow acne on the start texel.
-    let h0 = hf_height(tex, p0 * to_grid, ri) + 0.35;
+    let to_grid = (res - 1.0) / size;
+    let receiver = hf_height(tex, p0 * to_grid, i32(res)) + march.y;
     let texel = min(size.x, size.y) / (res - 1.0);
-    let max_t = length(size) * 1.42;
-    var vis = 1.0;
     var t = texel;
-    let steps = u32(march_steps);
-    for (var i = 0u; i < steps; i++) {
+    var skyline = 0.0;
+    let upper = tan(min(1.5707962, elevation + radius));
+    for (var i = 0u; i < u32(march.x); i++) {
         let p = p0 + dir * t;
-        if (p.x < 0.0 || p.y < 0.0 || p.x > size.x || p.y > size.y) { break; }
-        let h = hf_height(tex, p * to_grid, ri);
-        // Penumbra width floored at ONE heightfield texel (keep in sync with
-        // HeightField::sun_visibility): the physical width `t * tan_sun_r` collapses far
-        // below a texel for near casters at grazing sun, quantizing visibility into a hard
-        // 0/1 staircase. One texel, not two: the floor also sets how far above the ray an
-        // occluder must stand to reach full umbra, and at two texels nothing ever got
-        // properly dark.
-        let width = max(t * tan_sun_r, texel);
-        // How far the terrain rises ABOVE the ray, in penumbra widths — the only thing
-        // that may darken a sample. `1 - rise` is fully lit while the ray is clear and
-        // fades to 0 once the occluder stands a full width above it.
-        //
-        // NOT `(ray - h) / width`: that demanded the ray clear the terrain by a whole
-        // penumbra width to read lit, so with the 2-texel floor dominating (it does
-        // almost everywhere — the physical width is centimetres) even FLAT ground came
-        // back ~32% lit. The floor softens the shadow EDGE; it must not dim open ground.
-        let rise = (h - (h0 + slope * t)) / width;
-        // Smooth the visibility ramp at the heightfield sampling scale. A hard
-        // linear min makes every one-texel crater rim a pixel-wide tooth in a
-        // grazing shadow; the physical penumbra is continuous, so use the same
-        // monotonic cubic edge on both CPU and GPU mirrors.
-        let edge = smoothstep(0.0, 1.0, clamp(rise, 0.0, 1.0));
-        vis = min(vis, 1.0 - edge);
-        if (vis <= 0.0) { return 0.0; }
-        t = t * 1.18 + texel * 0.5;
-        if (t > max_t) { break; }
+        if (any(p < vec2(0.0)) || any(p > size)) { break; }
+        skyline = max(skyline, (hf_height(tex, p * to_grid, i32(res)) - receiver) / t);
+        if (skyline >= upper) { return 0.0; }
+        t = t * march.z + texel * march.w;
     }
-    // Linear penumbra — no terminal smoothstep (it re-steepens the band).
-    return clamp(vis, 0.0, 1.0);
+    return disc_above_skyline(elevation, radius, atan(skyline));
 }
 
-// Shared distance blend for static and streamed heightfield materials.
-fn horizon_shadow_blend(distance: f32, csm_far: f32, sun_local: vec3<f32>, res: f32) -> f32 {
-    // The finite heightfield's point-source night gate applies inside native
-    // cascade range too. It returns before any texture access or march.
-    if (res >= 2.0 && sun_local.y <= 0.0) { return 1.0; }
-    if (csm_far > 0.0) { return smoothstep(csm_far, csm_far * 1.1, distance); }
-    return 1.0;
+fn horizon_shadow_blend(view_depth: f32, csm_far: f32) -> f32 {
+    if (csm_far <= 0.0) { return 1.0; }
+    return smoothstep(csm_far * 0.9, csm_far, view_depth);
 }
 
-// Sun visibility resolved from the **pre-baked shadow cache** (a single
-// `textureSampleLevel` lookup) when `use_cache > 0.5`, otherwise the live
-// per-pixel ray-march above. The cache (`shadow_cache`, an `R8Unorm` texture)
-// is baked on the CPU by `lunco-environment`'s horizon system using the SAME
-// `HeightField::sun_visibility` algorithm, refreshed only when the sun's
-// terrain-local direction moves past a small threshold — so the expensive
-// configured march loop runs ~once per minutes-long sun increment instead of
-// every pixel every frame.
-//
-// `textureSampleLevel` with an explicit LOD of 0 (the cache is single-mip) is
-// permitted in non-uniform control flow, so this can be called from inside the
-// distance-gated `march_blend` branch — unlike `textureSample`, which WebGPU
-// restricts to uniform control flow. The `use_cache` guard is itself a uniform
-// (`mat.shadow_cache_on`), so the whole branch is uniform-stable.
-
-fn sun_visibility_resolved(
-    cache: texture_2d<f32>,
-    cache_samp: sampler,
-    use_cache: f32,
-    height_tex: texture_2d<f32>,
-    uv: vec2<f32>,
-    sun_local: vec3<f32>,
-    tan_sun_r: f32,
-    march_steps: f32,
-    size: vec2<f32>,
-    res: f32,
-) -> f32 {
-    if (res < 2.0) { return 1.0; } // no finite heightfield owner
-    // Night is current geometry, independent of the cache's sampled direction.
-    // Keep the cache bound across this transition instead of entering a march.
-    if (sun_local.y <= 0.0) { return 0.0; }
-    if (use_cache > 0.5) {
-        // CPU bake nodes span both footprint endpoints: i / (dimensions - 1).
-        // Normalized texture sampling addresses texel centres at (i + 0.5) / dimensions.
+// A valid cache is nodal and spans both footprint endpoints.
+fn sun_visibility_resolved(cache: texture_2d<f32>, cache_samp: sampler, use_cache: f32,
+    height_tex: texture_2d<f32>, uv: vec2<f32>, sun: vec3<f32>, tan_radius: f32,
+    march: vec4<f32>, size: vec2<f32>, res: f32, blend: f32) -> f32 {
+    if (res < 2.0) { return 1.0; }
+    let horizontal = length(sun.xz);
+    // Clear day and full night need no trigonometry or terrain lookup nearby.
+    if (sun.y <= -horizontal * tan_radius && sun.y <= 0.0) { return 0.0; }
+    let whole_disc = sun.y >= horizontal * tan_radius;
+    if (blend <= 0.0 && whole_disc) { return 1.0; }
+    var sampled = 1.0;
+    if (use_cache > 0.5 && blend > 0.0) {
         let dimensions = vec2<f32>(textureDimensions(cache));
         let cache_uv = (clamp(uv, vec2(0.0), vec2(1.0)) * (dimensions - 1.0) + 0.5) / dimensions;
-        return textureSampleLevel(cache, cache_samp, cache_uv, 0.0).r;
+        sampled = textureSampleLevel(cache, cache_samp, cache_uv, 0.0).r;
+        if (whole_disc) { return mix(1.0, sampled, blend); }
     }
-    return sun_visibility(
-        height_tex, uv, sun_local, tan_sun_r, march_steps, size, res);
+    let elevation = atan2(sun.y, horizontal);
+    let radius = atan(tan_radius);
+    let open = disc_above_skyline(elevation, radius, 0.0);
+    if (blend <= 0.0) { return open; }
+    if (use_cache > 0.5) {
+        return open * mix(1.0, sampled, blend);
+    }
+    let terrain = sun_visibility(height_tex, uv, sun, radius, march, size, res, elevation);
+    return mix(open, terrain, blend);
+}
+
+fn terrain_horizon_visibility(world_position: vec3<f32>, csm_far: f32,
+    cache: texture_2d<f32>, cache_sampler: sampler, use_cache: f32,
+    height_map: texture_2d<f32>, uv: vec2<f32>, sun: vec3<f32>, tan_radius: f32,
+    march: vec4<f32>, size: vec2<f32>, res: f32) -> f32 {
+    var far = 0.0;
+    if (csm_far > 0.0 && lights.material_response_light_mask != 0u) {
+        let light = &lights.directional_lights[firstTrailingBit(lights.material_response_light_mask)];
+        if (((*light).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u && (*light).num_cascades > 0u) {
+            far = (*light).cascades[(*light).num_cascades - 1u].far_bound;
+        }
+    }
+    let depth = -position_world_to_view(world_position).z;
+    return sun_visibility_resolved(cache, cache_sampler, use_cache, height_map, uv, sun,
+        tan_radius, march, size, res, horizon_shadow_blend(depth, far));
 }
