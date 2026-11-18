@@ -406,7 +406,9 @@ mod document_input_tests {
         input.session_layer = Some("lunco://session.usda".to_owned());
         input.bytes.insert(
             "lunco://session.usda".to_owned(),
-            b"#usda 1.0\nover \"Root\" { double value = 42 }\n".to_vec(),
+            b"#usda 1.0\nover \"Root\" { double value = 42 }\n"
+                .to_vec()
+                .into(),
         );
         let inputs = app.world().resource::<DocumentStageInputs>().clone();
         let _owner = inputs.register(input).unwrap();

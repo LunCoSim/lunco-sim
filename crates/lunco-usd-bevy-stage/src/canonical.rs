@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 static NEXT_CANONICAL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
-use lunco_usd_compose::recipe::StageRecipe;
+use lunco_usd_compose::recipe::{StageLayerBytes, StageRecipe};
 use openusd::sdf::Path as SdfPath;
 use openusd::usd::{CommittedChange, Stage, StageSinkId};
 
@@ -120,7 +120,7 @@ impl CanonicalStageRecipeSnapshot {
     pub fn into_recipe(mut self) -> anyhow::Result<StageRecipe> {
         for (identifier, data) in self.authored_layers {
             let bytes = lunco_usd_authoring::author::layer_bytes(&identifier, &data)?;
-            self.recipe.bytes.insert(identifier, bytes);
+            self.recipe.bytes.insert(identifier, bytes.into());
         }
         Ok(self.recipe)
     }
@@ -464,7 +464,7 @@ impl CanonicalStage {
     /// those ids composes on this stage. Returns `false` if this stage has no
     /// injectable resolver (built via [`from_stage`](Self::from_stage) over a
     /// foreign resolver). Merges — existing ids keep their bytes.
-    pub fn add_layer_bytes(&mut self, extra: HashMap<String, Vec<u8>>) -> bool {
+    pub fn add_layer_bytes(&mut self, extra: HashMap<String, StageLayerBytes>) -> bool {
         match self.add_layer_bytes_from(&extra) {
             Some(changed) => {
                 if changed {
@@ -542,7 +542,7 @@ impl CanonicalStage {
             .map_err(Into::into)
     }
 
-    fn add_layer_bytes_from(&self, extra: &HashMap<String, Vec<u8>>) -> Option<bool> {
+    fn add_layer_bytes_from(&self, extra: &HashMap<String, StageLayerBytes>) -> Option<bool> {
         match &self.resolver_bytes {
             Some(shared) => {
                 let mut bytes = shared.borrow_mut();
@@ -671,7 +671,7 @@ impl CanonicalStage {
             .as_ref()
             .and_then(|shared| shared.borrow().get(&reference_id).cloned())
             .ok_or_else(|| anyhow!("reference source `{asset_path}` is not loaded"))?;
-        let layer = openusd::sdf::Layer::from_bytes(&reference_id, source)?;
+        let layer = openusd::sdf::Layer::from_bytes(&reference_id, source.asset_buffer())?;
         let root = SdfPath::abs_root();
         let default_prim = layer
             .data()
@@ -1604,7 +1604,7 @@ mod recipe_tests {
         let unopened_id = "lunco://fixture/unopened.usda";
         input
             .bytes
-            .insert(unopened_id.to_owned(), FIXTURE.as_bytes().to_vec());
+            .insert(unopened_id.to_owned(), FIXTURE.as_bytes().to_vec().into());
         let session_id = input.session_layer.clone().unwrap();
         let canonical = CanonicalStage::from_recipe(&input).unwrap();
         let size = SdfPath::new("/Root/Box.size").unwrap();
@@ -1713,7 +1713,8 @@ mod recipe_tests {
         let recipe = StageRecipe::from_source("scene.usda", FIXTURE);
         let mut canonical = CanonicalStage::from_recipe(&recipe).expect("create canonical stage");
         let initial = canonical.layer_bytes_revision();
-        let dependency = HashMap::from([("part.usda".to_string(), FIXTURE.as_bytes().to_vec())]);
+        let dependency =
+            HashMap::from([("part.usda".to_string(), FIXTURE.as_bytes().to_vec().into())]);
 
         assert!(canonical.add_layer_bytes(dependency.clone()));
         let updated = canonical.layer_bytes_revision();
@@ -1741,7 +1742,7 @@ mod recipe_tests {
 
         assert!(canonical.add_layer_bytes(HashMap::from([(
             source.root_id.clone(),
-            b"#usda 1.0\ndef Xform \"Replacement\" {}\n".to_vec(),
+            b"#usda 1.0\ndef Xform \"Replacement\" {}\n".to_vec().into(),
         )])));
         let explicit_merge = canonical.layer_bytes_revision();
         assert_ne!(explicit_merge, first_merge);
@@ -2273,7 +2274,10 @@ mod authoring_tests {
         // Inject the rover's closure into the LIVE resolver, then author the
         // spawn: a prim + a reference to the rover.
         assert!(
-            cs.add_layer_bytes(HashMap::from([(ref_id.clone(), ROVER.as_bytes().to_vec())])),
+            cs.add_layer_bytes(HashMap::from([(
+                ref_id.clone(),
+                ROVER.as_bytes().to_vec().into()
+            )])),
             "a recipe-built stage must accept injected layer bytes"
         );
         assert!(
@@ -2324,7 +2328,7 @@ mod authoring_tests {
         const B: &str = "#usda 1.0\n(\n    defaultPrim = \"B\"\n)\ndef Xform \"B\"\n{\n    def Cube \"FromB\"\n    {\n    }\n}\n";
         for (path, src) in [("a.usda", A), ("b.usda", B)] {
             let id = cs.canonical_reference_id(path).expect("valid reference");
-            assert!(cs.add_layer_bytes(HashMap::from([(id, src.as_bytes().to_vec())])));
+            assert!(cs.add_layer_bytes(HashMap::from([(id, src.as_bytes().to_vec().into())])));
         }
 
         let spawn = SdfPath::new("/World/combo").unwrap();

@@ -1,6 +1,69 @@
 //! Send-safe input recipe for a composed OpenUSD stage.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
+
+/// Immutable transported layer content and its native dependency scan.
+/// Replacing a recipe entry installs a new buffer and retires its scan together.
+#[derive(Debug, Clone)]
+pub struct StageLayerBytes(Arc<LayerSource>);
+
+#[derive(Debug)]
+struct LayerSource {
+    bytes: openusd::ar::SharedBuffer,
+    dependencies: OnceLock<(String, Vec<String>)>,
+}
+
+impl From<Vec<u8>> for StageLayerBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self(Arc::new(LayerSource {
+            bytes: openusd::ar::SharedBuffer::new(bytes),
+            dependencies: OnceLock::new(),
+        }))
+    }
+}
+
+impl AsRef<[u8]> for StageLayerBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0.bytes
+    }
+}
+
+impl std::ops::Deref for StageLayerBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+impl PartialEq for StageLayerBytes {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for StageLayerBytes {}
+
+impl StageLayerBytes {
+    /// Share the transport allocation with native text or crate decoding.
+    pub fn asset_buffer(&self) -> openusd::ar::AssetBuffer {
+        self.0.bytes.clone().into()
+    }
+
+    /// The anchor selects the file codec and resolves relative identifiers.
+    /// A second identity for these bytes must perform its own native scan.
+    pub fn child_layer_ids(&self, id: &str) -> anyhow::Result<Vec<String>> {
+        if let Some((anchor, children)) = self.0.dependencies.get() {
+            if anchor == id {
+                return Ok(children.clone());
+            }
+            return crate::child_layer_ids(id, self);
+        }
+        let children = crate::child_layer_ids(id, self)?;
+        let _ = self.0.dependencies.set((id.to_owned(), children.clone()));
+        Ok(children)
+    }
+}
 
 /// A dependency that USD could not materialize while opening a stage.
 ///
@@ -85,7 +148,7 @@ pub struct StageRecipe {
     /// Explicit canonical session-layer identity, when this stack has session opinions.
     pub session_layer: Option<String>,
     /// Layer identifier to file bytes for the available closure.
-    pub bytes: HashMap<String, Vec<u8>>,
+    pub bytes: HashMap<String, StageLayerBytes>,
     /// Non-fatal missing dependencies discovered while fetching the closure.
     /// OpenUSD independently retains its own composition diagnostics when the
     /// recipe is opened; this field preserves the async reader's logical URI
@@ -209,8 +272,8 @@ impl StageRecipe {
                 )?;
                 output.bytes.insert(target_id.clone(), raw.clone());
             }
-            let source_children = crate::child_layer_ids(&source_id, raw)?;
-            let target_children = crate::child_layer_ids(&target_id, raw)?;
+            let source_children = raw.child_layer_ids(&source_id)?;
+            let target_children = raw.child_layer_ids(&target_id)?;
             crate::check_stage_closure_limits(
                 &limits,
                 output.bytes.len(),
@@ -243,7 +306,10 @@ impl StageRecipe {
         Self {
             root_id: root_id.into(),
             session_layer: None,
-            bytes,
+            bytes: bytes
+                .into_iter()
+                .map(|(id, bytes)| (id, bytes.into()))
+                .collect(),
             dependency_diagnostics: Vec::new(),
         }
     }
@@ -313,6 +379,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dependency_scans_follow_immutable_bytes_and_the_resolving_anchor() {
+        let id = "twin://fixture/a/root.usda";
+        let relocated = "twin://fixture/b/root.usda";
+        let mut recipe = StageRecipe::from_source(id, "#usda 1.0\n(subLayers = [@part.usda@])\n");
+        let snapshot = recipe.clone();
+        let layer = &snapshot.bytes[id];
+        assert_eq!(
+            layer.child_layer_ids(id).unwrap(),
+            ["twin://fixture/a/part.usda"]
+        );
+        assert!(Arc::ptr_eq(&recipe.bytes[id].0, &layer.0));
+        assert_eq!(layer.0.dependencies.get().unwrap().0, id);
+        assert_eq!(
+            layer.child_layer_ids(relocated).unwrap(),
+            ["twin://fixture/b/part.usda"]
+        );
+        recipe
+            .bytes
+            .insert(id.to_owned(), b"invalid layer".to_vec().into());
+        assert!(recipe.bytes[id].child_layer_ids(id).is_err());
+        assert!(recipe.bytes[id].0.dependencies.get().is_none());
+        assert_eq!(
+            layer.child_layer_ids(id).unwrap(),
+            ["twin://fixture/a/part.usda"]
+        );
+    }
+
+    #[test]
     fn reanchor_composes_nested_arcs_and_preserves_authored_asset_values() {
         let transport_root = "twin://fixture/models/root.usda";
         let absolute = "lunco://library/shared.usda";
@@ -367,8 +461,8 @@ over "Asset" {
                 Some(&openusd::ar::ResolvedPath::new(&child_id)),
             )
             .unwrap();
-            assert_eq!(prepared.bytes[&child_id], child);
-            assert_eq!(prepared.bytes[&grand_id], grand);
+            assert_eq!(prepared.bytes[&child_id].as_ref(), child);
+            assert_eq!(prepared.bytes[&grand_id].as_ref(), grand);
             if anchor != transport_root {
                 assert!(!prepared.bytes.contains_key(transport_root));
             }

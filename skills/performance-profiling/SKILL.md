@@ -1888,8 +1888,10 @@ At a scene transition, align the authored event with the following host updates
 in Tracy. Record structural resyncs and changed-info paths separately, along
 with fixed tick counts. For collection consumers with a known prim population,
 compare native membership on those candidates with full expansion, including
-exclusions and expression collections. Measure settled frames separately from
-the transition.
+exclusions and expression collections. For transient USD edits, time the full
+script task and the nested transaction. Check whether each private stage open
+shares the admitted source buffers and their anchor-specific dependency scans.
+Measure settled frames separately from the transition.
 
 When gating a dependency's multi-system transform schedule, distinguish its
 per-update output flags from authoritative input changes. Preserve any required

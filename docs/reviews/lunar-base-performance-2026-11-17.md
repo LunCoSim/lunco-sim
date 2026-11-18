@@ -618,3 +618,58 @@ verification passed at tick 8,756. Concurrent host activity varied and the
 collection change runs on projection invalidation. These settled frame timings
 do not isolate its effect. Receipts and Tracy exports are in
 `.cache/perf/lunar-100fps/scoped-collection-members/`.
+
+## Prepared Griffin study parameters
+
+At landing, the route controller read compact-egress parameters and CAD wheel
+dimensions by opening their individual SysML files. Native samples in the
+mission task included syntax-tree traversal, qualified-name lookup and semantic
+model cloning. Griffin model revision `dea9f68` now reads the mounted Twin’s
+prepared model. All 74 named egress and controlled-descent values and both CAD
+values matched the individually opened files. The surface-operations mission
+passed all nine checks at tick 8,756.
+
+With the same production binary, the maximum in the five seconds around
+handoff fell from 469.858 ms to 189.323 ms. The subsequent uninstrumented
+60-second sample recorded 98.769 FPS across 5,908 frames, p95 13.665 ms,
+p99 16.381 ms and maximum 26.101 ms. 3,621 frames exceeded 10 ms. The
+simulation advanced 3,685 ticks between checkpoints and retained 454 ordered
+torque samples. Terrain endpoints had 193 tiles in this run and 181 in the
+preceding run. In the separate Tracy capture the mission task still took
+375.258 ms, including 333.132 ms for the nine-operation transient transaction.
+A release check was compiling during that capture. The samples identify work
+inside the hitch; the uninstrumented run measures frame times. Evidence is in
+`.cache/perf/lunar-100fps/griffin-prepared-datums/`.
+
+## Reopening an admitted layer closure
+
+Each private authoring stage opened a new resolver. It parsed every dependency
+again to validate its native structure and discover its composition arcs, even
+though the loader had already completed that scan. A recipe snapshot now shares
+each immutable layer buffer, its successful scan for the exact anchor and its
+native OpenUSD decoder buffer. Changed bytes still pass native validation and
+a new anchor resolves its own relative arcs.
+
+In the landed Tracy capture the nine edits took 4.624 ms inside an 8.358 ms
+mission task. The preceding capture measured 333.132 ms inside a 375.258 ms
+task while a release check was compiling. In the separate regular release runs
+the wall interval from touchdown confirmation to four-pad handoff was 170.142 ms
+and 8.098 ms respectively. The five-second handoff maximum fell from 189.323 ms
+to 66.333 ms. The snapshots qualified contact at ticks 1,357 and 1,341
+respectively.
+
+The candidate's 60-second settled run measured 90.595 FPS over 5,427 frames,
+p95 14.433 ms, p99 16.795 ms and maximum 20.193 ms. 3,658 frames exceeded 10 ms.
+The simulation advanced 3,691 ticks between checkpoints, retained 453 ordered
+torque samples and reported zero runtime warnings or errors. All 181 terrain
+tiles were resident at the final checkpoint. The official surface-operations
+verification passed all nine checks. The composition suite passed 16 tests,
+including replacement and reanchoring of shared bytes. The stage test covered
+a reloaded source. The authoring test checked inheritance, references and
+layer strength across USDA, USDC and USD root identifiers. Evidence is in
+`.cache/perf/lunar-100fps/shared-layer-analysis/`.
+
+The separate strict acceptance run stopped during the measurement when the
+terrain selector reported a pending selection with 181 of 181 tiles resident.
+Application readiness remained true. The raw 60-second diagnostic above
+also exceeded the 10 ms frame budget.

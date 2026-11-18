@@ -40,7 +40,7 @@ use openusd::usd::Stage;
 
 use crate::asset::UsdLayerReadReceipt;
 use lunco_usd_compose::recipe::{StageClosureLimits, StageDependencyDiagnostic, StageRecipe};
-use lunco_usd_compose::{SharedLayerBytes, check_stage_closure_limits, child_layer_ids};
+use lunco_usd_compose::{SharedLayerBytes, check_stage_closure_limits};
 
 fn is_missing_asset_read(error: &ReadAssetBytesError) -> bool {
     match error {
@@ -212,7 +212,7 @@ async fn fetch_layer_closure_inner(
             total_bytes = total_bytes
                 .checked_add(raw.len())
                 .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
-            bytes.insert(identifier.clone(), raw);
+            bytes.insert(identifier.clone(), raw.into());
         }
     }
     check_stage_closure_limits(&limits, bytes.len(), 0, 0, total_bytes)?;
@@ -233,7 +233,7 @@ async fn fetch_layer_closure_inner(
         let mut duplicate_referrers: HashMap<String, Vec<(usize, String)>> = HashMap::new();
         for (id, depth) in frontier {
             let raw = bytes.get(&id).expect("frontier id is present in map");
-            let child_ids = child_layer_ids(&id, raw)?;
+            let child_ids = raw.child_layer_ids(&id)?;
             check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
             for child_id in child_ids {
                 let dependency_order = next_dependency_order;
@@ -399,7 +399,7 @@ async fn fetch_layer_closure_inner(
                 {
                     source_dependencies.push(load_context.add_loaded_labeled_asset(label, receipt));
                 }
-                bytes.insert(child_id.clone(), fetched);
+                bytes.insert(child_id.clone(), fetched.into());
                 next_frontier.push((child_id, child_depth));
             }
         }
@@ -407,12 +407,15 @@ async fn fetch_layer_closure_inner(
     }
 
     dependency_diagnostics.sort_by_key(|(order, _)| *order);
-    let mut recipe = StageRecipe::new(root_id, bytes);
-    recipe.session_layer = session_layer;
-    recipe.dependency_diagnostics = dependency_diagnostics
-        .into_iter()
-        .map(|(_, diagnostic)| diagnostic)
-        .collect();
+    let recipe = StageRecipe {
+        root_id,
+        bytes,
+        session_layer,
+        dependency_diagnostics: dependency_diagnostics
+            .into_iter()
+            .map(|(_, diagnostic)| diagnostic)
+            .collect(),
+    };
     Ok(FetchedStageClosure {
         recipe,
         source_dependencies,
@@ -626,7 +629,10 @@ mod tests {
             ))
             .unwrap();
 
-        assert_eq!(prepared.bytes.get(&child_id), Some(&open_document_bytes));
+        assert_eq!(
+            prepared.bytes.get(&child_id).map(AsRef::as_ref),
+            Some(open_document_bytes.as_slice())
+        );
     }
 }
 

@@ -557,14 +557,14 @@ pub fn document_stage_recipe(
     });
     output.session_layer = Some(ids.session.clone());
     let root_bytes = layer_bytes(&root_id, base)?;
-    output.bytes.insert(root_id, root_bytes);
+    output.bytes.insert(root_id, root_bytes.into());
     for (id, data) in [
         (ids.runtime, runtime),
         (ids.view, view),
         (ids.session, &session),
     ] {
         let bytes = layer_bytes(&id, data)?;
-        output.bytes.insert(id, bytes);
+        output.bytes.insert(id, bytes.into());
     }
     Ok(output)
 }
@@ -1000,7 +1000,8 @@ over "World" { double value = 3 }
                     br#"#usda 1.0
 def "Part" { double referenced = 23 }
 "#
-                    .to_vec(),
+                    .to_vec()
+                    .into(),
                 )]),
                 dependency_diagnostics: Vec::new(),
             };
@@ -1076,7 +1077,12 @@ def "Part" { double referenced = 23 }
                     .get("default"),
                 Some(&Value::Double(1.0))
             );
-            assert!(data_to_usda(&extracted).is_err());
+            let restored = usda_to_data(&data_to_usda(&extracted).unwrap()).unwrap();
+            let world = SdfPath::new("/World").unwrap();
+            for field in ["inheritPaths", "references"] {
+                let authored = base.spec(&world).unwrap().get(field).unwrap();
+                assert_eq!(restored.spec(&world).unwrap().get(field), Some(authored));
+            }
         }
     }
 
