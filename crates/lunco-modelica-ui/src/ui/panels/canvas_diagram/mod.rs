@@ -299,6 +299,8 @@ pub struct CanvasDocState {
     /// 800×600 the observer would have to use). Cleared after the
     /// fit lands.
     pub pending_fit: bool,
+    /// Instance name, viewport fraction and selection intent for the next projected frame.
+    pub pending_component: Option<(String, f32, bool)>,
     /// Snapshot of the drill-in target that produced the *currently
     /// rendered* scene. The render trigger compares this against the
     /// live `DrilledInClassNames[doc_id]`; a difference re-projects.
@@ -401,6 +403,7 @@ impl Default for CanvasDocState {
             canvas_acked_gen: 0,
             last_seen_source_hash: 0,
             pending_fit: false,
+            pending_component: None,
             last_seen_target: None,
             target_unit_instance: None,
             projection_error: None,

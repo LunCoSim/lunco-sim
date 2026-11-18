@@ -423,7 +423,48 @@ fn apply_pending_fit(
     egui_ctx: &egui::Context,
 ) {
     let docstate = state.get_mut_for_render(render_tab_id, active_doc);
-    if !docstate.pending_fit || docstate.projection_task.is_some() {
+    if docstate.projection_task.is_some()
+        || (docstate.pending_component.is_some()
+            && (docstate.projection_wait.is_some() || docstate.last_seen_gen == 0))
+    {
+        return;
+    }
+    if let Some((name, fraction, select)) = docstate.pending_component.take() {
+        let node = docstate
+            .canvas
+            .scene
+            .nodes()
+            .find(|(_, node)| node.origin.as_deref() == Some(name.as_str()))
+            .map(|(id, node)| (*id, node.rect))
+            .or_else(|| {
+                docstate
+                    .canvas
+                    .scene
+                    .nodes()
+                    .find(|(_, n)| n.label == name)
+                    .map(|(id, n)| (*id, n.rect))
+            });
+        if let Some((id, rect)) = node {
+            let center = lunco_canvas::Pos::new(
+                (rect.min.x + rect.max.x) * 0.5,
+                (rect.min.y + rect.max.y) * 0.5,
+            );
+            let zoom = widget_rect.width().min(widget_rect.height()) * fraction
+                / rect.width().max(rect.height()).max(1e-3);
+            docstate.canvas.viewport.set_target(center, zoom);
+            if select {
+                docstate
+                    .canvas
+                    .selection
+                    .set(lunco_canvas::SelectItem::Node(id));
+            }
+            docstate.pending_fit = false;
+            egui_ctx.request_repaint();
+            return;
+        }
+        bevy::log::warn!("[FocusComponent] no node named `{name}` in the projected diagram");
+    }
+    if !docstate.pending_fit {
         return;
     }
     let Some(world_rect) = docstate.canvas.scene.bounds() else {
