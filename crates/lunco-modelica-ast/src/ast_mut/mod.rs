@@ -33,8 +33,6 @@ pub use edit::Edit;
 pub use equations::*;
 pub use errors::AstMutError;
 pub use graphics::*;
-pub use parsing::{FRAGMENT_CLASS_NAME, parse_stub_cached};
-pub use text::{annotation_clause, find_keyword, line_start, statement_end};
 pub use util::lookup_class_mut;
 
 use rumoca_ir_ast::{ClassDef, StoredDefinition};

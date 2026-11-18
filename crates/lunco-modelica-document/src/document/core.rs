@@ -100,9 +100,6 @@ impl SyntaxCache {
     /// parses them before they reach this document; they cannot be edited into
     /// a broken state, so recovery does not apply.)
     pub fn from_source(source: &str, generation: u64) -> Self {
-        if std::env::var_os("LUNCO_NO_PARSE").is_some() {
-            return Self::empty(generation);
-        }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = source;
@@ -235,7 +232,7 @@ impl ModelicaDocument {
         // `with_origin` seeds for async parsing — see [`Self::index_baselined`].
         let index_baselined = !syntax.ast.classes.is_empty();
         let mut index = ModelicaIndex::new();
-        index.rebuild_with_errors(&syntax.ast, &source, has_errors);
+        index.rebuild_with_errors(&syntax.ast, has_errors);
         Self {
             id,
             source,
@@ -355,8 +352,7 @@ impl ModelicaDocument {
             // immediately wants back.
             return;
         }
-        self.index
-            .rebuild_with_errors(&self.syntax.ast, &self.source, has_errors);
+        self.index.rebuild_with_errors(&self.syntax.ast, has_errors);
         // First (baseline) build: adopt the initial class set silently. The
         // document's starting classes aren't `ClassAdded` mutations — consumers
         // read the index directly for initial state; the ring carries only the

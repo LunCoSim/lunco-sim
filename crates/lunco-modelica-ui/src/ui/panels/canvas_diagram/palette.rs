@@ -254,7 +254,7 @@ mod tests {
         let source = "package Icons model Device Real state; end Device; partial class Template end Template; end Icons;";
         let ast = rumoca_phase_parse::parse_to_ast(source, "palette.mo").unwrap();
         let mut index = lunco_modelica_index::index::ModelicaIndex::new();
-        index.rebuild_from_ast(&ast, source);
+        index.rebuild_from_ast(&ast);
         let device = index.classes.get("Icons.Device").unwrap();
         let template = index.classes.get("Icons.Template").unwrap();
         assert!(!device.partial);

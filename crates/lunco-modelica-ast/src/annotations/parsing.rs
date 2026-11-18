@@ -371,16 +371,6 @@ fn extract_dyn_extent(expr: &Expression) -> Option<DynExtent> {
     })
 }
 
-pub fn extract_line_points(annotation: &[Expression]) -> Vec<(f32, f32)> {
-    extract_line_full(annotation)
-        .map(|r| r.points)
-        .unwrap_or_default()
-}
-
-pub fn extract_line_route(annotation: &[Expression]) -> Option<(Vec<(f32, f32)>, bool)> {
-    extract_line_full(annotation).map(|r| (r.points, r.smooth_bezier))
-}
-
 pub fn extract_line_full(annotation: &[Expression]) -> Option<LineRoute> {
     let line_call = find_call(annotation, "Line")?;
     let line_args = call_args(line_call)?;

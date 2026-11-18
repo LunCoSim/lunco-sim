@@ -80,7 +80,13 @@ fn observe_initialization(
         .chain(state_names)
         .cloned()
         .collect::<Vec<_>>();
-    let mut values = rumoca_sim::initialize_fmi_component(component, &plan.options, &requested)?;
+    // The composite is consumed by this observation. Compile persistent
+    // execution programs when constructing each live participant.
+    let options = rumoca_sim::SimOptions {
+        execution_policy: rumoca_sim::SimExecutionPolicy::Interpreter,
+        ..plan.options
+    };
+    let mut values = rumoca_sim::initialize_fmi_component(component, &options, &requested)?;
     let state_values = state_names
         .iter()
         .cloned()
@@ -340,23 +346,20 @@ pub(super) fn dispatch(
     let plan = work.plan.clone();
     let probes = work.probes.clone();
     let state_names = source_state_names(&work.comp_res);
-    let native_cache = pool.native_cache.clone();
     let tx = pool.tx.clone();
     let queued = web_time::Instant::now();
     lane.submit(move |_| {
         let queue_wait_ns = queued.elapsed().as_nanos() as u64;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            native_cache
-                .construct(|| observe_initialization(&component, plan, &probes, &state_names))
+            observe_initialization(&component, plan, &probes, &state_names)
         }))
         .unwrap_or_else(|_| {
             Err(rumoca_sim::SimulationDiagnosticError::Solver(
                 "initialization observation panicked".into(),
             ))
         })
-        .map(|(mut outcome, native_profile)| {
+        .map(|mut outcome| {
             outcome.construction_profile.queue_wait_ns = Some(queue_wait_ns);
-            outcome.construction_profile.native_code_cache = Some(native_profile);
             outcome
         });
         let _ = tx.send(WorkerPreparationResult::Initialization { id, result });

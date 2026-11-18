@@ -1,18 +1,17 @@
 //! Fixed-step RK4 integration on Rumoca's shared Model Exchange host.
 //!
 //! The host owns initialization, input transactions, component evaluation and
-//! observations. The numerical plugin owns four RK stages at the exact fixed
-//! cadence. Continuous extensions use those retained stages without evaluating
-//! the component outside the host-issued derivative capability.
+//! observations. Rumoca's RK4 plugin advances the continuous state on the
+//! communication lattice selected by the prediction host.
 
 use rumoca_compile::compile::Dae;
 use rumoca_core::VarName;
 use rumoca_ir_solve::fmi::FmiComponent;
 use rumoca_sim::{SimOptions, SimulationDiagnosticError};
 use rumoca_solver::fmi_me::{
-    MeAdvanceRequest, MeContinuousPoint, MeDerivativeHandle, MeInstanceConfig, MeIntegrationError,
-    MeIntegratorBackend, MeModelSource, MeStepCandidate, accepted_interval_contains,
+    MeInstanceConfig, MeIntegratorBackend, MeModelSource,
     driver::{advance_live_session, live_session_options},
+    fixed_step::FixedRk4Integrator,
     integrator::canonical_coordinate,
     session::{MeRetainedComponent, MeSimulationSession},
 };
@@ -20,7 +19,6 @@ use rumoca_solver::fmi_me::{
 /// A continuous fixed-step session with parameter-only event partitions.
 pub struct FixedStepSession {
     session: MeSimulationSession<'static, 'static>,
-    input_names: Vec<String>,
     output_count: usize,
     time_origin: f64,
     step_index: u64,
@@ -55,7 +53,7 @@ impl FixedStepSession {
             options.t_end,
         )
         .map_err(solver_error)?;
-        let execution = rumoca_sim::fmi_execution_backend(component, &options);
+        let execution = rumoca_sim::fmi_execution_backend(component, &options)?;
         let retained =
             MeRetainedComponent::instantiate(MeModelSource::new(component), &config, execution)
                 .map_err(solver_error)?;
@@ -78,20 +76,14 @@ impl FixedStepSession {
         let plugin: Option<Box<dyn MeIntegratorBackend>> = if host.state_count() == 0 {
             None
         } else {
-            Some(Box::new(FixedRk4 {
-                origin: canonical_coordinate(options.t_start),
-                index: 0,
-                dt: fixed_dt,
-                derivatives: None,
-                history: None,
-            }))
+            Some(Box::new(
+                FixedRk4Integrator::new(options.t_start, fixed_dt).map_err(solver_error)?,
+            ))
         };
         let session = host.into_session(plugin).map_err(solver_error)?;
-        let input_names = session.input_names();
-        let output_count = session.output_names().len();
+        let output_count = session.output_names().map_err(solver_error)?.len();
         Ok(Self {
             session,
-            input_names,
             output_count,
             time_origin: canonical_coordinate(options.t_start),
             step_index: 0,
@@ -160,7 +152,7 @@ impl FixedStepSession {
             .map_err(solver_error)
     }
     pub fn input_names(&self) -> &[String] {
-        &self.input_names
+        self.session.input_names()
     }
     /// Initialized parameters read by the shared Model Exchange host.
     pub fn parameter_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
@@ -173,153 +165,6 @@ impl FixedStepSession {
     pub(crate) fn output_count(&self) -> usize {
         self.output_count
     }
-}
-
-struct Rk4History {
-    start: f64,
-    end: f64,
-    initial: Vec<f64>,
-    final_state: Vec<f64>,
-    stages: [Vec<f64>; 4],
-}
-
-struct FixedRk4 {
-    origin: f64,
-    index: u64,
-    dt: f64,
-    derivatives: Option<MeDerivativeHandle>,
-    history: Option<Rk4History>,
-}
-
-fn integration_error(reason: impl Into<String>) -> MeIntegrationError {
-    MeIntegrationError::Contract {
-        reason: reason.into(),
-    }
-}
-
-impl FixedRk4 {
-    fn validate_coordinate(&self, point: &MeContinuousPoint) -> Result<(), MeIntegrationError> {
-        let expected = self.origin + self.index as f64 * self.dt;
-        if point.time().to_bits() != expected.to_bits() {
-            return Err(integration_error(format!(
-                "fixed-rk4 requires grid coordinate {expected}, received {}",
-                point.time()
-            )));
-        }
-        Ok(())
-    }
-}
-
-impl MeIntegratorBackend for FixedRk4 {
-    fn initialize(
-        &mut self,
-        point: &MeContinuousPoint,
-        derivatives: MeDerivativeHandle,
-    ) -> Result<(), MeIntegrationError> {
-        self.validate_coordinate(point)?;
-        self.derivatives = Some(derivatives);
-        self.history = None;
-        Ok(())
-    }
-
-    fn advance(
-        &mut self,
-        request: &MeAdvanceRequest,
-    ) -> Result<MeStepCandidate, MeIntegrationError> {
-        let point = request.current();
-        self.validate_coordinate(point)?;
-        let next = self
-            .index
-            .checked_add(1)
-            .ok_or_else(|| integration_error("fixed-rk4 step index overflowed"))?;
-        let end = self.origin + next as f64 * self.dt;
-        let handle = self
-            .derivatives
-            .as_ref()
-            .ok_or_else(|| integration_error("fixed-rk4 has no admitted derivative capability"))?;
-        let eval = |time, state: &[f64]| {
-            handle
-                .derivatives(time, state)
-                .map_err(|_| MeIntegrationError::DerivativeRefused)
-        };
-        let t = point.time();
-        let h = self.dt;
-        let y = point.states();
-        let k1 = eval(t, y)?;
-        let k2 = eval(t + h * 0.5, &stage_state(y, &k1, h * 0.5))?;
-        let k3 = eval(t + h * 0.5, &stage_state(y, &k2, h * 0.5))?;
-        let k4 = eval(end, &stage_state(y, &k3, h))?;
-        let values: Vec<_> = y
-            .iter()
-            .enumerate()
-            .map(|(i, value)| value + (h / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
-            .collect();
-        self.history = Some(Rk4History {
-            start: t,
-            end,
-            initial: y.to_vec(),
-            final_state: values.clone(),
-            stages: [k1, k2, k3, k4],
-        });
-        self.index = next;
-        // Classical RK4's cubic continuous extension has local order three.
-        Ok(MeStepCandidate::new(end, values, 3))
-    }
-
-    fn sample(&self, time: f64, states: &mut [f64]) -> Result<(), MeIntegrationError> {
-        let history = self
-            .history
-            .as_ref()
-            .ok_or_else(|| integration_error("fixed-rk4 has no accepted interval to sample"))?;
-        if states.len() != history.initial.len()
-            || !accepted_interval_contains(history.start, history.end, time)
-        {
-            return Err(integration_error(
-                "fixed-rk4 sample is outside its accepted interval or state width",
-            ));
-        }
-        if time.to_bits() == history.end.to_bits() {
-            states.copy_from_slice(&history.final_state);
-            return Ok(());
-        }
-        if time.to_bits() == history.start.to_bits() {
-            states.copy_from_slice(&history.initial);
-            return Ok(());
-        }
-        let theta = (time - history.start) / self.dt;
-        let square = theta * theta;
-        let cube = square * theta;
-        let weights = [
-            theta - 1.5 * square + (2.0 / 3.0) * cube,
-            square - (2.0 / 3.0) * cube,
-            square - (2.0 / 3.0) * cube,
-            -0.5 * square + (2.0 / 3.0) * cube,
-        ];
-        for (i, state) in states.iter_mut().enumerate() {
-            let delta: f64 = history
-                .stages
-                .iter()
-                .zip(weights)
-                .map(|(stage, weight)| stage[i] * weight)
-                .sum();
-            *state = history.initial[i] + self.dt * delta;
-        }
-        Ok(())
-    }
-
-    fn truncate_reset(&mut self, point: &MeContinuousPoint) -> Result<(), MeIntegrationError> {
-        self.validate_coordinate(point)?;
-        self.history = None;
-        Ok(())
-    }
-}
-
-fn stage_state(state: &[f64], derivative: &[f64], scale: f64) -> Vec<f64> {
-    state
-        .iter()
-        .zip(derivative)
-        .map(|(value, derivative)| value + scale * derivative)
-        .collect()
 }
 
 fn validate_fixed_step_component(
@@ -375,7 +220,7 @@ end ObservationProbe;
             },
         )
         .unwrap();
-        let labels = stepper.session.output_names();
+        let labels = stepper.session.output_names().unwrap();
         assert_eq!(labels.len(), 2305);
         assert!(labels.iter().any(|name| name == "command"));
         let named = |stepper: &FixedStepSession| {

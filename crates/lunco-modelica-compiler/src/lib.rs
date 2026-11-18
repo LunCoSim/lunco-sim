@@ -1634,13 +1634,13 @@ fn diagnostics_from_strict_failure(
             // Resolve the primary span against its original compilation source map.
             let resolved = f.primary_label.as_ref().and_then(|label| {
                 let (name, content) = report.source_map.get_source(label.span.source)?;
-                Some((name.to_string(), content.to_string(), label.span.start.0))
+                Some((name, content, label.span.start.0))
             });
             match resolved {
                 Some((name, content, start)) if name == user_uri => {
                     let (line, column) =
                         lunco_modelica_document::document::core::byte_offset_to_line_col(
-                            &content, start,
+                            content, start,
                         );
                     Diagnostic::error(message, Some(line), Some(column))
                 }

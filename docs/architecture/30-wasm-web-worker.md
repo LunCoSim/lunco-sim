@@ -411,7 +411,7 @@ bottom egui bar).
 
 ## Rumoca dependency verification
 
-Compilation, tools, and browser simulation consume the same Rumoca 0.10.2
+Compilation, tools, and browser simulation consume the same Rumoca 0.10.4
 revision. Prepared execution uses checked FMI components; source-root loading
 uses the maintained compile session. Temporary local dependency paths and
 branch-based dependency pins must not enter a release.

@@ -6,7 +6,7 @@
 //! orchestration does not rebuild these consumers, and asset tooling can use
 //! the serialized index without depending on the document runtime.
 
-pub mod annotation_source;
+pub mod connection_routes;
 pub mod doc_extract;
 pub mod index;
 pub mod package_tree;

@@ -1,9 +1,7 @@
 //! Connection and port mutation helpers.
 //!
-//! rumoca's `Equation::Connect` carries no `annotation` field, so the routing of
-//! a connection line (`annotation(Line(points={…}))`) does not survive a parse.
-//! Source splices preserve and update that authored annotation. Endpoint syntax
-//! stays in the parsed AST; routing stays in its exact source statement span.
+//! Source splices retain comments and unrelated fields of connection annotations.
+//! The Rumoca parser supplies the typed annotation for the edited connection.
 
 use std::ops::Range;
 
@@ -12,7 +10,7 @@ use rumoca_ir_ast::{ClassDef, Equation};
 use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
-use super::parsing::parse_connect_equation_fragment;
+use super::parsing::parse_equation_fragment;
 use super::text;
 use super::util::matches_port_ref;
 use crate::pretty;
@@ -38,7 +36,7 @@ fn find_connect(
         .position(|eq| {
             matches!(
                 eq,
-                Equation::Connect { lhs, rhs }
+                Equation::Connect { lhs, rhs, .. }
                     if (matches_port_ref(lhs, from) && matches_port_ref(rhs, to))
                         || (matches_port_ref(lhs, to) && matches_port_ref(rhs, from))
             )
@@ -79,8 +77,8 @@ pub fn add_connection(
     edit: &mut Edit<'_>,
     eq: &pretty::ConnectEquation,
 ) -> Result<(), AstMutError> {
-    let new_eq = parse_connect_equation_fragment(eq)?;
     let rendered = pretty::connect_equation(eq);
+    let new_eq = parse_equation_fragment(&rendered)?;
     insert_equation(class, edit, &rendered)?;
     class.equations.push(new_eq);
     Ok(())
@@ -146,7 +144,7 @@ pub fn reverse_connection(
     edit.replace(args[0].clone(), rhs);
     edit.replace(args[1].clone(), format!(" {lhs}"));
 
-    if let Equation::Connect { lhs, rhs } = &mut class.equations[idx] {
+    if let Equation::Connect { lhs, rhs, .. } = &mut class.equations[idx] {
         std::mem::swap(lhs, rhs);
     }
     Ok(())
@@ -163,9 +161,13 @@ pub fn set_connection_line(
     to: &pretty::PortRef,
     points: &[(f32, f32)],
 ) -> Result<(), AstMutError> {
-    let (_, stmt) = find_connect(class, edit.source(), from, to)?;
-    set_line_fields(edit, stmt, &[("points", pretty::fmt_points(points))]);
-    Ok(())
+    let (index, stmt) = find_connect(class, edit.source(), from, to)?;
+    edit_line_fields(
+        &mut class.equations[index],
+        edit,
+        stmt,
+        &[("points", pretty::fmt_points(points))],
+    )
 }
 
 /// Set individual `Line(...)` style fields on a `connect(...)` equation.
@@ -179,7 +181,7 @@ pub fn set_connection_line_style(
     thickness: Option<f64>,
     smooth_bezier: Option<bool>,
 ) -> Result<(), AstMutError> {
-    let (_, stmt) = find_connect(class, edit.source(), from, to)?;
+    let (index, stmt) = find_connect(class, edit.source(), from, to)?;
     let mut fields: Vec<(&str, String)> = Vec::new();
     if let Some([r, g, b]) = color {
         fields.push(("color", format!("{{{r},{g},{b}}}")));
@@ -191,7 +193,37 @@ pub fn set_connection_line_style(
         let value = if s { "Smooth.Bezier" } else { "Smooth.None" };
         fields.push(("smooth", value.to_string()));
     }
-    set_line_fields(edit, stmt, &fields);
+    edit_line_fields(&mut class.equations[index], edit, stmt, &fields)
+}
+
+fn edit_line_fields(
+    equation: &mut Equation,
+    edit: &mut Edit<'_>,
+    statement: Range<usize>,
+    fields: &[(&str, String)],
+) -> Result<(), AstMutError> {
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let source = edit.source();
+    let mut line_edit = Edit::new(source);
+    set_line_fields(&mut line_edit, statement.clone(), fields);
+    let (range, replacement) = line_edit.into_patch()?;
+    let mut updated = source[statement.start..range.start].to_string();
+    updated.push_str(&replacement);
+    updated.push_str(&source[range.end..statement.end]);
+    let Equation::Connect { annotation, .. } = equation else {
+        unreachable!("find_connect only selects connect equations");
+    };
+    let Equation::Connect {
+        annotation: updated_annotation,
+        ..
+    } = parse_equation_fragment(&updated)?
+    else {
+        return Err(AstMutError::ValueParseFailed { value: updated });
+    };
+    *annotation = updated_annotation;
+    edit.replace(range, replacement);
     Ok(())
 }
 
@@ -200,9 +232,6 @@ pub fn set_connection_line_style(
 /// when the connection has none yet. Fields the caller didn't name are left
 /// exactly as authored.
 fn set_line_fields(edit: &mut Edit<'_>, stmt: Range<usize>, fields: &[(&str, String)]) {
-    if fields.is_empty() {
-        return;
-    }
     let source = edit.source();
     let line_group = text::annotation_clause(source, stmt.clone()).and_then(|(_, group)| {
         clause::call_group(source, group.clone(), "Line").map(|l| (group, l))

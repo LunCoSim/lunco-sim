@@ -393,9 +393,7 @@ pub(super) fn build_ops_from_events(
                 let Some(to_instance) = to_node.origin.clone() else {
                     continue;
                 };
-                // Canvas Y is +down; Modelica diagram Y is +up. Flip
-                // so the round-trip back through `extract_line_points`
-                // lands at the same canvas positions.
+                // Modelica diagram Y increases up, and canvas Y increases down.
                 let modelica_points: Vec<(f32, f32)> = points.iter().map(|p| (p.x, -p.y)).collect();
                 ops.push(ModelicaOp::SetConnectionLine {
                     class: class.to_string(),

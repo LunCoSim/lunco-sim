@@ -651,9 +651,10 @@ A scheduling round dispatches at most one initialized transaction per entity
 before awaiting results. It transfers the complete owned input vector, retaining
 the requested communication point and checked observation path. The selected
 numerical backend owns internal steps through `LiveStepper::advance_to`:
-Rumoca drives adaptive Model Exchange, and fixed prediction validates its
-configured lattice before integrating. Both obtain their opaque native
-execution backend from Rumoca's simulation facade; fixed RK4 passes
+Rumoca drives adaptive Model Exchange and supplies the RK4 numerical plugin
+for fixed prediction. LunCoSim validates the communication lattice before
+advancing. Both obtain their opaque native execution backend from Rumoca's
+simulation facade. Fixed RK4 passes
 `fmi_execution_backend(component, options)` into the shared retained ME
 component. Numerical integration, execution policy and complete checked
 observations keep their existing owners. The application does not implement a
@@ -1064,7 +1065,7 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v13`.
+`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v14`.
 It preserves the N−1 most recently published or used other records within the
 compressed byte budget (file modification time, filename as the tie-break, so
 enumeration order never decides); a verified disk hit records its use through
@@ -1664,8 +1665,10 @@ composite as a request-owned job. Its identity contains the scene generation
 and a sequence within that generation. The worker returns checked finite
 observations, solver settings and preparation timings under that request identity, without
 installing a live session, attaching an integration plugin or publishing a
-scene model. It shares prepared artifacts and bounded worker lanes with live
-construction. Native and browser transports keep initialization replies
+scene model. The transient composite evaluates through Rumoca's reference
+execution policy. The participating live sessions prepare their own
+execution programs. Both jobs share checked artifacts and bounded worker lanes.
+Native and browser transports keep initialization replies
 separate from participant lifecycle results.
 Preparation neither advances simulation time nor blocks the live World on parsing
 or solver construction. While the job has no outcome, the

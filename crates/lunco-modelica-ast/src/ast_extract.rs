@@ -25,23 +25,6 @@ pub fn is_plot_node_record_call(expr: &Expression) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Parsing entry point
-// ---------------------------------------------------------------------------
-
-/// Recover source facts through Rumoca's tolerant syntax projection.
-fn parse_recovered(source: &str, file_label: &str) -> StoredDefinition {
-    // Interface metadata uses the compiler's tolerant syntax projection.
-    rumoca_phase_parse::parse_to_syntax(source, file_label)
-        .best_effort()
-        .clone()
-}
-
-fn parse(source: &str) -> Option<StoredDefinition> {
-    let syntax = rumoca_phase_parse::parse_to_syntax(source, "model.mo");
-    (!syntax.has_errors()).then(|| syntax.best_effort().clone())
-}
-
-// ---------------------------------------------------------------------------
 // Public source and AST projections
 // ---------------------------------------------------------------------------
 
@@ -95,19 +78,6 @@ pub struct ModelicaVariableMetadata {
     pub unit: Option<String>,
 }
 
-/// Read direct variable documentation of the selected runnable class.
-///
-/// An undocumented declaration produces no entry. Consumers therefore preserve
-/// the absence of documentation instead of manufacturing prose from a variable
-/// identifier.
-pub fn variable_metadata(
-    source: &str,
-    file_label: &str,
-) -> HashMap<String, ModelicaVariableMetadata> {
-    let ast = parse_recovered(source, file_label);
-    parse_model_interface_from_ast(&ast).variable_metadata
-}
-
 fn declaration_metadata(component: &rumoca_ir_ast::Component) -> Option<ModelicaVariableMetadata> {
     let description = description_from_tokens(&component.description);
     let unit = component
@@ -128,8 +98,8 @@ fn declaration_metadata(component: &rumoca_ir_ast::Component) -> Option<Modelica
 /// name/parameter/input snapshots, the same recovery `Session::recovered_file_query`
 /// gives the engine side.
 pub fn parse_model_interface(source: &str, file_label: &str) -> ModelInterface {
-    let ast = parse_recovered(source, file_label);
-    parse_model_interface_from_ast(&ast)
+    let syntax = rumoca_phase_parse::parse_to_syntax(source, file_label);
+    parse_model_interface_from_ast(syntax.best_effort())
 }
 
 /// Read direct declarations of the selected runnable class from a recovered AST.
@@ -300,7 +270,7 @@ fn authored_component_type(
 /// nesting. Files containing only packages, connectors, records, types, or
 /// functions have no automatic simulation target.
 pub fn extract_model_name(source: &str) -> Option<String> {
-    let ast = parse(source)?;
+    let ast = rumoca_phase_parse::parse_to_ast_with_errors(source, "model.mo").ok()?;
     extract_model_name_from_ast(&ast)
 }
 
@@ -660,7 +630,7 @@ end Metadata;"#;
             string_literal_value(class.components["label"].binding.as_ref().unwrap()),
             Some("\"quoted\"\\n".to_string())
         );
-        let metadata = variable_metadata(source, "metadata.mo");
+        let metadata = parse_model_interface_from_ast(&ast).variable_metadata;
         assert_eq!(metadata["temperature"].unit.as_deref(), Some("\"K\""));
         assert_eq!(
             metadata["temperature"].description.as_deref(),
@@ -706,7 +676,7 @@ end Metadata;"#;
             "  y = gain * drive_left;\n",
             "end M;\n",
         );
-        let ast = parse(source).expect("parses");
+        let ast = rumoca_phase_parse::parse_to_ast(source, "model.mo").expect("parses");
 
         let interface = parse_model_interface_from_ast(&ast);
         let names = &interface.inputs;
@@ -794,15 +764,16 @@ end Models;
             interface.variable_metadata["sample"].description.as_deref(),
             Some("selected output")
         );
-        let ast = parse_recovered(source, "Models.mo");
-        let explicit = model_interface_for_class(&ast, "Demo.Models.Sibling").unwrap();
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "Models.mo");
+        let ast = syntax.best_effort();
+        let explicit = model_interface_for_class(ast, "Demo.Models.Sibling").unwrap();
         assert_eq!(explicit.model_name.as_deref(), Some("Models.Sibling"));
         assert_eq!(
             explicit.parameters,
             HashMap::from([("sibling_parameter".into(), 66.0)])
         );
         assert_eq!(explicit.inputs, BTreeSet::from(["sibling_input".into()]));
-        assert!(model_interface_for_class(&ast, "Demo.Models.Missing").is_none());
+        assert!(model_interface_for_class(ast, "Demo.Models.Missing").is_none());
         let library = parse_model_interface(
             "connector Library input Real value=4; parameter Real gain=7; end Library;",
             "Library.mo",
@@ -978,7 +949,7 @@ model Thermal
   Real undocumented;
 end Thermal;
 "#;
-        let metadata = variable_metadata(source, "Thermal.mo");
+        let metadata = parse_model_interface(source, "Thermal.mo").variable_metadata;
         assert_eq!(
             metadata.get("case_temperature"),
             Some(&ModelicaVariableMetadata {
@@ -999,7 +970,7 @@ model Battery
   output Real charge_remaining_ah(unit="Ah") "Charge currently available";
 end Battery;
 "#;
-        let metadata = variable_metadata(source, "Battery.mo");
+        let metadata = parse_model_interface(source, "Battery.mo").variable_metadata;
         assert_eq!(
             metadata.get("charge_remaining_ah"),
             Some(&ModelicaVariableMetadata {

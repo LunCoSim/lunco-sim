@@ -66,7 +66,8 @@ failures; those errors must leave the application available for inspection.
 Rust panic handling alone cannot contain a native access violation. See the
 [native execution contract](../../docs/architecture/20-domain-modelica.md).
 
-Predicted participants retain fixed RK4. Its admission uses Rumoca's shared
+Predicted participants use Rumoca's fixed RK4 integrator on LunCoSim's
+communication lattice. Admission uses Rumoca's shared
 parameter-only event proof: parameter assertions execute at initialization and
 after parameter changes, while dynamic error predicates, discrete updates,
 clocks, delays and external tables remain rejected. Inspect the model's startup
@@ -160,7 +161,7 @@ component value cannot read an unrelated root variable with the same leaf name.
 Compiled reuse requires the exact target and source unit. Prepared solver reuse
 uses the compiler's exact participating-source identity, including generated
 identifiers and literals. Class documentation uses qualified declaration ownership
-and Rumoca-decoded strings. Optional prepared disk records use version 13 and
+and Rumoca-decoded strings. Optional prepared disk records use version 14 and
 require the exact clean compiler build identity; an unknown or dirty compiler
 build disables disk reuse.
 
@@ -182,7 +183,8 @@ For cyclic initial admission, run `modelica_initialization_network.usda` and
 the inconsistent `modelica_initialization_failure.usda` production gates.
 Inspect `CosimStatus.last_coupled_initialization` for the certified worker
 preparation's scene, solver identity and construction timings. This bounded
-initialization job has no live participant or telemetry publisher. See the
+initialization job uses Rumoca's reference evaluator to return the composite's
+initial values. Each live participant prepares its own execution programs. See the
 [coupled admission guidance below](#omitted-library-inputs) for source fencing
 and state constraints. Missing diagnostic timings are unavailable; they do not
 block numerical admission.
