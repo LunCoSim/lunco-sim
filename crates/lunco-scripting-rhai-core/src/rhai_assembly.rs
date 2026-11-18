@@ -99,6 +99,13 @@ fn connect(
 /// Register the typed assembly surface. Identifiers are strings only at the
 /// constructor edge; poses, kinds, ports, and links remain native Rust values.
 pub fn register(engine: &mut Engine) {
+    // Even an optimized script must allocate on each invocation of the same call site.
+    rhai::FuncRegistration::new("new_component_id")
+        .with_volatility(true)
+        .register_into_engine(engine, || {
+            let uuid = bevy::asset::uuid::Uuid::new_v4();
+            component_id(format!("c_{}", uuid.simple()))
+        });
     engine
         .register_type_with_name::<ComponentId>("ComponentId")
         .register_get("value", |value: &mut ComponentId| value.as_str().to_owned())
@@ -172,11 +179,6 @@ pub fn register(engine: &mut Engine) {
             value.links.len() as i64
         })
         .register_fn("assembly_plan", AssemblyPlan::default)
-        // Allocate once at authoring time. Store the returned value with the component.
-        .register_fn("new_component_id", || {
-            let uuid = bevy::asset::uuid::Uuid::new_v4();
-            component_id(format!("c_{}", uuid.simple()))
-        })
         .register_fn("component_id", component_id)
         .register_fn("port_id", port_id)
         .register_fn("component_kind", component_kind)
@@ -208,9 +210,14 @@ mod tests {
     fn allocated_component_ids_round_trip_as_distinct_authored_identifiers() {
         let mut engine = Engine::new();
         register(&mut engine);
-        assert!(engine.eval::<bool>(
-            "let a = new_component_id(); let b = new_component_id(); a.value != b.value && component_id(a.value).value == a.value"
-        ).unwrap());
+        engine.set_optimization_level(rhai::OptimizationLevel::Full);
+        let script = engine
+            .compile("component_id(new_component_id().value).value")
+            .unwrap();
+        let first = engine.eval_ast::<String>(&script).unwrap();
+        let second = engine.eval_ast::<String>(&script).unwrap();
+        assert_ne!(first, second);
+        assert!(bevy::asset::uuid::Uuid::parse_str(first.strip_prefix("c_").unwrap()).is_ok());
     }
 
     #[test]
