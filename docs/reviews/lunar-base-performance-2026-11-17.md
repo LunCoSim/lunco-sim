@@ -1052,3 +1052,52 @@ selected terrain tiles drawn at the final check, zero clipped time, zero
 runtime findings and matching source hashes. The paused parity probe and
 the landed run both release their API port. This run misses both performance
 limits. The receipt is in `tether-visual-candidate/strict/session.json`.
+
+## Output shadow caster preparation trial
+
+The trial reused the render adapter's camera and candidate storage and
+delegated ordering to Bevy's existing visibility collector. Each frame
+rebuilt caster membership from current extraction. The trial preserved
+directional subview selection, light masks and shared shadow origin.
+
+The adjacent Tracy collector records 22,274,082 zones for the candidate.
+In 25-second landed High 2560×1440 windows, mean caster injection time drops
+from 0.183 to 0.083 ms. Mean native collection rises from 0.155 to 0.179 ms.
+The two passes total 0.338 and 0.261 ms of mean work per render frame. The
+inclusive Render median moves from 8.498 to 7.881 ms and p99 from 11.334 to
+14.058 ms. The trace windows have matching Twin source hashes and qualified
+viewport and terrain state. These are owner timings with profiling enabled.
+Receipts and the capture comparison are under
+`retained-shadow-candidates/`.
+
+The uninstrumented production build passes 39 shadow input checks and all 12
+moving-Sun GPU phases. The independent terrain view scene passes 14 view and
+physics checks and six quality rejection checks. The rover drives 6.954 m
+while the main view retains its 175 drawn tiles. The separate feed draws its
+190 tiles and retires cleanly. Both captured views show terrain relief and
+shadows, and the runtime reports zero findings.
+
+All three uninstrumented 60-second windows use the committed High profile at
+2560×1440 with matching model sources. Each passes the sampled readiness
+checks and ends with 181 drawn terrain tiles and zero clipped clock time.
+
+| Run | FPS | P99 (ms) | Worst (ms) | Frames over 10 ms |
+| --- | ---: | ---: | ---: | ---: |
+| First candidate | 66.558 | 37.800 | 120.131 | 3,308 of 4,029 |
+| Fresh control | 52.625 | 48.845 | 74.694 | 2,665 of 3,183 |
+| Candidate repeat | 38.934 | 50.960 | 114.669 | 2,343 of 2,352 |
+
+The fresh control and repeat ran back to back under elevated system I/O
+pressure. The cause of the frame-time variation is unresolved. The candidate
+was withdrawn after the repeat showed lower throughput and slower p99 and
+worst frames than the fresh control.
+
+The control's landed physics probe finds 17 dynamic bodies and one sleeping
+body. Across three post-handoff samples, the lander and four rover wheels
+each report a 0.01667 s native sleep timer against a 0.5 s rest requirement.
+Their measured velocity magnitudes are below the native sleep thresholds.
+The admitted rover brake is held, delivered motor torques are zero, and
+main-engine thrust decays below the native force representation. The
+authored brake-release helper is rejected in the external command context.
+The native wake cause remains open. The probe receipt is under
+`landed-sleep-wake/`.
