@@ -39,6 +39,7 @@ use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::Path as SdfPath;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 mod policy_projection;
@@ -341,7 +342,7 @@ fn runtime_ui_facts(
     control_claimed: bool,
     visibility_mode: &str,
     authored_programs: &[AuthoredRuntimeProgram],
-    public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
+    public_output_names: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
@@ -361,7 +362,7 @@ fn runtime_ui_facts(
     telemetry: &[PublicTelemetryValue],
     surface_pose: &lunco_celestial_spatial_core::SurfacePoseQuery,
     progress: Option<&lunco_core_runtime::SimulationProgress>,
-) -> HookValue {
+) -> ProjectionFacts {
     let label = root
         .map(|root| {
             lunco_core::entity_display_name(
@@ -463,7 +464,7 @@ fn runtime_ui_facts(
             let public_names = cached_public_output_names(public_output_names, entity, || {
                 authored_output_names(entity, q_paths, stages, canonical)
             });
-            let (outputs, public_outputs) = runtime_output_facts(&sim.outputs, public_names);
+            let outputs = OutputSamples::capture(&sim.outputs, public_names);
             let (status, error) = sim_status_facts(&sim.status);
             let gid = q_gid
                 .get(entity)
@@ -472,16 +473,17 @@ fn runtime_ui_facts(
                 .unwrap_or(HookValue::Unit);
             participants.push((
                 path.clone(),
-                HookValue::map([
-                    ("entity_gid", gid),
-                    ("path", HookValue::str(path)),
-                    ("model", HookValue::str(sim.model_name.clone())),
-                    ("status", HookValue::str(status)),
-                    ("error", error.map_or(HookValue::Unit, HookValue::str)),
-                    ("inputs", scalar_hook_map(&sim.inputs)),
-                    ("outputs", outputs),
-                    ("public_outputs", public_outputs),
-                ]),
+                ParticipantFacts {
+                    fields: [
+                        ("entity_gid", gid),
+                        ("path", HookValue::str(path)),
+                        ("model", HookValue::str(sim.model_name.clone())),
+                        ("status", HookValue::str(status)),
+                        ("error", error.map_or(HookValue::Unit, HookValue::str)),
+                        ("inputs", scalar_hook_map(&sim.inputs)),
+                    ],
+                    outputs,
+                },
             ));
         }
     }
@@ -504,51 +506,52 @@ fn runtime_ui_facts(
         })
         .collect();
 
-    HookValue::map([
-        ("surface_id", HookValue::str(surface_id)),
-        (
-            "subject_gid",
-            subject
-                .map(|gid| HookValue::Int(gid.get() as i64))
-                .unwrap_or(HookValue::Unit),
-        ),
-        ("control_owner", HookValue::str(control_owner)),
-        ("control_claimed", HookValue::Bool(control_claimed)),
-        ("visibility_mode", HookValue::str(visibility_mode)),
-        ("available", HookValue::Bool(root.is_some())),
-        ("label", HookValue::str(label)),
-        (
-            "scope",
-            root_path
-                .map(HookValue::str)
-                .unwrap_or_else(|| HookValue::str("")),
-        ),
-        ("status", HookValue::str(status.0)),
-        ("error", status.1.map_or(HookValue::Unit, HookValue::str)),
-        ("position", position),
-        ("coordinates", surface_coordinate_facts(root, surface_pose)),
-        ("velocity", velocity),
-        ("angular_velocity", angular_velocity),
-        ("rotation", rotation),
-        ("telemetry", HookValue::Array(telemetry)),
-        ("simulation_progress", simulation_progress_facts(progress)),
-        (
-            "pause",
-            root.and_then(|entity| q_paused.get(entity).ok())
-                .map_or(HookValue::Unit, |pause| {
-                    HookValue::map([
-                        ("condition", HookValue::str(pause.condition.clone())),
-                        ("detail", HookValue::str(pause.detail.clone())),
-                    ])
-                }),
-        ),
-        (
-            "participants",
-            HookValue::Array(participants.into_iter().map(|(_, facts)| facts).collect()),
-        ),
-        ("programs", HookValue::Array(programs)),
-        ("inputs", inputs),
-    ])
+    ProjectionFacts::Runtime {
+        fields: vec![
+            ("surface_id", HookValue::str(surface_id)),
+            (
+                "subject_gid",
+                subject
+                    .map(|gid| HookValue::Int(gid.get() as i64))
+                    .unwrap_or(HookValue::Unit),
+            ),
+            ("control_owner", HookValue::str(control_owner)),
+            ("control_claimed", HookValue::Bool(control_claimed)),
+            ("visibility_mode", HookValue::str(visibility_mode)),
+            ("available", HookValue::Bool(root.is_some())),
+            ("label", HookValue::str(label)),
+            (
+                "scope",
+                root_path
+                    .map(HookValue::str)
+                    .unwrap_or_else(|| HookValue::str("")),
+            ),
+            ("status", HookValue::str(status.0)),
+            ("error", status.1.map_or(HookValue::Unit, HookValue::str)),
+            ("position", position),
+            ("coordinates", surface_coordinate_facts(root, surface_pose)),
+            ("velocity", velocity),
+            ("angular_velocity", angular_velocity),
+            ("rotation", rotation),
+            ("telemetry", HookValue::Array(telemetry)),
+            ("simulation_progress", simulation_progress_facts(progress)),
+            (
+                "pause",
+                root.and_then(|entity| q_paused.get(entity).ok()).map_or(
+                    HookValue::Unit,
+                    |pause| {
+                        HookValue::map([
+                            ("condition", HookValue::str(pause.condition.clone())),
+                            ("detail", HookValue::str(pause.detail.clone())),
+                        ])
+                    },
+                ),
+            ),
+        ],
+        participants: participants.into_iter().map(|(_, facts)| facts).collect(),
+        programs,
+        inputs,
+    }
 }
 
 /// Project cached authored program metadata together with the program's live
@@ -579,24 +582,90 @@ fn runtime_program_facts(
         .collect()
 }
 
-fn runtime_output_facts(
-    outputs: &ScalarPortMap,
-    public_names: Option<&HashSet<String>>,
-) -> (HookValue, HookValue) {
-    let all = outputs
-        .iter()
-        .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
-        .collect();
-    let public = outputs
-        .slots_for_names(
-            public_names
-                .into_iter()
-                .flat_map(|names| names.iter().map(String::as_str)),
+#[derive(Clone, PartialEq)]
+struct OutputSamples {
+    samples: Vec<(Arc<str>, f64)>,
+    public_names: Option<Arc<HashSet<String>>>,
+}
+
+impl OutputSamples {
+    fn capture(outputs: &ScalarPortMap, public_names: Option<Arc<HashSet<String>>>) -> Self {
+        Self {
+            samples: outputs.snapshot_samples(),
+            public_names,
+        }
+    }
+
+    fn hook_maps(&self) -> (HookValue, HookValue) {
+        let mut all = Vec::with_capacity(self.samples.len());
+        let mut public = Vec::new();
+        for (name, value) in &self.samples {
+            if self
+                .public_names
+                .as_ref()
+                .is_some_and(|names| names.contains(name.as_ref()))
+            {
+                public.push((name.to_string(), HookValue::Float(*value)));
+            }
+            all.push((name.to_string(), HookValue::Float(*value)));
+        }
+        (HookValue::Map(all), HookValue::Map(public))
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct ParticipantFacts {
+    fields: [(&'static str, HookValue); 6],
+    outputs: OutputSamples,
+}
+
+impl ParticipantFacts {
+    fn hook_value(&self) -> HookValue {
+        let (outputs, public_outputs) = self.outputs.hook_maps();
+        HookValue::map(
+            self.fields
+                .iter()
+                .cloned()
+                .chain([("outputs", outputs), ("public_outputs", public_outputs)]),
         )
-        .filter_map(|(_, slot)| outputs.get_slot_entry(slot))
-        .map(|(name, value)| (name.to_string(), HookValue::Float(*value)))
-        .collect();
-    (HookValue::Map(all), HookValue::Map(public))
+    }
+}
+
+/// Facts retained across bounded worker admission. Participant output names are
+/// expanded into the hook ABI only while invoking the presentation policy.
+#[derive(Clone, PartialEq)]
+enum ProjectionFacts {
+    Ready(HookValue),
+    Runtime {
+        fields: Vec<(&'static str, HookValue)>,
+        participants: Vec<ParticipantFacts>,
+        programs: Vec<HookValue>,
+        inputs: HookValue,
+    },
+}
+
+impl ProjectionFacts {
+    fn hook_value(&self) -> std::borrow::Cow<'_, HookValue> {
+        match self {
+            Self::Ready(value) => std::borrow::Cow::Borrowed(value),
+            Self::Runtime {
+                fields,
+                participants,
+                programs,
+                inputs,
+            } => {
+                let participants = participants
+                    .iter()
+                    .map(ParticipantFacts::hook_value)
+                    .collect();
+                std::borrow::Cow::Owned(HookValue::map(fields.iter().cloned().chain([
+                    ("participants", HookValue::Array(participants)),
+                    ("programs", HookValue::Array(programs.clone())),
+                    ("inputs", inputs.clone()),
+                ])))
+            }
+        }
+    }
 }
 
 fn scalar_hook_map<'a, I, N>(values: I) -> HookValue
@@ -1336,7 +1405,7 @@ mod public_output_cache_tests {
     use std::cell::Cell;
 
     #[test]
-    #[ignore = "manual complete output-fact projection measurement"]
+    #[ignore = "manual participant output snapshot measurement"]
     fn runtime_output_facts_diagnostic() {
         let mut outputs = ScalarPortMap::default();
         for index in 0..8192 {
@@ -1347,7 +1416,11 @@ mod public_output_cache_tests {
             .map(|index| format!("output{:05}", index * 251))
             .collect();
         public_names.extend(["missing".to_owned(), "unsampled".to_owned()]);
-        let (all, public) = runtime_output_facts(&outputs, Some(&public_names));
+        let public_names = Arc::new(public_names);
+        let capture = OutputSamples::capture(&outputs, Some(public_names.clone()));
+        let old = outputs.remove("output00000").unwrap();
+        outputs.insert("unsampled".into(), 97.0);
+        let (all, public) = capture.hook_maps();
         let HookValue::Map(all) = all else {
             panic!("complete output map")
         };
@@ -1363,17 +1436,19 @@ mod public_output_cache_tests {
             };
             assert_eq!(value.to_bits(), (index as f64 * 251.0 * 0.25).to_bits());
         }
-        let (_, absent) = runtime_output_facts(&outputs, None);
+        assert_eq!(all[0], ("output00000".to_owned(), HookValue::Float(old)));
+        assert!(all.iter().all(|(name, _)| name != "unsampled"));
+        let (_, absent) = OutputSamples::capture(&outputs, None).hook_maps();
         assert!(matches!(absent, HookValue::Map(values) if values.is_empty()));
         let started = std::time::Instant::now();
         for _ in 0..512 {
-            std::hint::black_box(runtime_output_facts(
+            std::hint::black_box(OutputSamples::capture(
                 std::hint::black_box(&outputs),
-                std::hint::black_box(Some(&public_names)),
+                Some(Arc::clone(&public_names)),
             ));
         }
         println!(
-            "RUNTIME_OUTPUT_FACTS outputs=8192 public=32 iterations=512 elapsed_ns={}",
+            "RUNTIME_OUTPUT_CAPTURE outputs=8192 public=32 iterations=512 elapsed_ns={}",
             started.elapsed().as_nanos()
         );
     }
@@ -1616,7 +1691,7 @@ mod exposure_tests {
             });
             cache
                 .public_output_names
-                .insert(entity, Some(HashSet::from(["old-output".into()])));
+                .insert(entity, Some(Arc::new(HashSet::from(["old-output".into()]))));
             cache.retired_surface_ids.push("older".into());
         }
         {
@@ -2419,7 +2494,7 @@ pub(crate) struct RuntimeSurfaceRootCache {
     active_root: Option<Entity>,
     initialized: bool,
     roots: Vec<AuthoredRuntimeSurface>,
-    public_output_names: HashMap<Entity, Option<HashSet<String>>>,
+    public_output_names: HashMap<Entity, Option<Arc<HashSet<String>>>>,
     retired_surface_ids: Vec<String>,
 }
 
@@ -2516,7 +2591,7 @@ fn queue_runtime_surfaces(
     stages: &Assets<UsdStageAsset>,
     canonical: &CanonicalStages,
     roots: &[AuthoredRuntimeSurface],
-    public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
+    public_output_names: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
     retired_surface_ids: &[String],
     sessions: &lunco_core_session::SessionRegistry,
     local_session: lunco_command_contracts::SessionId,
@@ -2591,7 +2666,7 @@ fn queue_runtime_surface(
     control_claimed: bool,
     visibility_mode: &str,
     authored_programs: &[AuthoredRuntimeProgram],
-    public_output_names: &mut HashMap<Entity, Option<HashSet<String>>>,
+    public_output_names: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
     telemetry: Vec<PublicTelemetryValue>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
@@ -2784,12 +2859,15 @@ fn authored_output_names(
     (!names.is_empty()).then_some(names)
 }
 
-fn cached_public_output_names<'a>(
-    cache: &'a mut HashMap<Entity, Option<HashSet<String>>>,
+fn cached_public_output_names(
+    cache: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
     entity: Entity,
     load: impl FnOnce() -> Option<HashSet<String>>,
-) -> Option<&'a HashSet<String>> {
-    cache.entry(entity).or_insert_with(load).as_ref()
+) -> Option<Arc<HashSet<String>>> {
+    cache
+        .entry(entity)
+        .or_insert_with(|| load().map(Arc::new))
+        .clone()
 }
 
 fn authored_runtime_programs(
@@ -3039,7 +3117,7 @@ fn queue_camera_exposure(
         ProjectionInput {
             namespace: "camera-status".to_owned(),
             identity: InputIdentity::Camera(source_revision),
-            facts,
+            facts: ProjectionFacts::Ready(facts),
             context: runtime_context,
             telemetry: Vec::new(),
             driven: None,

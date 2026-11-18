@@ -505,10 +505,10 @@ producer change ticks. Equal facts must not schedule another projection merely
 because a presentation component received an equal-value write. Preserve hook
 generation, source lifetime, caller identity and derived vessel invalidation.
 Attribute `exposure_runtime_surface_facts` separately from its publisher and
-worker policy spans. Public output selection uses the port owner's name index
-and live slot order; preserve complete output facts and unsampled-port semantics.
+worker policy spans. Capture retains sampled values in slot order. The worker
+constructs the full and public output maps from that one capture.
 The ignored `runtime_output_facts_diagnostic` in `lunco-luncosim-exposures`
-measures complete output projection, including all-value allocation. Compare
+measures capture time and checks both resulting maps. Compare
 independent binaries and qualify the authored public-output consumer in a
 production session; fixture timing alone does not establish a scene speedup.
 The default communication period is one physics tick; longer periods must be

@@ -422,6 +422,17 @@ impl<T: Copy> PortMap<T> {
         }
     }
 
+    /// Capture available samples in slot order for readers outside the world.
+    /// The capture owns its values and shares the immutable names with their slots.
+    pub fn snapshot_samples(&self) -> Vec<(Arc<str>, T)> {
+        let mut samples = Vec::with_capacity(self.len());
+        samples.extend(self.slots.iter().filter_map(|slot| {
+            let value = slot.value?;
+            Some((Arc::clone(slot.name.as_ref()?), value))
+        }));
+        samples
+    }
+
     /// Mutably iterate live values.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.slots.iter_mut().filter_map(|slot| slot.value.as_mut())

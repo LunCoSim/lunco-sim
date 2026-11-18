@@ -686,6 +686,12 @@ policy results become `failed`, with an error and no partial view. Such failures
 remain terminal until the source or identity changes. Native synchronous domain
 producers publish `ready` views through the same registry.
 
+Participant output capture copies sampled scalar values in live slot order and
+shares immutable port names and authored public-name sets with the worker.
+The worker constructs the ordered `outputs` and `public_outputs` maps from
+that capture. A later port write, removal or scene replacement cannot change
+the values supplied to an admitted invocation. Unsampled ports appear in neither map.
+
 Only owned values and pure hook registrations leave the application thread.
 The native host uses workers; wasm currently schedules the same kernel as a
 cooperative local task. Neither path changes simulation clocks or permits UI
