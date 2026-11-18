@@ -241,4 +241,4 @@ pub struct Ground;
 pub struct SystemManaged;
 
 mod reflection;
-pub use reflection::ReflectReadOnly;
+pub use reflection::{ReflectReadOnly, ReflectReplaceOnWrite};

@@ -1601,10 +1601,10 @@ pub fn get_resource_field<B: ValueBuilder>(b: &B, path: &str) -> Option<B::Value
 /// `set(id, "Component.field", value)` — generic reflection WRITE, the mirror of
 /// [`get_field`]. Navigates to the live reflected field and hands a `&mut` to
 /// `apply`, which writes the backend-native value straight in (`native → reflect`,
-/// no JSON) — symmetric with the `reflect → native` read path. The `reflect_mut`
-/// borrow trips Bevy change-detection, so the edit replicates / re-runs dependent
-/// systems normally. Host-side scripts may use it when authorized; client-targeted
-/// scripts are denied because this path has no prediction/forwarding contract.
+/// no JSON). Mutable components use change detection. Immutable components that
+/// opt into field replacement publish the edited clone through ECS insertion.
+/// Host-side scripts may write when authorized. Client-targeted scripts have no
+/// prediction or forwarding contract for this operation.
 pub fn set_component_field(
     gid: u64,
     path: &str,
@@ -1624,20 +1624,47 @@ pub fn set_component_field(
         let reflect_component = registration
             .data::<ReflectComponent>()
             .ok_or_else(|| format!("'{comp}' is not a Component"))?;
-        let entity_mut = world
+        let update = |reflected: &mut dyn bevy::reflect::Reflect| {
+            let field = if sub.is_empty() {
+                reflected.as_partial_reflect_mut()
+            } else {
+                reflected
+                    .reflect_path_mut(sub.as_str())
+                    .map_err(|e| format!("no field '{comp}{sub}': {e}"))?
+            };
+            apply(field)
+        };
+        let mutable = world
+            .components()
+            .get_valid_id(registration.type_info().type_id())
+            .and_then(|id| world.components().get_info(id))
+            .ok_or_else(|| format!("entity {gid} has no {comp}"))?
+            .mutable();
+        let mut entity_mut = world
             .get_entity_mut(entity)
             .map_err(|_| format!("entity {gid} despawned"))?;
-        let mut reflected = reflect_component
-            .reflect_mut(entity_mut)
-            .ok_or_else(|| format!("entity {gid} has no {comp}"))?;
-        let field: &mut dyn bevy::reflect::PartialReflect = if sub.is_empty() {
-            reflected.as_partial_reflect_mut()
-        } else {
-            reflected
-                .reflect_path_mut(sub.as_str())
-                .map_err(|e| format!("no field '{comp}{sub}': {e}"))?
-        };
-        apply(field)
+        if mutable {
+            let mut reflected = reflect_component
+                .reflect_mut(entity_mut)
+                .ok_or_else(|| format!("entity {gid} has no {comp}"))?;
+            return update(&mut *reflected);
+        }
+        if registration
+            .data::<lunco_core::ReflectReplaceOnWrite>()
+            .is_none()
+        {
+            return Err(format!("component '{comp}' is immutable"));
+        }
+        // An immutable component's insert observers consume its complete identity.
+        // Apply the field edit to an owned value before publishing the replacement.
+        let mut replacement = reflect_component
+            .reflect(entity_mut.as_readonly())
+            .ok_or_else(|| format!("entity {gid} has no {comp}"))?
+            .reflect_clone()
+            .map_err(|error| format!("cannot clone {comp} for field edit: {error}"))?;
+        update(&mut *replacement)?;
+        reflect_component.insert(&mut entity_mut, replacement.as_partial_reflect(), &reg);
+        Ok(())
     })
     .unwrap_or_else(|| Err("no world in scope".into()))
 }

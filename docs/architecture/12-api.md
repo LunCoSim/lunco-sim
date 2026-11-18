@@ -1073,6 +1073,12 @@ its numerical inventory and layout-bound projections. `ModelicaModel` protects
 its input/parameter maps through field metadata; source/control edits use
 the existing typed Modelica and port commands.
 
+Immutable ECS components with editable reflected fields register
+`ReflectReplaceOnWrite` and reflection cloning. After the usual field and
+authority checks, `set` edits a clone and inserts the complete component on
+success. This lets the USD path index observe identity replacements. A failed
+field edit leaves the previous identity intact.
+
 ### Twin source identity at presentation boundaries
 
 Asset loading retains an opaque mount lease internally. Public script source

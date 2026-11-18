@@ -151,8 +151,9 @@ When the source entity identifies the owning scene but its USD document is not
 attached yet, use `find_path_in_stage(me, path)` to resolve another live
 identity in that same scene mount; editor preview projections are excluded. Use
 `find_path_in_document(doc_id, path)` when the document identity is available.
-`find_path(path)` returns the first exact live path match, so use a scoped
-lookup when the same stage path can be mounted more than once.
+`find_path(path)` returns the lowest registered ID for the exact path across
+all mounts, including preview projections. Both scoped calls exclude previews.
+All three return `-1` for a missing path.
 
 All active Modelica entities share the fixed-step barrier. Declarations grant
 scenario access without changing clock membership. Required input

@@ -11,10 +11,12 @@
 pub mod billboard;
 pub mod collision;
 mod geometry;
+pub mod prim_index;
 
 use bevy::asset::{AssetEvent, AssetId, AssetLoadFailedEvent};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::prelude::*;
+use lunco_core::ReflectReplaceOnWrite;
 use lunco_usd_bevy_stage::{UsdInstanceRoot, UsdStageAsset};
 
 pub use geometry::{
@@ -32,6 +34,9 @@ pub struct UsdScenePlugin;
 
 impl Plugin for UsdScenePlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<prim_index::UsdPrimIndexPlugin>() {
+            app.add_plugins(prim_index::UsdPrimIndexPlugin);
+        }
         app.register_type::<UsdSceneProjectionFailed>();
         app.register_type::<billboard::UsdBillboard>();
         app.init_resource::<UsdStageRevision>()
@@ -53,7 +58,8 @@ impl Plugin for UsdScenePlugin {
 /// that needs to associate an ECS entity with composed USD reads uses this
 /// component and the stage asset handle it carries.
 #[derive(Component, Reflect, Debug, Clone)]
-#[reflect(Component)]
+#[component(immutable)]
+#[reflect(Component, Clone, ReplaceOnWrite)]
 pub struct UsdPrimPath {
     /// Handle to the loaded composed USD stage asset.
     pub stage_handle: Handle<UsdStageAsset>,
@@ -427,16 +433,43 @@ pub fn scene_root_ancestor(
     child_of: &Query<&ChildOf>,
     entities: &Query<Entity>,
 ) -> Result<Option<Entity>, SceneRootAncestorError> {
+    walk_scene_root(
+        entity,
+        |e| scene_roots.contains(e),
+        |e| child_of.get(e).ok().map(ChildOf::parent),
+        |e| entities.contains(e),
+    )
+}
+
+/// Resolve a mounted hierarchy from an exclusive-system or scripting world read.
+pub fn scene_root_in_world(
+    world: &World,
+    entity: Entity,
+) -> Result<Option<Entity>, SceneRootAncestorError> {
+    walk_scene_root(
+        entity,
+        |e| world.get::<UsdSceneRoot>(e).is_some(),
+        |e| world.get::<ChildOf>(e).map(ChildOf::parent),
+        |e| world.entities().contains(e),
+    )
+}
+
+fn walk_scene_root(
+    entity: Entity,
+    is_root: impl Fn(Entity) -> bool,
+    parent_of: impl Fn(Entity) -> Option<Entity>,
+    exists: impl Fn(Entity) -> bool,
+) -> Result<Option<Entity>, SceneRootAncestorError> {
     let mut current = entity;
     for _ in 0..MAX_SCENE_HIERARCHY_DEPTH {
-        if scene_roots.contains(current) {
+        if is_root(current) {
             return Ok(Some(current));
         }
-        let Ok(parent) = child_of.get(current) else {
+        let Some(parent) = parent_of(current) else {
             return Ok(None);
         };
-        current = parent.parent();
-        if !entities.contains(current) {
+        current = parent;
+        if !exists(current) {
             return Err(SceneRootAncestorError::MissingParentEntity);
         }
     }

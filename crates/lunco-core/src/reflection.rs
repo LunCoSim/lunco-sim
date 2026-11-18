@@ -1,5 +1,19 @@
 //! Owner-controlled runtime state is inspectable without generic mutation.
 
+/// Permit a reflected field edit to replace an immutable component through its
+/// ECS lifecycle. Owners register this only for identities with editable fields.
+#[derive(Clone)]
+pub struct ReflectReplaceOnWrite;
+
+impl<T> bevy::reflect::CreateTypeData<T> for ReflectReplaceOnWrite
+where
+    T: bevy::prelude::Component<Mutability = bevy::ecs::component::Immutable> + Clone,
+{
+    fn create_type_data(_: ()) -> Self {
+        Self
+    }
+}
+
 /// Reflection type data denying raw writes to owner-maintained state.
 /// Typed commands and the owning engine mechanism retain their normal access.
 /// Install through `#[reflect(ReadOnly)]` alongside this type's import.

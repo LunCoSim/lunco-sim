@@ -4130,7 +4130,10 @@ pub(crate) fn refresh_prim_subtree(
         return;
     }
 
-    let entities = crate::live_consume::find_stage_entities(world, scene_id, path).to_vec();
+    let entities = world
+        .resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>()
+        .in_stage(scene_id, path)
+        .to_vec();
     for entity in entities {
         reinstantiate_entity(world, entity);
     }

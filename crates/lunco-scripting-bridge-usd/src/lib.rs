@@ -4,9 +4,10 @@
 //! facts to the language-neutral bridge without making its generic reflection,
 //! command, or authority mechanism depend on the USD runtime packages.
 
-use bevy::prelude::*;
+use bevy::prelude::Entity;
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_scripting_bridge_core::{resolve_entity, with_world};
+use lunco_usd_bevy_scene::prim_index::UsdPrimIndex;
 
 /// Read the authoritative USD document generation without constructing the
 /// full `InspectUsdDocument` snapshot.
@@ -27,23 +28,27 @@ pub fn usd_document_generation(doc_id: u64) -> Option<u64> {
     .flatten()
 }
 
+/// Multiple mounts can project the same path. The API identity determines
+/// the selected entity regardless of Bevy entity slots or stage iteration order.
+fn lowest_registered_id(
+    registry: &ApiEntityRegistry,
+    candidates: impl Iterator<Item = Entity>,
+) -> Option<i64> {
+    candidates
+        .filter_map(|entity| registry.api_id_for(entity))
+        .map(|id| id.get())
+        .min()
+        .map(|id| id as i64)
+}
+
 /// `find_path(path)` — first entity gid with the exact composed USD prim path,
 /// or `-1`. Paths are the authored identity; this is intentionally separate
 /// from `find`, whose name lookup is only a display convenience.
 pub fn find_path(path: &str) -> i64 {
     with_world(|world| {
-        let pairs = world
-            .get_resource::<ApiEntityRegistry>()?
-            .entities_unordered();
-        pairs
-            .filter(|(_, entity)| {
-                world
-                    .get::<lunco_usd_bevy_scene::UsdPrimPath>(*entity)
-                    .is_some_and(|prim| prim.path == path)
-            })
-            .map(|(id, _)| id.get())
-            .min()
-            .map(|id| id as i64)
+        let registry = world.get_resource::<ApiEntityRegistry>()?;
+        let index = world.get_resource::<UsdPrimIndex>()?;
+        lowest_registered_id(registry, index.at_path(path))
     })
     .flatten()
     .unwrap_or(-1)
@@ -61,40 +66,21 @@ pub fn find_path_in_stage(source_gid: u64, path: &str) -> i64 {
             .get::<lunco_usd_bevy_scene::UsdPrimPath>(source)?
             .stage_handle
             .id();
-        let mut state: bevy::ecs::system::SystemState<(
-            Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-            Query<&ChildOf>,
-            Query<Entity>,
-            Query<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>,
-        )> = bevy::ecs::system::SystemState::new(world);
-        let (scene_roots, child_of, scene_entities, prims) = state.get(world).ok()?;
-        let source_root = lunco_usd_bevy_scene::scene_root_ancestor(
-            source,
-            &scene_roots,
-            &child_of,
-            &scene_entities,
-        )
-        .ok()??;
+        let source_root = lunco_usd_bevy_scene::scene_root_in_world(world, source).ok()??;
         let api_entities = world.get_resource::<ApiEntityRegistry>()?;
-        prims
+        let index = world.get_resource::<UsdPrimIndex>()?;
+        let candidates = index
+            .in_stage(stage, path)
             .iter()
-            .filter(|(entity, prim)| {
-                prim.stage_handle.id() == stage
-                    && prim.path == path
-                    && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-                    && lunco_usd_bevy_scene::scene_root_ancestor(
-                        *entity,
-                        &scene_roots,
-                        &child_of,
-                        &scene_entities,
-                    )
-                    .ok()
-                    .flatten()
+            .copied()
+            .filter(|entity| {
+                !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
+                    && lunco_usd_bevy_scene::scene_root_in_world(world, *entity)
+                        .ok()
+                        .flatten()
                         == Some(source_root)
-            })
-            .filter_map(|(entity, _)| api_entities.api_id_for(entity))
-            .min_by_key(|id| id.get())
-            .map(|id| id.get() as i64)
+            });
+        lowest_registered_id(api_entities, candidates)
     })
     .flatten()
     .unwrap_or(-1)
@@ -109,18 +95,14 @@ pub fn find_path_in_document(doc_id: u64, path: &str) -> i64 {
         let doc = lunco_doc::DocumentId::new(doc_id);
         let backed = world.get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()?;
         let stage = lunco_usd_bevy_twin::stage_asset_for_document(backed, doc)?;
-        let mut prims = world.query::<(Entity, &lunco_usd_bevy_scene::UsdPrimPath)>();
         let entities = world.get_resource::<ApiEntityRegistry>()?;
-        prims
-            .iter(world)
-            .filter(|(entity, prim)| {
-                prim.stage_handle.id() == stage
-                    && prim.path == path
-                    && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-            })
-            .filter_map(|(entity, _)| entities.api_id_for(entity))
-            .min_by_key(|id| id.get())
-            .map(|id| id.get() as i64)
+        let index = world.get_resource::<UsdPrimIndex>()?;
+        let candidates = index
+            .in_stage(stage, path)
+            .iter()
+            .copied()
+            .filter(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity));
+        lowest_registered_id(entities, candidates)
     })
     .flatten()
     .unwrap_or(-1)
