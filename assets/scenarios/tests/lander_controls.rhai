@@ -96,36 +96,18 @@ fn on_start(me, ctx) {
     this.headless_without_render_camera = has_no_render_camera(
         query("SceneCameraAudit", #{}));
     this.hud_visibility_checks = [
-        t_true(!runtime_ui_policy::runtime_ui_should_be_visible(#{
-            surface_id: "vehicle-control-left", available: true,
-            visibility_mode: "possessed", control_owner: "none",
-            status: "compiling", simulation_progress: [#{owner: "SceneLifecycle"}],
-        }), "an unpossessed HUD stays hidden during startup preparation"),
-        t_true(!runtime_ui_policy::runtime_ui_should_be_visible(#{
-            surface_id: "vehicle-control-left", available: true,
-            visibility_mode: "possessed", control_owner: "remote",
-            status: "running", simulation_progress: [#{owner: "ModelicaPreparation"}],
-        }), "remote control does not reveal the local HUD during preparation"),
-        t_true(runtime_ui_policy::runtime_ui_should_be_visible(#{
-            surface_id: "vehicle-control-left", available: true,
-            visibility_mode: "possessed", control_owner: "local",
-            status: "compiling", simulation_progress: [#{owner: "TerrainPreparation"}],
-        }), "local possession keeps its HUD visible during preparation"),
-        t_true(runtime_ui_policy::runtime_ui_should_be_visible(#{
-            surface_id: "vehicle-control-left", available: true,
-            visibility_mode: "possessed", control_owner: "local",
-            status: "running", simulation_progress: [],
-        }), "local possession keeps its HUD visible after preparation"),
-        t_true(runtime_ui_policy::runtime_ui_should_be_visible(#{
-            surface_id: "vehicle-control-left", available: true,
-            visibility_mode: "always", control_owner: "none",
-            status: "compiling", simulation_progress: [#{owner: "SceneReferences"}],
-        }), "an available always-mode HUD remains visible during preparation"),
-        t_true(!runtime_ui_policy::runtime_ui_should_be_visible(#{
-            surface_id: "vehicle-control-left", available: false,
-            visibility_mode: "always", control_owner: "none",
-            status: "unavailable", simulation_progress: [],
-        }), "always mode does not reveal a missing subject"),
+        t_true(!runtime_ui_policy::runtime_ui_should_be_visible("vehicle-control-left", true, "possessed", "none"),
+            "an unpossessed HUD stays hidden"),
+        t_true(!runtime_ui_policy::runtime_ui_should_be_visible("vehicle-control-left", true, "possessed", "remote"),
+            "remote control keeps the local HUD hidden"),
+        t_true(runtime_ui_policy::runtime_ui_should_be_visible("vehicle-control-left", true, "possessed", "local"),
+            "local possession reveals its HUD"),
+        t_true(runtime_ui_policy::runtime_ui_should_be_visible("vehicle-control-left", true, "always", "none"),
+            "an available always-mode HUD stays visible"),
+        t_true(!runtime_ui_policy::runtime_ui_should_be_visible("vehicle-control-left", false, "always", "none"),
+            "always mode hides a missing subject"),
+        t_true(runtime_ui_policy::runtime_ui_should_be_visible("camera-status", (), (), ()),
+            "camera status has independent visibility"),
     ];
 
     if this.lander < 0 || this.avatar < 0 {

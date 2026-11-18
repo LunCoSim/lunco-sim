@@ -399,6 +399,9 @@ pub fn apply_joint_torque_actuators(
         if coordinate_torque == 0.0 && !brake_changed {
             continue;
         }
+        // Bearing drag dissipates existing relative motion. Only an applied
+        // drive effort or a brake transition needs to wake a resting island.
+        let wake = torque != 0.0 || brake_changed;
         for (body, dynamic, sign) in receivers {
             if dynamic {
                 pending.push(lunco_physics::BodyForce {
@@ -407,14 +410,14 @@ pub fn apply_joint_torque_actuators(
                     local_force: DVec3::ZERO,
                     point: None,
                     torque: world_torque * sign,
-                    wake: true,
+                    wake,
                 });
             }
         }
-        if q_sleeping.contains(joint.body1) {
+        if wake && q_sleeping.contains(joint.body1) {
             commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body1));
         }
-        if q_sleeping.contains(joint.body2) {
+        if wake && q_sleeping.contains(joint.body2) {
             commands.queue(avian3d::dynamics::solver::islands::WakeBody(joint.body2));
         }
     }
