@@ -738,3 +738,24 @@ checks. All nine Griffin surface-operations requirements passed at tick 8,756.
 The strict UI-candidate run qualified at 44.08 s, then stopped after 31 samples
 when the terrain owner reported one pending selection. Its 181 wanted tiles
 were resident, presentation had no pending work, and the source hashes matched.
+
+## Current local visibility build
+
+The uninstrumented `current-visibility/luncosim` combines engine `ea1d85b0b`,
+model `b4de8d5` and local Bevy lighting `400fa336e`. The local lock differs
+only in the source of `bevy_light`. The engine repository retains its published
+dependency revision.
+
+At High 2560×1440 after handoff, 5,903 consecutive frames over 60.31 s averaged
+98.696 FPS. The median was 10.930 ms, p95 13.420 ms, p99 15.329 ms and the
+maximum 19.893 ms. There were 3,597 frames over 10 ms. Authoritative physics
+advanced 3,685 ticks between the surrounding checks. The final check found
+181 of 181 wanted tiles resident and zero runtime diagnostics.
+
+Holding physics in that same session kept tick 5,373 constant over a separate
+20 s window. Its 2,596 frames averaged 130.833 FPS with p99 10.777 ms and a
+13.089 ms maximum. Physics resumed and all 312 authored public output values
+matched their full maps. The independent strict run stopped after 37 samples
+with a terrain selection pending, 181 tiles resident and no pending presentation.
+The 100 FPS and 10 ms maximum remain open. The two other simulator sessions
+remained running through validation.
