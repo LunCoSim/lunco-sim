@@ -414,7 +414,7 @@ pub fn fetch_recipe_with_roots(
     let mut diagnostics = Vec::new();
     while let Some((id, depth)) = queue.pop() {
         let raw = bytes.get(&id).expect("queued USD layer is present");
-        let child_ids = child_layer_ids(&id, raw)?;
+        let child_ids = raw.child_layer_ids(&id)?;
         check_stage_closure_limits(&limits, seen.len(), depth, child_ids.len(), total_bytes)?;
         for child_id in child_ids {
             if !seen.insert(child_id.clone()) {
@@ -447,7 +447,7 @@ pub fn fetch_recipe_with_roots(
                 .checked_add(child.len())
                 .ok_or_else(|| anyhow!("USD layer closure byte count overflowed"))?;
             check_stage_closure_limits(&limits, seen.len(), child_depth, 0, total_bytes)?;
-            bytes.insert(child_id.clone(), child);
+            bytes.insert(child_id.clone(), child.into());
             queue.push((child_id, child_depth));
         }
     }
@@ -617,7 +617,8 @@ def Xform "Vehicle" (
                     asset blocked = None
                 }
             "#
-                .to_vec(),
+                .to_vec()
+                .into(),
             ),
             (
                 child.to_owned(),
@@ -632,7 +633,8 @@ def Xform "Vehicle" (
                     asset binary = @meshes/model.glb@
                 }
             "#
-                .to_vec(),
+                .to_vec()
+                .into(),
             ),
         ]);
         let stage = Stage::builder()

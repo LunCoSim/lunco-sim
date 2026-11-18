@@ -2768,9 +2768,9 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                             let layer_changed = !recipe
                                 .bytes
                                 .get(&layer_id)
-                                .is_some_and(|existing| existing.as_slice() == bytes.as_ref());
+                                .is_some_and(|existing| existing.as_ref() == bytes.as_ref());
                             if layer_changed {
-                                recipe.bytes.insert(layer_id, bytes.to_vec());
+                                recipe.bytes.insert(layer_id, bytes.to_vec().into());
                                 changed = true;
                             }
                         }

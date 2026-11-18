@@ -1451,7 +1451,7 @@ impl UsdDocument {
             .clone();
         Ok(DocumentStageInput {
             recipe,
-            root_bytes: std::sync::Arc::new(root_bytes),
+            root_bytes: std::sync::Arc::new(root_bytes.to_vec()),
         })
     }
 

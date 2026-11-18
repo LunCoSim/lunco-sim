@@ -686,7 +686,7 @@ fn prepare(
         retained = retained
             .checked_add(bytes.len())
             .ok_or("USD edit dependency byte count overflowed")?;
-        recipe.bytes.insert(id, bytes);
+        recipe.bytes.insert(id, bytes.into());
     }
     let recipe = lunco_usd_compose::fetch_recipe_with_roots(recipe, assets_root, twin_root, limits)
         .map_err(|error| error.to_string())?;

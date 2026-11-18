@@ -621,7 +621,7 @@ fn refresh_doc_backed_scene_source(
             asset_server,
             lunco_usd_document::document::DocumentStageInput {
                 recipe,
-                root_bytes: std::sync::Arc::new(root_bytes),
+                root_bytes: std::sync::Arc::new(root_bytes.to_vec()),
             },
         )
         .map_err(|error| format!("could not prepare current USD source for `{path}`: {error}"))?;
@@ -1019,11 +1019,12 @@ fn restart_source_seed(
         .get(&root_id)
         .cloned()
         .ok_or_else(|| format!("candidate source recipe has no root bytes for {root_id}"))?;
-    let mut seed = lunco_usd_compose::recipe::StageRecipe::new(
+    let mut seed = lunco_usd_compose::recipe::StageRecipe {
+        bytes: std::collections::HashMap::from([(root_id.clone(), root_bytes)]),
         root_id,
-        std::collections::HashMap::from([(input.recipe.root_id.clone(), root_bytes)]),
-    );
-    seed.session_layer = input.recipe.session_layer.clone();
+        session_layer: input.recipe.session_layer.clone(),
+        dependency_diagnostics: Vec::new(),
+    };
     if let Some(session) = seed.session_layer.as_ref() {
         let bytes = input.recipe.bytes.get(session).cloned().ok_or_else(|| {
             format!("candidate source recipe has no session-layer bytes for {session}")

@@ -21,7 +21,7 @@ use std::io::{self, Cursor};
 use std::rc::Rc;
 use std::time::SystemTime;
 
-use crate::validate_usda_nesting;
+use crate::{recipe::StageLayerBytes, validate_usda_nesting};
 use openusd::ar::{self, Asset, ResolvedPath};
 
 use lunco_assets_path::{canonicalize, canonicalize_root};
@@ -35,7 +35,7 @@ use lunco_assets_path::{canonicalize, canonicalize_root};
 /// author the `references` arc, and PCP composes it on the next read. `Rc`
 /// (not `Arc`) because the composed `Stage` is `!Send` and lives on the main
 /// thread; the resolver shares its thread.
-pub type SharedLayerBytes = Rc<RefCell<HashMap<String, Vec<u8>>>>;
+pub type SharedLayerBytes = Rc<RefCell<HashMap<String, StageLayerBytes>>>;
 
 /// File extensions openusd cannot parse as USD layers — non-USD binary assets
 /// referenced through `payload`/`references`. Pixar handles these via
@@ -166,9 +166,9 @@ pub struct LuncoUsdResolver {
 
 impl LuncoUsdResolver {
     /// Admit layer identifiers and authored arcs before OpenUSD's lazy reads.
-    pub fn new(bytes: HashMap<String, Vec<u8>>) -> anyhow::Result<Self> {
+    pub fn new(bytes: HashMap<String, StageLayerBytes>) -> anyhow::Result<Self> {
         for (id, raw) in &bytes {
-            crate::child_layer_ids(id, raw)?;
+            raw.child_layer_ids(id)?;
         }
         Ok(Self {
             bytes: Rc::new(RefCell::new(bytes)),
@@ -251,7 +251,7 @@ impl ar::Resolver for LuncoUsdResolver {
                 io::Error::new(io::ErrorKind::InvalidData, format!("{key}: {error}"))
             })?;
         }
-        Ok(Box::new(Cursor::new(bytes)))
+        Ok(Box::new(Cursor::new(bytes.asset_buffer())))
     }
 
     /// Override the one fs-touching default (`fs::metadata`) so composition is
@@ -368,7 +368,7 @@ mod tests {
         assert!(
             LuncoUsdResolver::new(HashMap::from([(
                 invalid.to_owned(),
-                b"#usda 1.0\n".to_vec()
+                b"#usda 1.0\n".to_vec().into()
             )]))
             .is_err()
         );
