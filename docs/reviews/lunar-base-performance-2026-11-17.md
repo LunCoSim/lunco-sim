@@ -1223,3 +1223,86 @@ pending time below one tick at both endpoints. The 100 FPS gate remains open.
 The paired trace is under `griffin-current-100/callback-paired/`. The actual
 Twin trace, timing run and mission verdict are under
 `griffin-current-100/named-tether/`.
+
+## Landed Griffin on the published main branches
+
+The production executable at simulator `ab9ef36c7` and Twin `bd292c1c4`
+selected the NVIDIA GeForce RTX 5060 Laptop GPU through Vulkan. A desktop
+launch at ordinary process priority rendered 564 consecutive High 2560×1440
+tracking-camera frames in the one-minute measurement. Mean throughput was
+9.29 FPS, with median 106.29 ms and p95 138.98 ms. All 35 scene checks
+qualified and all 181 requested terrain tiles were resident. The physics
+clock advanced from tick 1,478 to 2,197. Pending simulation time grew from
+135.87 to 184.15 s. The final sample included 9,557 ECS entities, 698
+colliders and 15 Modelica participants communicating at 60 Hz. Across their
+2,170 accepted samples per participant, the main propulsion participant
+had the largest mean worker time at 7.32 ms. This average covers the full
+session. The application exited normally and released port 5466.
+
+During 53.26 s inside this window Linux accounted 16.16 s of execution
+and 15.43 s of runnable wait on the main thread, 3,228 major process page
+faults and 2.27–2.36 GiB of process swap. Other simulator and compiler
+processes were active. The median of the sampled rolling fixed-tick
+medians was 16.57 ms. The laptop reported battery power immediately after
+shutdown. These measurements do not isolate the GPU, power or scheduler's
+individual effects. The receipt and scheduler samples are under
+`griffin-current-100/publication/simulator/.cache/desktop-published/`.
+
+The earlier named-tether Tracy capture reports the lander awake at both
+ends of its timed phase. In a 24 s interval, 526 fixed-loop calls had a
+20.95 ms median and 1,087 native physics schedules had a 4.37 ms median.
+In the independent 47.69 FPS release run, all sampled snapshots reported
+19 sleeping bodies. Median native step time was 0.52 ms and median velocity
+relaxation time was 0.00061 ms. Sleep state matters when attributing solver
+time across captures.
+
+On AC power the same published executable and Twin rendered 1,003 consecutive
+frames in 60.78 s at 16.50 FPS, with median 56.74 ms and p95 97.73 ms.
+Across 49 scene checks, physics advanced 1,933 ticks and pending simulation
+time grew from 21.13 to 50.83 s. The median of the reported rolling
+fixed-loop medians was 19.08 ms. All 49 camera samples drew the 181
+requested tiles. During 54.36 s inside this window the main thread executed
+for 22.04 s and waited runnable for 8.47 s. The process
+incurred 2,295 major page faults and had 2.48–2.61 GiB swapped. Its median
+NVIDIA streaming multiprocessor utilization was 13%. Four to nine compiler
+processes were present. Three subsequent one-minute windows in that same
+session sampled frame history throughout. With scene qualification checks at
+the endpoints, throughout, and at the endpoints again, they recorded 17.18,
+16.70 and 19.61 FPS respectively. All three had p95 above 96 ms. Reducing
+diagnostic polling left the frame stalls visible. The frame series and host
+samples are under `publication/simulator/.cache/griffin-polling-comparison/`
+within the Griffin run directory.
+
+## Grouped port validation
+
+The sampled release main thread landed directly in the byte comparison for
+backend keys on 269 of 8,265 CPU samples. The authored Griffin graph has
+1,100 numeric connections. Of 1,877 distinct endpoints, 1,511 belong to
+prims with at least eight endpoints. These counts describe the authored
+graph before runtime admission.
+
+An alternating release probe used 32 entities with 32 distinct resolved
+inputs each. Every transaction read and staged a write to all 1,024 inputs
+in the original order. Four blocks per version yielded median block times
+of 0.09675 ms with the published registry and 0.082 ms with shared keys.
+The candidate also rejected a stale locator after accepting a fresh locator
+for the same entity and rolled back the staged batch. This isolates the
+registry operation. The probe and individual timings are under
+`griffin-current-100/publication/port-followup/`.
+
+The grouped-validation release passed all nine Griffin mission checks at
+tick 8,756 with identical structured evidence to the published control.
+At High 2560×1440 it rendered 947 consecutive frames in 60.80 s, averaging
+15.57 FPS with a 62.32 ms median and 88.51 ms p95. All 48 checks retained
+the tracking camera, terrain configuration and complete drawn cover.
+Physics advanced 1,773 ticks at 27.55 Hz between qualification samples.
+Pending simulation time increased from 40.55 to 73.39 s with zero clock
+clipping. The run ended with zero runtime errors.
+
+During 55.77 s inside this window, the main thread spent 18.88 s on CPU
+and 14.00 s waiting runnable. The process incurred 4,980 major page faults
+and its median GPU streaming multiprocessor utilization was 13% on AC.
+The host measurements differed between runs. The isolated port improvement
+has no demonstrated whole-scene FPS gain and the 100 FPS target remains open.
+The release, mission and frame measurements are recorded in
+`publication/port-followup/result.json` within the Griffin run directory.

@@ -1436,6 +1436,22 @@ pub struct ResolvedPort {
     side: ResolvedPortSide,
 }
 
+impl ResolvedPort {
+    /// Share identical precedence-key sequences within a collection of resolved
+    /// endpoints. Entity, world, registration and revision remain per locator.
+    pub fn share_contract_keys<'a>(ports: impl IntoIterator<Item = &'a mut Self>) {
+        let mut layouts = HashSet::<Arc<[u64]>>::new();
+        for port in ports {
+            let keys = &mut port.lease.owner_keys;
+            if let Some(shared) = layouts.get(keys.as_ref()) {
+                *keys = Arc::clone(shared);
+            } else {
+                layouts.insert(Arc::clone(keys));
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedPortSide {
     Input,
@@ -1671,12 +1687,21 @@ pub struct InputWriteBuffer {
 #[derive(Default)]
 struct ScopedContractProofs {
     entities: HashTable<usize>,
-    entries: Vec<(Entity, Vec<u64>)>,
+    entries: Vec<EntityContractProof>,
     used: usize,
+}
+
+struct EntityContractProof {
+    entity: Entity,
+    keys: Vec<u64>,
+    verified: Option<Arc<[u64]>>,
 }
 
 impl ScopedContractProofs {
     fn reset(&mut self) {
+        for proof in &mut self.entries[..self.used] {
+            proof.verified = None;
+        }
         self.entities.clear();
         self.used = 0;
     }
@@ -1694,8 +1719,8 @@ impl ScopedContractProofs {
         let hash = FixedHasher.hash_one(entity);
         let index = match self.entities.entry(
             hash,
-            |&i| entries[i].0 == entity,
-            |&i| FixedHasher.hash_one(entries[i].0),
+            |&i| entries[i].entity == entity,
+            |&i| FixedHasher.hash_one(entries[i].entity),
         ) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
@@ -1705,25 +1730,37 @@ impl ScopedContractProofs {
                 let index = self.used;
                 self.used += 1;
                 if index == entries.len() {
-                    entries.push((entity, Vec::new()));
+                    entries.push(EntityContractProof {
+                        entity,
+                        keys: Vec::new(),
+                        verified: None,
+                    });
                 }
-                entries[index].0 = entity;
-                entries[index].1.clear();
+                entries[index].entity = entity;
+                entries[index].keys.clear();
                 entry.insert(index);
                 index
             }
         };
-        let keys = &mut entries[index].1;
-        for owner in context
-            .registry
-            .backends
-            .iter()
-            .take(lease.owner_keys.len())
-            .skip(keys.len())
+        let proof = &mut entries[index];
+        if proof
+            .verified
+            .as_ref()
+            .is_some_and(|keys| Arc::ptr_eq(keys, &lease.owner_keys))
         {
-            keys.push((owner.topology_key)(context.world, entity));
+            return true;
         }
-        keys.get(..lease.owner_keys.len()) == Some(lease.owner_keys.as_ref())
+        let count = lease.owner_keys.len();
+        if proof.keys.len() < count {
+            for owner in &context.registry.backends[proof.keys.len()..count] {
+                proof.keys.push((owner.topology_key)(context.world, entity));
+            }
+        }
+        if proof.keys[..count] != *lease.owner_keys {
+            return false;
+        }
+        proof.verified = Some(Arc::clone(&lease.owner_keys));
+        true
     }
 }
 
@@ -2885,8 +2922,10 @@ mod tests {
                 ..INPUT_PORTS_BACKEND
             }]),
         };
-        let a = registry.resolve_input(&world, entity, "a").unwrap();
-        let b = registry.resolve_input(&world, entity, "b").unwrap();
+        let mut a = registry.resolve_input(&world, entity, "a").unwrap();
+        let mut b = registry.resolve_input(&world, entity, "b").unwrap();
+        super::ResolvedPort::share_contract_keys([&mut a, &mut b]);
+        assert!(Arc::ptr_eq(&a.lease.owner_keys, &b.lease.owner_keys));
         registry
             .write_resolved(&mut world, entity, &a, 1.0)
             .unwrap();
@@ -2912,9 +2951,15 @@ mod tests {
             .unwrap()
             .values
             .insert("new".into(), 5.0);
+        let mut fresh = registry.resolve_input(&world, entity, "a").unwrap();
+        super::ResolvedPort::share_contract_keys([&mut a, &mut fresh]);
+        assert!(!Arc::ptr_eq(&a.lease.owner_keys, &fresh.lease.owner_keys));
         world.resource::<Keys>().0.store(0, Ordering::Relaxed);
         let rejected = registry.input_transaction(&mut world, &mut buffer, |transaction| {
+            assert_eq!(transaction.read_resolved(entity, &fresh), Some(3.0));
+            transaction.stage_resolved(entity, &fresh, 7.0)?;
             assert_eq!(transaction.read_resolved(entity, &a), None);
+            assert_eq!(transaction.read_resolved(entity, &fresh), Some(3.0));
             transaction.stage_resolved(entity, &a, 6.0)
         });
         assert!(matches!(
