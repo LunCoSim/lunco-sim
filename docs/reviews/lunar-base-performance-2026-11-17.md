@@ -944,3 +944,38 @@ Host swap activity also varied sharply across the windows, so the first
 transition cannot isolate the cost of recording. All three ended with zero
 clock clipping or runtime findings. The final output check verified all 312
 public values. The receipt is in `borrowed-camera-filter/recording-aba/`.
+
+## Landside frame cost by fixed cycles
+
+Two experiments targeted the fixed-step terrain sunlight query. Keeping a
+per-axis raster cursor preserved all ray verdicts, examined-interval counts
+and cache occupancies. The medians across five alternating test-binary pairs
+changed by 0.46–1.34% across four resident and miss-heavy cases. Reusing the
+paged certificate store for the per-tick batch passed 14 native occlusion
+checks. Across equal 25-second landed windows of 1,500 calls each, the paged
+batch measured 0.383 ms mean and 0.585 ms p99, versus 0.356 and 0.563 ms for
+the existing batch. Both experiments were removed. Their captures and
+diagnostics are under `occlusion-axis-cursor/` in the performance cache.
+
+A schedule-filtered Tracy capture of the unchanged engine and main High
+2560×1440 used a 60-second window after Griffin's landing handoff. Among 4,313
+consecutive host periods, 720 contained no fixed cycle and had a median of
+9.468 ms. Of those, 212 exceeded 10 ms. All 3,587 periods containing one fixed
+cycle exceeded 10 ms, with a median of 14.631 ms. That group's median
+`FixedMain` was 5.072 ms. Its render schedule overlapped a median of 7.994 ms
+of its frame period. The median time outside the render schedule was 6.669 ms.
+Six periods contained two fixed cycles. The longest, at 37.318 ms, spent
+19.007 ms inside its two fixed cycles. The capture also recorded a 29.562 ms
+frame with zero fixed cycles. Its Update and PostUpdate took 9.374 and
+14.690 ms. These are schedule timings with profiler overhead.
+
+The separate uninstrumented session used the same source hashes, quality,
+resolution and camera across playing, paused and resumed 25-second windows.
+Their averages were 88.411, 124.448 and 82.936 FPS. The windows advanced
+1,589, zero and 1,590 authoritative ticks. The p99 frame times were 17.846,
+11.350 and 17.536 ms and the maxima were 23.245, 14.345 and 27.058 ms.
+Each endpoint retained 181 of 181 terrain tiles, zero clock clipping and
+zero runtime findings. The final public-output comparison matched all 312
+values. The paused window still had 142 of 3,082 frames over 10 ms. These
+results distinguish sustained fixed-cycle cost from presentation spikes.
+The app and collector released their owned ports.
