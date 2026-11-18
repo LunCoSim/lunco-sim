@@ -280,10 +280,14 @@ pub(super) fn read_network_with_members(
                     ModelicaParameterValue::Real(value)
                 } else if let Some(value) = view.boolean(&path, &attr) {
                     ModelicaParameterValue::Boolean(value)
+                } else if let Some(openusd::sdf::Value::String(value)) =
+                    view.attr_value(&path, &attr)
+                {
+                    ModelicaParameterValue::String(value)
                 } else {
                     extraction_errors.push(DomainProjectionError {
                         path: format!("{path}.{attr}"),
-                        message: "Modelica parameters must be authored as scalar real, integer, or boolean USD values".into(),
+                        message: "Modelica parameters must be authored as scalar real, integer, boolean, or string USD values".into(),
                     });
                     continue;
                 };

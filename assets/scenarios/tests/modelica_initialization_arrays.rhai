@@ -12,6 +12,10 @@ fn on_start(me, ctx) {
     let source = synth::instance_declaration("Feedback", "p0", bindings);
     checks.push(t_true(source == "Feedback p0(u = {p1.sample, 7.0}, matrix = {{1.0, 2.0}, {3.0, 4.0}}, scalar = true)",
         "checked input groups emit whole array modifiers in exact scalar order"));
+    checks.push(t_true(synth::parameter_literal("cart \"A\"\\aisle\n7") == "\"cart \\\"A\\\"\\\\aisle\\n7\"",
+        "typed USD text becomes a quoted Modelica string with escaped content"));
+    checks.push(t_true(synth::parameter_literal(7) == "7" && synth::parameter_literal("7") == "\"7\"",
+        "numeric-looking asset IDs keep their string type"));
     let too_few = false;
     try { synth::initial_bindings([#{name: "u", dimensions: [2, 2], values: ["1.0"]}]); }
     catch (error) { too_few = true; }
