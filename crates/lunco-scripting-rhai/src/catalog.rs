@@ -265,6 +265,8 @@ fn native_verb_entries() -> Result<Vec<NativeVerbEntry>, ApiQueryError> {
 /// Curated descriptions and product return-type labels for public native
 /// verbs. Callable signatures are read from the runtime registration schema.
 const VERB_DOCS: &[(&str, &str, &str)] = &[
+    ("http_request", "integer request id", "Native. Start a configured Twin HTTP connection with unit (GET) or a JSON value (POST)."),
+    ("http_result", "map | ()", "Native. Poll a Twin HTTP request. Unit while pending; consumes the terminal response."),
     (
         "cmd",
         "#{ id: u64, ok, status, data, error }",

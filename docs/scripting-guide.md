@@ -1626,3 +1626,24 @@ scoped to that hook.
 - [Examples directory](../assets/scripting/examples)
 - [Crate index](./crates-index.md)
 - [rhai language reference](https://rhai.rs/book/)
+
+### Native HTTP tasks
+
+A presentation program can wait for an operator-configured HTTP connection while other scenario tasks and the simulation continue. Compose `http_task` with `seq`, `forever` or `par_all`. Each entry starts one request. Its continuation receives the scenario's usual `this`, the host entity and the terminal response.
+
+```rhai
+// @timing presentation
+fn received(me, reply) {
+    if reply.ok { this.stock = parse_json(reply.text); }
+    else { this.error = if reply.error != () {reply.error} else {"HTTP " + reply.status}; }
+}
+fn task(me, ctx) {
+    http_task("warehouse", (), Fn("received"))
+}
+```
+
+For another asynchronous operation use `await_task(submit, poll, complete)`. The submission callback receives `me` and returns a handle. Poll receives `(me, handle)`; return unit while pending and a value on completion. The continuation receives `(me, value)` once. A thrown submission or polling error reaches the continuation as a map with `ok=false` and `error`. Each entry into the task starts a fresh operation. Leaving a task discards its continuation. An HTTP request already sent to the server can still finish and its abandoned handle expires. All three callbacks share scenario state through `this`.
+
+Set `LUNCOSIM_HTTP_CONNECTIONS` in the native process environment to a JSON map of named connections. Each entry contains `twin` (absolute mounted folder), `url` (exact endpoint), `method` (GET or POST) and optionally `bearer_env` (name of an environment variable holding the token). Use HTTPS. A local fixture can use credential-free HTTP with a loopback IP. GET takes unit; POST takes a Rhai value serialized as JSON. Redirects are disabled.
+
+For interactive controllers, `http_request(name, body)` returns an integer handle immediately; `http_result(id)` returns unit while pending, then consumes one result with `ok`, `status`, `text` and `error`. HTTP errors retain the status and response body. Transport failures carry a diagnostic. A bounded number of workers share the Rustls HTTP connection pool. Requests have a 20-second network timeout and 60 KiB body limits. Completed, unconsumed handles can expire after two minutes. Fixed simulation callbacks cannot initiate or consume HTTP.

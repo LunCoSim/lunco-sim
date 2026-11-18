@@ -10777,7 +10777,10 @@ dependencies = [
  "lunco-workspace",
  "rhai",
  "serde",
+ "serde_json",
  "tempfile",
+ "ureq",
+ "url",
 ]
 
 [[package]]

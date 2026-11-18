@@ -1362,6 +1362,8 @@ fn build_world_engine_base(
 ) -> Engine {
     let mut engine = Engine::new();
     engine.on_print(route_world_rhai_print);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::http::register(&mut engine);
 
     lunco_hooks_rhai::register_json(&mut engine);
     lunco_hooks_rhai::register_value_functions(&mut engine);

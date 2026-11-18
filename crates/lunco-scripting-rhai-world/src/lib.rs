@@ -8,6 +8,8 @@
 
 #[cfg(feature = "native-plugins")]
 pub mod native_plugins;
+#[cfg(not(target_arch = "wasm32"))]
+mod http;
 pub mod policy;
 pub mod source_asset;
 pub mod tool_libs;

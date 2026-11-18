@@ -123,3 +123,39 @@ fn __init_task(me, ctx) {
         this.task = Fn("task").call(me, ctx);
     }
 }
+
+// Start the request when the task is reached. The task driver resumes it on
+// later presentation ticks and calls the continuation once for either outcome.
+// The callback receives (me, response) with the scenario's normal 'this'.
+fn await_task(submit, poll, complete) {
+    let handle=();
+    let failure=();
+    seq([
+        once(|me| {
+            failure=();
+            try {
+                handle=this.call(submit,me);
+                if handle==() {throw "Async task submission returned an empty handle";}
+            } catch (error) {
+                failure=#{ok:false,error:if type_of(error)=="map" && error.message!=() {error.message} else {error.to_string()}};
+            }
+            true
+        }),
+        wait_until(|me| {
+            let result=failure;
+            if result==() {
+                try {result=this.call(poll,me,handle);}
+                catch (error) {
+                    result=#{ok:false,error:if type_of(error)=="map" && error.message!=() {error.message} else {error.to_string()}};
+                }
+            }
+            if result==() {return false;}
+            this.call(complete,me,result);
+            true
+        })
+    ])
+}
+
+fn http_task(connection, body, complete) {
+    await_task(|me| http_request(connection,body), |me,id| http_result(id), complete)
+}
