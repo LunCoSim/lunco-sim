@@ -414,7 +414,9 @@ site anchor withdraws its domain declaration.
 `lunco-celestial-spatial::globe_collision` owns planetary contact residency.
 Seeded dynamic bodies demand a closed, balanced cube-sphere cover through
 their `GravityBody` association, current surface projection and velocity
-lookahead. The camera does not select physical coverage. Collision geometry
+lookahead. The cover compares each seeded body's current and predicted positions
+with its last admitted demand using the rigid-body entity as the key. An ECS
+query reorder therefore preserves the cover. The camera does not select physical coverage. Collision geometry
 comes from `lunco-terrain-globe::GlobeSurfaceGeometry` in f64; only its rendering
 adapter narrows vertices for the GPU. The exact DEM crop remains owned by its
 terrain collider ring, and the shared `GlobeHandoff` supplies the physical and

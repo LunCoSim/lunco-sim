@@ -215,9 +215,11 @@ impl SelectionClip {
         ]
         .map(|plane| {
             let length = plane.truncate().length();
-            // Infinite reverse perspective has an exact constant far
-            // inequality. Preserve it instead of inventing a unit normal.
-            if length == 0.0 {
+            // A zero-normal inequality accepts every point or rejects every point.
+            // Homogeneous rescaling must preserve its selection identity.
+            if plane.truncate() == DVec3::ZERO && plane.w.is_finite() {
+                DVec3::ZERO.extend(if plane.w >= 0.0 { 1.0 } else { -1.0 })
+            } else if length == 0.0 {
                 plane
             } else {
                 let normalized = plane / length;
@@ -7614,10 +7616,22 @@ mod draw_partition_tests {
         let anchor = SelectionClip::new(projection, 1080.0, 2.0, eye).unwrap();
         let native = SelectionClip::normalized_planes(projection, anchor.center);
         assert_eq!(native[4].truncate(), DVec3::ZERO);
-        assert_eq!(
-            anchor.planes[4], native[4],
-            "the native constant inequality must remain exact"
-        );
+        assert_eq!(anchor.planes[4], DVec3::ZERO.extend(1.0));
+        let scaled = TerrainProjection::Perspective {
+            fov_y_rad: 0.01,
+            clip_from_local: projection.clip_from_local() * 1.0_f64.next_up(),
+        };
+        let scaled_clip = SelectionClip::new(scaled, 1080.0, 2.0, eye).unwrap();
+        assert!(anchor.retains(scaled, scaled_clip));
+        let mut excludes_all = projection.clip_from_local();
+        excludes_all.w_axis.z = -excludes_all.w_axis.z;
+        let excluded = TerrainProjection::Perspective {
+            fov_y_rad: 0.01,
+            clip_from_local: excludes_all,
+        };
+        let excluded_clip = SelectionClip::new(excluded, 1080.0, 2.0, eye).unwrap();
+        assert_eq!(excluded_clip.planes[4], DVec3::ZERO.extend(-1.0));
+        assert!(!anchor.retains(excluded, excluded_clip));
         let rotation = DQuat::from_rotation_y(anchor.normal_quantum * 0.9);
         let current = TerrainProjection::Perspective {
             fov_y_rad: 0.01,

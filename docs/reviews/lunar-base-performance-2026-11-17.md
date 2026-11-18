@@ -820,3 +820,34 @@ all 181 wanted terrain tiles. The separate strict run lost terrain selection
 readiness after three samples with all tiles resident and no presentation
 work pending. Stable 100 FPS remains open. Measurements and the native
 input receipts are under `.cache/perf/lunar-100fps/workbench-world-rays/`.
+
+## Rigid-body demand identity and infinite far-plane equivalence
+
+In the landed scene, positional comparison across successive ECS query results
+reported 25.38 m of motion whenever the result order changed. At the same times
+every one of the 34 current or predicted positions was within 0.3 mm of a
+previous position. The 16 m selection threshold triggered two unnecessary
+globe cover rebuilds roughly every half-second. The physical cover now
+compares both projections with the stored projections for the same rigid body.
+
+Across matching 25 s Tracy windows, globe contact preparation p99 fell from
+1.150 to 0.116 ms. Of 1,460 control updates, 98 exceeded 0.5 ms. All 1,431
+candidate updates took less than 0.3 ms. The planetary flight gate passed 14
+checks with identical numerical evidence at tick 8,103, and Griffin's nine
+checks passed at tick 8,756.
+
+The tracking view also alternated between two selection signatures while every
+finite frustum plane remained inside its retained envelope. The constant
+far-plane offset differed by 5.55e-17. Canonicalizing the zero-normal
+inequality by its truth value preserves its entire footprint. A projection
+test checks positive homogeneous rescaling and rejects an oppositely signed
+far inequality.
+
+The strict release run kept terrain ready across all 97 samples, with 181 of
+181 tiles drawn at the end, zero runtime diagnostics and zero clock clipping.
+Its 6,019 frames averaged 99.332 FPS, with p95 13.225 ms, p99 15.987 ms and
+a 64.509 ms maximum. There were 3,692 frames over 10 ms. The independent
+frame-history-only run averaged 101.599 FPS across 6,068 frames. Its p99 was
+15.357 ms, its maximum was 57.017 ms, and 3,588 frames exceeded 10 ms. Both
+used the same High 2560×1440 worktree profile and tracked the landed Griffin.
+Receipts are in `.cache/perf/lunar-100fps/identified-globe-foci/`.
