@@ -547,6 +547,25 @@ pub trait UsdRead {
         instance_name: &str,
     ) -> Result<Vec<SdfPath>, String>;
 
+    /// Select members from active, defined, non-abstract prims enumerated by
+    /// this reader at the same revision. Preserve candidate order.
+    fn collection_members_among_prims(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+        candidates: &[SdfPath],
+    ) -> Result<Vec<SdfPath>, String> {
+        let members: HashSet<_> = self
+            .collection_members(prim, instance_name)?
+            .into_iter()
+            .collect();
+        Ok(candidates
+            .iter()
+            .filter(|path| members.contains(*path))
+            .cloned()
+            .collect())
+    }
+
     /// Every live composed prim path (active, defined, non-abstract), in
     /// traversal order — the set a per-stage scan iterates. On the live stage
     /// this is `Stage::traverse`.
@@ -834,6 +853,13 @@ pub trait UsdReadObject {
         &self,
         prim: &SdfPath,
         instance_name: &str,
+    ) -> Result<Vec<SdfPath>, String>;
+
+    fn collection_members_among_prims(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+        candidates: &[SdfPath],
     ) -> Result<Vec<SdfPath>, String>;
     fn prim_paths(&self) -> Vec<SdfPath>;
     fn prim_paths_matching(&self, type_names: &[&str], api_schemas: &[&str]) -> Vec<SdfPath>;
@@ -1449,6 +1475,15 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
         UsdRead::collection_members(self, prim, instance_name)
     }
 
+    fn collection_members_among_prims(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+        candidates: &[SdfPath],
+    ) -> Result<Vec<SdfPath>, String> {
+        UsdRead::collection_members_among_prims(self, prim, instance_name, candidates)
+    }
+
     fn prim_paths(&self) -> Vec<SdfPath> {
         UsdRead::prim_paths(self)
     }
@@ -1674,6 +1709,20 @@ impl UsdRead for StageView<'_> {
         instance_name: &str,
     ) -> Result<Vec<SdfPath>, String> {
         StageView::collection_members(self, prim, instance_name)
+    }
+
+    fn collection_members_among_prims(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+        candidates: &[SdfPath],
+    ) -> Result<Vec<SdfPath>, String> {
+        let query = self.collection_membership_query(prim, instance_name)?;
+        Ok(candidates
+            .iter()
+            .filter(|path| query.is_included(path))
+            .cloned()
+            .collect())
     }
 
     /// Canonical double-precision transform for physical geometry consumers.
@@ -2240,6 +2289,22 @@ impl UsdRead for UsdReadSource<'_> {
         match self {
             Self::Prepared(reader) => UsdRead::collection_members(*reader, prim, instance_name),
             Self::Live(reader) => UsdRead::collection_members(reader, prim, instance_name),
+        }
+    }
+
+    fn collection_members_among_prims(
+        &self,
+        prim: &SdfPath,
+        instance_name: &str,
+        candidates: &[SdfPath],
+    ) -> Result<Vec<SdfPath>, String> {
+        match self {
+            Self::Prepared(reader) => {
+                UsdRead::collection_members_among_prims(*reader, prim, instance_name, candidates)
+            }
+            Self::Live(reader) => {
+                UsdRead::collection_members_among_prims(reader, prim, instance_name, candidates)
+            }
         }
     }
 
