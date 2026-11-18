@@ -50,7 +50,7 @@ fn setup_scene(
             base_color: Color::srgb(0.1, 0.1, 0.1),
             ..default()
         })),
-        Collider::half_space(bevy::math::DVec3::Y),
+        Collider::half_space(Vec3::Y),
         RigidBody::Static,
     ));
 
