@@ -585,3 +585,36 @@ The 60.30-second polling window advanced 3,685 fixed ticks between qualification
 snapshots, with 181 terrain tiles drawn, 454 ordered torque samples, zero time
 clipping and clear runtime diagnostics. A second GPU client showed 8% activity
 at the final sample. The 100 FPS and frame-stability requirements remain open.
+
+## The touchdown transition
+
+The indexed-command Tracy capture shows two consecutive sources of delay.
+During fixed tick 1,341 the mission's landed-route task took 329.566 ms,
+including 183.098 ms in the nine-operation transient USD transaction.
+The enclosing frame took 358.346 ms. In the first host update after four-pad
+handoff, authored program projection took another 56.956 ms, telemetry
+projection 18.623 ms and exposure publication 13.208 ms. The frame took
+125.595 ms and ran zero fixed ticks. A second, schedule-only capture recorded
+141.796 ms for that following frame.
+
+The program projector computes Modelica network membership from composed USD.
+It now locates network roots and program candidates in a single traversal and
+tests the program paths against each native collection query. In the new
+Tracy capture the corresponding authored-runtime pass took 20.436 ms.
+Four target translations and one visibility edit triggered the projection,
+with no structural resync. Telemetry projection still took 25.718 ms.
+The stage's prepared and live readers both matched native full expansion
+for nested inclusions, exclusions, properties and an expression collection.
+
+The uninstrumented control and candidate used the same working High profile,
+2560×1440 camera and Twin source hashes. The five-second handoff windows had
+maxima of 365.936 ms and 469.858 ms respectively. Once settled, the control
+recorded 83.742 FPS, p99 18.452 ms and maximum 38.952 ms. The candidate
+recorded 93.292 FPS over 5,582 frames, p95 14.440 ms, p99 16.349 ms and
+maximum 28.048 ms. Of these, 3,639 exceeded 10 ms. The candidate advanced
+3,687 simulation ticks between checkpoints, retained 452 ordered telemetry
+samples and reported zero runtime diagnostics. The surface-operations
+verification passed at tick 8,756. Concurrent host activity varied and the
+collection change runs on projection invalidation. These settled frame timings
+do not isolate its effect. Receipts and Tracy exports are in
+`.cache/perf/lunar-100fps/scoped-collection-members/`.

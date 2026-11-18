@@ -510,8 +510,10 @@ pub fn modelica_source_ref(
 /// OpenUSD binding through `HasAPI`; their standard authored properties are
 /// authoritative and round-trip in all runtimes.
 pub fn is_domain_network_root(view: &dyn UsdReadObject, prim: &SdfPath) -> bool {
-    view.any_attr_with_prefix(prim, "collection:components:")
+    view.any_attr_with_prefix(prim, COMPONENT_COLLECTION_PREFIX)
 }
+
+const COMPONENT_COLLECTION_PREFIX: &str = "collection:components:";
 
 /// Reusable root attributes and component paths for classifying a network's
 /// Modelica boundary without re-reading its USD collection for every port.
@@ -823,20 +825,27 @@ fn authored_synthesizer_name(view: &dyn UsdReadObject, root: &SdfPath) -> Option
 /// is the authoritative boundary between a Modelica member and such a
 /// physical participant; collection membership alone is not.
 pub fn modelica_network_member_paths(view: &dyn UsdReadObject) -> HashSet<String> {
-    let mut members = HashSet::new();
-    for prim in view.prim_paths() {
-        if !is_domain_network_root(view, &prim) {
-            continue;
+    let mut roots = Vec::new();
+    let mut programs = Vec::new();
+    for facts in
+        view.prim_schema_facts_matching(&[], &["LunCoProgramAPI"], COMPONENT_COLLECTION_PREFIX)
+    {
+        if facts.has_attr_prefix {
+            roots.push(facts.path.clone());
         }
-        let Ok(paths) = view.collection_members(&prim, "components") else {
-            continue;
-        };
-        members.extend(
-            paths
-                .into_iter()
-                .filter(|path| view.has_api_schema(path, "LunCoProgramAPI"))
-                .map(|path| path.to_string()),
-        );
+        if facts
+            .api_schemas
+            .iter()
+            .any(|schema| schema == "LunCoProgramAPI")
+        {
+            programs.push(facts.path);
+        }
+    }
+    let mut members = HashSet::new();
+    for root in roots {
+        if let Ok(paths) = view.collection_members_among_prims(&root, "components", &programs) {
+            members.extend(paths.into_iter().map(|path| path.to_string()));
+        }
     }
     members
 }

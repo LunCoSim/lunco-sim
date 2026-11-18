@@ -901,11 +901,33 @@ def Xform "World" {
     assert!(expression.membership_query()? != expression.membership_query()?);
     let plan = UsdStageProjectionPlan::from_stage(&stage)?;
     let live = StageView::new(&stage);
+    let candidates = [
+        SdfPath::new("/World/Other")?,
+        SdfPath::new("/World/Group/Excluded")?,
+        SdfPath::new("/World/Group/Child")?,
+        SdfPath::new("/World/Group")?,
+    ];
     for name in ["First", "Second", "Expression"] {
         let path = SdfPath::new(&format!("/World/{name}"))?;
         assert_eq!(
             plan.collection_members(&path, "members"),
             live.collection_members(&path, "members")
+        );
+        let expanded = live
+            .collection_members(&path, "members")
+            .map_err(anyhow::Error::msg)?;
+        let expected: Vec<_> = candidates
+            .iter()
+            .filter(|p| expanded.contains(p))
+            .cloned()
+            .collect();
+        assert_eq!(
+            live.collection_members_among_prims(&path, "members", &candidates),
+            Ok(expected.clone())
+        );
+        assert_eq!(
+            plan.collection_members_among_prims(&path, "members", &candidates),
+            Ok(expected)
         );
     }
     let first_path = SdfPath::new("/World/First")?;
