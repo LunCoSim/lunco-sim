@@ -78,7 +78,9 @@ impl Plugin for UsdSceneRuntimePlugin {
         dataset_requirements::install(app);
         app.init_resource::<live_consume::PendingStageProjections>();
         app.init_resource::<native_assets::PendingNativeAssetPaths>();
-        live_consume::install_live_prim_entity_index(app);
+        if !app.is_plugin_added::<lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin>() {
+            app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
+        }
         app.add_systems(
             bevy::prelude::PreUpdate,
             (

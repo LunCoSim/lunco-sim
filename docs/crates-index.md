@@ -861,6 +861,7 @@ re-export layer.
 
 **`lunco-usd-bevy-scene`**
 Render-free ECS contract between USD projection domains. It owns `UsdPrimPath`,
+its lifecycle-maintained `UsdPrimIndex`,
 `UsdSceneProjected`, `UsdSceneRoot`, `UsdPreviewOnly`, `UsdAnimated`, the
 projection ordering boundaries, the generic `UsdSceneProjectionReset` and
 coalesced `UsdSceneChangeBatch` path/generation message,

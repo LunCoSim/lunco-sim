@@ -361,9 +361,13 @@ mod source_lease_tests {
         world
             .resource_mut::<lunco_core::SceneMountState>()
             .register_root(root, true);
-        world.get_mut::<UsdPrimPath>(entities[0]).unwrap().path = "/Moved".into();
+        let original = world.get::<UsdPrimPath>(entities[0]).unwrap().clone();
+        world.entity_mut(entities[0]).insert(UsdPrimPath {
+            path: "/Moved".into(),
+            ..original.clone()
+        });
         assert!(!first.is_live(&world));
-        world.get_mut::<UsdPrimPath>(entities[0]).unwrap().path = first.path.clone();
+        world.entity_mut(entities[0]).insert(original);
         assert!(first.is_live(&world));
         world.despawn(entities[0]);
         assert!(!first.is_live(&world));

@@ -14,12 +14,11 @@
 //! `twin_projection`; ordinary authored route edits use the incremental path.
 
 use bevy::prelude::*;
-use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch};
+use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneChangeBatch, prim_index::UsdPrimIndex};
 use lunco_usd_bevy_stage::{UsdRead, UsdStageAsset};
 use openusd::sdf::Path as SdfPath;
 use openusd_schemas::lux::tokens as ltok;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
 
 /// The attribute a move edit (`UsdOp::SetTranslate`) records as `InfoOnly`.
 const TRANSLATE_ATTR: &str = "xformOp:translate";
@@ -58,76 +57,6 @@ struct PendingStageProjection {
 #[derive(Resource, Default)]
 pub(crate) struct PendingStageProjections {
     stages: HashMap<AssetId<UsdStageAsset>, PendingStageProjection>,
-}
-
-/// Lifecycle-maintained lookup for every ECS projection of a USD path.
-/// Live simulation reads exclude preview ancestry; visual and structural edits
-/// reconcile every explicit preview lease through the same indexed candidates.
-#[derive(Resource, Default)]
-pub(crate) struct LiveUsdPrimEntities {
-    by_stage: HashMap<AssetId<UsdStageAsset>, HashMap<Arc<str>, Vec<Entity>>>,
-    by_entity: HashMap<Entity, (AssetId<UsdStageAsset>, Arc<str>)>,
-}
-
-impl LiveUsdPrimEntities {
-    fn insert(&mut self, entity: Entity, prim: &UsdPrimPath) {
-        let stage = prim.stage_handle.id();
-        let path: Arc<str> = Arc::from(prim.path.as_str());
-        let key = (stage, Arc::clone(&path));
-        if self.by_entity.get(&entity) == Some(&key) {
-            return;
-        }
-        self.remove(entity);
-        let candidates = self
-            .by_stage
-            .entry(stage)
-            .or_default()
-            .entry(path)
-            .or_default();
-        match candidates.binary_search_by_key(&entity.to_bits(), |candidate| candidate.to_bits()) {
-            Ok(_) => {}
-            Err(index) => candidates.insert(index, entity),
-        }
-        self.by_entity.insert(entity, key);
-    }
-
-    fn remove(&mut self, entity: Entity) {
-        let Some((stage, path)) = self.by_entity.remove(&entity) else {
-            return;
-        };
-        let Some(paths) = self.by_stage.get_mut(&stage) else {
-            return;
-        };
-        if let Some(candidates) = paths.get_mut(&path) {
-            candidates.retain(|candidate| *candidate != entity);
-            if candidates.is_empty() {
-                paths.remove(&path);
-            }
-        }
-        if paths.is_empty() {
-            self.by_stage.remove(&stage);
-        }
-    }
-}
-
-fn index_live_usd_prim(
-    trigger: On<Insert<UsdPrimPath>>,
-    prims: Query<&UsdPrimPath>,
-    mut index: ResMut<LiveUsdPrimEntities>,
-) {
-    if let Ok(prim) = prims.get(trigger.entity) {
-        index.insert(trigger.entity, prim);
-    }
-}
-
-fn unindex_live_usd_prim(trigger: On<Remove<UsdPrimPath>>, mut index: ResMut<LiveUsdPrimEntities>) {
-    index.remove(trigger.entity);
-}
-
-pub(crate) fn install_live_prim_entity_index(app: &mut App) {
-    app.init_resource::<LiveUsdPrimEntities>()
-        .add_observer(index_live_usd_prim)
-        .add_observer(unindex_live_usd_prim);
 }
 
 impl PendingStageProjections {
@@ -388,27 +317,14 @@ pub(crate) fn mark_live_transform(
 // of that bridge: it drains the OpenUSD sink and projects the committed stage
 // changes into ECS.
 
-/// All ECS instances of one stage/path, in stable entity order.
-pub(crate) fn find_stage_entities<'w>(
-    world: &'w World,
-    stage_handle_id: AssetId<UsdStageAsset>,
-    path: &str,
-) -> &'w [Entity] {
-    world
-        .resource::<LiveUsdPrimEntities>()
-        .by_stage
-        .get(&stage_handle_id)
-        .and_then(|paths| paths.get(path))
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-}
-
 pub(crate) fn find_live_entity(
     world: &World,
     stage_handle_id: AssetId<UsdStageAsset>,
     path: &str,
 ) -> Option<Entity> {
-    find_stage_entities(world, stage_handle_id, path)
+    world
+        .resource::<UsdPrimIndex>()
+        .in_stage(stage_handle_id, path)
         .iter()
         .copied()
         .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
@@ -431,7 +347,9 @@ fn find_projection_entity(
         ProjectionScope::Live => find_live_entity(world, stage, path),
         ProjectionScope::Preview(root) => {
             let parents = parents.query(world);
-            find_stage_entities(world, stage, path)
+            world
+                .resource::<UsdPrimIndex>()
+                .in_stage(stage, path)
                 .iter()
                 .copied()
                 .find(|entity| lunco_usd_bevy_scene::is_preview_entity(*entity, root, &parents))
@@ -896,7 +814,10 @@ pub(crate) fn apply_transform_edits_live(
         }
     }
     for (path, channels, transform, translation) in transforms {
-        let entities = find_stage_entities(world, id, &path).to_vec();
+        let entities = world
+            .resource::<UsdPrimIndex>()
+            .in_stage(id, &path)
+            .to_vec();
         if entities.is_empty() {
             debug!("[usd] transform edit {path}: no projected entity on this stage");
         }
@@ -1543,7 +1464,6 @@ mod tests {
     #[test]
     fn live_prim_path_index_tracks_component_lifecycle_and_preview_duplicates() {
         let mut app = App::new();
-        install_live_prim_entity_index(&mut app);
         let stage_handle = Handle::<UsdStageAsset>::default();
         let stage_id = stage_handle.id();
         let live = app
@@ -1553,6 +1473,7 @@ mod tests {
                 path: "/World/Marker".into(),
             })
             .id();
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
         let preview = app
             .world_mut()
             .spawn((
@@ -1563,6 +1484,31 @@ mod tests {
                 lunco_usd_bevy_scene::UsdPreviewOnly,
             ))
             .id();
+
+        let other_stage = Assets::<UsdStageAsset>::default().reserve_handle();
+        let other = app
+            .world_mut()
+            .spawn(UsdPrimPath {
+                stage_handle: other_stage.clone(),
+                path: "/World/Marker".into(),
+            })
+            .id();
+        let index = app.world().resource::<UsdPrimIndex>();
+        assert_eq!(
+            index
+                .at_path("/World/Marker")
+                .collect::<std::collections::HashSet<_>>(),
+            [live, preview, other].into_iter().collect()
+        );
+        assert_eq!(index.in_stage(other_stage.id(), "/World/Marker"), &[other]);
+        app.world_mut().despawn(other);
+        assert_eq!(
+            app.world()
+                .resource::<UsdPrimIndex>()
+                .at_path("/World/Marker")
+                .count(),
+            2
+        );
 
         assert_eq!(
             find_live_entity(app.world(), stage_id, "/World/Marker"),
@@ -1583,10 +1529,9 @@ mod tests {
         app.world_mut().entity_mut(preview).remove::<UsdPrimPath>();
         assert!(
             app.world()
-                .resource::<LiveUsdPrimEntities>()
-                .by_entity
-                .get(&preview)
-                .is_none()
+                .resource::<UsdPrimIndex>()
+                .in_stage(stage_id, "/World/Marker")
+                .is_empty()
         );
         assert_eq!(
             find_live_entity(app.world(), stage_id, "/World/Marker"),
@@ -1645,7 +1590,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
-        install_live_prim_entity_index(&mut app);
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app
@@ -1724,7 +1669,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
-        install_live_prim_entity_index(&mut app);
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app
@@ -1847,7 +1792,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
-        install_live_prim_entity_index(&mut app);
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
         let recipe = StageRecipe::from_source("scene.usda", SCENE);
         let handle = app
             .world_mut()
@@ -1911,7 +1856,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
-        install_live_prim_entity_index(&mut app);
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
         let recipe = StageRecipe::from_source("vehicle.usda", SCENE);
         let handle = app
             .world_mut()
@@ -1971,7 +1916,7 @@ mod tests {
         app.add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>();
-        install_live_prim_entity_index(&mut app);
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
 
         // An asset carrying the ref-less in-memory scene + its build recipe.
         let recipe = StageRecipe::from_source("scene.usda", SCENE);
@@ -2054,7 +1999,7 @@ mod tests {
             .init_asset::<UsdStageAsset>()
             .init_non_send::<CanonicalStages>()
             .add_message::<UsdSceneChangeBatch>();
-        install_live_prim_entity_index(&mut app);
+        app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);
 
         let recipe = StageRecipe::from_source("scene.usda", TINY);
         let handle = app

@@ -673,3 +673,30 @@ The separate strict acceptance run stopped during the measurement when the
 terrain selector reported a pending selection with 181 of 181 tiles resident.
 Application readiness remained true. The raw 60-second diagnostic above
 also exceeded the 10 ms frame budget.
+
+## Projected path lookup during tether operation
+
+Tracy attributed 20 of 320 main-thread samples inside the landed tether task
+to global prim-path matching. Stage-scoped lookup also built query metadata
+for four ECS queries on each call. Structural reconciliation and Rhai now
+share the scene-owned prim index. The caller resolves live registration,
+preview ancestry and mount identity from the indexed candidates. Reflected
+path replacement updates the same index through the ECS insertion lifecycle.
+
+In the production tracking view at High 2560×1440, each trial resolved one
+present and one missing path 100 times. Median script elapsed time across
+five trials fell from 3.131 to 0.110 ms globally, from 38.830 to 0.152 ms
+within the source mount and from 17.267 to 0.160 ms within the document. The
+live Rhai test passed all ten identity, restoration and rejection checks.
+The lifecycle test also covered pre-existing projections, a preview, a second
+stage and despawn. The nine mission checks passed at tick 8,756.
+
+The separate landed release run measured 90.720 FPS over 5,425 fresh frames.
+Median, p95, p99 and maximum frame times were 11.349, 15.144, 17.431 and
+25.859 ms. There were 3,664 frames above 10 ms. The run advanced 3,686
+fixed ticks between checkpoints and retained 455 ordered torque samples.
+A Tracy CSV export overlapped the beginning of this diagnostic. The separate
+strict run lost terrain qualification with one selection pending and all
+181 tiles resident. Reproducible lookup savings have yet to yield the
+requested sustained frame budget. Receipts are in
+`.cache/perf/lunar-100fps/projected-path-index/`.

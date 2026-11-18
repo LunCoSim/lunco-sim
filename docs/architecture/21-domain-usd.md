@@ -1446,9 +1446,10 @@ and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
   prim path. USD stays the source of truth for the root prim; the loader resolves
   the authored `defaultPrim` rather than making a filename-based path guess.
 - Live structural reconciliation resolves `(stage, prim path)` through the
-  `UsdPrimPath` lifecycle index. Insert and removal observers keep the index
-  current, including duplicate preview paths; scene edits no longer scan every
-  live prim once for each changed path. A referenced spawn merges its immutable
+  scene-owned `UsdPrimIndex`. It records existing projections at installation
+  and tracks insert, replacement, removal and despawn of immutable `UsdPrimPath`
+  components. Script lookups use the same candidates and resolve the current
+  API ID, mount and preview ancestry for their requested scope. A referenced spawn merges its immutable
   `StageRecipe` through the canonical stage's weak recipe-identity cache. Reuse
   of the same admitted recipe avoids another closure scan, while a new recipe
   revision refreshes changed layer bytes. `ReferenceLayerInputs` retains real

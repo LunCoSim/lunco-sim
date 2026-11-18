@@ -1495,8 +1495,9 @@ and fixed-step cadence during each. Use the production spans
 command, document, reference, projection, and removal costs. Warm instances of
 one immutable asset recipe should bypass layer-byte cloning and comparison;
 asset reloads use a new recipe identity and still merge changed bytes. Path
-reconciliation uses the lifecycle-maintained stage/path index, not a full
-population scan per changed prim. Raw-file spawn identity collision checks use
+reconciliation and Rhai path lookups share the scene-owned stage/path index.
+Measure global, mount and document lookups separately with matching numbers
+of present and missing paths, and time inside the script to exclude transport. Raw-file spawn identity collision checks use
 the lifecycle-maintained API identity registry and a hash set of queued roots,
 not a world scan or a walk of all pending inputs. Document projection waits only for
 references named by that edit's typed AddPrim operations; an unrelated
