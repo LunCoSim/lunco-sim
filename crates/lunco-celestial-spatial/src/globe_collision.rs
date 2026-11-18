@@ -95,6 +95,23 @@ struct PreparedSurface {
     rotation: DQuat,
 }
 
+#[derive(Clone, Copy)]
+struct SurfaceFocus {
+    position: DVec3,
+    predicted: Option<DVec3>,
+}
+
+impl SurfaceFocus {
+    fn retained_by(self, previous: Self, limit_squared: f64) -> bool {
+        self.position.distance_squared(previous.position) <= limit_squared
+            && match (self.predicted, previous.predicted) {
+                (Some(a), Some(b)) => a.distance_squared(b) <= limit_squared,
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 #[derive(Default)]
 struct BodyCover {
     handoff: Option<GlobeHandoff>,
@@ -104,7 +121,7 @@ struct BodyCover {
     /// Present while a replacement cover is being admitted. Once committed,
     /// the resident map contains exactly the selected keys.
     replacement: Option<BTreeSet<SurfaceKey>>,
-    last_foci: Vec<DVec3>,
+    last_foci: BTreeMap<Entity, SurfaceFocus>,
     geometry_settings: Option<(u32, u64, u32)>,
     selection_factor: Option<u64>,
     failed: BTreeSet<SurfaceKey>,
@@ -230,6 +247,7 @@ fn prepare_globe_collision(
         Option<&GlobeHandoff>,
     )>,
     dynamic: Query<(
+        Entity,
         &RigidBody,
         &Position,
         Option<&LinearVelocity>,
@@ -287,7 +305,7 @@ fn prepare_globe_collision(
     for (body, descriptor, lod, handoff) in ordered_bodies {
         let relevant: Vec<_> = dynamic
             .iter()
-            .filter(|(mode, _, _, gravity, _, _)| {
+            .filter(|(_, mode, _, _, gravity, _, _)| {
                 **mode == RigidBody::Dynamic && gravity.body_entity == body
             })
             .collect();
@@ -352,7 +370,7 @@ fn prepare_globe_collision(
         let inverse = rotation.inverse();
         let mut foci = Vec::new();
         let mut contact_near = false;
-        for (_, position, velocity, _, owned, seeded) in relevant {
+        for (entity, _, position, velocity, _, owned, seeded) in relevant {
             // Seeding may run later in this preparation schedule. Never read
             // Position's required-component default as a physical demand or
             // advance an unseeded body past missing surface support.
@@ -365,7 +383,6 @@ fn prepare_globe_collision(
                 waiting = true;
                 continue;
             }
-            foci.push(p.normalize() * radius);
             let mut envelope = 0.0_f64;
             // A body without collider members has no contact envelope. For
             // actual members, every AABB must be admitted before its footprint
@@ -391,12 +408,18 @@ fn prepare_globe_collision(
                 velocity.map_or(0.0, |v| v.0.length() as f64) * settings.lookahead_seconds;
             contact_near |= !known
                 || p.length() - radius - envelope <= settings.preparation_height_m + approach;
-            if let Some(velocity) = velocity {
-                let predicted = p + inverse * velocity.0.as_dvec3() * settings.lookahead_seconds;
-                if predicted.is_finite() && predicted.length_squared() > 0.0 {
-                    foci.push(predicted.normalize() * radius);
-                }
-            }
+            let predicted = velocity.and_then(|velocity| {
+                let point = p + inverse * velocity.0.as_dvec3() * settings.lookahead_seconds;
+                (point.is_finite() && point.length_squared() > 0.0)
+                    .then(|| point.normalize() * radius)
+            });
+            foci.push((
+                entity,
+                SurfaceFocus {
+                    position: p.normalize() * radius,
+                    predicted,
+                },
+            ));
         }
         if foci.is_empty() {
             continue;
@@ -412,14 +435,17 @@ fn prepare_globe_collision(
                 .extend(cover.resident.values().flatten().copied());
             cover.resident.clear();
             cover.pending.clear();
-            cover.last_foci.clear();
             cover.failed.clear();
             cover.handoff = handoff.cloned();
             cover.geometry_settings = Some(geometry_settings);
         }
+        let limit_squared = (settings.contact_tile_span_m / 16.0).powi(2);
         let moved = foci.len() != cover.last_foci.len()
-            || foci.iter().zip(&cover.last_foci).any(|(a, b)| {
-                a.distance_squared(*b) > (settings.contact_tile_span_m / 16.0).powi(2)
+            || foci.iter().any(|(entity, focus)| {
+                !cover
+                    .last_foci
+                    .get(entity)
+                    .is_some_and(|previous| focus.retained_by(*previous, limit_squared))
             });
         let selection_factor = settings.refinement_distance_factor.to_bits();
         if moved || changed || cover.selection_factor != Some(selection_factor) {
@@ -428,10 +454,17 @@ fn prepare_globe_collision(
                 .keys()
                 .filter_map(|key| key.coord(body))
                 .collect();
+            cover.last_foci.clear();
+            cover.last_foci.extend(foci);
+            let positions: Vec<_> = cover
+                .last_foci
+                .values()
+                .flat_map(|focus| std::iter::once(focus.position).chain(focus.predicted))
+                .collect();
             let mut desired = desired_cover(
                 body,
                 radius,
-                &foci,
+                &positions,
                 &resident,
                 max_lod,
                 settings.refinement_distance_factor,
@@ -440,7 +473,6 @@ fn prepare_globe_collision(
                 desired.insert(SurfaceKey::Collar);
             }
             cover.replacement = Some(desired);
-            cover.last_foci = foci;
             cover.selection_factor = Some(selection_factor);
         }
         let collider_ready = |entity: Entity| {

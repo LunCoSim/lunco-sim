@@ -156,7 +156,9 @@ cover workers compute it, while synchronous web preparation only reads an alread
 cached enclosure and otherwise keeps uncertain nodes eligible. Selection retains
 conservative local clip envelopes with hysteresis; angular tolerances derive from
 the projection, output pixels and configured pixel error. The same retained envelope
-owns invalidation and clipping, so subpixel rig jitter can reuse preparation while
+owns invalidation and clipping. A constant plane in an infinite projection is
+identified by whether its inequality accepts or rejects the entire domain.
+Subpixel rig jitter can therefore reuse preparation while
 meaningful telephoto pans and roll changes wake selection. Native lens/output
 changes retire incompatible preparation. Orthographic tiles use static parent-edge stitching without distance
 morphing and discrete zoom cover changes. Unsupported custom projection metrics

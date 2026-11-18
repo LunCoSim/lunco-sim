@@ -559,7 +559,8 @@ viewing axis must preserve LOD. Both projections retain a projected posting-size
 floor at every range and clip against conservative full-source heights. Retained
 view envelopes use projected angular tolerances and hysteresis for both clipping
 and invalidation; verify that microscopic mounted-camera jitter can settle while
-meaningful telephoto pan/roll changes wake selection. Test zoom
+meaningful telephoto pan/roll changes wake selection. Positive homogeneous
+rescaling of a constant far plane must preserve its selection identity. Test zoom
 and lateral footprint changes separately. The motion driver also compares two
 otherwise identical distant-crater scenes with wide/telephoto focal lengths using
 `camera_terrain_zoom.rhai`; require finer visible postings without changing physical
