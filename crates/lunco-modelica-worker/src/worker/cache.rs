@@ -1121,8 +1121,12 @@ mod tests {
         let mut session = rumoca_compile::Session::new(rumoca_compile::SessionConfig::default());
         session.add_document("CacheProbe.mo", "model CacheProbe parameter Real gain = 3.5; Real x(start=42, fixed=true); equation der(x) = -gain*x; end CacheProbe;").unwrap();
         let compiled = session.compile_model("CacheProbe").unwrap();
-        rumoca_sim::prepare_fmi_component(&compiled.dae, &rumoca_sim::SimOptions::default())
-            .unwrap()
+        let (_, _, options) = super::super::live_stepper_options(solver::RuntimeProfile {
+            live: true,
+            predicted: false,
+        })
+        .unwrap();
+        rumoca_sim::prepare_fmi_component(&compiled.dae, &options).unwrap()
     }
 
     fn record(

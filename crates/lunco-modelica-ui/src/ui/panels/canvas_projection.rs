@@ -613,9 +613,12 @@ annotation(
 );
 end GeneratedRoot;
 
+connector UnitInput = input Real;
+connector UnitOutput = output Real;
+
 model Unit_One
-  input Real input_a;
-  output Real output_b;
+  UnitInput input_a;
+  UnitOutput output_b;
 equation
   output_b = input_a;
 annotation(

@@ -68,7 +68,7 @@ package P
     output Real sample;
   equation
     der(x)=fill(k,n);
-    sample=if enabled then u+x[1] else x[1];
+    sample=x[1];
   end Base;
   model Derived
     extends Base;

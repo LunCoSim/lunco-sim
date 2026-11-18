@@ -82,10 +82,8 @@ fn observe_initialization(
         .collect::<Vec<_>>();
     // The composite is consumed by this observation. Compile persistent
     // execution programs when constructing each live participant.
-    let options = rumoca_sim::SimOptions {
-        execution_policy: rumoca_sim::SimExecutionPolicy::Interpreter,
-        ..plan.options
-    };
+    let mut options = plan.options;
+    options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
     let mut values = rumoca_sim::initialize_fmi_component(component, &options, &requested)?;
     let state_values = state_names
         .iter()

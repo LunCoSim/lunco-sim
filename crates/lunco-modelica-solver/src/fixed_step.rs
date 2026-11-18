@@ -184,6 +184,8 @@ fn validate_fixed_step_component(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod observation_diagnostics {
     use super::*;
+    use crate::solver_backends;
+    use lunco_experiments::solver::{self, RuntimeProfile, SolverParams, SolverRequest};
     use std::{hint::black_box, time::Instant};
 
     /// Compare complete observation collection through the existing public ME
@@ -211,15 +213,27 @@ end ObservationProbe;
         let compiled = compiler
             .compile_model_dae_strict_reachable_uncached_with_recovery("ObservationProbe")
             .unwrap();
-        let mut stepper = FixedStepSession::new(
-            &compiled.dae,
-            SimOptions {
-                dt: Some(0.01),
+        solver_backends::ensure_builtin_solvers();
+        let spec = solver::resolve(&SolverRequest {
+            profile: RuntimeProfile {
+                live: true,
+                predicted: true,
+            },
+            authored: None,
+        })
+        .unwrap();
+        let options = solver_backends::rumoca_options(
+            &spec,
+            &SolverParams {
+                atol: 1e-6,
+                rtol: 1e-6,
+                h0: Some(0.01),
+                t_start: 0.0,
                 t_end: 1.0,
-                ..Default::default()
             },
         )
         .unwrap();
+        let mut stepper = FixedStepSession::new(&compiled.dae, options).unwrap();
         let labels = stepper.session.output_names().unwrap();
         assert_eq!(labels.len(), 2305);
         assert!(labels.iter().any(|name| name == "command"));
