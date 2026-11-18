@@ -270,6 +270,10 @@ The window is drawn by **two layered cameras**, not by tiling:
 | 0 | scene `Camera3d` (`lunco_render::SceneCamera` intent) | renders the 3D **full-window**; **clears** the target |
 | 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints chrome into the scene camera's shared main texture |
 
+The workbench host receives chrome hits in window coordinates. The workbench
+removes that host's ray from Bevy's pointer ray map during input processing,
+before spatial picking starts. Scene and preview cameras keep their own rays.
+
 The host is a separate camera because scene cameras are transient (USD spawns
 them, `camera_switch` swaps them) while the egui context must be stable. Both
 cameras target the window's shared main texture, with the scene clear preceding

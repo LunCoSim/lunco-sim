@@ -149,6 +149,9 @@ de-duplicating the gesture, so a lower blocking or context target can receive
 it. Disposable scene previews that overlap interactive geometry must author
 pass-through behavior for the buttons they should not consume.
 
+The workbench egui host captures chrome using window coordinates. Inspect the
+scene camera's pointer ray for world-space hits.
+
 The retained Bevy UI backend shares the window target with scene picking. The
 Workbench's UI camera sorts above the scene, so unmarked Bevy UI nodes would
 block scene hits even when they are decorative. `RuntimeUiPlugin` requires UI

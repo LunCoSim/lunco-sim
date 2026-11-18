@@ -795,3 +795,28 @@ the stall and the next directional shadow pass started 61.284 ms into the
 frame. These GPU timestamps locate the gap in submissions. They do not
 identify the reason for the renderer's wait. Captures and receipts are under
 `.cache/perf/lunar-100fps/committed-globe-cover/` and `landed-critical/`.
+
+## Spatial picking for scene cameras
+
+The workbench egui host paints window chrome and receives pointer hits in
+window coordinates. Input processing removes that camera's rays before
+spatial backends traverse the scene. Camera identity scopes the removal to
+the host, including when the pointer also covers another camera's target.
+
+The landed Tracy windows recorded two ray-culling passes in all 1,492 control
+updates and one pass in all 1,460 candidate updates. Mesh picking averaged
+0.591 and 0.530 ms respectively, with p99 falling from 1.278 to 1.164 ms.
+In an owned release window, injected pointer clicks switched View to Analyze
+and back. Both revisions hit the authored route geometry and emitted its
+context event. Repeated route tests on both builds failed the same possessed
+rover right-click selection assertion. The separate graph HUD gate stopped
+before input when its empty HUD did not report a rendered rectangle.
+
+At High 2560×1440 the release frame sequence covered 6,173 landed frames.
+It averaged 103.313 FPS. Median, p95, p99 and worst frame times were
+10.596, 12.856, 14.881 and 24.706 ms. Of these frames, 3,580 exceeded 10 ms.
+The simulation advanced 3,682 fixed ticks and the tracking camera retained
+all 181 wanted terrain tiles. The separate strict run lost terrain selection
+readiness after three samples with all tiles resident and no presentation
+work pending. Stable 100 FPS remains open. Measurements and the native
+input receipts are under `.cache/perf/lunar-100fps/workbench-world-rays/`.
