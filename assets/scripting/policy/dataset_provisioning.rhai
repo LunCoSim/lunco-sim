@@ -21,6 +21,14 @@ fn source_file_label(state) {
     "Not downloaded"
 }
 fn provision_choice(condition,yes,no) {if condition {return yes;} no}
+fn preparation_color(ready,working) {
+    if ready {return "var(--ok-color)";}
+    if working {return "var(--caution-color)";}
+    "var(--danger-color)"
+}
+fn dataset_working(state) {
+    ["queued","downloading","processing","cancelling"].contains(state)
+}
 fn preparation_title(complete,failed,busy,downloads_needed) {
     if complete {return "Data ready";}
     if failed>0 {return "Data preparation needs attention";}
@@ -56,6 +64,7 @@ fn dataset_preparation_row(dataset,scope) {
     let can_prepare=dataset.inputs_ready && dataset.processed;
     let row=#{id:dataset.id,parameter_id:dataset.id,scope:scope,label:dataset.name,
         status:provision_choice(dataset.inputs_ready,"Downloaded · ready to prepare","Not downloaded"),
+        status_color:preparation_color(state=="installed",dataset_working(state)),
         download_status:"1  Source files · "+sources.count+" downloaded",
         source_files:sources.files,
         details_display:provision_choice(dataset.expanded==true,"flex","none"),
@@ -130,7 +139,7 @@ fn dataset_provisioning(ctx) {
         let idle=["missing","failed","cancelled"].contains(state);
         if idle {missing+=1;}
         if idle && !dataset.inputs_ready {downloads_needed+=1;}
-        if ["queued","downloading","processing","cancelling"].contains(state) {busy+=1;}
+        if dataset_working(state) {busy+=1;}
         let row=dataset_preparation_row(dataset,ctx.scope_id);
         if state=="failed" || row.status=="Source validation failed" {failed+=1;}
         if ctx.include_optional==true {
@@ -178,6 +187,7 @@ fn dataset_provisioning(ctx) {
     if working {dismiss="Continue in background";}
     actions.push(#{key:"dismiss",label:dismiss,action:"dismiss",scope:ctx.scope_id});
     #{visible:ctx.interactive && recommended>0,
-      title:title,description:description,simulation_status:simulation.status,simulation_detail:simulation.detail,
+      title:title,phase_color:preparation_color(complete && !working && !simulation.fault,working && failed==0 && !simulation.fault),
+      activity_display:provision_choice(working,"flex","none"),description:description,simulation_status:simulation.status,simulation_detail:simulation.detail,
       scope_label:ctx.owner+" · "+installed_count.to_string()+" / "+recommended.to_string()+" datasets installed",rows:rows,actions:actions}
 }

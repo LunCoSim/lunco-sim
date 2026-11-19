@@ -112,6 +112,9 @@ camera-cover progress from their owners. A completed artifact row means its
 files are available. The window labels that count as datasets installed and
 states the work still in progress while scene admission or terrain presentation
 is pending. Terrain preparation can continue after simulation admission.
+The policy selects semantic theme colors for blocked, active and completed
+states. The stylesheet animates the activity ring while work is active,
+independently of simulation time.
 Its closed output map contains visibility, title, description, scoped rows,
 and semantic actions. `lunco-luncosim-ui` validates and publishes that view;
 Rhai owns labels, progress formatting, retry/cancel actions, and completion.

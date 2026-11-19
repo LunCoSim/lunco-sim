@@ -39,6 +39,7 @@ pub(super) struct ProvisioningRow {
     parameter_id: String,
     pub(super) label: String,
     pub(super) status: String,
+    status_color: String,
     pub(super) download_status: String,
     pub(super) preparation_status: String,
     pub(super) detail: String,
@@ -76,6 +77,8 @@ struct ProvisioningAction {
 struct ProvisioningView {
     visible: bool,
     title: String,
+    phase_color: String,
+    activity_display: String,
     description: String,
     scope_label: String,
     simulation_status: String,
@@ -200,6 +203,8 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
         &[
             "visible",
             "title",
+            "phase_color",
+            "activity_display",
             "description",
             "scope_label",
             "simulation_status",
@@ -211,6 +216,8 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
     )?;
     let visible = bool_field(fields, "visible", "assets.provision result")?;
     let title = string_field(fields, "title", "assets.provision result")?;
+    let phase_color = string_field(fields, "phase_color", "assets.provision result")?;
+    let activity_display = string_field(fields, "activity_display", "assets.provision result")?;
     let description = string_field(fields, "description", "assets.provision result")?;
     let scope_label = string_field(fields, "scope_label", "assets.provision result")?;
     let simulation_status = string_field(fields, "simulation_status", "assets.provision result")?;
@@ -234,6 +241,7 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                     "parameter_id",
                     "label",
                     "status",
+                    "status_color",
                     "download_status",
                     "preparation_status",
                     "detail",
@@ -258,6 +266,7 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                 parameter_id: string_field(fields, "parameter_id", &context)?,
                 label: string_field(fields, "label", &context)?,
                 status: string_field(fields, "status", &context)?,
+                status_color: string_field(fields, "status_color", &context)?,
                 download_status: string_field(fields, "download_status", &context)?,
                 preparation_status: string_field(fields, "preparation_status", &context)?,
                 detail: string_field(fields, "detail", &context)?,
@@ -335,6 +344,8 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
     Ok(ProvisioningView {
         visible,
         title,
+        phase_color,
+        activity_display,
         description,
         scope_label,
         simulation_status,
@@ -469,6 +480,7 @@ fn exposure_map(view: &ProvisioningView) -> ExposureValue {
                             ("parameter_id".to_owned(), row.parameter_id.clone().into()),
                             ("label".to_owned(), row.label.clone().into()),
                             ("status".to_owned(), row.status.clone().into()),
+                            ("status_color".to_owned(), row.status_color.clone().into()),
                             (
                                 "download_status".to_owned(),
                                 row.download_status.clone().into(),
@@ -531,6 +543,8 @@ fn publish_view(view: Option<&ProvisioningView>, exposures: &mut EngineExposures
     };
     writer.visible(view.visible);
     writer.property("title", view.title.clone());
+    writer.property("phase_color", view.phase_color.clone());
+    writer.property("activity_display", view.activity_display.clone());
     writer.property("description", view.description.clone());
     writer.property("scope_label", view.scope_label.clone());
     writer.property("simulation_status", view.simulation_status.clone());

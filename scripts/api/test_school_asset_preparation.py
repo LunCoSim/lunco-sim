@@ -93,6 +93,9 @@ def main():
         phase=wait_for(presentation_phase,"terrain presentation phase",timeout=90)
         if phase!="Data ready":
             session.capture_screenshot(output/"preparing-terrain-view.png")
+            time.sleep(0.23)
+            if presentation_phase()==phase:
+                session.capture_screenshot(output/"preparing-terrain-view-next.png")
         def ready():
             report=execute(session,"GetReadiness")
             if report.get("faulted"):raise RuntimeError(str(report))

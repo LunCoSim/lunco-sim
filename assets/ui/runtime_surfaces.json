@@ -356,6 +356,8 @@
       "namespace": "asset-consent",
       "bindings": {
         "title": { "source": "title" },
+        "phase_color": { "source": "phase_color", "css": true },
+        "activity_display": { "source": "activity_display", "css": true },
         "description": { "source": "description" },
         "scope_label": { "source": "scope_label" },
         "simulation_status": { "source": "simulation_status" },
@@ -367,7 +369,7 @@
           "container": "asset-consent-rows",
           "template": "ui/asset_consent_row.html",
           "key": "id",
-          "css": ["details_display", "action_display", "min_height", "stages_display"],
+          "css": ["details_display", "action_display", "min_height", "stages_display", "status_color"],
           "scrollbar": "asset-consent-scrollbar"
         },
         {

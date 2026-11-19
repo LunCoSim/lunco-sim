@@ -1,5 +1,7 @@
 <template>
   <property name="title">Download resources</property>
+  <property name="phase_color">var(--danger-color)</property>
+  <property name="activity_display">none</property>
   <property name="description">Some declared resources are not installed.</property>
   <property name="scope_label">scope</property>
   <property name="simulation_status">Waiting for simulation readiness</property>
@@ -7,7 +9,10 @@
 
   <node id="asset-consent-root">
     <node id="asset-consent-dialog" pickable="true false">
-      <text id="asset-consent-title">{title}</text>
+      <node id="asset-consent-heading">
+        <node id="asset-consent-spinner" />
+        <text id="asset-consent-title">{title}</text>
+      </node>
       <text id="asset-consent-scope">{scope_label}</text>
       <text id="asset-consent-description">{description}</text>
       <node id="asset-consent-list">

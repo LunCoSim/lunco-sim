@@ -66,10 +66,16 @@ for state in [
     if state.kind == "downloading" {
         checks.push(t_true(view.rows[0].status.contains("25%")
             && view.rows[0].action == "cancel", "download shows real progress and cancellation"));
+        checks.push(t_true(view.phase_color=="var(--caution-color)"
+            && view.rows[0].status_color=="var(--caution-color)" && view.activity_display=="flex",
+            "active downloads are amber and show activity"));
     }
     if state.kind == "failed" {
         checks.push(t_true(view.rows[0].detail.contains("checksum mismatch")
             && view.rows[0].action_label == "Retry download", "failure retains its cause and retry action"));
+        checks.push(t_true(view.phase_color=="var(--danger-color)"
+            && view.rows[0].status_color=="var(--danger-color)" && view.activity_display=="none",
+            "failed downloads are red and stop showing activity"));
     }
 }
 facts.datasets[0].inputs_ready=true;
@@ -85,6 +91,9 @@ checks.push(t_true(complete.visible && complete.rows.len() == 1
     "completed downloads retain an explicit completion view"));
 checks.push(t_true(complete.rows[0].stages_display=="none" && complete.rows[0].min_height=="80px","ready rows use compact summaries"));
 checks.push(t_eq(complete.rows[0].rebuild_action,"rebuild","only an installed processed artifact offers forced rebuild"));
+checks.push(t_true(complete.phase_color=="var(--ok-color)"
+    && complete.rows[0].status_color=="var(--ok-color)" && complete.activity_display=="none",
+    "completed preparation is green and stops showing activity"));
 facts.simulation=#{pending:[],world_hold:false,blockers:[],playing:false,fault:(),
     terrain_maps_pending:false,terrain_views_pending:false};
 let paused=provisioned_view(facts);
@@ -97,6 +106,9 @@ checks.push(t_true(maps.title=="Building terrain maps" && maps.actions[0].label=
 checks.push(t_true(maps.description.contains("Terrain will appear once")
     && maps.scope_label.contains("1 / 1 datasets installed") && maps.rows[0].status=="Installed",
     "the map stage says which work is still outstanding and labels disk installation explicitly"));
+checks.push(t_true(maps.phase_color=="var(--caution-color)"
+    && maps.rows[0].status_color=="var(--ok-color)" && maps.activity_display=="flex",
+    "the scene stays amber and active while installed data rows turn green"));
 facts.simulation.terrain_maps_pending=false;
 let views=provisioned_view(facts);
 checks.push(t_true(views.title=="Preparing terrain views" && views.description.contains("Terrain is still loading")
@@ -108,6 +120,10 @@ checks.push(t_eq(provisioned_view(facts).title,"Data ready",
 facts.datasets[0].state=#{kind:"missing",detail:()};
 checks.push(t_true(provisioned_view(facts).simulation_detail.contains("Source files are downloaded"),"downloaded files wait for preparation without claiming work is running"));
 facts.datasets[0].inputs_ready=false;
+let missing=provisioned_view(facts);
+checks.push(t_true(missing.phase_color=="var(--danger-color)"
+    && missing.rows[0].status_color=="var(--danger-color)" && missing.activity_display=="none",
+    "missing data is red and waits without showing activity"));
 checks.push(t_true(provisioned_view(facts).simulation_detail.contains("Download the required files"),"missing files explain the required action"));
 facts.datasets[0].state=#{kind:"queued",detail:()};
 checks.push(t_true(provisioned_view(facts).simulation_detail.contains("continue in the background"),"active work leaves the application available"));
