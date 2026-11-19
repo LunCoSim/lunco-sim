@@ -107,6 +107,11 @@ The application dataset surface uses the existing `assets.provision` hook,
 declared by `lunco-core-session` and installed by application/Twin policy.
 Its typed input map contains scope identity, scene requirements, and registry
 dataset states, including unsigned byte counters and processing/failure detail.
+It also receives simulation admission, transport, derived terrain map and
+camera-cover progress from their owners. A completed artifact row means its
+files are available. The window labels that count as datasets installed and
+states the work still in progress while scene admission or terrain presentation
+is pending. Terrain preparation can continue after simulation admission.
 Its closed output map contains visibility, title, description, scoped rows,
 and semantic actions. `lunco-luncosim-ui` validates and publishes that view;
 Rhai owns labels, progress formatting, retry/cancel actions, and completion.

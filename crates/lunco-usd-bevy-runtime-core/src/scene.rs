@@ -463,8 +463,8 @@ fn record_scene_load_terminal_outcome(
             || requirements.scene != root
             || !requirements.pending_scopes.is_empty()
             || requirements
-                .ids
-                .iter()
+                .artifacts
+                .keys()
                 .any(|id| !registry.state(id).is_some_and(|state| state.is_installed()))
         {
             return;

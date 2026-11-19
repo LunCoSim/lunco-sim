@@ -71,36 +71,22 @@ fn retire_scene_dataset_reads(
 fn read_requested_dataset_artifact(
     trigger: On<ReadDatasetTextArtifact>,
     registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     asset_server: Option<Res<AssetServer>>,
     assets: Option<Res<Assets<TextAsset>>>,
     mut reads: ResMut<DatasetArtifactReads>,
     mount: Option<Res<lunco_core::SceneMountState>>,
     mut commands: Commands,
 ) {
-    if let (Some(scene), Some(entry)) = (
-        mount.as_ref().and_then(|mount| mount.active_root()),
-        registry
-            .as_ref()
-            .and_then(|registry| registry.entry(&trigger.event().id)),
-    ) {
-        let Some(uri) = entry.artifact_uri() else {
-            report_dataset_request_failure(
-                &trigger.event().id,
-                "the dataset has no live Twin mount authority".to_owned(),
-                &mut reads,
-                &mut commands,
-            );
-            return;
-        };
-        commands.trigger(lunco_assets_datasets::AssetRequired { scene, uri });
-    }
     request_dataset_artifact(
         &trigger.event().id,
         registry.as_deref(),
+        roots.as_deref(),
         asset_server.as_deref(),
         assets.as_deref(),
         &mut reads,
         &mut commands,
+        mount.as_ref().and_then(|mount| mount.active_root()),
         false,
     );
 }
@@ -108,22 +94,30 @@ fn read_requested_dataset_artifact(
 fn retry_installed_dataset_artifact(
     trigger: On<lunco_assets_datasets::DatasetInstalled>,
     registry: Option<Res<lunco_assets_datasets::DatasetRegistry>>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
     asset_server: Option<Res<AssetServer>>,
     assets: Option<Res<Assets<TextAsset>>>,
     mut reads: ResMut<DatasetArtifactReads>,
     mut commands: Commands,
 ) {
     let id = &trigger.event().id;
-    if !reads.requested.contains(id) {
+    if !reads.requested.contains(id)
+        || !registry
+            .as_ref()
+            .and_then(|registry| registry.installed(id))
+            .is_some_and(|entry| entry.scope == trigger.event().scope)
+    {
         return;
     }
     request_dataset_artifact(
         id,
         registry.as_deref(),
+        roots.as_deref(),
         asset_server.as_deref(),
         assets.as_deref(),
         &mut reads,
         &mut commands,
+        None,
         true,
     );
 }
@@ -131,10 +125,12 @@ fn retry_installed_dataset_artifact(
 fn request_dataset_artifact(
     id: &str,
     registry: Option<&lunco_assets_datasets::DatasetRegistry>,
+    roots: Option<&lunco_assets_core::TwinRoots>,
     asset_server: Option<&AssetServer>,
     assets: Option<&Assets<TextAsset>>,
     reads: &mut DatasetArtifactReads,
     commands: &mut Commands,
+    scene: Option<Entity>,
     retry: bool,
 ) {
     let Some(registry) = registry else {
@@ -155,6 +151,19 @@ fn request_dataset_artifact(
         );
         return;
     };
+    let asset_uri = match entry.mounted_artifact_uri(roots) {
+        Ok(uri) => uri,
+        Err(error) => {
+            report_dataset_request_failure(id, error, reads, commands);
+            return;
+        }
+    };
+    if let Some(scene) = scene {
+        commands.trigger(lunco_assets_datasets::AssetRequired {
+            scene,
+            uri: asset_uri.clone(),
+        });
+    }
     if reads.requested.contains(id) {
         if !retry && !reads.failed.remove(id) {
             return;
@@ -166,6 +175,9 @@ fn request_dataset_artifact(
     } else {
         reads.requested.insert(id.to_owned());
     }
+    if !entry.state.is_installed() {
+        return;
+    }
     let Some(asset_server) = asset_server else {
         report_dataset_request_failure(
             id,
@@ -176,15 +188,6 @@ fn request_dataset_artifact(
         return;
     };
 
-    let Some(asset_uri) = entry.artifact_uri() else {
-        report_dataset_request_failure(
-            id,
-            "the dataset has no live Twin mount authority".to_owned(),
-            reads,
-            commands,
-        );
-        return;
-    };
     let asset_path =
         match lunco_assets_core::asset_path::load_asset_path(&asset_uri, None, None, None) {
             Ok(path) => path,
@@ -199,7 +202,7 @@ fn request_dataset_artifact(
             }
         };
     let handle = asset_server.load::<TextAsset>(asset_path);
-    if let Some(asset) = assets.and_then(|assets| assets.get(&handle)) {
+    if !retry && let Some(asset) = assets.and_then(|assets| assets.get(&handle)) {
         reads.delivered.insert(id.to_owned());
         reads.failed.remove(id);
         commands.trigger(DatasetTextArtifactReady {

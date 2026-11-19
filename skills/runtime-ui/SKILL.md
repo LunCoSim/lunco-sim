@@ -629,7 +629,8 @@ while data admission is held using
 measured 1280x720 native layout. Command-only tests do not prove button input.
 
 Retain retry/cancel actions. Dismissal means background work, and completion remains
-visible until dismissed. Run `test_download_policies.rhai` and the windowed
+visible until dismissed. Use the owning terrain map and camera-cover states
+for visual preparation after disk installation. Run `test_download_policies.rhai` and the windowed
 `dataset_provisioning_surface.rhai` gate against a declared missing scope,
 including invalid-scope/request rejection. Check Recent Events for discrete
 dataset lifecycle transitions and verify Twin replacement retires the scope.

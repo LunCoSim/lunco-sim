@@ -74,6 +74,9 @@ mount before reading Twin scope metadata. It also accepts an exact live authorit
 for internal asset facts; a retired authority remains invalid and cannot be
 reinterpreted as a stable source identity. User scene commands use the same
 stable URI, with `asset_path::load_source_uri` resolving it at admission.
+Dataset installation and text loading use the dataset registry's exact mounted
+artifact address. A URI returned by `ListDatasets` identifies the artifact
+independently of the runtime handle used to read it.
 
 Engine assets resolve from `assets/`, then the shared global cache. Twin assets
 resolve from the Twin's authored root, its `.cache`, then the shared global

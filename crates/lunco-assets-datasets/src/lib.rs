@@ -36,8 +36,8 @@ pub use registry::{
 pub struct SceneDatasetRequirements {
     /// Exact mounted scene lease whose dependency discovery has completed.
     pub scene: Option<bevy::prelude::Entity>,
-    /// Declared datasets referenced by the selected scene, regardless of recommendation.
-    pub ids: std::collections::BTreeSet<String>,
+    /// Declared dataset IDs and the live artifact URIs consumed by the scene.
+    pub artifacts: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     /// Discovery must finish before absence of a declaration can be established.
     pub pending_scopes: std::collections::BTreeSet<String>,
 }
@@ -64,10 +64,13 @@ pub fn required_asset_data_pending(
         return false;
     };
     let uri = lunco_assets_core::engine_asset_uri(&lunco_assets_core::asset_path::anchor_of(&path));
-    let mut pending = registry.uri_scope_scanned(&uri, roots) == Ok(false);
-    if let Ok(Some(entry)) = registry.declared_uri(&uri, roots) {
-        commands.trigger(AssetRequired { scene, uri });
-        pending |= !entry.state.is_installed();
+    let mut pending = false;
+    if let Ok(Some((scope, relative))) = DatasetScope::for_asset_uri(&uri, roots) {
+        pending = !registry.is_scope_scanned(&scope);
+        if let Some(entry) = registry.declared_artifact(&scope, &relative) {
+            commands.trigger(AssetRequired { scene, uri });
+            pending |= !entry.state.is_installed();
+        }
     }
     // Publication restarts failed handles synchronously. A parent can still
     // carry an earlier recursive failure while its child loads this revision.

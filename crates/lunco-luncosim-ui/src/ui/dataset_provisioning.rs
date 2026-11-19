@@ -28,6 +28,7 @@ pub(crate) struct DatasetProvisioningState {
     last_hook_generation: u64,
     last_interactive: Option<bool>,
     last_simulation: Option<HookValue>,
+    last_required_datasets: Option<(Option<Entity>, Vec<String>)>,
     expanded: std::collections::HashMap<String, HashSet<String>>,
     pub(super) settings_groups: Vec<DatasetSettingsGroup>,
 }
@@ -101,7 +102,8 @@ fn required_missing(
 ) -> bool {
     registry.entries().iter().any(|entry| {
         &entry.scope == scope
-            && requirements.is_some_and(|requirements| requirements.ids.contains(&entry.id))
+            && requirements
+                .is_some_and(|requirements| requirements.artifacts.contains_key(&entry.id))
             && needs_provisioning(&entry.state)
     })
 }
@@ -399,7 +401,9 @@ fn invoke_policy(
                 ("recommended", HookValue::Bool(entry.recommended)),
                 (
                     "required_for_scene",
-                    HookValue::Bool(requirements.is_some_and(|r| r.ids.contains(&entry.id))),
+                    HookValue::Bool(
+                        requirements.is_some_and(|r| r.artifacts.contains_key(&entry.id)),
+                    ),
                 ),
                 ("processed", HookValue::Bool(entry.spec.process.is_some())),
                 ("state", state_value(&entry.state)),
@@ -579,6 +583,8 @@ pub(crate) fn publish_dataset_provisioning_surface(
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     transport: Option<Res<lunco_time::TimeTransport>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
+    terrain_maps: Option<Res<lunco_terrain_surface::TerrainDerivedStatus>>,
+    terrain_stream: Option<Res<lunco_terrain_surface::TerrainStreamStatus>>,
     mut state: ResMut<DatasetProvisioningState>,
     mut exposures: ResMut<EngineExposures>,
 ) {
@@ -626,6 +632,18 @@ pub(crate) fn publish_dataset_provisioning_surface(
                 .unwrap_or(HookValue::Unit),
         ),
         (
+            "terrain_maps_pending",
+            HookValue::Bool(terrain_maps.as_ref().is_some_and(|maps| maps.active)),
+        ),
+        (
+            "terrain_views_pending",
+            HookValue::Bool(
+                terrain_stream
+                    .as_ref()
+                    .is_some_and(|stream| stream.selection_pending > 0),
+            ),
+        ),
+        (
             "fault",
             faults
                 .as_ref()
@@ -639,7 +657,17 @@ pub(crate) fn publish_dataset_provisioning_surface(
                 .unwrap_or(HookValue::Unit),
         ),
     ]);
-    let requirements_changed = requirements.as_ref().is_some_and(|r| r.is_changed());
+    let mut requirements_changed = false;
+    if let Some(requirements) = requirements.as_ref().filter(|r| r.is_changed()) {
+        let required = (
+            requirements.scene,
+            requirements.artifacts.keys().cloned().collect(),
+        );
+        if state.last_required_datasets.as_ref() != Some(&required) {
+            state.last_required_datasets = Some(required);
+            requirements_changed = true;
+        }
+    }
     if requirements_changed {
         state.active = None;
         state.pending.clear();

@@ -90,7 +90,11 @@ work, cancellation, and retry with the failure detail. `ListDatasets` and
 `DatasetScope::id()`. UUID-backed Twins use `uuid-<simple-uuid>`. Recent Events records lifecycle transitions; live byte
 progress stays in the registry. A required missing DEM holds simulation while
 UI remains usable, then the existing terrain bridge automatically retries the
-pending prim when the dataset is installed. Initial installation uses that bridge.
+pending prim when the dataset is installed. Installation refreshes existing
+file-backed handles through the dataset's exact live mount. The public
+`artifact_uri` is for references and display. For a runtime read use the
+registry's mounted artifact address. The preparation window can show derived
+terrain maps or camera-cover preparation after the artifacts are installed.
 Settings offers Rebuild (`ProcessDataset { id, force: true }`) to rerun a valid
 recipe; normal Prepare reuses valid outputs. A deliberate rebuild of an already
 loaded terrain bundle needs Reload scene to apply it through the full scene
@@ -101,7 +105,8 @@ For school startup acceptance, use the built production binary with
 <fresh-evidence-directory> --port <owned-free-port>`. It stages a source-only
 Twin from the current checkout and pinned cached raw inputs, then checks the
 four composed scene dependencies, missing-ground tick hold, preserved manual pause,
-and full rendered terrain cover through authored Rhai verdicts. Inspect the
+and complete terrain cover in the viewport and stereo feed without replacing
+the scene. Inspect the
 captures separately from the API verdict. Every texture bound by the startup
 material needs a delivered artifact, including an overlay whose authored weight
 starts at zero; unrelated candidate sites remain optional.

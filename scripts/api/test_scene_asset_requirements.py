@@ -27,7 +27,11 @@ def author_asset_references(session, path, references, *, close=True):
     def inspect():
         try:return execute(session,"InspectUsdDocument",doc_id=document,path="/LunarSurface")
         except RuntimeError as error:
-            if "USD stage source asset is unavailable" in str(error):return None
+            if any(reason in str(error) for reason in (
+                "USD stage source asset is unavailable",
+                "the USD stage is loading",
+            )):
+                return None
             raise
     info=wait_for(inspect,"USD document source preparation")
     if not info["prim"]["exists"]:raise RuntimeError("fixture root is missing")
@@ -114,7 +118,8 @@ def main():
                 t_report([t_eq(runtime.scope,"twin","Twin UI tool retains its registration owner"),
                     t_eq(runtime.cycle,"ui","tool runs on the UI cycle"),
                     t_eq(runtime.clock,"application","UI uses application time"),
-                    t_eq(runtime.target_twin_id,runtime.owner_id,"Twin target survives independently of its route"),
+                    t_true(!runtime.contains("target_twin_id") && !runtime.contains("owner_id"),
+                        "Twin tools keep workspace selectors private"),
                     t_true(query("GetReadiness",#{}).application_available && !query("GetReadiness",#{}).ready,"UI tool can run before simulation admission")]);
             }\n'''
             probe=execute(session,"RegisterToolLibrary",name="independent_ui_probe",source=probe_source)

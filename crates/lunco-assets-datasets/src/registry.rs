@@ -80,6 +80,86 @@ pub enum DatasetScope {
 }
 
 impl DatasetScope {
+    /// Resolve a composed or runtime asset URI to its exact dataset scope and
+    /// relative path. Stable Twin references bind to the current mount.
+    pub fn for_asset_uri(
+        uri: &str,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) -> Result<Option<(Self, PathBuf)>, String> {
+        let (scope, relative) = if let Some(relative) = lunco_assets_core::parse_lunco_uri(uri) {
+            (Self::Engine, relative)
+        } else if let Some((address, relative)) = lunco_assets_core::parse_twin_uri(uri) {
+            let roots = roots.ok_or("Twin asset registry is unavailable")?;
+            let (authority, root) =
+                match roots.root_for(address).map_err(|error| error.to_string())? {
+                    Some(root) => (address.to_owned(), root),
+                    None => {
+                        let authority = roots
+                            .mounted_authority_for_logical(address)
+                            .map_err(|error| error.to_string())?
+                            .ok_or("Referenced Twin source is not mounted")?;
+                        let root = roots
+                            .root_for(&authority)
+                            .map_err(|error| error.to_string())?
+                            .ok_or("Referenced Twin source is not mounted")?;
+                        (authority, root)
+                    }
+                };
+            let source_identity = roots
+                .logical_identity_for_authority(&authority)
+                .map_err(|error| error.to_string())?;
+            let display_name = roots
+                .display_name_for_authority(&authority)
+                .map_err(|error| error.to_string())?;
+            (
+                Self::Twin {
+                    source_identity,
+                    authority: Some(authority),
+                    display_name,
+                    root,
+                },
+                relative,
+            )
+        } else {
+            return Ok(None);
+        };
+        let relative = lunco_assets_path::relative_path(relative)
+            .ok_or_else(|| format!("Unsafe asset URI: {uri}"))?;
+        Ok(Some((scope, relative)))
+    }
+
+    /// Asset reader URI for a relative path in this resolved scope.
+    pub fn mounted_uri(&self, relative: &Path) -> Option<String> {
+        match self {
+            Self::Engine => Some(lunco_assets_path::uri(
+                lunco_assets_core::LUNCO_SCHEME,
+                &lunco_assets_path::slashed(relative),
+            )),
+            Self::Twin { authority, .. } => authority
+                .as_ref()
+                .map(|authority| lunco_assets_core::twin_uri(authority, relative)),
+        }
+    }
+
+    /// Whether this exact scope still owns its runtime asset address.
+    pub(crate) fn is_live(
+        &self,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) -> Result<bool, String> {
+        match self {
+            Self::Engine => Ok(true),
+            Self::Twin {
+                authority, root, ..
+            } => match (authority, roots) {
+                (Some(authority), Some(roots)) => roots
+                    .root_for(authority)
+                    .map(|current| current.as_ref() == Some(root))
+                    .map_err(|error| error.to_string()),
+                _ => Ok(false),
+            },
+        }
+    }
+
     /// Transport aliases of the same admitted canonical root share one store.
     pub fn same_storage(&self, other: &Self) -> bool {
         match (self, other) {
@@ -375,6 +455,20 @@ impl DatasetEntry {
                 )
             }),
         }
+    }
+
+    /// Address to use with the live asset reader for this declaration.
+    /// Public artifact URIs identify the source across mount lifetimes.
+    pub fn mounted_artifact_uri(
+        &self,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) -> Result<String, String> {
+        if !self.scope.is_live(roots)? {
+            return Err(format!("Dataset '{}' has no live asset mount", self.name));
+        }
+        self.scope
+            .mounted_uri(Path::new(&self.artifact_rel))
+            .ok_or_else(|| format!("Dataset '{}' has no live asset mount", self.name))
     }
 }
 
@@ -835,20 +929,10 @@ impl DatasetRegistry {
         uri: &str,
         roots: Option<&lunco_assets_core::TwinRoots>,
     ) -> Result<Option<&'a DatasetEntry>, String> {
-        let Some((scope, relative)) = dataset_scope_for_uri(uri, roots)? else {
+        let Some((scope, relative)) = DatasetScope::for_asset_uri(uri, roots)? else {
             return Ok(None);
         };
         Ok(self.declared_artifact(&scope, &relative))
-    }
-
-    /// Discovery must settle before a runtime loader can classify a missing file.
-    pub fn uri_scope_scanned(
-        &self,
-        uri: &str,
-        roots: Option<&lunco_assets_core::TwinRoots>,
-    ) -> Result<bool, String> {
-        Ok(dataset_scope_for_uri(uri, roots)?
-            .is_none_or(|(scope, _)| self.is_scope_scanned(&scope)))
     }
 
     /// Find the declaration delivering a file or an explicit bundle member.
@@ -1073,8 +1157,6 @@ pub struct DatasetInstalled {
     pub id: String,
     /// Owning scope.
     pub scope: DatasetScope,
-    /// Consumer-facing asset URI.
-    pub artifact_uri: String,
 }
 
 #[cfg(test)]
@@ -1088,6 +1170,50 @@ name = "Demo vectors"
 url = "https://example.invalid/vectors.csv"
 dest = "data/demo.csv"
 "#;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn authored_twin_source_resolves_to_current_mount_without_reviving_retired_leases() {
+        let root = tempfile::tempdir().expect("temporary Twin root");
+        let roots = lunco_assets_core::TwinRoots::default();
+        let first = roots
+            .register_authority("stable-source", root.path())
+            .expect("first mount");
+        let resolve = |address: &str| {
+            DatasetScope::for_asset_uri(
+                &lunco_assets_core::twin_uri(address, "terrain/asset.png"),
+                Some(&roots),
+            )
+            .map(|scope| scope.and_then(|(scope, relative)| scope.mounted_uri(&relative)))
+        };
+        assert_eq!(
+            resolve("stable-source"),
+            Ok(Some(lunco_assets_core::twin_uri(
+                &first,
+                "terrain/asset.png"
+            )))
+        );
+        assert_eq!(resolve(&first), resolve("stable-source"));
+
+        roots
+            .unregister_authority(&first)
+            .expect("retire first mount");
+        assert!(resolve("stable-source").is_err());
+        assert!(resolve(&first).is_err());
+
+        let second = roots
+            .register_authority("stable-source", root.path())
+            .expect("remount");
+        assert_ne!(first, second);
+        assert_eq!(
+            resolve("stable-source"),
+            Ok(Some(lunco_assets_core::twin_uri(
+                &second,
+                "terrain/asset.png"
+            )))
+        );
+        assert!(resolve(&first).is_err());
+    }
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
@@ -1280,41 +1406,6 @@ output = "terrain/site/materials/textures/albedo.png"
 pub struct RetireDatasetScope {
     /// Exact retiring authority and canonical root.
     pub scope: DatasetScope,
-}
-
-fn dataset_scope_for_uri(
-    uri: &str,
-    roots: Option<&lunco_assets_core::TwinRoots>,
-) -> Result<Option<(DatasetScope, PathBuf)>, String> {
-    let (scope, relative) = if let Some(relative) = lunco_assets_core::parse_lunco_uri(uri) {
-        (DatasetScope::Engine, relative)
-    } else if let Some((authority, relative)) = lunco_assets_core::parse_twin_uri(uri) {
-        let roots = roots.ok_or("Twin asset registry is unavailable")?;
-        let root = roots
-            .root_for(authority)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Twin asset authority retired: {authority}"))?;
-        let display_name = roots
-            .display_name_for_authority(authority)
-            .map_err(|e| e.to_string())?;
-        let source_identity = roots
-            .logical_identity_for_authority(authority)
-            .map_err(|e| e.to_string())?;
-        (
-            DatasetScope::Twin {
-                source_identity,
-                authority: Some(authority.to_owned()),
-                display_name,
-                root,
-            },
-            relative,
-        )
-    } else {
-        return Ok(None);
-    };
-    let relative = lunco_assets_path::relative_path(relative)
-        .ok_or_else(|| format!("Unsafe asset URI: {uri}"))?;
-    Ok(Some((scope, relative)))
 }
 
 /// A runtime owner actually needs a logical asset; this is independent of catalog recommendations.

@@ -42,6 +42,21 @@ fn verify_terrain_visible() {
     ]);
 }
 
+fn verify_school_asset_handoff(original_root, current_root) {
+    let terrain=query("TerrainLodStatus",#{});
+    let view=query("ReadExposures",#{surface:"asset-consent"}).surfaces["asset-consent"];
+    let complete_views=0;
+    for cover in terrain.camera_cover {
+        if cover.presented_ready && cover.drawn>0 {complete_views+=1;}
+    }
+    t_report([
+        t_eq(current_root,original_root,"preparation preserves the original scene projection"),
+        t_true(complete_views>=2,"the viewport and the stereo feed both publish complete terrain cover"),
+        t_eq(view.properties.title,"Data ready","the data window reports completion after terrain presentation"),
+        t_eq(view.properties.simulation_status,"Simulation paused","terrain presentation leaves a manual pause intact"),
+    ]);
+}
+
 fn verify_pipeline(scope, key, state, artifact_count, step_count) {
     let dataset = pipeline_dataset(scope,key);
     t_report([

@@ -8,13 +8,18 @@
 //! wants `RequestDataset` downloads or `ProcessDataset` bakes to perform
 //! native I/O.
 
+use bevy::asset::AssetPath;
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap};
 
-use crate::{DatasetRegistry, DatasetScopeRemoved, dataset_failed};
+use crate::{
+    DatasetInstalled, DatasetRegistry, DatasetScopeRemoved, SceneDatasetRequirements,
+    dataset_failed,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{DatasetScope, DatasetScopeReady};
 
@@ -35,18 +40,19 @@ fn on_require_asset(
     let scene = mount
         .active_root()
         .ok_or("RequireAsset needs an admitted scene")?;
-    let uri = &trigger.event().uri;
-    if registry.uri_scope_scanned(uri, roots.as_deref())?
-        && registry.declared_uri(uri, roots.as_deref())?.is_none()
-    {
+    let reference = &trigger.event().uri;
+    let path = lunco_assets_core::asset_path::load_source_uri(reference, roots.as_deref())
+        .map_err(|error| error.to_string())?;
+    let uri = lunco_assets_core::engine_asset_uri(&lunco_assets_core::asset_path::anchor_of(&path));
+    let address = crate::DatasetScope::for_asset_uri(&uri, roots.as_deref())?;
+    if address.is_none_or(|(scope, relative)| {
+        registry.is_scope_scanned(&scope) && registry.declared_artifact(&scope, &relative).is_none()
+    }) {
         return Err(format!(
-            "No downloadable artifact is declared for {uri}; correct the URI or declare it in Assets.toml"
+            "No downloadable artifact is declared for {reference}; correct the URI or declare it in Assets.toml"
         ));
     }
-    commands.trigger(crate::AssetRequired {
-        scene,
-        uri: uri.clone(),
-    });
+    commands.trigger(crate::AssetRequired { scene, uri });
     Ok(lunco_command_contracts::Ack::new(
         lunco_command_contracts::OpId::new(),
     ))
@@ -181,73 +187,126 @@ mod failure_drain_tests {
     }
 }
 
+/// A publication that overlaps a read of the previous file revision waits for
+/// that read to settle before refreshing the path. Only outstanding work lives here.
+#[derive(Resource, Default)]
+struct PendingDatasetRefreshes(HashMap<AssetPath<'static>, DatasetInstalled>);
+
 fn reload_installed_asset(
-    trigger: On<crate::DatasetInstalled>,
+    trigger: On<DatasetInstalled>,
     asset_server: Option<Res<AssetServer>>,
     registry: Res<DatasetRegistry>,
+    scene: Option<Res<SceneDatasetRequirements>>,
     runtime: Res<crate::RuntimeAssetRequirements>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut pending: ResMut<PendingDatasetRefreshes>,
+    mut commands: Commands,
 ) {
-    if let Some(asset_server) = asset_server {
-        let mut paths = std::collections::BTreeSet::from([trigger.event().artifact_uri.clone()]);
-        // Consumers can request bundle members before preparation finishes.
-        // Reload their existing handles as well as the directory handle so
-        // failed image/DEM dependencies cross the ordinary readiness boundary.
-        if let Some(pipeline) = registry
-            .entry(&trigger.event().id)
-            .and_then(|entry| entry.spec.process.as_ref())
-            .and_then(|process| process.pipeline.as_ref())
+    let Some(server) = asset_server else { return };
+    let event = trigger.event();
+    let Some(entry) = registry
+        .installed(&event.id)
+        .filter(|entry| entry.scope == event.scope)
+    else {
+        return;
+    };
+    let base = match entry.mounted_artifact_uri(roots.as_deref()) {
+        Ok(base) => base,
+        Err(error) => {
+            commands.trigger(dataset_failed(error));
+            return;
+        }
+    };
+    let mut uris = BTreeSet::from([base.clone()]);
+    if let Some(pipeline) = entry
+        .spec
+        .process
+        .as_ref()
+        .and_then(|p| p.pipeline.as_ref())
+    {
+        uris.extend(
+            pipeline
+                .artifacts
+                .iter()
+                .map(|member| format!("{base}/{}", member.path)),
+        );
+    }
+    if let Some(consumed) = scene
+        .as_ref()
+        .and_then(|scene| scene.artifacts.get(&event.id))
+    {
+        uris.extend(consumed.iter().cloned());
+    }
+    // A newly admitted dynamic consumer can precede the next composed scene
+    // requirements publication. Its concrete request already belongs to the registry.
+    uris.extend(runtime.uris.iter().cloned());
+    for uri in uris {
+        if !registry
+            .declared_uri(&uri, roots.as_deref())
+            .ok()
+            .flatten()
+            .is_some_and(|declared| declared.id == event.id)
         {
-            for artifact in &pipeline.artifacts {
-                paths.insert(format!(
-                    "{}/{}",
-                    trigger.event().artifact_uri.trim_end_matches('/'),
-                    artifact.path
-                ));
-            }
+            continue;
         }
-        // Runtime consumers can select a member of an archive dynamically.
-        // Reload precisely those consumed identities through their existing handles.
-        for uri in &runtime.uris {
-            if registry
-                .declared_uri(uri, roots.as_deref())
-                .ok()
-                .flatten()
-                .is_some_and(|entry| entry.id == trigger.event().id)
-            {
-                paths.insert(uri.clone());
+        match lunco_assets_core::asset_path::load_asset_path(&uri, None, None, None) {
+            Ok(path) if !refresh_asset_path(&server, &path) => {
+                pending.0.insert(path, event.clone());
             }
-        }
-        for path in paths {
-            let path = match lunco_assets_core::asset_path::load_asset_path(&path, None, None, None)
-            {
-                Ok(path) => path,
-                Err(error) => {
-                    warn!("[datasets] installed artifact has an invalid load identity: {error}");
-                    continue;
-                }
-            };
-            let handles = asset_server.get_handles_untyped(path.clone());
-            let mut reload = false;
-            for handle in handles {
-                if asset_server.load_state(handle.id()).is_failed() {
-                    // Requesting a failed handle synchronously transitions it
-                    // to Loading. Async reload alone leaves its old failure
-                    // visible to consumers after publication has completed.
-                    drop(
-                        asset_server
-                            .load_builder()
-                            .load_erased(handle.type_id(), path.clone()),
-                    );
-                } else {
-                    reload = true;
-                }
-            }
-            if reload {
-                asset_server.reload(path);
-            }
+            Ok(_) => {}
+            Err(error) => commands.trigger(dataset_failed(format!(
+                "Invalid installed artifact address: {error}"
+            ))),
         }
     }
+}
+
+/// Bevy's force reload is path-wide. Serialize it with existing reads so an
+/// older worker result cannot overwrite the result of this publication.
+fn refresh_asset_path(server: &AssetServer, path: &AssetPath<'static>) -> bool {
+    let handles = server.get_handles_untyped(path.clone());
+    if handles
+        .iter()
+        .any(|handle| server.load_state(handle.id()).is_loading())
+    {
+        return false;
+    }
+    if handles
+        .iter()
+        .any(|handle| server.load_state(handle.id()).is_loaded())
+    {
+        server.reload(path.clone());
+    } else {
+        // A request for a failed handle synchronously marks it Loading and
+        // retains its original typed loader configuration.
+        for handle in handles {
+            drop(
+                server
+                    .load_builder()
+                    .load_erased(handle.type_id(), path.clone()),
+            );
+        }
+    }
+    true
+}
+
+fn refresh_settled_dataset_paths(
+    server: Res<AssetServer>,
+    registry: Res<DatasetRegistry>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut pending: ResMut<PendingDatasetRefreshes>,
+) {
+    pending.0.retain(|path, publication| {
+        let uri = lunco_assets_core::asset_path::anchor_of(path);
+        let current = registry
+            .declared_uri(&uri, roots.as_deref())
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.id == publication.id && entry.scope == publication.scope);
+        current
+            && publication.scope.is_live(roots.as_deref()) == Ok(true)
+            && !refresh_asset_path(&server, path)
+    });
 }
 
 fn on_twin_closed(
@@ -567,7 +626,14 @@ impl Plugin for DatasetRegistryPlugin {
         app.add_observer(on_asset_required);
         register_all_commands(app);
         app.init_resource::<PendingTwinManifestScans>();
-        app.add_observer(reload_installed_asset);
+        app.init_resource::<PendingDatasetRefreshes>()
+            .add_observer(reload_installed_asset)
+            .add_systems(
+                PreUpdate,
+                refresh_settled_dataset_paths
+                    .after(bevy::asset::AssetTrackingSystems)
+                    .run_if(|pending: Res<PendingDatasetRefreshes>| !pending.0.is_empty()),
+            );
         app.add_observer(on_twin_closed);
         app.add_observer(retire_registry_scope);
         app.add_systems(Update, drain_registry_failures);

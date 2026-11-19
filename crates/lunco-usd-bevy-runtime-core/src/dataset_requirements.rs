@@ -18,19 +18,6 @@ struct Inputs {
 }
 impl SceneResource for Inputs {}
 
-fn live_twin_mount(
-    roots: &lunco_assets_core::TwinRoots,
-    address: &str,
-) -> Result<Option<(String, std::path::PathBuf)>, lunco_assets_core::TwinRootsError> {
-    if let Some(root) = roots.root_for(address)? {
-        return Ok(Some((address.to_owned(), root)));
-    }
-    let Some(authority) = roots.mounted_authority_for_logical(address)? else {
-        return Ok(None);
-    };
-    Ok(roots.root_for(&authority)?.map(|root| (authority, root)))
-}
-
 fn update(
     mount: Res<lunco_core::SceneMountState>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
@@ -79,139 +66,68 @@ fn update(
     inputs.plan = plan.cloned();
     inputs.mounts_revision = revision;
     let mut next = SceneDatasetRequirements::default();
-    if let (Some(plan), Some(registry)) = (plan, registry.as_deref()) {
-        next.scene = root;
-        for identifier in inputs
+    if let Some(registry) = registry.as_deref() {
+        next.scene = plan.and(root);
+        let composed = inputs
             .live
             .as_ref()
-            .unwrap_or_else(|| plan.asset_identifiers())
-            .values()
-            .flatten()
-        {
-            let addressed = if let Some(relative) = lunco_assets_core::parse_lunco_uri(identifier) {
-                Some((DatasetScope::Engine, relative))
-            } else if let Some((authority, relative)) =
-                lunco_assets_core::parse_twin_uri(identifier)
-            {
-                let Some(roots) = roots.as_deref() else {
+            .or_else(|| plan.map(|plan| plan.asset_identifiers()));
+        let composed = composed
+            .into_iter()
+            .flat_map(|paths| paths.values().flatten())
+            .map(|uri| (uri, false));
+        let runtime = runtime
+            .as_deref()
+            .filter(|runtime| runtime.scene == root)
+            .into_iter()
+            .flat_map(|runtime| &runtime.uris)
+            .map(|uri| (uri, true));
+        for (reference, runtime_required) in composed.chain(runtime) {
+            let (scope, relative) = match DatasetScope::for_asset_uri(reference, roots.as_deref()) {
+                Ok(Some(address)) => address,
+                Ok(None) if !runtime_required => continue,
+                Ok(None) => {
+                    faults.raise("required-asset-undeclared", root, "Runtime asset dependency",
+                        format!("No artifact is declared for {reference}. Correct the URI or declare it in Assets.toml."));
+                    continue;
+                }
+                Err(error) => {
                     faults.raise(
                         "required-asset-invalid",
                         root,
                         "Runtime asset dependency",
-                        "The Twin source registry is unavailable for a scene asset.",
+                        error,
+                    );
+                    continue;
+                }
+            };
+            let scanned = registry.is_scope_scanned(&scope);
+            if !scanned {
+                next.pending_scopes.insert(scope.id());
+            }
+            if let Some(entry) = registry.declared_artifact(&scope, &relative) {
+                let Some(uri) = scope.mounted_uri(&relative) else {
+                    faults.raise(
+                        "required-asset-invalid",
+                        root,
+                        "Runtime asset dependency",
+                        "A referenced Twin source has no mounted asset address.",
                     );
                     continue;
                 };
-                let (authority, root_path) = match live_twin_mount(roots, authority) {
-                    Ok(Some(mount)) => mount,
-                    Ok(None) => {
-                        faults.raise(
-                            "required-asset-invalid",
-                            root,
-                            "Runtime asset dependency",
-                            "A referenced Twin source is not mounted.",
-                        );
-                        continue;
-                    }
-                    Err(_) => {
-                        faults.raise(
-                            "required-asset-invalid",
-                            root,
-                            "Runtime asset dependency",
-                            "The Twin source registry could not resolve a scene asset.",
-                        );
-                        continue;
-                    }
-                };
-                let source_identity = match roots.logical_identity_for_authority(&authority) {
-                    Ok(identity) => identity,
-                    Err(_) => {
-                        faults.raise(
-                            "required-asset-invalid",
-                            root,
-                            "Runtime asset dependency",
-                            "The mounted Twin source identity is unavailable.",
-                        );
-                        continue;
-                    }
-                };
-                let display_name = match roots.display_name_for_authority(&authority) {
-                    Ok(display_name) => display_name,
-                    Err(_) => {
-                        faults.raise(
-                            "required-asset-invalid",
-                            root,
-                            "Runtime asset dependency",
-                            "The mounted Twin display name is unavailable.",
-                        );
-                        continue;
-                    }
-                };
-                Some((
-                    DatasetScope::Twin {
-                        source_identity,
-                        authority: Some(authority),
-                        display_name,
-                        root: root_path,
-                    },
-                    relative,
-                ))
-            } else {
-                None
-            };
-            if let Some((scope, relative)) = addressed {
-                if !registry.is_scope_scanned(&scope) {
-                    next.pending_scopes.insert(scope.id());
-                }
-                if let Some(entry) =
-                    registry.declared_artifact(&scope, std::path::Path::new(relative))
-                {
-                    next.ids.insert(entry.id.clone());
-                }
-            }
-        }
-    }
-    if let (Some(runtime), Some(registry)) = (runtime.as_deref(), registry.as_deref()) {
-        if runtime.scene == root {
-            for uri in &runtime.uris {
-                match registry.declared_uri(uri, roots.as_deref()) {
-                    Ok(Some(entry)) => {
-                        next.ids.insert(entry.id.clone());
-                    }
-                    Ok(None) => {
-                        if registry.uri_scope_scanned(uri, roots.as_deref()) == Ok(true) {
-                            faults.raise("required-asset-undeclared",root,"Runtime asset dependency",format!("No artifact is declared for {uri}. Correct the URI or declare it in Assets.toml."));
-                        }
-                    }
-                    Err(error) => {
-                        faults.raise(
-                            "required-asset-invalid",
-                            root,
-                            "Runtime asset dependency",
-                            error,
-                        );
-                    }
-                }
-                match registry.uri_scope_scanned(uri, roots.as_deref()) {
-                    Ok(false) => {
-                        next.pending_scopes.insert(format!("Discovering {uri}"));
-                    }
-                    Err(error) => {
-                        faults.raise(
-                            "required-asset-invalid",
-                            root,
-                            "Runtime asset dependency",
-                            error,
-                        );
-                    }
-                    Ok(true) => {}
-                }
+                next.artifacts
+                    .entry(entry.id.clone())
+                    .or_default()
+                    .insert(uri);
+            } else if runtime_required && scanned {
+                faults.raise("required-asset-undeclared", root, "Runtime asset dependency",
+                    format!("No artifact is declared for {reference}. Correct the URI or declare it in Assets.toml."));
             }
         }
     }
     let missing: Vec<_> = next
-        .ids
-        .iter()
+        .artifacts
+        .keys()
         .filter_map(|id| registry.as_ref()?.entry(id))
         .filter(|entry| !entry.state.is_installed())
         .map(|entry| entry.name.as_str())
@@ -354,48 +270,4 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(lunco_core::SceneTeardown, |mut progress: ResMut<SimulationProgress>| {
             progress.release(SimulationProgressKey::scene_datasets());
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::live_twin_mount;
-
-    #[test]
-    fn authored_twin_source_resolves_to_current_mount_without_reviving_retired_leases() {
-        let root = tempfile::tempdir().expect("temporary Twin root");
-        let roots = lunco_assets_core::TwinRoots::default();
-        let first = roots
-            .register_authority_with_display_name("stable-source", "Twin", root.path())
-            .expect("first mount");
-
-        assert_eq!(
-            live_twin_mount(&roots, "stable-source").expect("logical source"),
-            Some((first.clone(), root.path().to_owned()))
-        );
-        assert_eq!(
-            live_twin_mount(&roots, &first).expect("live lease"),
-            Some((first.clone(), root.path().to_owned()))
-        );
-
-        roots
-            .unregister_authority(&first)
-            .expect("retire first mount");
-        assert_eq!(
-            live_twin_mount(&roots, "stable-source").expect("unmounted source"),
-            None
-        );
-        assert_eq!(
-            live_twin_mount(&roots, &first).expect("retired lease"),
-            None
-        );
-
-        let second = roots
-            .register_authority_with_display_name("stable-source", "Twin", root.path())
-            .expect("remount");
-        assert_ne!(first, second);
-        assert_eq!(
-            live_twin_mount(&roots, "stable-source").expect("remounted source"),
-            Some((second, root.path().to_owned()))
-        );
-    }
 }

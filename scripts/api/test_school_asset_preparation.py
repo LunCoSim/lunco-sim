@@ -67,6 +67,10 @@ def main():
         verdict(f'verify_scene_assets({json.dumps(scope)},["apollo15_dtm","apollo15_ortho","apollo15_normal","apollo15_slope"]);')
         verdict(f'certify_terrain_hold("apollo15_dtm",{tick});')
         verdict(f'verify_preparation_view({json.dumps(scope)},"apollo15_dtm","process","");')
+        def projected_root():
+            return execute(session,"QueryUsdPrim",path="/Traverse",topology=True)["topology"]["binding"]["entity"]
+        root_entity=projected_root()
+        verdict((ROOT/"assets/scripting/tests/test_download_policies.rhai").read_text())
         session.capture_screenshot(output/"startup-data.png")
         execute(session,"SetTimeTransport",playing=False)
         execute(session,"RunRhai",code=f'let result=assets::request_required({json.dumps(scope)});if result.ok==false {{throw result.error;}}')
@@ -78,6 +82,17 @@ def main():
                 if row["state"]["kind"]=="failed":raise RuntimeError(str(row))
             return len(selected)==4 and all(r["state"]["kind"]=="installed" for r in selected)
         wait_for(prepared,"four startup artifacts",timeout=300)
+        def provisioning_view():
+            return execute(session,"ReadExposures",surface="asset-consent")["surfaces"]["asset-consent"]
+        def presentation_phase():
+            view=provisioning_view()
+            if view["visible"] and view["properties"]["title"] in {
+                "Building terrain maps","Preparing terrain views","Data ready",
+            }:
+                return view["properties"]["title"]
+        phase=wait_for(presentation_phase,"terrain presentation phase",timeout=90)
+        if phase!="Data ready":
+            session.capture_screenshot(output/"preparing-terrain-view.png")
         def ready():
             report=execute(session,"GetReadiness")
             if report.get("faulted"):raise RuntimeError(str(report))
@@ -89,6 +104,11 @@ def main():
             return stream["wanted"]>0 and stream["resident"]==stream["wanted"] and stream["pending"]==0
         wait_for(visible,"visible terrain after all bound images publish",timeout=180)
         verdict('verify_terrain_visible();')
+        def completed_view():
+            view=provisioning_view()
+            return view["visible"] and view["properties"]["title"]=="Data ready"
+        wait_for(completed_view,"presentation completion in the data window")
+        verdict(f'verify_school_asset_handoff({json.dumps(root_entity)},{json.dumps(projected_root())});')
         session.capture_screenshot(output/"data-ready-paused.png")
         execute(session,"DismissDatasetProvisioning",scope=scope)
         session.capture_screenshot(output/"terrain.png")

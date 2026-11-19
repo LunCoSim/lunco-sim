@@ -121,7 +121,7 @@ impl ApiQueryProvider for ListDatasetsProvider {
                     "processed": entry.spec.process.is_some(),
                     "recommended": entry.recommended,
                     "required_for_scene": world.get_resource::<lunco_assets_datasets::SceneDatasetRequirements>()
-                        .is_some_and(|requirements| requirements.ids.contains(&entry.id)),
+                        .is_some_and(|requirements| requirements.artifacts.contains_key(&entry.id)),
                     "artifact_uri": query_artifact_uri,
                     "metadata": metadata,
                     "recipe": recipe,

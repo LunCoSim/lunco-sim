@@ -326,15 +326,19 @@ through the supported full scene lifecycle, including normal physics admission.
 Manifest changes are admitted when the Twin is opened.
 
 The provisioning dialog also consumes typed readiness, runtime-fault, transport
-and simulation-progress snapshots. Artifact readiness and simulation readiness
-remain separate: required terrain holds ticks through source preparation, DEM
-admission and resident collision support. Closing the dialog never changes
-transport; a manual pause survives successful preparation.
+and simulation-progress snapshots. Required terrain holds ticks through source
+preparation, DEM admission and resident collision support. The dialog also reads
+the terrain owner's derived-map and camera-cover progress. Once the files are
+installed it can show **Building terrain maps** or **Preparing terrain views**
+while the simulation is already ready. Closing the dialog leaves transport
+alone, including a manual pause.
 
 Scene requirements and admission
 -------------------------------
 
-USD composition owns scene dependency facts. The stage projection worker
+USD composition owns scene dependency facts. The dataset scope resolver binds
+both composed and runtime dependency references to the current asset mount.
+The stage projection worker
 snapshots active asset values (scalar/array/time sampled) and binary references;
 unselected variants and inactive prims are excluded. Live asset edits refresh
 only affected properties/subtrees through the canonical stage owner. The native
@@ -344,6 +348,16 @@ scene-scoped `SceneDatasetRequirements`. It waits for manifest discovery before
 asserting completeness. A `SceneDatasets` progress hold persists until every
 required declaration is installed. Teardown releases the exact scene hold and
 clears requirements; byte/worker completion never controls transport Play/Pause.
+
+Installation publishes a dataset ID and its exact owning scope after verifying
+the committed artifact. The registry resolves that lease to the live asset
+reader address and refreshes existing typed handles for the root, declared
+pipeline members, and concrete members referenced by scene requirements.
+The public artifact URI remains stable across mounts. The registry waits for
+any read already in flight at publication, then refreshes the path once under
+the same scope lease. A closed mount cannot refresh a replacement Twin.
+The text-artifact reader uses the same mounted address and starts a waiting
+read on installation.
 
 `ListDatasets.required_for_scene` and the provisioning hook consume that same
 resource. Recommendations do not define scene requirements. The prompt shows
@@ -360,7 +374,8 @@ text consumers also admit their requested identities. Dataset discovery and
 artifact installation remain separate from source parsing and physics readiness.
 
 For a URI selected by running code, `assets::require(uri)` dispatches the typed
-`RequireAsset` command. It declares use, without starting a download or blocking
+`RequireAsset` command. The command resolves the public URI against the current
+mount before declaring use. It can do so without starting a download or blocking
 the calling Rhai function. Its acknowledgement means the requirement was
 accepted, not that the bytes are ready. Event-driven code consumes the artifact
 after `DATASET_INSTALLED` using its ordinary loader/ready event; the dataset text

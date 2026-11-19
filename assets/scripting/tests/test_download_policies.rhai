@@ -85,9 +85,26 @@ checks.push(t_true(complete.visible && complete.rows.len() == 1
     "completed downloads retain an explicit completion view"));
 checks.push(t_true(complete.rows[0].stages_display=="none" && complete.rows[0].min_height=="80px","ready rows use compact summaries"));
 checks.push(t_eq(complete.rows[0].rebuild_action,"rebuild","only an installed processed artifact offers forced rebuild"));
-facts.simulation=#{pending:[],world_hold:false,blockers:[],playing:false,fault:()};
+facts.simulation=#{pending:[],world_hold:false,blockers:[],playing:false,fault:(),
+    terrain_maps_pending:false,terrain_views_pending:false};
 let paused=provisioned_view(facts);
 checks.push(t_true(paused.simulation_status=="Simulation paused" && paused.actions[0].action=="dismiss","completion preserves intentional pause and never starts transport"));
+facts.simulation.terrain_maps_pending=true;
+facts.simulation.terrain_views_pending=true;
+let maps=provisioned_view(facts);
+checks.push(t_true(maps.title=="Building terrain maps" && maps.actions[0].label=="Continue in background",
+    "installed data retains a terrain map stage after physics is ready"));
+checks.push(t_true(maps.description.contains("Terrain will appear once")
+    && maps.scope_label.contains("1 / 1 datasets installed") && maps.rows[0].status=="Installed",
+    "the map stage says which work is still outstanding and labels disk installation explicitly"));
+facts.simulation.terrain_maps_pending=false;
+let views=provisioned_view(facts);
+checks.push(t_true(views.title=="Preparing terrain views" && views.description.contains("Terrain is still loading")
+    && views.simulation_status=="Simulation paused",
+    "terrain rendering progress leaves the transport pause visible"));
+facts.simulation.terrain_views_pending=false;
+checks.push(t_eq(provisioned_view(facts).title,"Data ready",
+    "the completion title returns when terrain presentation settles"));
 facts.datasets[0].state=#{kind:"missing",detail:()};
 checks.push(t_true(provisioned_view(facts).simulation_detail.contains("Source files are downloaded"),"downloaded files wait for preparation without claiming work is running"));
 facts.datasets[0].inputs_ready=false;
@@ -101,7 +118,8 @@ facts.datasets[0].state=#{kind:"installed",detail:()};
 facts.simulation.pending=["collision support"];
 facts.simulation.world_hold=true;
 let held=provisioned_view(facts);
-checks.push(t_true(held.title=="Preparing simulation" && held.simulation_status.contains("held"),"prepared data is distinct from physics readiness"));
+checks.push(t_true(held.title=="Preparing simulation" && held.description.contains("still in progress")
+    && held.simulation_status.contains("held"),"the window names ongoing simulation preparation after installation"));
 facts.simulation.fault=#{subject:"Physics",detail:"Initialization failed"};
 checks.push(t_true(provisioned_view(facts).title=="Simulation needs attention","a simulation failure is not reported ready merely because data is ready"));
 facts.simulation=();
