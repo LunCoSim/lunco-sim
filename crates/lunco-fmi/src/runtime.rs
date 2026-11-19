@@ -640,6 +640,10 @@ impl Plugin for FmiPlugin {
         app.insert_resource(Channels { tx, rx });
         app.register_type::<FmuParticipant>();
         register_all_commands(app);
+        app.configure_sets(
+            SimulationCompletions,
+            FmiCompletionSet.in_set(lunco_core::RuntimeCycleSet::Lifecycle),
+        );
         app.add_systems(SimulationCompletions, receive.in_set(FmiCompletionSet));
         app.add_systems(
             FixedUpdate,

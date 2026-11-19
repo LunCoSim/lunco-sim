@@ -1108,9 +1108,10 @@ lifecycle-coalesced pending-prim set and the `UsdSourcedCosim` discovery marker,
 independently of native projection completion. Pending Modelica source admission
 reuses Bevy's system-local query state across updates and scene replacements.
 Loaded source declarations are published before causal input admission. The same
-owner captures stalled Modelica feedback, synthesizes its initial composite through
-a required typed Rhai hook, and certifies live connected observations at t=0 before
-releasing participant readiness. See the
+owner captures stalled Modelica feedback after wiring settles and synthesizes its
+initial composite through a required typed Rhai hook. The shared clock-free
+`SimulationCompletions` schedule admits its worker result and certifies live
+connected observations at t=0 before releasing participant readiness. See the
 [coupled admission contract](architecture/20-domain-modelica.md#coupled-initial-admission).
 Standalone Modelica programs consume `UsdSceneProjectionReset` before
 rediscovery, delegating worker and observation retirement to Modelica component

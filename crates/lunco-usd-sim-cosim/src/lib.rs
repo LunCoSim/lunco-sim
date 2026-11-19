@@ -2713,11 +2713,16 @@ impl Plugin for UsdSimCosimPlugin {
             .add_systems(
                 lunco_core_runtime::SimulationCompletions,
                 (
+                    preparations::pump.run_if(preparations::pump_needed),
                     validate_usd_modelica_port_contracts,
                     sync::sync_modelica_outputs,
+                    initialization::complete
+                        .run_if(initialization::completion_needed)
+                        .run_if(not(resource_exists::<SceneLoadInFlight>))
+                        .run_if(not(wiring_due)),
                 )
                     .chain()
-                    .after(ModelicaSet::HandleResponses),
+                    .after(lunco_core::RuntimeCycleSet::Lifecycle),
             );
 
         // Wiring is derived from native `connectionPaths`: rebuilds the
@@ -2758,11 +2763,10 @@ impl Plugin for UsdSimCosimPlugin {
                 seed_usd_input_defaults,
                 interfaces::invalidate_changed_source_assets
                     .run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<ModelicaSource>>),
-                preparations::pump.run_if(preparations::pump_needed),
                 publish_loaded_modelica_interfaces
                     .run_if(any_with_component::<lunco_port_core::PortSurfacePending>),
-                initialization::coordinate
-                    .run_if(initialization::needed)
+                initialization::dispatch
+                    .run_if(initialization::dispatch_needed)
                     .run_if(not(resource_exists::<SceneLoadInFlight>)),
                 dispatch_loaded_modelica_sources
                     .run_if(any_with_component::<PendingModelicaSource>)

@@ -271,10 +271,11 @@ entities; the identity owner assigns their stable IDs; then the API registry
 publishes path lookups for those identities. `ClockProjectionSet` runs in
 `First`, before `TimeSystems` samples the next virtual delta. Modelica completion
 admission uses the core runtime's `SimulationCompletions` schedule, serviced
-after message rotation and before `ClockProjectionSet` in `First`. The native
-driver also services that same schedule on response readiness while waiting for
-the next fixed deadline. The shared fixed runner services it once before checking
-a held pending cycle, so receipts completed during native integration can release
+after message rotation and before `ClockProjectionSet` in `First`. Native
+headless waits for the next fixed deadline and native windows wait for the
+render handoff. Both service that schedule on response readiness, including
+while preparation holds the clock. The shared fixed runner services it once
+before checking a held pending cycle, so receipts completed during native integration can release
 the next cycle in the same update. Neither path waits on unfinished work or
 reruns the application update.
 The completion systems retain one state and their existing session, source,
@@ -1774,9 +1775,10 @@ The whole-simulation guarantee remains open because:
     before physical presentation sampling. Render readiness ends admission
     between complete cycles. When queued work or its allowance runs out,
     main-world presentation can overlap the preceding render and extraction
-    receives the render world. Extraction admits no simulation work. The timing
-    profile records both fixed service phases and the final accumulator, with
-    render-only waiting outside the service timer.
+    receives the render world. While waiting, extraction can admit clock-free
+    receipts. Fixed cycles stay before presentation sampling. The timing profile
+    records both fixed service phases and the final accumulator, with render
+    handoff and clock-free admission outside the fixed service timer.
 13. World-bound REPL requests use a bounded 64-entry FIFO, reject excess
     commands visibly, drain one request per `Update`, and cap each live-world
     invocation at 100,000 Rhai operations. This bounds interpreter work per

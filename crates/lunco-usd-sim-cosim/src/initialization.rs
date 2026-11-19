@@ -39,6 +39,14 @@ struct Member {
     resume: bool,
 }
 
+impl Member {
+    fn matches_pending_source(&self, pending: &PendingModelicaSource) -> bool {
+        self.handle.as_ref() == Some(&pending.handle)
+            && self.uri == pending.asset_path
+            && self.session == pending.session_id
+    }
+}
+
 /// One complete checked input aggregate. Policy owns array-literal syntax.
 #[derive(Clone, Debug, PartialEq)]
 struct InputBinding {
@@ -820,11 +828,7 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
         let Some(model) = world.get::<ModelicaModel>(member.entity) else {
             if world
                 .get::<PendingModelicaSource>(member.entity)
-                .is_some_and(|pending| {
-                    member.handle.as_ref() == Some(&pending.handle)
-                        && member.uri == pending.asset_path
-                        && member.session == pending.session_id
-                })
+                .is_some_and(|pending| member.matches_pending_source(pending))
             {
                 waiting = true;
                 continue;
@@ -1003,11 +1007,9 @@ fn fail(world: &mut World, plan: &Plan, error: String) {
     }
 }
 
-/// Admit a solved composite atomically or retain the physics/readiness holds.
-/// Compiler work runs on the existing worker, never on the live World thread.
-pub(super) fn coordinate(world: &mut World) {
+/// Admit a ready result or certify the constructed participants at the held boundary.
+pub(super) fn complete(world: &mut World) {
     world.run_schedule(lunco_cosim_core::schedule::InitializationSampling);
-    world.init_resource::<CoupledInitialization>();
     let certificate = world
         .resource_mut::<CoupledInitialization>()
         .certificate
@@ -1052,6 +1054,7 @@ pub(super) fn coordinate(world: &mut World) {
             world.resource_mut::<CoupledInitialization>().job = Some(job);
             return;
         };
+        debug!(request_id = ?job.request_id, "processing coupled initialization worker result");
         let outcome = outcome.and_then(|outcome| match outcome {
             lunco_modelica_runtime::ModelicaPreparationOutcome::Initialization(result) => {
                 Ok(result)
@@ -1156,8 +1159,13 @@ pub(super) fn coordinate(world: &mut World) {
                 debug!("[usd-cosim] discarded superseded coupled initialization");
             }
         }
-        return;
     }
+}
+
+/// Capture and submit a new plan after the scene's wiring and interfaces settle.
+pub(super) fn dispatch(world: &mut World) {
+    world.run_schedule(lunco_cosim_core::schedule::InitializationSampling);
+    world.init_resource::<CoupledInitialization>();
     let plan = match capture(world) {
         Ok(Some(plan)) => plan,
         Ok(None) => return,
@@ -1286,27 +1294,44 @@ pub(super) fn coordinate(world: &mut World) {
     world.resource_mut::<CoupledInitialization>().job = Some(Job { request_id, plan });
 }
 
-/// Admit initial capture, ready worker outcomes and pending certification.
-pub(super) fn needed(
+pub(super) fn dispatch_needed(
     pending: Query<(), With<PendingModelicaSource>>,
     models: Query<&ModelicaModel, (With<UsdSourcedCosim>, With<GeneratedModelicaSource>)>,
+    owner: Option<Res<CoupledInitialization>>,
+) -> bool {
+    !owner.is_some_and(|owner| owner.failed || owner.job.is_some() || owner.certificate.is_some())
+        && (!pending.is_empty()
+            || models
+                .iter()
+                .any(|model| !model.is_compiled && model.last_error.is_none()))
+}
+
+pub(super) fn completion_needed(
     owner: Option<Res<CoupledInitialization>>,
     actors: Query<&ModelicaModel>,
     preparations: Option<Res<super::preparations::ModelicaPreparations>>,
     holds: Query<&CoupledInitializationPending>,
+    pending_sources: Query<&PendingModelicaSource>,
 ) -> bool {
-    if owner.as_ref().is_some_and(|owner| owner.failed) {
+    let Some(owner) = owner.filter(|owner| !owner.failed) else {
         return false;
-    }
-    if let Some(job) = owner.as_ref().and_then(|owner| owner.job.as_ref()) {
+    };
+    if let Some(job) = &owner.job {
         return preparations.is_none_or(|preparations| preparations.ready(job.request_id));
     }
-    if let Some(certificate) = owner.as_ref().and_then(|owner| owner.certificate.as_ref()) {
+    if let Some(certificate) = &owner.certificate {
         // Certification samples and revalidates once every participant has an
         // outcome. Pending constructors cannot yet supply a t=0 observation.
         let mut waiting = false;
         for member in &certificate.plan.members {
             let Ok(model) = actors.get(member.entity) else {
+                if pending_sources
+                    .get(member.entity)
+                    .is_ok_and(|pending| member.matches_pending_source(pending))
+                {
+                    waiting = true;
+                    continue;
+                }
                 return true;
             };
             if model.last_error.is_some() {
@@ -1322,10 +1347,7 @@ pub(super) fn needed(
         }
         return !waiting;
     }
-    !pending.is_empty()
-        || models
-            .iter()
-            .any(|model| !model.is_compiled && model.last_error.is_none())
+    false
 }
 
 /// Cancel preparation with its owning scene before another scene can publish it.
@@ -1455,17 +1477,17 @@ mod tests {
             }),
             ..default()
         });
-        assert!(!world.run_system_once(needed).unwrap());
+        assert!(!world.run_system_once(completion_needed).unwrap());
         world.get_mut::<ModelicaModel>(first).unwrap().is_compiled = true;
-        assert!(!world.run_system_once(needed).unwrap());
+        assert!(!world.run_system_once(completion_needed).unwrap());
         world.get_mut::<ModelicaModel>(second).unwrap().is_compiled = true;
-        assert!(world.run_system_once(needed).unwrap());
+        assert!(world.run_system_once(completion_needed).unwrap());
 
         world.get_mut::<ModelicaModel>(first).unwrap().is_compiled = false;
         world.get_mut::<ModelicaModel>(second).unwrap().last_error =
             Some("construction failed".into());
-        assert!(world.run_system_once(needed).unwrap());
+        assert!(world.run_system_once(completion_needed).unwrap());
         world.entity_mut(second).remove::<ModelicaModel>();
-        assert!(world.run_system_once(needed).unwrap());
+        assert!(world.run_system_once(completion_needed).unwrap());
     }
 }
