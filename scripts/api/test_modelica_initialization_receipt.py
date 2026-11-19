@@ -15,13 +15,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=4757)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--windowed", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     os.environ.update(LUNCOSIM_EPHEMERAL_SETTINGS="1", LUNCOSIM_ISOLATED_RUN="1",
                       LUNCOSIM_CONFIG=str(output / "config"))
-    receipt = {"binary_sha256": hashlib.sha256(BINARY.read_bytes()).hexdigest(), "port": args.port}
-    with ProductionSession(args.port, extra_args=["--scene", "scenes/tests/modelica_initialization_network.usda"],
+    receipt = {"binary_sha256": hashlib.sha256(BINARY.read_bytes()).hexdigest(),
+               "port": args.port, "windowed": args.windowed}
+    with ProductionSession(args.port, windowed=args.windowed,
+                           extra_args=["--scene", "scenes/tests/modelica_initialization_network.usda"],
                            log_path=output / "app.log") as session:
         pid = session.process.pid
         assert Path(f"/proc/{pid}/cwd").resolve() == ROOT

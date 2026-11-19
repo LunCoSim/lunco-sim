@@ -1192,9 +1192,12 @@ fences as authored models. USD projection must not send a direct worker compile.
 
 Scene lifecycle projection, stable entity identity assignment, and API/path
 index publication run in that order in `PreUpdate`, before
-`SimulationAdmissionSet`. Modelica completions are admitted in `First`, after
-message rotation and before `ClockProjectionSet` gates the following virtual
-delta sample. Compile intent remains in the `Update` lifecycle cycle. The
+`SimulationAdmissionSet`. Headless and windowed hosts share the clock-free
+`SimulationCompletions` schedule for Modelica receipts and coupled initialization
+certification. `First` services it after message rotation and before
+`ClockProjectionSet` gates the next virtual delta. Native host waits also
+service ready receipts while the clock is held. Compile intent remains in the
+`Update` lifecycle after scene wiring. The
 fixed runner checks admission before each full tick and shares one host-update
 allowance with render-overlap service. A projected reference must resolve by
 path on the first resumed tick using the same published index.

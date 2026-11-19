@@ -140,6 +140,9 @@ impl PreparationRequests {
         outcome: Result<ModelicaPreparationOutcome, String>,
     ) {
         if self.active.remove(&request_id) {
+            if matches!(&outcome, Ok(ModelicaPreparationOutcome::Initialization(_))) {
+                debug!(?request_id, "coupled initialization worker result ready");
+            }
             let _ = self.responses.send(ModelicaPreparationResult {
                 request_id,
                 outcome,

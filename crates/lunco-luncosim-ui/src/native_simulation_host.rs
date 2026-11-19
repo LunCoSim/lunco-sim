@@ -82,7 +82,7 @@ fn service_simulation_during_render(world: &mut World) {
     }
 }
 
-fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> RenderFrameHandoff {
+fn wait_for_render_frame(world: &mut World, service_fixed_ticks: bool) -> RenderFrameHandoff {
     let executor = world
         .resource::<bevy::ecs::schedule::MainThreadExecutor>()
         .clone();
@@ -99,17 +99,14 @@ fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> RenderF
                         if let Poll::Ready(frame) = receipt.as_mut().poll(cx) {
                             return Poll::Ready(HostReady::Frame(frame));
                         }
-                        if service_simulation {
-                            match world
-                                .resource::<lunco_core_runtime::SimulationCompletionSources>()
-                                .poll_wake(cx)
-                            {
-                                Ok(Poll::Ready(())) => return Poll::Ready(HostReady::Completion),
-                                Ok(Poll::Pending) => {}
-                                Err(error) => return Poll::Ready(HostReady::Fault(error)),
-                            }
+                        match world
+                            .resource::<lunco_core_runtime::SimulationCompletionSources>()
+                            .poll_wake(cx)
+                        {
+                            Ok(Poll::Ready(())) => Poll::Ready(HostReady::Completion),
+                            Ok(Poll::Pending) => Poll::Pending,
+                            Err(error) => Poll::Ready(HostReady::Fault(error)),
                         }
-                        Poll::Pending
                     }));
                 })
                 .pop();
@@ -120,6 +117,11 @@ fn wait_for_render_frame(world: &mut World, service_simulation: bool) -> RenderF
                 Some(HostReady::Completion) => {
                     // Release the host task scope before entering ECS schedules;
                     // their own main-thread executor must remain available.
+                    // Extraction admits receipts even while the fixed clock is held.
+                    if !service_fixed_ticks {
+                        lunco_core_runtime::admit_simulation_completions(world);
+                        continue;
+                    }
                     let mut received = None;
                     lunco_time::service_pending_simulation(world, || {
                         // Recheck at complete-cycle boundaries. The blocking
@@ -165,8 +167,8 @@ fn extract_ready_frame(world: &mut World, _extract: &mut World) {
     let handoff = std::mem::take(&mut *world.non_send_mut::<RenderFrameHandoff>());
     let handoff = match handoff {
         RenderFrameHandoff::Awaiting => {
-            // The main world has already sampled presentation for this update.
-            // Receive the render world here without admitting further cycles.
+            // Presentation endpoints are already sampled. Only the shared
+            // clock-free completion schedule can run before extraction.
             wait_for_render_frame(world, false)
         }
         handoff => handoff,

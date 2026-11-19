@@ -1118,6 +1118,7 @@ Ordering uses these system sets:
 ```
 SimulationCompletions:
   ModelicaSet::HandleResponses    — validate worker results and release completed causal holds
+  USD coupled initialization     — admit solved inputs and certify constructed participants
 First:
   ClockProjectionSet             — project remaining holds before TimeSystems samples time
 
@@ -1268,8 +1269,9 @@ Staleness: `stale = !is_compiled || compiled_generation != gen`, where
 Worker lifecycle and simulation time are separate schedule domains. The execution
 host registers `handle_modelica_responses` once in the core runtime's
 `SimulationCompletions` schedule. `First` services that schedule after message
-rotation and before `ClockProjectionSet`; the native simulation driver also
-services it while waiting for the next fixed deadline. The shared fixed runner
+rotation and before `ClockProjectionSet`. The headless driver services it while
+waiting for the next fixed deadline, and the windowed driver services it on
+response readiness during the render handoff. The shared fixed runner
 services it once before checking admission of a held pending cycle. Ready
 receipts can release that cycle in the same application update; unfinished work
 yields without waiting. The same system state,
@@ -1670,11 +1672,12 @@ execution policy. The participating live sessions prepare their own
 execution programs. Both jobs share checked artifacts and bounded worker lanes.
 Native and browser transports keep initialization replies
 separate from participant lifecycle results.
-Preparation neither advances simulation time nor blocks the live World on parsing
-or solver construction. While the job has no outcome, the
-coordinator's native readiness gate skips its World boundary and initial
-physical sampling. A result, worker error or disconnected response channel wakes the coordinator;
-acceptance still samples the current providers and compares the complete plan.
+The `Update` lifecycle captures the initial plan after USD wiring and interface
+publication. `SimulationCompletions` drains the preparation mailbox, accepts a
+ready solve, and certifies the participants after their construction results
+arrive. Both hosts use this reader while the simulation clock is held. Admission
+resamples the current providers and compares the complete plan once an outcome
+is available. A pending worker result leaves the existing hold in place.
 Scene retirement cancels the exact request; late replies cannot authorize a
 different generation. Failed admission revokes unconsumed solved inputs and
 participant holds, terminates pending member operations and raises the owner fault.

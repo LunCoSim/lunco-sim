@@ -304,7 +304,10 @@ Rhai limits or classify sources by guessed catalog filenames.
 For coupled startup, distinguish the one-shot solve from participant
 certification. Pending constructors supply no certifiable observation; the owner
 waits on their outcomes and revalidates current source, wiring and physical
-samples at final admission. Include coordinator counts and main-thread time
+samples at final admission. Measure receipt delivery from the worker's result
+log to the shared completion schedule's admission log, using the scene-scoped
+request ID across headless and windowed runs. Include coordinator counts and
+main-thread time
 when measuring startup; worker timing alone misses repeated certification work.
 Independent participants whose initial inputs are complete must not serialize
 an unrelated coupled plan. Compare dispatch timestamps and generated membership;
@@ -501,9 +504,10 @@ before clock projection, before admission of a held pending fixed cycle, and by
 the native driver on response readiness between application updates. A ready
 receipt can release another cycle in the same update; unfinished work yields
 without a wait. Full presentation isolation remains a separate requirement.
-Native headless readiness is shared through `SimulationCompletionSources` for
-participant workers. Its worker leases control registration lifetime;
-readiness does not consume a receipt. Windowed hosts never block on this wait.
+Native hosts share `SimulationCompletionSources` for participant and preparation
+receipts. Its worker leases control registration lifetime. A window waiting for
+render extraction admits ready receipts through the clock-free schedule, with
+fixed work staying before presentation sampling.
 Complete-cycle continuation checks both coupling and generic progress holds.
 For runtime UI policy work, compare actual immutable input snapshots as well as
 producer change ticks. Equal facts must not schedule another projection merely
