@@ -45,14 +45,10 @@ render submissions. It contains no Roadster or episode selection policy.
 
 ## Dependency identity
 
-The configured registry does not provide `bevy_solari` 0.20. The integration
-selects it from the exact maintained Bevy revision already used by `bevy_shader`.
-The user approved vendoring only this crate and a public ordering hook on
-23 October. Its package manifest uses the declared released Bevy 0.20 identities;
-Cargo resolves one ECS/render graph. The sole runtime source patch exposes
-`PathtracingSystems::Trace`. See
-[`VENDOR.md`](../../third_party/bevy_solari/VENDOR.md) for the source identity,
-licences and exact patch.
+Cargo pins `bevy_solari` 0.20 to the LunCoSim Bevy fork. The fork exposes
+`PathtracingSystems::Trace` and resolves Bevy dependencies by version so Solari
+shares the application's ECS and render graph.
+[Bevy fork commit](https://github.com/LunCoSim/bevy/commit/89d20883269eee3bd1dac89b6e02536c74fbb4f8)
 
 ## Compatibility boundary
 

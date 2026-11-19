@@ -1756,6 +1756,7 @@ dependencies = [
 [[package]]
 name = "bevy_flair_style"
 version = "0.9.0"
+source = "git+https://github.com/LunCoSim/bevy_flair?rev=554b2344ec5f5ade2dcc75199b56932a7718dd94#554b2344ec5f5ade2dcc75199b56932a7718dd94"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2537,6 +2538,7 @@ dependencies = [
 [[package]]
 name = "bevy_solari"
 version = "0.20.0"
+source = "git+https://github.com/LunCoSim/bevy?rev=89d20883269eee3bd1dac89b6e02536c74fbb4f8#89d20883269eee3bd1dac89b6e02536c74fbb4f8"
 dependencies = [
  "bevy_anti_alias",
  "bevy_app",

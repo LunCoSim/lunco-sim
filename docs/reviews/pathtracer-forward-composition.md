@@ -6,23 +6,13 @@ Roadster content qualification is pending.
 
 ## Required ordering
 
-The pinned Bevy 0.20 reference path tracer runs after the opaque and transparent
-main passes and before tonemapping. Its final color overwrites the transparent
-pass. The trace function lives in a private module and has no public ordering
-set. The public `main_transparent_pass_3d` can be reused, but the application
-cannot currently place a pass after tracing and before tonemapping through a
-supported scheduling boundary.
-
-[Prepared patch](pathtracer-forward-composition.patch) adds one public system
-set to the exact current `bevy_solari` source revision
-`a12e8366cdd9c0ee8dabd3ada7bb7e8f02f0b338`. It changes ordering metadata only;
-no shader, ray integrator, light model or physical simulation changes.
+The Bevy 0.20 reference path tracer runs after the main passes and before
+tonemapping. Its final color overwrites the transparent pass. The pinned
+LunCoSim Bevy fork exposes `PathtracingSystems::Trace` so the application
+can schedule transparent composition after tracing.
+[Bevy fork commit](https://github.com/LunCoSim/bevy/commit/89d20883269eee3bd1dac89b6e02536c74fbb4f8)
 
 ## Application integration
-
-Only the pinned `bevy_solari` crate is vendored, with its original licences and
-this patch. Its package manifest uses the existing Bevy 0.20 dependencies.
-The Cargo cache is unchanged and no fork was published.
 
 In `lunco-render-bevy`, an application-owned wrapper invokes the public
 `main_transparent_pass_3d`. The wrapper checks that its render-world view has

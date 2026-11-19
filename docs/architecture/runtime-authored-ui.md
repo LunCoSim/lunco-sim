@@ -18,6 +18,9 @@ it cannot inspect ECS state or directly mutate the simulation.
 The committed dependency baseline is `bevy_hui 0.8.0`, `bevy_flair 0.9.0`, and
 Bevy `0.20.0`. Keep the committed `Cargo.lock` as the version
 evidence and re-check upstream release notes before changing this contract.
+The workspace pins `bevy_flair_style` to the LunCoSim Flair fork, which orders
+the style recalculation set after Bevy UI propagation.
+[Flair fork commit](https://github.com/LunCoSim/bevy_flair/commit/554b2344ec5f5ade2dcc75199b56932a7718dd94)
 
 The shipped contract deliberately uses the smallest stable subset:
 

@@ -27,7 +27,9 @@ server has this surface manifest.
 
 The committed dependency baseline is `bevy_hui 0.8.0`, `bevy_flair 0.9.0`,
 and Bevy `0.20.0`. Verify the lockfile and upstream release notes before
-changing it. The separate
+changing it. See the
+[dependency baseline](../../docs/architecture/runtime-authored-ui.md#version-and-capability-baseline)
+for the Flair fork. The separate
 `bevy_hui_widgets 0.6.0` crate provides primitive text-input, slider, and select
 components, but is intentionally not a LunCoSim dependency: it does not define
 our clipboard, validation, keyboard-navigation, accessibility, or modal
