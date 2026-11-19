@@ -1060,7 +1060,26 @@ mod parsed_bundle_tests {
     #[test]
     fn class_index_reads_interfaces_without_instantiating_internal_models() {
         let mut indexer = SourceLibraryIndexer::new();
-        indexer.ingest_file(std::path::Path::new("Bounded.mo"), "package Bounded model Device Missing internal; end Device; model Root input Real demand; Device device; output Real delivered; end Root; end Bounded;", "Bounded.mo", "");
+        indexer.ingest_file(
+            std::path::Path::new("Bounded.mo"),
+            r#"
+package Bounded
+  connector Demand = input Real;
+  connector Delivery = output Real;
+  model Device
+    Missing internal;
+  end Device;
+  model Root
+    Demand demand;
+    Device device;
+    Delivery delivered;
+    output Real diagnostic;
+  end Root;
+end Bounded;
+"#,
+            "Bounded.mo",
+            "",
+        );
         indexer.install_into_engine();
         let entries = indexer.index_all();
         let root = entries

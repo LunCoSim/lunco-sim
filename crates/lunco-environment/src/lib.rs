@@ -1086,7 +1086,7 @@ mod tests {
                 .get::<ConstantLinearAcceleration>(entity)
                 .unwrap()
                 .0,
-            sampled
+            sampled.as_vec3()
         );
         assert_eq!(
             app.world().resource::<AccelerationChangeCount>().0,
@@ -1103,7 +1103,7 @@ mod tests {
                 .get::<ConstantLinearAcceleration>(entity)
                 .unwrap()
                 .0,
-            DVec3::NEG_Y * 1.7
+            Vec3::NEG_Y * 1.7
         );
         assert_eq!(
             app.world().resource::<AccelerationChangeCount>().0,
@@ -1122,7 +1122,7 @@ mod tests {
                 .get::<ConstantLinearAcceleration>(entity)
                 .unwrap()
                 .0,
-            sampled
+            sampled.as_vec3()
         );
         assert_eq!(
             app.world().resource::<AccelerationChangeCount>().0,
@@ -1320,11 +1320,12 @@ mod tests {
             moved_probe,
             "a parent native-position change did not invalidate its mounted probe"
         );
-        let rotation = DQuat::from_rotation_z(0.3);
+        let rotation = Quat::from_rotation_z(0.3);
         app.world_mut().get_mut::<Rotation>(body).unwrap().0 = rotation;
         app.update();
         let moved_probe =
-            -(moved_position + rotation * mount_offset + DVec3::Y * 1000.0).normalize() * 1.62;
+            -(moved_position + rotation.as_dquat() * mount_offset + DVec3::Y * 1000.0).normalize()
+                * 1.62;
         assert_eq!(
             app.world()
                 .get::<LocalGravity>(probe)

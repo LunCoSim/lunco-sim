@@ -188,8 +188,8 @@ fn remove_component_deletes_only_its_own_line() {
 
 #[test]
 fn set_connection_line_actually_writes_the_route() {
-    // Connect routing is a source-span edit owned by the annotation reader.
-    let after = apply(ModelicaOp::SetConnectionLine {
+    let mut host = host(SRC);
+    host.apply(ModelicaOp::SetConnectionLine {
         class: "Foo.Bar.Sys".into(),
         from: PortRef {
             component: "a".into(),
@@ -200,8 +200,10 @@ fn set_connection_line_actually_writes_the_route() {
             port: String::new(),
         },
         points: vec![(5.0, 6.0), (7.0, 8.0)],
-    });
-    assert_only_touched(&after, &["connect(a, b)"]);
+    })
+    .expect("route edit applies");
+    let after = host.document().source();
+    assert_only_touched(after, &["connect(a, b)"]);
     assert!(
         after.contains("points={{5,6},{7,8}}"),
         "line route was not written:\n{after}"
@@ -211,6 +213,13 @@ fn set_connection_line_actually_writes_the_route() {
         after.contains("color={0,0,255}"),
         "re-routing dropped the authored colour:\n{after}"
     );
+    let routes = lunco_modelica_index::connection_routes::connect_line_routes(
+        host.document().syntax().ast(),
+        "Foo.Bar.Sys",
+    );
+    assert_eq!(routes.len(), 1);
+    let route = routes.values().next().unwrap();
+    assert_eq!(route.points, vec![(5.0, 6.0), (7.0, 8.0)]);
 }
 
 #[test]

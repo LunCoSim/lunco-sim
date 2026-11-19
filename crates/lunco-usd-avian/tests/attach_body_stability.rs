@@ -59,10 +59,7 @@ fn colliderless_dynamic_body_jointed_to_host_stays_finite() {
                     Transform::from_xyz(0.0, 4.0, 0.0),
                 ))
                 .id();
-            world.spawn(
-                FixedJoint::new(host, body)
-                    .with_local_anchor1(bevy::math::DVec3::new(0.0, -1.0, 0.0)),
-            );
+            world.spawn(FixedJoint::new(host, body).with_local_anchor1(Vec3::NEG_Y));
             body
         },
         60,

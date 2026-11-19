@@ -1,9 +1,8 @@
 # Rumoca source admission
 
-LunCoSim consumes Rumoca 0.10.2 from the maintained `main` branch.
-`Cargo.lock` retains the exact compiler/solver revision
-`e3da928cce08b794c6ec78ef85d2db0bd521547f`; locked builds therefore use one
-reproducible source snapshot. Dependency updates advance this lock explicitly.
+This review used Rumoca revision `e3da928cce08b794c6ec78ef85d2db0bd521547f`.
+See the [Rumoca runtime contracts](../architecture/29-rumoca-runtime-contracts.md)
+for the current dependency and ownership.
 The maintained dependency owns lexical/import-aware namespace dependencies,
 base-class lookup context, immutable cached class interfaces, and comprehension
 analysis of continuous and initial structured equation templates. Hosts consume

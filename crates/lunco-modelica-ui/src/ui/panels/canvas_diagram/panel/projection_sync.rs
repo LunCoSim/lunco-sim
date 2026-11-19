@@ -702,7 +702,6 @@ fn spawn_projection_task(
                     crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                         ast_arc,
                         std::sync::Arc::new(snapshot),
-                        &source,
                         max_nodes,
                         &layout,
                     )?;

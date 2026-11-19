@@ -52,9 +52,6 @@ pub struct ModelicaIndex {
     /// Bumped on every patch. Panels can fingerprint to skip rerender.
     pub generation: u64,
 
-    /// The current authoritative source text (synced after parse-success).
-    pub source: String,
-
     /// All component entries across every class, in arbitrary order.
     pub components: Vec<ComponentEntry>,
 
@@ -125,7 +122,6 @@ pub struct ConnectionEntry {
     pub node_id: NodeId,
     pub from: ComponentEndpoint,
     pub to: ComponentEndpoint,
-    pub waypoints: Vec<(f32, f32)>,
     pub source_range: Option<TextRange>,
 }
 
@@ -351,27 +347,15 @@ pub enum Variability {
 // These are the only entry points UI-side code should use to mutate the
 // Index. The rumoca-AST → Index builder lives behind `rebuild_from_ast`;
 // optimistic edits go through `patch_*`. Both bump `generation`.
-//
-// Implementations are intentionally stubbed for this skeleton commit —
-// the actual Modelica refactor (kill regex, swap projection) lands as
-// follow-up commits. See docs/architecture/20-domain-modelica.md §5.
 
 impl ModelicaIndex {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Discard everything and rebuild from a fresh rumoca AST.
-    /// Call on parse-success.
-    ///
-    /// Phase 1 (this commit): components + classes + within. Annotations
-    /// (Placement, Icon, Diagram, connection waypoints) are populated by
-    /// downstream commits — they live in `lunco_modelica_ast::annotations` /
-    /// `crate::diagram` today and will move to `annotation_parse.rs`
-    /// when the placement metamodel lands.
-    pub fn rebuild_from_ast(&mut self, ast: &ast::StoredDefinition, source: &str) {
+    /// Rebuild the declaration and connection index from a parsed Rumoca AST.
+    pub fn rebuild_from_ast(&mut self, ast: &ast::StoredDefinition) {
         self.generation = self.generation.saturating_add(1);
-        self.source = source.to_string();
         self.has_errors = false; // overwritten by `rebuild_with_errors` when caller knows
         self.components.clear();
         self.component_by_qualified.clear();
@@ -387,19 +371,14 @@ impl ModelicaIndex {
         // Walk top-level classes; nested classes go into their own
         // entry so panels can drill in by qualified name.
         for (qualified, class_def) in &ast.classes {
-            insert_class_recursive(self, qualified.clone(), class_def, source);
+            insert_class_recursive(self, qualified.clone(), class_def);
         }
     }
 
     /// Same as [`Self::rebuild_from_ast`] but also records the
     /// lenient-parse error flag supplied by the document syntax cache.
-    pub fn rebuild_with_errors(
-        &mut self,
-        ast: &ast::StoredDefinition,
-        source: &str,
-        has_errors: bool,
-    ) {
-        self.rebuild_from_ast(ast, source);
+    pub fn rebuild_with_errors(&mut self, ast: &ast::StoredDefinition, has_errors: bool) {
+        self.rebuild_from_ast(ast);
         self.has_errors = has_errors;
     }
 
@@ -519,7 +498,6 @@ impl ModelicaIndex {
                 component_name: to_component.to_string(),
                 port: to_port.map(str::to_string),
             },
-            waypoints: Vec::new(),
             source_range: None,
         };
         self.connections_by_class
@@ -800,12 +778,7 @@ fn sim_tier(c: &ClassEntry, used: &std::collections::HashSet<&str>) -> u8 {
 // AST → Index helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn insert_class_recursive(
-    idx: &mut ModelicaIndex,
-    qualified: String,
-    class_def: &ast::ClassDef,
-    source: &str,
-) {
+fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def: &ast::ClassDef) {
     // Description from the class header (`model X "desc"`).
     let description =
         lunco_modelica_ast::ast_extract::description_from_tokens(&class_def.description)
@@ -942,23 +915,9 @@ fn insert_class_recursive(
     // skipped — diagram-side panels read connections; full equations
     // are inspector territory.
     for eq in &class_def.equations {
-        if let ast::Equation::Connect { lhs, rhs } = eq {
+        if let ast::Equation::Connect { lhs, rhs, .. } = eq {
             let from = endpoint_from_component_ref(lhs);
             let to = endpoint_from_component_ref(rhs);
-            // Rumoca currently drops connect-equation annotations from the
-            // AST. Read the authored Line route from this equation's source
-            // span through the shared annotation projection instead of
-            // manufacturing a UI-only route or losing the user's layout.
-            let waypoints = lhs
-                .get_location()
-                .and_then(|location| {
-                    crate::annotation_source::line_route_for_connect(
-                        source,
-                        location.start as usize,
-                    )
-                })
-                .map(|route| route.points)
-                .unwrap_or_default();
             let key = idx.alloc_connection_key();
             let entry = ConnectionEntry {
                 key,
@@ -972,7 +931,6 @@ fn insert_class_recursive(
                 )),
                 from,
                 to,
-                waypoints,
                 source_range: lhs
                     .get_location()
                     .map(|l| TextRange::new(l.start as usize, l.end as usize)),
@@ -988,11 +946,11 @@ fn insert_class_recursive(
     // Recurse nested classes (e.g. examples inside a package).
     for (nested_name, nested_def) in class_def.classes.iter() {
         let nested_qualified = format!("{}.{}", qualified, nested_name);
-        insert_class_recursive(idx, nested_qualified, nested_def, source);
+        insert_class_recursive(idx, nested_qualified, nested_def);
     }
 }
 
-fn endpoint_from_component_ref(cr: &ast::ComponentReference) -> ComponentEndpoint {
+pub(crate) fn endpoint_from_component_ref(cr: &ast::ComponentReference) -> ComponentEndpoint {
     let component_name = cr
         .parts
         .first()
@@ -1057,7 +1015,7 @@ mod tests {
 end Labels;"#;
         let ast = rumoca_phase_parse::parse_to_ast(source, "labels.mo").unwrap();
         let mut index = ModelicaIndex::default();
-        index.rebuild_from_ast(&ast, source);
+        index.rebuild_from_ast(&ast);
         assert_eq!(index.classes["Labels"].description, "\"Model\" description");
         let entry = index.find_component("Labels", "value").unwrap();
         assert_eq!(entry.unit.as_deref(), Some("\"K\""));
@@ -1079,7 +1037,7 @@ end Labels;"#;
     fn rebuild_populates_within_classes_components() {
         let ast = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
         let mut idx = ModelicaIndex::new();
-        idx.rebuild_from_ast(&ast, SRC);
+        idx.rebuild_from_ast(&ast);
 
         assert_eq!(idx.within_path.as_deref(), Some("Demo"));
         assert!(
@@ -1209,12 +1167,12 @@ end Labels;"#;
     fn rebuild_clears_old_state() {
         let mut idx = ModelicaIndex::new();
         let ast1 = rumoca_phase_parse::parse_to_ast(SRC, "RC.mo").expect("parses");
-        idx.rebuild_from_ast(&ast1, SRC);
+        idx.rebuild_from_ast(&ast1);
         let gen_before = idx.generation;
 
         let small = "model Tiny\nend Tiny;\n";
         let ast2 = rumoca_phase_parse::parse_to_ast(small, "Tiny.mo").expect("parses");
-        idx.rebuild_from_ast(&ast2, small);
+        idx.rebuild_from_ast(&ast2);
 
         assert!(idx.generation > gen_before, "generation must advance");
         assert_eq!(idx.components.len(), 0);
@@ -1317,21 +1275,5 @@ end Labels;"#;
         let mut idx = ModelicaIndex::new();
         idx.patch_class_removed("DoesNotExist");
         // No panic, no state change.
-    }
-
-    #[test]
-    fn rebuild_extracts_connect_annotation_waypoints() {
-        let src = "model M\n  Real a;\n  Real b;\nequation\n  connect(a, b) annotation(Line(points={{0,0},{10,5},{20,10}}));\nend M;\n";
-        let ast = rumoca_phase_parse::parse_to_ast(src, "M.mo").expect("parses");
-        let mut idx = ModelicaIndex::new();
-        idx.rebuild_from_ast(&ast, src);
-
-        let conns: Vec<_> = idx.connections_in_class("M").collect();
-        assert_eq!(conns.len(), 1, "expected one connect equation");
-        assert_eq!(
-            conns[0].waypoints,
-            vec![(0.0, 0.0), (10.0, 5.0), (20.0, 10.0)],
-            "annotation Line points should populate waypoints"
-        );
     }
 }

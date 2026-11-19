@@ -14,11 +14,11 @@ use std::sync::Arc;
 /// parsed, and the wrapper is discarded by looking up the contained
 /// child. Centralised so all sites that construct the wrapper and
 /// all sites that retrieve the inner class agree on the literal.
-pub const FRAGMENT_CLASS_NAME: &str = "__LunCoFragment";
+pub(super) const FRAGMENT_CLASS_NAME: &str = "__LunCoFragment";
 
 /// Parse a [`FRAGMENT_CLASS_NAME`] stub class and return the
 /// resulting `StoredDefinition`, **memoised by stub text**.
-pub fn parse_stub_cached(stub: &str) -> Option<Arc<StoredDefinition>> {
+pub(super) fn parse_stub_cached(stub: &str) -> Option<Arc<StoredDefinition>> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
@@ -104,27 +104,20 @@ pub(crate) fn parse_component_fragment(
         .ok_or(AstMutError::ValueParseFailed { value: body })
 }
 
-/// Parse a `pretty::ConnectEquation` into a rumoca `Equation::Connect`.
-pub(crate) fn parse_connect_equation_fragment(
-    eq: &pretty::ConnectEquation,
-) -> Result<rumoca_ir_ast::Equation, AstMutError> {
-    let body = pretty::connect_equation(eq);
-    let stub = format!("model {FRAGMENT_CLASS_NAME}\nequation\n{body}end {FRAGMENT_CLASS_NAME};\n");
-    let parsed = parse_stub_cached(&stub).ok_or_else(|| AstMutError::ValueParseFailed {
-        value: body.clone(),
-    })?;
-    let class =
-        parsed
-            .classes
-            .get(FRAGMENT_CLASS_NAME)
-            .ok_or_else(|| AstMutError::ValueParseFailed {
-                value: body.clone(),
-            })?;
-    class
-        .equations
-        .first()
+/// Parse one equation with Rumoca in an isolated class.
+pub(super) fn parse_equation_fragment(body: &str) -> Result<rumoca_ir_ast::Equation, AstMutError> {
+    let stub =
+        format!("model {FRAGMENT_CLASS_NAME}\nequation\n{body}\nend {FRAGMENT_CLASS_NAME};\n");
+    let invalid = || AstMutError::ValueParseFailed {
+        value: body.to_string(),
+    };
+    let parsed = parse_stub_cached(&stub).ok_or_else(invalid)?;
+    parsed
+        .classes
+        .get(FRAGMENT_CLASS_NAME)
+        .and_then(|class| class.equations.first())
         .cloned()
-        .ok_or(AstMutError::ValueParseFailed { value: body })
+        .ok_or_else(invalid)
 }
 
 /// Parse a fragment destined for a graphics array (`{Foo(...), Bar(...)}`).

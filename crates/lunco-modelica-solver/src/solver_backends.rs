@@ -53,11 +53,9 @@ pub fn ensure_builtin_solvers() {
             label: "RK45 / Tsit45 (non-stiff, authoritative live)".into(),
         });
 
-        // This is not Rumoca's adaptive RkLike session. The live construction
-        // boundary dispatches this capability to lunco-modelica-solver's explicit RK4
-        // loop over Rumoca's lowered derivative runtime. Its qualified model
-        // contract is continuous with parameter-only event partitions and no
-        // external tables. Rumoca owns the event-dependency proof.
+        // The live construction boundary selects Rumoca's fixed RK4 integrator.
+        // Its qualified model contract is continuous with parameter-only event
+        // partitions and no external tables. Rumoca owns the event-dependency proof.
         solver::register(SolverSpec {
             id: SolverId::from("fixed-rk4"),
             caps: SolverCaps {
@@ -88,9 +86,8 @@ pub fn rumoca_options(
     let mode = match spec.id.as_str() {
         "bdf" => M::Bdf,
         "rk45" => M::RkLike,
-        // The fixed-rk4 session owns the integration loop. These options only
-        // carry the solver-neutral Rumoca lowering mode and tolerances into the
-        // checked FMI preparation boundary.
+        // The fixed-step host selects Rumoca's fixed RK4 integrator separately.
+        // These options configure checked FMI preparation and model exchange.
         "fixedrk4" => M::RkLike,
         _ => {
             return Err(SolverError::Incapable {

@@ -204,7 +204,7 @@ fn remove_class_top_level() {
 #[test]
 fn remove_class_nested() {
     let sd = mutate_doc(
-        "package P\n  model A\n  end A;\n  model B\n  end B;\nend P;\n",
+        "package P\n  type A = Real;\n  model B\n  end B;\nend P;\n",
         |sd, e| ast_mut::remove_class(sd, e, "P.A"),
     );
     let p = sd.classes.get("P").unwrap();

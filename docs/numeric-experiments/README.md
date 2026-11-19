@@ -1,7 +1,7 @@
 # Numeric experiments
 
 Offline experiments resolve their solver through the capability registry and
-prepare a checked Rumoca 0.10.2 FMI component. BDF is the implicit default;
+prepare a checked Rumoca 0.10.4 FMI component. BDF is the implicit default;
 RK45 is available for non-stiff systems. Tolerance defaults to `1e-6` and remains
 editable per run. Output cadence is independent of the solver's internal steps.
 

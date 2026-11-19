@@ -131,7 +131,7 @@ pub(super) fn paren_group_at(source: &str, from: usize) -> Option<Range<usize>> 
 }
 
 /// Index just past the `;` terminating the statement that starts at `from`.
-pub fn statement_end(source: &str, from: usize) -> Option<usize> {
+pub(super) fn statement_end(source: &str, from: usize) -> Option<usize> {
     let mut out = None;
     for_each_code(source, from..source.len(), |i, b, d| {
         if b == b';' && d == 0 {
@@ -159,7 +159,7 @@ pub(super) fn find_byte(source: &str, range: Range<usize>, byte: u8) -> Option<u
 }
 
 /// Start of the line containing `pos`.
-pub fn line_start(source: &str, pos: usize) -> usize {
+pub(super) fn line_start(source: &str, pos: usize) -> usize {
     let src = source.as_bytes();
     let mut i = pos.min(src.len());
     while i > 0 && src[i - 1] != b'\n' {
@@ -188,7 +188,7 @@ pub(super) fn statement_end_containing(source: &str, anchor: usize) -> Option<us
 }
 
 /// Whole-word `kw` at nesting depth 0 within `range`.
-pub fn find_keyword(source: &str, range: Range<usize>, kw: &str) -> Option<usize> {
+pub(super) fn find_keyword(source: &str, range: Range<usize>, kw: &str) -> Option<usize> {
     let src = source.as_bytes();
     let mut hit = None;
     for_each_code(source, range.clone(), |i, _b, d| {
@@ -343,7 +343,7 @@ pub(super) fn component_modifier_group(source: &str, comp: &Component) -> Option
 }
 
 /// The `annotation(...)` clause inside a statement: `(keyword_start, group)`.
-pub fn annotation_clause(source: &str, stmt: Range<usize>) -> Option<(usize, Range<usize>)> {
+pub(super) fn annotation_clause(source: &str, stmt: Range<usize>) -> Option<(usize, Range<usize>)> {
     let kw = find_keyword(source, stmt, "annotation")?;
     let group = paren_group_at(source, kw + "annotation".len())?;
     Some((kw, group))
@@ -353,49 +353,11 @@ pub fn annotation_clause(source: &str, stmt: Range<usize>) -> Option<(usize, Ran
 // Class anchors
 // ---------------------------------------------------------------------------
 
-/// Byte extent of a class, from its `model`/`package`/… keyword through the
-/// `;` after `end Name`.
-///
-/// `ClassDef::location` starts at the class *name*, so rewind over the kind
-/// keyword and any `partial`/`encapsulated`/`operator` prefix.
+/// Authored declaration span, including its qualifiers and terminator.
 pub(super) fn class_extent(source: &str, class: &ClassDef) -> Option<Range<usize>> {
-    let src = source.as_bytes();
-    let mut i = class.location.start as usize;
-    loop {
-        let mut j = i;
-        while j > 0 && matches!(src[j - 1], b' ' | b'\t') {
-            j -= 1;
-        }
-        let word_end = j;
-        let mut k = j;
-        while k > 0 && is_ident_byte(src[k - 1]) {
-            k -= 1;
-        }
-        const CLASS_PREFIXES: &[&str] = &[
-            "model",
-            "class",
-            "package",
-            "record",
-            "block",
-            "connector",
-            "function",
-            "type",
-            "operator",
-            "partial",
-            "encapsulated",
-            "expandable",
-            "pure",
-            "impure",
-            "final",
-            "replaceable",
-        ];
-        if k == word_end || !CLASS_PREFIXES.contains(&&source[k..word_end]) {
-            break;
-        }
-        i = k;
-    }
-    let end = statement_end(source, class.location.end as usize)?;
-    Some(i..end)
+    let location = &class.location;
+    let range = location.start as usize..location.end as usize;
+    (location.has_source() && source.get(range.clone())?.ends_with(';')).then_some(range)
 }
 
 /// Position of the `end` keyword that closes `class`.

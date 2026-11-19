@@ -1567,7 +1567,7 @@ mod tests {
                     current_rotation: bevy::math::DQuat::IDENTITY,
                     current_scale: None,
                 },
-                LinearVelocity(DVec3::new(4.0, 5.0, 6.0)),
+                LinearVelocity(Vec3::new(4.0, 5.0, 6.0)),
             ))
             .id();
         app.world_mut()
@@ -1595,7 +1595,7 @@ mod tests {
         );
         assert_eq!(
             app.world().get::<LinearVelocity>(vessel).unwrap().0,
-            DVec3::ZERO
+            Vec3::ZERO
         );
         assert!(
             app.world()

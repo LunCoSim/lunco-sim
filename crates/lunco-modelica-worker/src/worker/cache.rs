@@ -100,8 +100,8 @@ impl CompiledArtifactCache {
         if self.disk_limits.is_none() {
             return Ok(None);
         }
-        let Some(identity) =
-            rumoca_core::build_identity().filter(|identity| !identity.ends_with("-dirty"))
+        let Some(identity) = rumoca_tool_build_info::build_identity()
+            .filter(|identity| !identity.ends_with("-dirty"))
         else {
             return Ok(None);
         };
@@ -595,7 +595,7 @@ impl PreparedSolveCache {
         initial_inputs: &[(String, f64)],
     ) -> PreparedSolveKey {
         PreparedSolveKey {
-            compiler_identity: rumoca_core::build_identity()
+            compiler_identity: rumoca_tool_build_info::build_identity()
                 .filter(|identity| !identity.ends_with("-dirty")),
             source_key,
             solver_id: spec.id.to_string(),
@@ -695,6 +695,7 @@ impl PreparedSolveCache {
         limits
             .validate()
             .map_err(ModelicaCacheWriteError::InvalidLimits)?;
+        let root = model.runtime_view().retain_assertion_root();
         let record = PreparedSolveDiskRecord {
             compiler_identity: Some(
                 key.compiler_identity
@@ -706,7 +707,7 @@ impl PreparedSolveCache {
             solver_id: key.solver_id.as_str(),
             parameter_overrides: key.parameter_overrides.as_slice(),
             initial_inputs: key.initial_inputs.as_slice(),
-            model: rumoca_sim::runtime_fmi_component_wire(model)
+            model: rumoca_sim::retained_fmi_component_wire(&root)
                 .map_err(|error| ModelicaCacheWriteError::ConstructionWire(error.to_string()))?,
         };
         encode_record(&record, limits)
@@ -1120,8 +1121,12 @@ mod tests {
         let mut session = rumoca_compile::Session::new(rumoca_compile::SessionConfig::default());
         session.add_document("CacheProbe.mo", "model CacheProbe parameter Real gain = 3.5; Real x(start=42, fixed=true); equation der(x) = -gain*x; end CacheProbe;").unwrap();
         let compiled = session.compile_model("CacheProbe").unwrap();
-        rumoca_sim::prepare_fmi_component(&compiled.dae, &rumoca_sim::SimOptions::default())
-            .unwrap()
+        let (_, _, options) = super::super::live_stepper_options(solver::RuntimeProfile {
+            live: true,
+            predicted: false,
+        })
+        .unwrap();
+        rumoca_sim::prepare_fmi_component(&compiled.dae, &options).unwrap()
     }
 
     fn record(
@@ -1146,6 +1151,7 @@ mod tests {
             Vec<(String, u64)>,
         >,
     ) -> Vec<u8> {
+        let root = record.model.runtime_view().retain_assertion_root();
         let wire = PreparedSolveDiskRecord {
             compiler_identity: record.compiler_identity.clone(),
             version: record.version,
@@ -1153,7 +1159,7 @@ mod tests {
             solver_id: &record.solver_id,
             parameter_overrides: &record.parameter_overrides,
             initial_inputs: &record.initial_inputs,
-            model: rumoca_sim::runtime_fmi_component_wire(&record.model).unwrap(),
+            model: rumoca_sim::retained_fmi_component_wire(&root).unwrap(),
         };
         serde_json::to_vec(&wire).unwrap()
     }
@@ -1401,7 +1407,7 @@ mod tests {
                         )
                         .unwrap()
                         .unwrap();
-                        assert_eq!(loaded.runtime_view().model().initial_y, [42.0]);
+                        assert_eq!(loaded.runtime_view().model().initial_y.as_slice(), &[42.0]);
                         matching_keys += 1;
                     }
                 }
@@ -1508,8 +1514,9 @@ mod tests {
         let model = PreparedSolveCache::load_disk_at(&storage, &handle, &key, limits)
             .unwrap()
             .unwrap();
-        assert_eq!(model.runtime_view().model().initial_y, [42.0]);
-        assert_eq!(model.runtime_view().model().parameters, [3.5]);
+        let model = model.runtime_view().model();
+        assert_eq!(model.initial_y.as_slice(), &[42.0]);
+        assert_eq!(model.parameters.as_slice(), &[3.5]);
         assert!(
             PreparedSolveCache::load_disk_at(
                 &storage,

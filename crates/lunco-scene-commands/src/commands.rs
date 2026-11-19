@@ -3005,7 +3005,7 @@ mod tests {
             .world_mut()
             .spawn((
                 RigidBody::Kinematic,
-                AngularVelocity(DVec3::new(1.0, 2.0, 3.0)),
+                AngularVelocity(Vec3::new(1.0, 2.0, 3.0)),
                 JustMovedKinematic {
                     restore: Some(RigidBody::Dynamic),
                     angular_pulse: true,
@@ -3021,7 +3021,7 @@ mod tests {
         );
         assert_eq!(
             app.world().get::<AngularVelocity>(body).unwrap().0,
-            DVec3::ZERO
+            Vec3::ZERO
         );
         assert!(app.world().get::<JustMovedKinematic>(body).is_none());
     }

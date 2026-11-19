@@ -1,6 +1,6 @@
 # 29 — Rumoca runtime contracts
 
-LunCoSim uses Rumoca 0.10.2 with one dependency revision across compilation,
+LunCoSim uses Rumoca 0.10.4 with one dependency revision across compilation,
 AST tools, lowering, simulation, and native execution. The LunCoSim fork supplies
 compile source-closure provenance, prepared FMI session construction,
 cooperative evaluation cancellation, and scoped retained-output admission.
@@ -176,7 +176,7 @@ editor sibling overlays.
 
 The worker prepares one checked `FmiComponent`, borrowing it for live session
 construction. Its FMI inventory and executable model come from the same
-correlated lowering. Prepared cache version 13 stores the exact clean compiler
+correlated lowering. Prepared cache version 14 stores the exact clean compiler
 build identity and canonical typed FMI
 construction wire through a bounded JSON persistence adapter and zstd. Loading
 replays Rumoca's checked construction; unsupported versions, malformed metadata,
@@ -254,7 +254,7 @@ source spans and portable content identities address those retained bytes.
 The native indexer writes the same paired-source record shape. Empty source sets
 and read or parse failures reject admission before publishing artifacts. The CLI and native workbench provisioning adapter invoke the same indexer;
 compiler and UI hosts consume its generated artifacts.
-The artifact tag is `rumoca-0.10.2+bincode2-ast3`. Native and browser decoders require
+The artifact tag is `rumoca-0.10.4+bincode2-ast4`. Native and browser decoders require
 complete records and full byte consumption; a partial bundle is never installed.
 Class documentation reads each exact parsed declaration and consumes Rumoca's
 decoded strings once. Equal short names in different packages retain their own
@@ -281,7 +281,8 @@ Explicit slower exchanges are validated integer multiples. The worker receives
 derived start/stop seconds and returns its actual accepted solver coordinate;
 transaction validation never fabricates a corrected output timestamp. See
 [architecture 19](19-unified-time-and-clock.md) for pause, reset and speed semantics.
-Fixed RK4 applies exactly the configured step lattice. It uses
+Rumoca's `FixedRk4Integrator` advances the continuous state and samples the accepted
+interval. LunCoSim admits and selects the fixed communication lattice. It uses
 `FmiRuntimeView::validate_parameter_only_events` to admit parameter-dependent
 assertions and settled parameter-only discrete equations through Rumoca's shared
 ME-EVENT-003 proof. Assertions remain executable at initialization and parameter
@@ -346,8 +347,12 @@ paused barrier held; only the exact current result releases it.
 
 Structured document edits splice the original source spans; untouched bytes,
 comments, and formatting are preserved. Only new nodes use the local emitter.
-Connect annotation routing has one parser-backed source reader in
-`lunco-modelica-index::annotation_source`.
+Class edits use Rumoca's declaration span, including qualifiers and the
+terminating semicolon.
+Rumoca retains authored annotations on `Equation::Connect`. The canvas
+projects route geometry from that annotation through
+`lunco_modelica_index::connection_routes`. Route edits also update the
+annotation in the document's installed AST.
 
 Rumoca lint jobs capture the document’s source generation with its text.
 Completed jobs publish only for that same current source generation; parser
@@ -367,9 +372,9 @@ that consumer and its negative cases.
 
 ## Ownership review
 
-The reviewed release is upstream `v0.10.2` (`276e82bd`); upstream main was
-`0b249f0f` on 2026-10-11. The pinned fork also includes upstream's
-[external-function binary cache fix](https://github.com/CogniPilot/rumoca/commit/4afaf0af02dc1fbce0a189771434de49b27bab20).
+The pinned fork includes upstream [Rumoca v0.10.4](https://github.com/CogniPilot/rumoca/releases/tag/v0.10.4) (`9c8c56fcd`).
+The prepared-solve cache writes Rumoca's retained FMI wire and replays each
+component through Rumoca's checked FMI constructor.
 Parsed AST fields must be serialized completely for positional readers.
 The Diffsol backend directly depends on the corrected source retained in the
 pinned Rumoca repository. Downstream Git consumers receive its accepted-state,
@@ -387,7 +392,8 @@ endpoint substitution.
 | FMI preparation and ordinary sessions | `rumoca_sim::prepare_fmi_component` and `SimulationSession::new` | Cache checked components and select registered live solver capabilities. |
 | Live scalar units, descriptions, and bounds | `FmiComponent::variables()` and `FmiVariable::scalar_names()` | Carry exact compiled facts through worker admission; keep USD provenance and channel retention at their application owners. |
 | Retained trajectory units and descriptions | `SimResult::variable_meta` and `rumoca_sim::build_variable_meta` | Store exact per-run series facts with completed artifacts; graphs consume retained facts. |
-| Component initialization, input transactions, algebraic refresh and observations | Rumoca Model Exchange host (`MeRetainedComponent` / `MeSimulationSession`) | Both adaptive and fixed sessions use this owner. Fixed RK4 supplies its numerical plugin through the retained derivative capability; initial equations run before the first observation. |
+| Component initialization, input transactions, algebraic refresh and observations | Rumoca Model Exchange host (`MeRetainedComponent` / `MeSimulationSession`) | Both live sessions use this owner. Initial equations run before the first observation. |
+| Classical RK4 stages and continuous extension | `rumoca_solver::fmi_me::fixed_step::FixedRk4Integrator` | Provide the admitted time origin and cadence. |
 | Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps, use Rumoca's parameter-only event proof, and reject external tables. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |
@@ -493,27 +499,9 @@ the absence of an authored default; a start guess is not a causal input binding.
 An authored non-literal binding stays unresolved in numeric authoring metadata;
 it never falls through to a start value.
 
-### Candidates for further upstream ownership
-
-- A persistent fixed-step Model Exchange backend could move the generic RK4
-  loop into Rumoca. The released `fmi_me::fixed_step::fixed_step_rk4` is a
-  finite batch driver starting at zero and recording each step; it does not
-  provide the open session, changing input, or step-lattice API used here.
-  `MeIntegratorBackend` is the appropriate extension boundary. Solver selection,
-  prediction admission, and ECS synchronization remain application-owned.
-- `Equation::Connect` should retain its authored annotation in the parsed AST.
-  The inspected release and main store only endpoints. The current source-span
-  annotation reader and source-preserving edit path remain necessary until the
-  parser represents that field.
-- The fork's prepared FMI borrowing/replay, exact compile source provenance,
-  cancellation, and retained-output admission should be upstream contracts.
-  The inspected main does not expose the equivalent public construction and
-  guard surface consumed by this host. Their owning Rumoca crates remain the
-  correct implementation location.
-- Upstream main exposes trajectory sensitivities, adjoint objective gradients,
-  and A/B/C/D linearization. New numerical-analysis tools should consume those
-  checked Rumoca APIs when that revision is admitted; application code should
-  supply experiment orchestration and typed result presentation.
+Rumoca exposes checked trajectory sensitivities, adjoint objective gradients,
+and A/B/C/D linearization. Application numerical-analysis tools supply experiment
+orchestration and typed result presentation around those APIs.
 
 Verification covers decoded strings and complete expression metadata, source
 index reconciliation, fixed-step/algebraic math, and deterministic input

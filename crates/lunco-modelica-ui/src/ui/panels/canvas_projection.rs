@@ -19,6 +19,7 @@ use bevy_egui::egui;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use lunco_modelica_index::connection_routes::{connect_line_routes, connection_key};
 use lunco_modelica_index::visual_diagram::{VisualDiagram, library_class_library};
 
 // ---------------------------------------------------------------------------
@@ -66,32 +67,6 @@ impl Default for DiagramAutoLayoutSettings {
     }
 }
 
-/// Build a lookup of authored `connect(...) annotation(Line(...))` routes.
-/// The shared source projection owns the parser because the Modelica AST does
-/// not retain connect-equation annotations in the current Rumoca API.
-pub(crate) fn scan_connect_annotations(
-    ast: &rumoca_compile::parsing::ast::StoredDefinition,
-    source: &str,
-    target_class: Option<&str>,
-) -> std::collections::HashMap<
-    ((String, String), (String, String)),
-    lunco_modelica_ast::annotations::LineRoute,
-> {
-    lunco_modelica_index::annotation_source::connect_line_routes(ast, source, target_class)
-}
-
-fn canonical_edge_key(
-    a_inst: &str,
-    a_port: &str,
-    b_inst: &str,
-    b_port: &str,
-) -> ((String, String), (String, String)) {
-    // Sort the pair so the two orderings hash to the same key.
-    let a = (a_inst.to_string(), a_port.to_string());
-    let b = (b_inst.to_string(), b_port.to_string());
-    if a <= b { (a, b) } else { (b, a) }
-}
-
 /// Default cap for the "don't project absurdly huge models" guard.
 /// Catches obvious mistakes (importing a whole source library subpackage into
 /// a diagram viewer) without getting in the way of real engineering
@@ -126,18 +101,13 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 pub fn import_model_to_diagram_from_ast(
     ast: std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
     snapshot: Arc<crate::diagram::DiagramSnapshot>,
-    source: &str,
     max_nodes: usize,
     layout: &DiagramAutoLayoutSettings,
 ) -> Result<VisualDiagram, String> {
     use crate::diagram::ModelicaComponentBuilder;
-    let target_class = Some(snapshot.target.as_str());
     let graph =
         ModelicaComponentBuilder::from_snapshot(Arc::clone(&ast), Arc::clone(&snapshot)).build();
-    // Authored connection-route annotations are read from the source span by
-    // the shared annotation projection. The graph itself still comes from
-    // the parsed AST, so source and semantic topology remain separate concerns.
-    let waypoint_map = scan_connect_annotations(&ast, source, target_class);
+    let waypoint_map = connect_line_routes(&ast, &snapshot.target);
 
     // An empty semantic graph is a valid equation-only class. Do not scan raw
     // source text here: a scanner cannot obey Modelica class scope and would
@@ -372,7 +342,10 @@ pub fn import_model_to_diagram_from_ast(
             }
             diagram.add_edge(src_id, src_port.clone(), tgt_id, tgt_port.clone());
             // Attach authored waypoints if the source had them.
-            let key = canonical_edge_key(src_short, &src_port, tgt_short, &tgt_port);
+            let key = connection_key(
+                (src_short.to_owned(), src_port.clone()),
+                (tgt_short.to_owned(), tgt_port.clone()),
+            );
             if let Some(route) = waypoint_map.get(&key) {
                 if let Some(last) = diagram.edges.last_mut() {
                     last.waypoints = route.points.clone();
@@ -441,7 +414,6 @@ mod composite_slim_slice_tests {
 
     fn project_fixture(
         ast: Arc<rumoca_compile::parsing::ast::StoredDefinition>,
-        source: &str,
         max_nodes: usize,
         target: Option<&str>,
         layout: &DiagramAutoLayoutSettings,
@@ -460,7 +432,7 @@ mod composite_slim_slice_tests {
             &target,
             crate::diagram::DiagramScope::ComponentGraph,
         )?;
-        import_model_to_diagram_from_ast(ast, Arc::new(snapshot), source, max_nodes, layout)
+        import_model_to_diagram_from_ast(ast, Arc::new(snapshot), max_nodes, layout)
     }
 
     #[test]
@@ -508,7 +480,6 @@ end Unselected;
         let ast = Arc::new(rumoca_phase_parse::parse_to_ast(source, "facts.mo").unwrap());
         let diagram = project_fixture(
             ast,
-            source,
             DEFAULT_MAX_DIAGRAM_NODES,
             Some("Root"),
             &DiagramAutoLayoutSettings::default(),
@@ -552,7 +523,6 @@ end Unselected;
         let ast = Arc::new(rumoca_phase_parse::parse_to_ast(source, "conditional.mo").unwrap());
         let diagram = project_fixture(
             ast,
-            source,
             DEFAULT_MAX_DIAGRAM_NODES,
             Some("Root"),
             &DiagramAutoLayoutSettings::default(),
@@ -620,7 +590,6 @@ end CompositeFixture;
         let layout = DiagramAutoLayoutSettings::default();
         let diagram = project_fixture(
             ast,
-            &slim,
             DEFAULT_MAX_DIAGRAM_NODES,
             Some("CompositeFixture.RocketStage"),
             &layout,
@@ -644,9 +613,12 @@ annotation(
 );
 end GeneratedRoot;
 
+connector UnitInput = input Real;
+connector UnitOutput = output Real;
+
 model Unit_One
-  input Real input_a;
-  output Real output_b;
+  UnitInput input_a;
+  UnitOutput output_b;
 equation
   output_b = input_a;
 annotation(
@@ -661,7 +633,6 @@ end Unit_One;
         );
         let diagram = project_fixture(
             ast,
-            source,
             DEFAULT_MAX_DIAGRAM_NODES,
             Some("GeneratedRoot"),
             &DiagramAutoLayoutSettings::default(),
@@ -712,7 +683,6 @@ end Unit_One;
         );
         let diagram = project_fixture(
             ast,
-            source,
             DEFAULT_MAX_DIAGRAM_NODES,
             Some("GeneratedRoot"),
             &DiagramAutoLayoutSettings::default(),
@@ -748,7 +718,7 @@ end Unit_One;
         let layout = DiagramAutoLayoutSettings::default();
         let project = |src: &str, target: Option<&str>| -> usize {
             let ast = std::sync::Arc::new(rumoca_phase_parse::parse_to_ast(src, "x.mo").unwrap());
-            project_fixture(ast, src, DEFAULT_MAX_DIAGRAM_NODES, target, &layout, full)
+            project_fixture(ast, DEFAULT_MAX_DIAGRAM_NODES, target, &layout, full)
                 .map(|d| d.nodes.len())
                 .unwrap_or(0)
         };

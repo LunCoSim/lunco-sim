@@ -142,7 +142,6 @@ fn enrich(
                 match crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                     ast.clone(),
                     Arc::new(snapshot),
-                    &source,
                     *remaining,
                     layout,
                 ) {
@@ -395,7 +394,6 @@ end Parts;
         let diagram = crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
             ast,
             Arc::new(snapshot),
-            source,
             100,
             &layout,
         )

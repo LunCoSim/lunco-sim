@@ -17,7 +17,7 @@ end BoundsFixture;
 fn bounds_extraction_finds_valve_opening_min_max() {
     let ast = rumoca_phase_parse::parse_to_ast(SOURCE, "bounds_fixture.mo").expect("parses");
     let mut index = lunco_modelica_index::index::ModelicaIndex::new();
-    index.rebuild_from_ast(&ast, SOURCE);
+    index.rebuild_from_ast(&ast);
     let entry = index
         .find_component("BoundsFixture.Valve", "opening")
         .expect("opening not in index");
@@ -43,7 +43,7 @@ end DescriptionFixture;
     let ast = rumoca_phase_parse::parse_to_ast(source, "description_fixture.mo")
         .expect("description fixture parses");
     let mut index = lunco_modelica_index::index::ModelicaIndex::new();
-    index.rebuild_from_ast(&ast, source);
+    index.rebuild_from_ast(&ast);
     for (name, needle) in [
         ("max_rate", "mass flow"),
         ("throttle", "Throttle"),

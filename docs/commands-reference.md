@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**322 commands** across **59** crates. All documented.
+**334 commands** across **62** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -61,6 +61,10 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-doc-bevy`](#lunco-doc-bevy) (11 commands)
 
+**Networking**
+
+- [`lunco-networking`](#lunco-networking) (2 commands)
+
 **Time & clock**
 
 - [`lunco-time`](#lunco-time) (6 commands)
@@ -104,6 +108,8 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-modelica-runtime`](#lunco-modelica-runtime) (1 command)
 - [`lunco-modelica-source-roots`](#lunco-modelica-source-roots) (1 command)
 - [`lunco-modelica-ui-core`](#lunco-modelica-ui-core) (3 commands)
+- [`lunco-networking-core`](#lunco-networking-core) (1 command)
+- [`lunco-networking-sync`](#lunco-networking-sync) (9 commands)
 - [`lunco-notifications-core`](#lunco-notifications-core) (1 command)
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
@@ -856,6 +862,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `doc_id` | `DocumentId` |  Document to focus in; unassigned (`0` over the API) = active. |
 | `name` | `String` |  Component instance name as it appears in the diagram. |
 | `padding` | `f32` |  Margin in canvas units to leave around the component. |
+| `select` | `bool` |  Also select this instance in the component inspector. |
 
 #### `FormatDocument`
 
@@ -1592,6 +1599,31 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `doc_id` | `DocumentId` |  The document whose most recent history group should be undone. |
+
+## Networking
+
+### `lunco-networking` <a id="lunco-networking"></a>
+
+#### `JoinServer`
+
+ Join a networked session at `address` (`host:port` — a hostname like
+ `lunica.lunco.space:5888` or an `ip:port`). The same typed command the
+ in-sim *Connect* button, the HTTP API, MCP, and the CLI all dispatch — the
+ networking internals establish the connection. Replaces any current one.
+
+- *defined in:* `crates/lunco-networking/src/client.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `address` | `String` |   |
+| `digest` | `String` |  Optional self-signed cert SHA-256 digest to pin (hex; colons/whitespace  tolerated). Empty ⇒ fall back to the ambient digest source  ([`client_cert_digest`]: `LUNCO_CERT_DIGEST` on native, the URL `#hash` on  wasm). A browser joining a self-signed LAN host by IP must supply this. |
+
+#### `LeaveServer`
+
+ Leave the current session and return to single-player (local sandbox).
+
+- *defined in:* `crates/lunco-networking/src/client.rs`
+- *fields:* none — call with `LeaveServer` (no params)
 
 ## Time & clock
 
@@ -2909,6 +2941,122 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `source` | `String` |  Stable Modelica source asset URI or native file path. |
 | `class` | `Option < String >` |  Exact qualified class from this source, if the caller selected one. |
+
+### `lunco-networking-core` <a id="lunco-networking-core"></a>
+
+#### `SetVisualLead`
+
+ Live-tune [`VisualLeadSettings`] (all fields optional → set only what you pass):
+ `SetVisualLead {enabled?, yaw_rate?, speed?, lead_secs?}`. Lets you A/B the
+ render-lead strength while driving, no rebuild.
+
+- *defined in:* `crates/lunco-networking-core/src/prediction.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `Option < bool >` |   |
+| `yaw_rate` | `Option < f32 >` |   |
+| `speed` | `Option < f32 >` |   |
+| `lead_secs` | `Option < f32 >` |   |
+
+### `lunco-networking-sync` <a id="lunco-networking-sync"></a>
+
+#### `MountCachedScenarioTwin`
+
+ Mount one exact cached scenario revision for a Rhai-authored scene action.
+
+- *defined in:* `crates/lunco-networking-sync/src/scenario_sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `scenario_id` | `String` |  Stable scenario UUID from the cache catalog. |
+| `revision` | `String` |  Exact lowercase SHA-256 revision selected by the authored action. |
+| `name` | `String` |  Logical name for the mounted Twin root. |
+| `scene` | `String` |  Manifest-relative scene path admitted from this cached revision. |
+
+#### `PromoteScenario`
+
+ Command: materialize the currently-loaded downloaded scenario into an
+ **editable** on-disk Twin at `folder`, add it to the workspace, and swap the
+ running scene to it. The counterpart to the default read-only consume — "keep
+ & edit this scenario". Empty `folder` = a GUI should present a folder picker
+ first. Native-only in effect: web has no ambient folder filesystem (File
+ System Access is a TODO); the wasm path logs and no-ops.
+
+ Local action (not networked) — it promotes *this* peer's local download.
+
+- *defined in:* `crates/lunco-networking-sync/src/scenario_sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `folder` | `String` |  Target folder that becomes the new Twin's root. |
+
+#### `SetAllowFreeMovement`
+
+ Set Allow Free Movement command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetFollowMode`
+
+ Set Follow Mode command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetFollowOptIn`
+
+ Set Follow Opt-In command: local consent to be locked by a broadcasting tutor.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetObserveMode`
+
+ Set Observe Mode command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SetTargetClient`
+
+ Set Target Client command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Option < u64 >` |   |
+
+#### `SetTeachMode`
+
+ Set Teach Mode command.
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `enabled` | `bool` |   |
+
+#### `SharePerspective`
+
+ Share Perspective command (Look-At).
+
+- *defined in:* `crates/lunco-networking-sync/src/sync.rs`
+- *fields:* none — call with `SharePerspective` (no params)
 
 ### `lunco-notifications-core` <a id="lunco-notifications-core"></a>
 
@@ -4770,7 +4918,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 322 commands from the runtime schema; scanned 1109 .rs files for docs (0 parse failure(s) skipped).
+<!-- 334 commands from the runtime schema; scanned 1111 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, JoinServer, LeaveServer, MountCachedScenarioTwin, PluginCommand, PromoteScenario, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, SetAllowFreeMovement, SetFollowMode, SetFollowOptIn, SetObserveMode, SetTargetClient, SetTeachMode, SetVisualLead, SharePerspective, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

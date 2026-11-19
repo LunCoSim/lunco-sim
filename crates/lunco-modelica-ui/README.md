@@ -226,7 +226,7 @@ roots, Editor documents, or scene composition.
 
 ## Key Dependencies
 
-- `rumoca-compile`, `rumoca-phase-parse` — Modelica compilation and parsing (Rumoca 0.10.2)
+- `rumoca-compile`, `rumoca-phase-parse` — Modelica compilation and parsing (Rumoca 0.10.4)
 - `lunco-workbench` — docking, persistence, panel system
 - `lunco-canvas` — interactive diagram rendering substrate
 - `lunco-viz` — shared line and multi-series trajectory rendering

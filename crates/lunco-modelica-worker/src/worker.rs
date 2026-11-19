@@ -32,7 +32,7 @@ use lunco_modelica_solver::simulation_session::LiveStepper;
 use rumoca_core::VarName;
 
 #[cfg(not(target_arch = "wasm32"))]
-const PREPARED_SOLVE_CACHE_VERSION: u32 = 13;
+const PREPARED_SOLVE_CACHE_VERSION: u32 = 14;
 
 mod initialization;
 #[cfg(not(target_arch = "wasm32"))]
@@ -422,16 +422,15 @@ fn build_prepared_stepper(
             .flat_map(|variable| {
                 variable
                     .scalar_names()
-                    .iter()
                     .enumerate()
                     .map(move |(index, name)| {
                         (
-                            name.clone(),
+                            name,
                             lunco_modelica_runtime::ModelicaScalarMetadata {
                                 unit: variable.unit().map(str::to_owned),
                                 description: variable.description().map(str::to_owned),
-                                minimum: variable.minimum().map(|values| values[index]),
-                                maximum: variable.maximum().map(|values| values[index]),
+                                minimum: variable.minimum().and_then(|values| values.value(index)),
+                                maximum: variable.maximum().and_then(|values| values.value(index)),
                             },
                         )
                     })

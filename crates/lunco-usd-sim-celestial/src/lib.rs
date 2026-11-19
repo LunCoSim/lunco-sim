@@ -1145,7 +1145,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Assets<lunco_usd_bevy_stage::UsdStageAsset>>()
             .init_resource::<PendingCelestialProjection>()
-            .insert_non_send_resource(lunco_usd_bevy_stage::canonical::CanonicalStages::default())
+            .insert_non_send(lunco_usd_bevy_stage::canonical::CanonicalStages::default())
             .add_systems(Update, project_celestial_comms_prims);
         let preview = app.world_mut().spawn(UsdPreviewOnly).id();
         let prim = || UsdPrimPath {

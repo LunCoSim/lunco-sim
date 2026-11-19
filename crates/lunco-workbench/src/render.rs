@@ -3613,12 +3613,24 @@ mod tests {
         );
     }
 
+    fn recent_history_test_events()
+    -> Vec<(StatusEventKey, lunco_status_core::status_bus::StatusEvent)> {
+        let mut bus = lunco_status_core::status_bus::StatusBus::default();
+        for event in 0..40 {
+            bus.push(
+                "runtime",
+                lunco_status_core::status_bus::StatusLevel::Info,
+                format!("event-{event:02}"),
+            );
+        }
+        status_history_snapshot(&bus)
+    }
+
     #[test]
     fn recent_history_log_extends_and_copies_offscreen_text_read_only() {
-        let history_text = (0..40)
-            .rev()
-            .map(|event| format!("[INFO] runtime\nevent-{event:02}\n\n"))
-            .collect::<String>();
+        let history = recent_history_test_events();
+        let history_text = status_history_copy_text(&history);
+        let theme = lunco_theme::Theme::default();
         let context = egui::Context::default();
         let frame = |events: Vec<egui::Event>| {
             let mut response = None;
@@ -3636,7 +3648,9 @@ mod tests {
                         egui::ScrollArea::vertical()
                             .id_salt("recent_history_log_test")
                             .max_height(80.0)
-                            .show(ui, |ui| render_status_history_log(ui, &history_text))
+                            .show(ui, |ui| {
+                                render_status_history_log(ui, &history_text, &history, &theme)
+                            })
                             .inner,
                     );
                 },
@@ -3701,10 +3715,9 @@ mod tests {
 
     #[test]
     fn recent_history_log_shift_click_extends_the_existing_selection() {
-        let history_text = (0..40)
-            .rev()
-            .map(|event| format!("[INFO] runtime\nevent-{event:02}\n\n"))
-            .collect::<String>();
+        let history = recent_history_test_events();
+        let history_text = status_history_copy_text(&history);
+        let theme = lunco_theme::Theme::default();
         let context = egui::Context::default();
         let mut time = 0.0_f64;
         let mut frame = |events: Vec<egui::Event>| {
@@ -3724,7 +3737,14 @@ mod tests {
                     let scroll = egui::ScrollArea::vertical()
                         .id_salt("recent_history_shift_click_test")
                         .max_height(80.0)
-                        .show(ui, |ui| Some(render_status_history_log(ui, &history_text)));
+                        .show(ui, |ui| {
+                            Some(render_status_history_log(
+                                ui,
+                                &history_text,
+                                &history,
+                                &theme,
+                            ))
+                        });
                     viewport = Some(scroll.inner_rect);
                 },
             );
@@ -3783,7 +3803,9 @@ mod tests {
                 egui::ScrollArea::vertical()
                     .id_salt("recent_history_shift_click_test")
                     .max_height(80.0)
-                    .show(ui, |ui| render_status_history_log(ui, &history_text));
+                    .show(ui, |ui| {
+                        render_status_history_log(ui, &history_text, &history, &theme)
+                    });
             },
         );
         output.textures_delta.clear();
@@ -3804,10 +3826,9 @@ mod tests {
 
     #[test]
     fn recent_history_log_drag_autoscrolls_and_extends_selection_offscreen() {
-        let history_text = (0..40)
-            .rev()
-            .map(|event| format!("[INFO] runtime\nevent-{event:02}\n\n"))
-            .collect::<String>();
+        let history = recent_history_test_events();
+        let history_text = status_history_copy_text(&history);
+        let theme = lunco_theme::Theme::default();
         let context = egui::Context::default();
         let mut time = 0.0_f64;
         let mut frame = |events: Vec<egui::Event>| {
@@ -3827,10 +3848,12 @@ mod tests {
                     let scroll = egui::ScrollArea::vertical()
                         .id_salt("recent_history_autoscroll_test")
                         .max_height(80.0)
-                        .show(ui, |ui| Some(render_status_history_log(ui, &history_text)));
+                        .show(ui, |ui| {
+                            render_status_history_log(ui, &history_text, &history, &theme)
+                        });
                     snapshot = Some((
                         scroll.inner_rect,
-                        scroll.inner.as_ref().unwrap().id,
+                        scroll.inner.id,
                         scroll.id,
                         scroll.state,
                         scroll.content_size,
@@ -3890,7 +3913,9 @@ mod tests {
                 egui::ScrollArea::vertical()
                     .id_salt("recent_history_autoscroll_test")
                     .max_height(80.0)
-                    .show(ui, |ui| render_status_history_log(ui, &history_text));
+                    .show(ui, |ui| {
+                        render_status_history_log(ui, &history_text, &history, &theme)
+                    });
             },
         );
         output.textures_delta.clear();
