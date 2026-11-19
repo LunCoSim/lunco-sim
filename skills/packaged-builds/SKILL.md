@@ -79,10 +79,18 @@ To remove this integration after deleting the AppImage, remove
 `icons/hicolor/256x256/apps/io.github.luncosim.AppImage.png` under that data
 directory.
 
+The AppImage also contains a root `.DirIcon` and a PNG matching the desktop
+entry's `Icon` value. File managers can show that icon for the AppImage file
+when they support AppImage thumbnails.
+
 Verify the artifact itself, its desktop/icon contract, launch path, scene load,
 API readiness, and one relevant user workflow. Linux AppImages remain writable
 and must be relaunched from that same path for updater testing. The updater
 feed is machine-only; it is not the human installer source.
+Use an empty shared asset cache when checking packaged fonts. Verify that
+`ListDatasets` reports `engine/fonts/dejavu_sans` as installed and confirm the
+toolbar glyphs in a window. The installer must carry both the TTF and its
+sibling `.DejaVuSans.ttf.integrity` marker.
 
 Windows desktop startup must not create a console by default. Check
 **Settings → Debug → Show console on next start** across restarts and the

@@ -18,8 +18,8 @@
 #![cfg_attr(not(target_arch = "wasm32"), allow(clippy::disallowed_methods))]
 
 use lunco_assets_datasets::{
-    AssetEntry, AssetManifest, entry_artifact_path, entry_dest_path, installed_destination_present,
-    processed_output_present,
+    AssetEntry, AssetManifest, entry_artifact_path, entry_dest_path,
+    extracted_file_integrity_marker, installed_destination_present, processed_output_present,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_download::download;
@@ -497,6 +497,7 @@ fn stage_engine_bundle(
     destination: &std::path::Path,
 ) -> Result<(), String> {
     let mut staged = std::collections::BTreeSet::new();
+    let mut artifacts = 0;
     for (group, path) in lunco_assets_core::engine_manifests().map_err(|e| e.to_string())? {
         let manifest = AssetManifest::from_file(&path).map_err(|e| format!("{group}: {e}"))?;
         for (key, entry) in manifest.assets {
@@ -507,19 +508,6 @@ fn stage_engine_bundle(
                 .map_err(|e| format!("{group}/{key}: invalid source path: {e}"))?;
             let artifact = entry_artifact_path(&entry, cache_root, None)
                 .map_err(|e| format!("{group}/{key}: invalid artifact path: {e}"))?;
-            let relative = artifact.strip_prefix(cache_root).map_err(|_| {
-                format!(
-                    "{group}/{key}: bundle artifact {} is outside cache {}",
-                    artifact.display(),
-                    cache_root.display()
-                )
-            })?;
-            let relative = lunco_assets_path::slashed(relative);
-            if !staged.insert(relative.clone()) {
-                return Err(format!(
-                    "{group}/{key}: artifact path collides with another bundled dataset: {relative}"
-                ));
-            }
             let complete = match &entry.process {
                 Some(process) => processed_output_present(&artifact, process, Some(&source)),
                 None => installed_destination_present(&entry, &artifact),
@@ -530,12 +518,33 @@ fn stage_engine_bundle(
                     artifact.display()
                 ));
             }
-            copy_bundle_path(&artifact, &destination.join(&relative))
-                .map_err(|e| format!("{group}/{key}: cannot stage {}: {e}", artifact.display()))?;
-            println!("  staged {relative}");
+            let marker = if entry.process.is_none() {
+                extracted_file_integrity_marker(&entry, &artifact)
+            } else {
+                None
+            };
+            for path in std::iter::once(artifact).chain(marker) {
+                let relative = path.strip_prefix(cache_root).map_err(|_| {
+                    format!(
+                        "{group}/{key}: bundle file {} is outside cache {}",
+                        path.display(),
+                        cache_root.display()
+                    )
+                })?;
+                let relative = lunco_assets_path::slashed(relative);
+                if !staged.insert(relative.clone()) {
+                    return Err(format!(
+                        "{group}/{key}: bundle file collides with another bundled dataset: {relative}"
+                    ));
+                }
+                copy_bundle_path(&path, &destination.join(&relative))
+                    .map_err(|e| format!("{group}/{key}: cannot stage {}: {e}", path.display()))?;
+                println!("  staged {relative}");
+            }
+            artifacts += 1;
         }
     }
-    println!("staged {} artifact(s) for {binary}", staged.len());
+    println!("staged {artifacts} artifact(s) for {binary}");
     Ok(())
 }
 
