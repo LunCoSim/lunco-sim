@@ -141,8 +141,10 @@ camera. Start the first independent camera view from **Settings → HUD → + Ad
 camera view**; the menu shows the active count out of eight and disables the
 action at the limit. Each camera window keeps source, resolution and **Style**
 controls on one toolbar line, with the graph HUD frame and `+`/`×` buttons.
-Its image controls affect only that feed; depth range,
-noise, seed, animation, quantization and shader asset are live typed settings.
+Its image controls affect only that feed. Fixed color exposure (EV100), depth
+range, noise, seed, animation, quantization and shader asset are live typed settings.
+The main camera's fixed EV100 takes precedence over **Settings → General →
+Fixed viewport exposure**.
 See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)
 for owners, shader bindings, physical scope and completion events. Verify both
 actual rendered depth/noise and negative `SetCameraImageEffects` admissions;

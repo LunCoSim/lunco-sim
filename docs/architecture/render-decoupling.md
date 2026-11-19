@@ -92,6 +92,13 @@ view. Invalid ranges, noise fractions, quantization or targets reject before
 mutation. Source-camera settings affect its main viewport; each feed is an
 independent consumer with its own settings.
 
+Optional `exposure_ev100` sets a fixed photographic exposure for that output.
+The renderer applies it during native camera extraction, before lighting and
+tonemapping. The main viewport inherits the saved General setting when its
+camera's fixed EV100 is off. It uses scene exposure when both controls are off.
+Feeds with fixed EV100 off use their source exposure. These controls preserve
+the source's physical exposure and have no effect on the depth display.
+
 `lunco-render` owns this validated presentation intent. `lunco-render-bevy`
 converts it at the named GPU boundary and runs the standard-library
 `lunco://shaders/camera_sensor.wesl` after tonemapping. The existing scene-depth

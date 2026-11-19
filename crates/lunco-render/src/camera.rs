@@ -235,6 +235,41 @@ pub struct GraphicsCameraDefaults;
 #[reflect(Component)]
 pub struct EditorPreviewCamera;
 
+/// Application exposure override for the interactive scene viewport, in EV100.
+#[derive(
+    Resource, Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize,
+)]
+pub struct ViewportExposureSettings {
+    pub ev100: Option<f64>,
+}
+
+impl lunco_settings::SettingsSection for ViewportExposureSettings {
+    const KEY: &'static str = "viewport_exposure";
+
+    fn validate_section(&self) -> Result<(), String> {
+        exposure_multiplier(self.ev100)
+            .map(|_| ())
+            .map_err(str::to_owned)
+    }
+}
+
+/// Convert an operator EV100 override to Bevy's native f32 exposure multiplier.
+pub fn exposure_multiplier(ev100: Option<f64>) -> Result<Option<f32>, &'static str> {
+    let Some(ev100) = ev100 else {
+        return Ok(None);
+    };
+    let native_ev100 = ev100 as f32;
+    let exposure = Exposure {
+        ev100: native_ev100,
+    }
+    .exposure();
+    if native_ev100.is_finite() && exposure.is_finite() && exposure >= f32::MIN_POSITIVE {
+        Ok(Some(exposure))
+    } else {
+        Err("EV100 must produce a finite, positive exposure within the renderer's range")
+    }
+}
+
 impl Default for SceneCamera {
     fn default() -> Self {
         Self {

@@ -176,6 +176,32 @@ pub(crate) fn register_workspace_settings_menu(world: &mut World) {
 }
 
 fn render_global_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+    if let Some(mut exposure) = ctx
+        .resource::<lunco_render::camera::ViewportExposureSettings>()
+        .copied()
+    {
+        let inherited = ctx
+            .resource::<lunco_viewport_core::SceneViewport>()
+            .and_then(|viewport| viewport.active_camera)
+            .and_then(|camera| ctx.get::<bevy::camera::Exposure>(camera))
+            .map_or_else(
+                || bevy::camera::Exposure::default().ev100,
+                |exposure| exposure.ev100,
+            );
+        if lunco_workbench_widgets::fixed_exposure_ev100(
+            ui,
+            "Fixed viewport exposure",
+            &mut exposure.ev100,
+            f64::from(inherited),
+        ) {
+            match lunco_render::camera::exposure_multiplier(exposure.ev100) {
+                Ok(_) => ctx.set_resource(exposure),
+                Err(reason) => {
+                    ui.colored_label(ui.visuals().error_fg_color, reason);
+                }
+            }
+        }
+    }
     let Some(mut settings) = ctx.resource::<SceneLoadingSettings>().cloned() else {
         return;
     };

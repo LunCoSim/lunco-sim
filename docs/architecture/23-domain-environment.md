@@ -102,6 +102,12 @@ leave a camera under-exposed, because the two move together.
 angular diameter); EV 16 lands 0.13-albedo regolith at mid-gray.
 **Raise EV100 to darken the image, lower it to brighten.**
 
+**Settings → General → Fixed viewport exposure** sets a saved EV100 for the
+active scene viewport. A camera's fixed EV100 in **Image controls…** takes
+precedence. With both controls off, the viewport uses scene exposure. Camera
+feeds have independent exposure controls in **Style**. See
+[camera image controls](render-decoupling.md#camera-image-controls).
+
 > A non-lunar scene (the luncosim) deliberately `insert_resource`s its own **studio** values
 > before plugins are added, because the calibrated lunar pair crushes an editor's dark
 > blueprint ground to black. That is not a bug to "fix at the source" — a shared test scene

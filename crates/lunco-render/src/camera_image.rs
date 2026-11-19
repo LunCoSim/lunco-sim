@@ -15,6 +15,8 @@ pub enum CameraImageMode {
 #[serde(default)]
 pub struct CameraImageEffects {
     pub mode: CameraImageMode,
+    /// Fixed exposure in EV100. None inherits the exposure for this output.
+    pub exposure_ev100: Option<f64>,
     pub near_m: f64,
     pub far_m: f64,
     pub read_noise: f64,
@@ -31,6 +33,7 @@ impl Default for CameraImageEffects {
     fn default() -> Self {
         Self {
             mode: CameraImageMode::Color,
+            exposure_ev100: None,
             near_m: 0.1,
             far_m: 100.0,
             read_noise: 0.0,
@@ -46,6 +49,7 @@ impl Default for CameraImageEffects {
 }
 impl CameraImageEffects {
     pub fn validate(&self) -> Result<(), String> {
+        crate::camera::exposure_multiplier(self.exposure_ev100).map_err(str::to_owned)?;
         if !self.near_m.is_finite()
             || !self.far_m.is_finite()
             || self.near_m < 0.0

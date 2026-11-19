@@ -8,7 +8,8 @@ use bevy::core_pipeline::{
 };
 use bevy::prelude::*;
 use bevy::render::{
-    Render, RenderApp, RenderStartup, RenderSystems,
+    Extract, ExtractSchedule, Render, RenderApp, RenderStartup, RenderSystems,
+    camera::{ExtractedCamera, extract_cameras},
     extract_component::{
         ComponentUniforms, DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin,
         UniformComponentPlugin,
@@ -18,10 +19,16 @@ use bevy::render::{
         *,
     },
     renderer::{RenderContext, RenderDevice, ViewQuery},
+    sync_world::RenderEntity,
     view::{PostProcessBindGroupCache, PostProcessBindGroupCacheBuilder, ViewTarget},
 };
 use bevy::shader::ShaderDefVal;
+use lunco_render::camera::{
+    CameraRetiring, EditorPreviewCamera, SceneViewDemand, SceneViewOutput,
+    ViewportExposureSettings, exposure_multiplier,
+};
 use lunco_render::camera_image::{CameraImageEffects, CameraImageMode, CameraImagePresentation};
+use lunco_settings::AppSettingsExt;
 
 #[derive(Component, Clone, Copy, ExtractComponent, ShaderType)]
 #[extract_app(RenderApp)]
@@ -42,7 +49,8 @@ struct ImagePresentation(CameraImagePresentation);
 struct ImageSourceKey(String);
 
 pub(crate) fn build(app: &mut App) {
-    app.register_type::<CameraImageEffects>()
+    app.register_settings_section::<ViewportExposureSettings>()
+        .register_type::<CameraImageEffects>()
         .add_plugins((
             ExtractComponentPlugin::<ImageUniform>::default(),
             UniformComponentPlugin::<ImageUniform>::default(),
@@ -53,6 +61,10 @@ pub(crate) fn build(app: &mut App) {
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
         render
             .init_resource::<SpecializedRenderPipelines<ImagePipeline>>()
+            .add_systems(
+                ExtractSchedule,
+                extract_exposure_overrides.after(extract_cameras),
+            )
             .add_systems(RenderStartup, init_pipeline)
             .add_systems(Render, prepare.in_set(RenderSystems::PrepareBindGroups))
             .add_systems(
@@ -65,6 +77,51 @@ pub(crate) fn build(app: &mut App) {
             );
     }
 }
+
+/// Amend native exposure after Bevy extracts it from the source. The ordinary
+/// extraction supplies scene exposure again as soon as an override is cleared.
+fn extract_exposure_overrides(
+    settings: Extract<Res<ViewportExposureSettings>>,
+    cameras: Extract<
+        Query<
+            (
+                &RenderEntity,
+                &Camera,
+                Option<&SceneViewDemand>,
+                Option<&CameraImageEffects>,
+            ),
+            (
+                Or<(With<SceneViewDemand>, With<CameraImageEffects>)>,
+                Without<EditorPreviewCamera>,
+                Without<CameraRetiring>,
+            ),
+        >,
+    >,
+    mut commands: Commands,
+) {
+    let viewport_exposure = exposure_multiplier(settings.ev100).ok().flatten();
+    for (render_entity, camera, demand, effects) in &cameras {
+        if !camera.is_active {
+            continue;
+        }
+        let exposure = match effects.and_then(|effects| effects.exposure_ev100) {
+            Some(ev100) => exposure_multiplier(Some(ev100)).ok().flatten(),
+            None if demand.is_some_and(|view| view.output == SceneViewOutput::MainViewport) => {
+                viewport_exposure
+            }
+            None => None,
+        };
+        if let Some(exposure) = exposure {
+            let render_entity = render_entity.id();
+            commands.queue(move |world: &mut World| {
+                if let Some(mut camera) = world.get_mut::<ExtractedCamera>(render_entity) {
+                    camera.exposure = exposure;
+                }
+            });
+        }
+    }
+}
+
 fn sync_image_intent(
     sources: Query<(
         Entity,
@@ -101,21 +158,24 @@ fn sync_image_intent(
                 .entity(entity)
                 .try_insert((receipt.clone(), ImagePresentation(receipt)));
         }
-        if !effect.enabled() {
-            if shader.is_some() {
-                commands
-                    .entity(entity)
-                    .try_remove::<(ImageUniform, EffectShader, ImageSourceKey)>();
-            }
-            continue;
-        }
-        if let Err(error) = effect.validate() {
+        let shader_enabled = effect.enabled();
+        if (shader_enabled || effect.exposure_ev100.is_some())
+            && let Err(error) = effect.validate()
+        {
             if effect.is_changed() {
                 lunco_core::trigger_runtime_error(&mut commands, "camera-image-effects", error);
             }
             commands
                 .entity(entity)
                 .try_remove::<(ImageUniform, EffectShader, ImageSourceKey)>();
+            continue;
+        }
+        if !shader_enabled {
+            if shader.is_some() {
+                commands
+                    .entity(entity)
+                    .try_remove::<(ImageUniform, EffectShader, ImageSourceKey)>();
+            }
             continue;
         }
         let Some(viewport) = camera.physical_viewport_rect() else {

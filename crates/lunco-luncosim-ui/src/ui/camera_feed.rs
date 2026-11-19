@@ -1,4 +1,5 @@
 //! Independent camera windows over the capture owner's live render targets.
+use bevy::camera::Exposure;
 use bevy::ecs::message::{MessageCursor, Messages};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
@@ -674,6 +675,7 @@ pub(super) fn draw_camera_feed(
             Option<&Callsign>,
             Option<&CatalogEntryId>,
             Option<&CameraImageEffects>,
+            Option<&Exposure>,
         ),
         With<Projection>,
     >,
@@ -681,6 +683,8 @@ pub(super) fn draw_camera_feed(
     mut state: ResMut<CameraFeedUiState>,
     mut commands: Commands,
     selection: Res<lunco_usd_bevy_camera::camera_switch::CameraSelectionStatus>,
+    viewport_exposure: Res<lunco_render::camera::ViewportExposureSettings>,
+    exposures: Query<&Exposure>,
     authored_images: Query<(&bevy_hui::prelude::Tags, &InheritedVisibility)>,
 ) {
     let previous_layout_count = state.layouts.len();
@@ -695,7 +699,7 @@ pub(super) fn draw_camera_feed(
         .retain(|id, _| feeds.instances.contains_key(id));
     let mut candidates: Vec<_> = cameras
         .iter()
-        .map(|(id, name, callsign, catalog, _)| {
+        .map(|(id, name, callsign, catalog, ..)| {
             (
                 *id,
                 name.as_str().to_owned(),
@@ -790,7 +794,8 @@ pub(super) fn draw_camera_feed(
                     let mut effects=feed.effects.clone();
                     ui.menu_button("Style",|ui| {
                         let draft=state.shader_drafts.entry((false,*id)).or_insert_with(||effects.shader.clone());
-                        if image_controls(ui,&mut effects,draft) {
+                        let exposure = feed.render_camera().and_then(|camera| exposures.get(camera).ok());
+                        if image_controls(ui,&mut effects,draft, f64::from(exposure.copied().unwrap_or_default().ev100)) {
                             commands.trigger(SetCameraImageEffects{feed:Some(*id),source:None,settings:effects.clone()});
                         }
                     });
@@ -880,7 +885,7 @@ pub(super) fn draw_camera_feed(
         }
     }
     if state.main_open {
-        let source = cameras.iter().find(|(id, name, _, _, _)| {
+        let source = cameras.iter().find(|(id, name, ..)| {
             state.main_source.map_or_else(
                 || selection.active_name.as_deref() == Some(name.as_str()),
                 |source| source == **id,
@@ -895,7 +900,7 @@ pub(super) fn draw_camera_feed(
             .open(&mut open)
             .default_width(390.0)
             .show(ctx, |ui| {
-                if let Some((source, name, callsign, catalog, settings)) = source {
+                if let Some((source, name, callsign, catalog, settings, exposure)) = source {
                     ui.strong(entity_display_name(Some(name), callsign, catalog));
                     ui.label(name.as_str());
                     let mut effects = settings.cloned().unwrap_or_default();
@@ -903,7 +908,10 @@ pub(super) fn draw_camera_feed(
                         .shader_drafts
                         .entry((true, source.get()))
                         .or_insert_with(|| effects.shader.clone());
-                    if image_controls(ui, &mut effects, draft) {
+                    let inherited = viewport_exposure
+                        .ev100
+                        .unwrap_or_else(|| f64::from(exposure.copied().unwrap_or_default().ev100));
+                    if image_controls(ui, &mut effects, draft, inherited) {
                         commands.trigger(SetCameraImageEffects {
                             feed: None,
                             source: Some(*source),
@@ -922,6 +930,7 @@ fn image_controls(
     ui: &mut egui::Ui,
     effects: &mut CameraImageEffects,
     shader: &mut String,
+    inherited_ev100: f64,
 ) -> bool {
     ui.set_max_width(390.0);
     let mut changed = false;
@@ -933,6 +942,12 @@ fn image_controls(
             .selectable_value(&mut effects.mode, CameraImageMode::Depth, "Depth")
             .changed();
     });
+    changed |= lunco_workbench_widgets::fixed_exposure_ev100(
+        ui,
+        "Fixed color exposure",
+        &mut effects.exposure_ev100,
+        inherited_ev100,
+    );
     if effects.mode == CameraImageMode::Depth {
         ui.weak("Opaque axial depth · metres · near red → yellow → far green; sky black");
         ui.horizontal(|ui| {

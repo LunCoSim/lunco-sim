@@ -37,12 +37,17 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     log = output / "runtime.log"
-    with ProductionSession(args.port, windowed=True, log_path=log, extra_args=["--no-throttle", "--render-quality", "balanced"]) as session:
-        execute(session, "OpenFile", path=str(ROOT / "assets/scenes/tests/sun_disc_occlusion.usda"))
+    scene = ROOT / "assets/scenes/tests/sun_disc_occlusion.usda"
+    with ProductionSession(
+        args.port,
+        windowed=True,
+        log_path=log,
+        extra_args=("--no-throttle", "--render-quality", "balanced", "--scene", str(scene)),
+    ) as session:
+        wait_for_scene(session, str(scene), 60)
         docs = await_value(lambda: execute(session, "ListOpenDocuments")["open_documents"],
                            lambda ds: any(d["title"] == "sun_disc_occlusion" for d in ds), "fixture document")
         doc = next(d["doc_id"] for d in docs if d["title"] == "sun_disc_occlusion")
-        wait_for_scene(session, str(ROOT / "assets/scenes/tests/sun_disc_occlusion.usda"), 60)
         wait_for_scene_time_selection(session, log, 60)
         execute(session, "SetTimeTransport", playing=True)
         def identities():
@@ -55,7 +60,7 @@ def main():
         execute(session, "RunScenario", target=camera,
                 source=(ROOT / "assets/scenarios/tests/camera_feed_live.rhai").read_text(),
                 params={"other_camera": probe, "non_camera": occluder})
-        wait_for_authored_verdict(session, title="LIVE CAMERA VIEWS", check_count=29, offset=offset)
+        wait_for_authored_verdict(session, title="LIVE CAMERA VIEWS", check_count=31, offset=offset)
         feeds = []
         for source in (camera, probe):
             feed = execute(session, "CreateCameraFeed")["feed"]
@@ -111,7 +116,7 @@ def main():
         assert tilted[1] > after[1] + 40, (after, tilted)
         session.capture_screenshot(output / "camera-windows.png")
         assert_render_log_clean(log)
-        print("PASS: 29 authored checks; depth red/green; fixed noise and live disable; independent world-fixed sky")
+        print("PASS: 31 authored checks; depth red/green; fixed noise and live disable; independent world-fixed sky")
     print("PASS: owned API Exit and port release")
 
 
