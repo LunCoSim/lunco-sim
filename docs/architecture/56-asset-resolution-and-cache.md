@@ -108,8 +108,10 @@ the global cache. Callers pass the scope's local cache base to
 `.cache` paths or choose shared storage independently.
 
 Packaged files are ordinary files under `assets/`, not a third cache root.
-Native and web packers stage only manifest-declared bundle files into that
-asset tree. Engine reads use `engine_asset_read_roots()` from
+Native and web packers stage manifest-declared artifacts into that asset tree.
+When a file comes from a checksum-pinned archive, the packager stages the
+integrity marker beside it so the native registry can admit it offline.
+Engine reads use `engine_asset_read_roots()` from
 `lunco-assets-core`; Twin reads use `asset_read_roots()`. The registered
 `AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
 reader use the engine roots, so a file the loader finds is a file the validator
