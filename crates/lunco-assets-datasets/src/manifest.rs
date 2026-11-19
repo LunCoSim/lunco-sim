@@ -296,6 +296,15 @@ fn integrity_marker_path(destination: &Path) -> PathBuf {
     install_marker_path(destination, destination.is_dir(), "integrity")
 }
 
+/// Archive checksum proof required beside a file extracted from a pinned archive.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn extracted_file_integrity_marker(entry: &AssetEntry, destination: &Path) -> Option<PathBuf> {
+    (is_archive_url(&entry.url)
+        && entry.extract.is_some()
+        && entry.sha256.as_deref().is_some_and(|hash| !hash.is_empty()))
+    .then(|| install_marker_path(destination, false, "integrity"))
+}
+
 /// Recognize archive suffixes supported by the native downloader.
 pub fn archive_extension(url: &str) -> Option<&'static str> {
     if url.ends_with(".tar.gz") {
@@ -365,8 +374,8 @@ pub fn installed_destination_present(entry: &AssetEntry, destination: &Path) -> 
         let Some(expected) = entry.sha256.as_deref().filter(|hash| !hash.is_empty()) else {
             return true;
         };
-        if is_archive_url(&entry.url) {
-            return std::fs::read_to_string(integrity_marker_path(destination))
+        if let Some(marker) = extracted_file_integrity_marker(entry, destination) {
+            return std::fs::read_to_string(marker)
                 .is_ok_and(|actual| actual.trim().eq_ignore_ascii_case(expected));
         }
         use sha2::{Digest, Sha256};
