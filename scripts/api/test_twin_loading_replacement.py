@@ -90,7 +90,7 @@ def main():
             if pending_load():
                 return False
             try:
-                execute("QueryUsdPrim", path="/SandboxScene")
+                execute("QueryUsdPrim", path="/World/Scout")
             except RuntimeError as error:
                 if "QueryUsdPrim: exactly one mounted live stage is required" in str(error):
                     return True
@@ -123,10 +123,10 @@ def main():
             execute("OpenTwin", path=str(outgoing_root))
             wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(outgoing_root),
                      "outgoing Twin admission")
-            wait_for(lambda: any(doc["origin"].get("path") == str(outgoing_root / "sandbox_scene.usda")
+            wait_for(lambda: any(doc["origin"].get("path") == str(outgoing_root / "crater_cup.usda")
                                  for doc in execute("ListOpenDocuments")["open_documents"]),
                      "outgoing scene document")
-            wait_for(pending_load, "an in-flight sandbox scene")
+            wait_for(pending_load, "an in-flight Crater Cup scene")
             outgoing = [doc["doc_id"] for doc in execute("ListOpenDocuments")["open_documents"]]
             recents = execute("ListRecentFiles")["recent_twins"]
             if [item["path"] for item in recents[:2]] != [str(ROOT / "assets/scenes/luncosim"), str(candidate)]:
@@ -141,11 +141,11 @@ def main():
             wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(candidate), "menu-selected replacement")
             wait_for(prim_projected, "replacement scene projection")
             wait_for_ready(args.port)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
             # Let running preparation results arrive after retirement, then require
             # the same owner and absence of the outgoing scene again.
             time.sleep(1)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
             session.capture_screenshot(ROOT / "target/twin-loading-replaced.png")
 
             # A queued restart/clear belongs to the outgoing transaction. Replacing
@@ -153,7 +153,7 @@ def main():
             execute("OpenTwin", path=str(outgoing_root))
             wait_for(lambda: execute("ListTwin", limit=0).get("root") == str(outgoing_root),
                      "second outgoing Twin admission")
-            wait_for(pending_load, "second in-flight sandbox scene")
+            wait_for(pending_load, "second in-flight Crater Cup scene")
             outgoing = [doc["doc_id"] for doc in execute("ListOpenDocuments")["open_documents"]]
             execute("RestartScene")
             execute("ClearScene")
@@ -164,9 +164,9 @@ def main():
                      "replacement after queued clear")
             wait_for(prim_projected, "replacement after outgoing cancellation")
             wait_for_ready(args.port)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
             time.sleep(1)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
 
             # Submit replacement requests in command order without waiting for the
             # intermediate scans to commit; only the final candidate may publish.
@@ -179,9 +179,9 @@ def main():
                      "final rapid replacement admission")
             wait_for(prim_projected, "final rapid replacement projection")
             wait_for_ready(args.port)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
             time.sleep(1)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
 
             # Clear without a successor must reach an empty, usable viewport and
             # stay empty when delayed preparation completes.
@@ -193,14 +193,14 @@ def main():
             execute("ClearScene")
             wait_for(scene_cleared, "empty viewport after pending load clears")
             wait_for_ready(args.port)
-            verdict("verify_cleared_loading", str(outgoing_root), "/SandboxScene")
+            verdict("verify_cleared_loading", str(outgoing_root), "/World/Scout")
             session.capture_screenshot(ROOT / "target/twin-loading-cleared.png")
             time.sleep(1)
-            verdict("verify_cleared_loading", str(outgoing_root), "/SandboxScene")
+            verdict("verify_cleared_loading", str(outgoing_root), "/World/Scout")
             execute("OpenTwin", path=str(candidate))
             wait_for(prim_projected, "successful replacement after clear-only cancellation")
             wait_for_ready(args.port)
-            verdict("verify_loading_replacement", outgoing, str(candidate), "/SandboxScene")
+            verdict("verify_loading_replacement", outgoing, str(candidate), "/World/Scout")
         if args.phase in ("physics", "all"):
             cases = [
                 (ROOT / "assets/tutorials/basic/slope_test.usda", "/SlopeTest", "/Rover/HingeL"),

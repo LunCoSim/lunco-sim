@@ -204,10 +204,12 @@ fn on_start(me, ctx) {
         && hidden.value.viewport_actions.len() == 1
         && hidden.value.viewport_actions[0].label == "Load default scene"
         && !viewport_has_label(hidden.value.viewport_actions, "Test Scene")
-        && hidden.value.viewport_actions[0].args.twin_id == 42
+        && hidden.value.viewport_actions[0].args.open_twin == true
+        && !hidden.value.viewport_actions[0].args.contains("twin_id")
         && !hidden.value.viewport_actions[0].args.contains("authority")
         && hidden.value.viewport_actions[0].args.relative_path == "scenes/main.usda",
-        "the active-Twin welcome action comes from the Rhai policy and excludes test scenes"));
+        "the active-Twin welcome action comes from the Rhai policy and excludes test scenes: "
+        + hidden.value.viewport_guidance + " " + hidden.value.viewport_actions.to_string()));
     checks.push(t_true(hidden.value.navigation_entries.len() == 3,
         "quick-open destinations use the same policy visibility rules"));
 
@@ -253,9 +255,10 @@ fn on_start(me, ctx) {
     let start_menu = invoke_hook("application.scenarios.menu", [start_facts]);
     if !start_menu.ok { throw start_menu.error; }
     checks.push(t_true(start_menu.value.viewport_actions.len() == 1
-        && start_menu.value.viewport_actions[0].label == "Explore demo sandbox"
-        && start_menu.value.viewport_actions[0].tool == "scenarios"
-        && start_menu.value.viewport_actions[0].args.uri == "lunco://scenes/luncosim/sandbox_scene.usda",
+        && start_menu.value.viewport_actions[0].label == "Play Crater Cup"
+        && start_menu.value.viewport_actions[0].tool == "tutorials"
+        && start_menu.value.viewport_actions[0].hook == "start"
+        && start_menu.value.viewport_actions[0].args.twin_asset == "lunco://scenes/luncosim/twin.toml",
         "the demo welcome action is authored by the Scenarios policy"));
     let start_restart = scenario_find_label(scenario_menu_items(start_menu.value), "Restart Scenario");
     checks.push(t_true(start_restart != () && start_restart.tool == "scenarios"

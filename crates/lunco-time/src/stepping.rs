@@ -10,7 +10,16 @@ use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_comma
 pub struct SimulationStepControl {
     held: bool,
     remaining: u32,
-    pub(crate) active_cycle: bool,
+    pub(crate) cycle: FixedCycle,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) enum FixedCycle {
+    #[default]
+    Idle,
+    Running,
+    Unintegrated,
+    InvalidEndpoint,
 }
 
 impl SceneResource for SimulationStepControl {}
@@ -23,7 +32,23 @@ impl SimulationStepControl {
 
     /// Whether the shared fixed runner is currently applying a complete cycle.
     pub fn is_cycle_active(&self) -> bool {
-        self.active_cycle
+        self.cycle != FixedCycle::Idle
+    }
+
+    /// Classify a terminal native endpoint before publishing the fixed interval.
+    /// A clock outside both endpoints cannot certify numerical observations.
+    pub fn observe_faulted_native_endpoint(
+        &mut self,
+        fixed: &Time<Fixed>,
+        native_elapsed: std::time::Duration,
+    ) {
+        if self.is_cycle_active() && native_elapsed != fixed.elapsed() {
+            self.cycle = if fixed.elapsed().checked_sub(fixed.timestep()) == Some(native_elapsed) {
+                FixedCycle::Unintegrated
+            } else {
+                FixedCycle::InvalidEndpoint
+            };
+        }
     }
 
     /// Explicit fixed cycles still awaiting admission.
@@ -65,6 +90,11 @@ impl SimulationStepControl {
     pub(crate) fn cancel(&mut self) {
         self.remaining = 0;
     }
+}
+
+/// Gate numerical sampling in `FixedLast`, after [`crate::FixedCycleVerificationSet`].
+pub fn fixed_cycle_integrated(control: Res<SimulationStepControl>) -> bool {
+    control.cycle == FixedCycle::Running
 }
 
 /// Hold/release automatic simulation advancement or request exact fixed cycles.
@@ -112,7 +142,7 @@ mod tests {
             commands.queue(|world: &mut World| {
                 let mut control = world.resource_mut::<SimulationStepControl>();
                 control.request(Some(true), Some(7), true).unwrap();
-                control.active_cycle = true;
+                control.cycle = FixedCycle::Running;
             });
         });
         for _ in 0..3 {

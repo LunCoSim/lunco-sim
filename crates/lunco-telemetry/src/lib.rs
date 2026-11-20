@@ -36,9 +36,9 @@
 //! entirely. That is the same mistake as pacing the co-simulation off the render frame
 //! — a sampled signal must ride the clock it is sampling.
 //!
-//! Sampling runs in `FixedUpdate`, so the ceiling is `FIXED_HZ` and a replay produces
-//! the same samples. **Do not move this to `Update`** — it would make telemetry
-//! frame-rate-dependent and non-deterministic.
+//! Sampling runs in `FixedLast` after fixed-cycle verification. An interval
+//! rejected before integration leaves numerical history and sampling deadlines
+//! unchanged. The sampling ceiling is `FIXED_HZ`.
 //!
 //! ## Where the samples go — the consumer half was already shipped
 //!
@@ -823,10 +823,7 @@ impl Plugin for LunCoTelemetryPlugin {
         })
         .init_scene_resource::<SampleDeliveryQueue>();
         app.add_systems(
-            // FIXED step — see the module docs. Not `Update`: telemetry would then be
-            // paced by the frame rate (different sample counts on a fast vs slow
-            // machine, a flood on an uncapped headless loop) and replay would diverge.
-            FixedUpdate,
+            FixedLast,
             (
                 // Change-driven plan maintenance — each sampler pass checks the
                 // active clock lanes and pops only due declarations.
@@ -838,10 +835,10 @@ impl Plugin for LunCoTelemetryPlugin {
                 sample_parameters_system.run_if(any_with_component::<Parameter>),
             )
                 .chain()
-                // Sampling reads the state produced by this fixed step and
-                // therefore keys it to the tick advanced by the shared runtime
-                // clock, never to the render/update cadence.
-                .after(lunco_core_runtime::SimTickSet),
+                // Numerical history records integrated intervals. Rejected attempts
+                // leave both retained samples and channel deadlines untouched.
+                .after(lunco_time::FixedCycleVerificationSet)
+                .run_if(lunco_time::fixed_cycle_integrated),
         );
         app.add_systems(
             PostUpdate,
@@ -1676,7 +1673,7 @@ mod tests {
         let first_fixed_pass = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let checked = Arc::clone(&first_fixed_pass);
         app.add_systems(
-            FixedUpdate,
+            FixedLast,
             (move || {
                 if !checked.swap(true, std::sync::atomic::Ordering::Relaxed) {
                     assert!(

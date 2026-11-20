@@ -50,3 +50,11 @@ Fix grouping and possession/endpoint lifetimes first, then authority-loss and
 sequence admission, then capture. Extend the production two-peer gate with
 negative cases; a passing smoke test does not cover these triggers. Remove
 competing rules in each phase rather than keeping compatibility paths.
+
+- [ ] **Prediction replay must isolate the live physics clocks.**
+  With `LUNCO_ROLLBACK=1`, `replay_one_tick` runs the exchange, then advances
+  `Time<Physics>` and `Time<Substeps>` and runs the solver even if the exchange
+  raised a terminal fault. Its caller restores only the generic `Time`. This
+  path is outside the shared fixed runner. Exercise successful and rejected
+  replay in the two-peer harness and verify live native elapsed time and substep
+  time on both exits, plus zero replay integrations after a rejected exchange.

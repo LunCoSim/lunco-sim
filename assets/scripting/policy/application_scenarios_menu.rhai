@@ -302,14 +302,14 @@ fn application_scenarios_menu(ctx) {
     result.settings_submenus = [sim_core_settings(ctx)];
     result.viewport_actions = active_viewport_actions(ctx);
     if ctx.active_twin == () {
-        let demo_args = #{ uri: "lunco://scenes/luncosim/sandbox_scene.usda", open_twin: false };
+        let demo_args = #{ twin_asset: "lunco://scenes/luncosim/twin.toml" };
         result.viewport_actions.push(#{
-            label: "Explore demo sandbox",
-            description: "Explore the collection of vehicle and physics demonstrations.",
+            label: "Play Crater Cup",
+            description: "Watch three haulers supply a lunar refinery and refuel Kestrel. Explore in Scout or race Comet.",
             enabled: true,
             primary: false,
-            tool: "scenarios",
-            hook: "load",
+            tool: "tutorials",
+            hook: "start",
             args: demo_args
         });
     }

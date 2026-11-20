@@ -484,7 +484,7 @@ Tutorial catalogs use the same replaceable menu provider and live under
 Scenarios → Tutorials → track → lesson. Rhai also publishes their existing
 lesson actions as Tutorials quick-navigation entries. Catalog policy can mark
 one lesson as the empty viewport's featured action; application-scope featured
-lessons are visible only while no Twin is active. **Explore demo sandbox** is
+lessons are visible only while no Twin is active. **Play Crater Cup** is
 also an authored policy action; **Open Twin** is the generic shell entry point
 when no Twin is active.
 The shared `tutorials` Rhai tool owns tour cursors and continuation. Domain

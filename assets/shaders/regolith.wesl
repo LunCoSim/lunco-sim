@@ -22,9 +22,8 @@ import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, la
 //!   * macro clumps: noise(scale 8) → ramp 0.40..0.62 → bump 0.12 + roughness
 //!   * fine grain:   noise(scale 180) → ramp 0.45..0.57 → bump 0.025
 //!
-//! Noise is sampled in **world space** (the Blender graph used object
-//! coordinates on a world-aligned terrain), so the mesh needs no UVs — the
-//! Shackleton DEM glb ships POSITION/NORMAL only.
+//! Sample procedural detail in the DEM frame when a heightfield is available.
+//! A moving mesh can select object space, which needs no UVs.
 //!
 //! Unlike the prop shaders (wheel/balloon), this feeds a full `PbrInput` into
 //! `apply_pbr_lighting`, so the regolith is lit by the *scene* sun — the low
@@ -73,6 +72,8 @@ import super::terrain_surface::{aa_fade, bump_layer, filter_detail_roughness, la
 //!@default rough_mix         0.35
 //!@ui      mottle            0 0.6       "Albedo mottle"
 //!@default mottle            0.22
+//!@ui      object_space      0 1         "Object-space detail"
+//!@default object_space      0
 // --- lunar photometry (lunco::shaders::lunar_brdf) ---------------------------------------
 // Fitted lunar values (Chrono/UW-Madison, arxiv 2410.04371 Table 1), not taste.
 // Keep the fitted values aligned with the canonical authored terrain fragment;
@@ -101,6 +102,7 @@ struct Material {
     fine_bump:         f32,
     rough_mix:         f32,
     mottle:            f32,
+    object_space:      f32,
     surge_amp:         f32,  // Hapke Bs0 — opposition surge amplitude
     surge_width:       f32,  // Hapke hs (rad) — opposition surge angular width
     photometry_gain:   f32,  // trim on the Lommel-Seeliger x surge multiplier
@@ -161,11 +163,30 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     let world_p = in.world_position.xyz;
     var detail_p = world_p;
+    var local_detail = mat.object_space > 0.5;
+    if (local_detail) {
+        let model = mesh_functions::get_world_from_local(in.instance_index);
+        // A fully empty cargo mesh can have a collapsed vertical axis.
+        // Such a mesh has no volumetric detail to sample.
+        if (dot(model[1].xyz, model[1].xyz) > 1e-12) {
+            detail_p = (mesh_functions::get_local_from_world(in.instance_index) * in.world_position).xyz;
+        } else {
+            detail_p = vec3(0.0);
+            local_detail = false;
+        }
+    }
+    // Ordinary pads and mesh props also have UVs. Only a sampled terrain
+    // heightfield gives those UVs an extent in metres.
+    @if((VERTEX_UVS_A)) if (mat.hf_res >= 2.0) {
+        detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
+        local_detail = true;
+    }
     var detail_n = normalize(in.world_normal);
-    @if((VERTEX_UVS_A)) detail_p = terrain_detail_position(in.uv, mat.hf_size.x * 0.5);
-    @if((VERTEX_UVS_A)) detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
-    // Pixel footprint in world metres (computed BEFORE any branch — fwidth
-    // needs uniform control flow). Drives per-layer anti-alias fades.
+    if (local_detail) {
+        detail_n = terrain_detail_normal_to_local(detail_n, in.instance_index);
+    }
+    // Pixel footprint in the detail frame. Compute derivatives outside the
+    // conditional sampling paths so all fragments use the same AA rule.
     let pw = length(fwidth(detail_p));
     let fine_fade  = aa_fade(fine_scale, pw);
     let macro_fade = aa_fade(macro_scale, pw);
@@ -189,7 +210,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     }
 
     var n = detail_n;
-    @if((VERTEX_UVS_A)) n = terrain_detail_normal_to_world(detail_n, in.instance_index);
+    if (local_detail) {
+        n = terrain_detail_normal_to_world(detail_n, in.instance_index);
+    }
 
     // Albedo variation — the Moon is low-contrast, but perfectly uniform
     // grey reads as plastic. Metre-scale mottle from the mid layer plus

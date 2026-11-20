@@ -274,15 +274,16 @@ pub(crate) fn register_orbit_history_hook(app: &mut App) {
         .register_component_hooks::<OrbitCamera>()
         .on_remove(remember_orbit_camera_on_remove);
 }
-/// Retire per-avatar orbital presentation state with the active Twin. A
-/// non-active Twin closing must not disturb the live camera's history.
-pub(crate) fn clear_orbit_view_history_on_twin_closed(
+/// Retire the active Twin's camera return poses, view history and transitions.
+pub(crate) fn clear_camera_return_state_on_twin_closed(
     trigger: On<lunco_workspace::TwinClosed>,
     mut commands: Commands,
     q_avatar: Query<
         Entity,
         Or<(
             With<OrbitViewHistory>,
+            With<OrbitViewReturn>,
+            With<crate::subject::PossessionViewReturn>,
             With<OrbitCameraTransition>,
             With<OrbitReturnTransition>,
         )>,
@@ -294,6 +295,8 @@ pub(crate) fn clear_orbit_view_history_on_twin_closed(
     for entity in &q_avatar {
         commands.entity(entity).remove::<(
             OrbitViewHistory,
+            OrbitViewReturn,
+            crate::subject::PossessionViewReturn,
             OrbitUserInput,
             CurrentRegionArrival,
             OrbitCameraTransition,
@@ -1392,7 +1395,7 @@ mod tests {
     #[test]
     fn active_twin_close_clears_orbit_history_without_touching_inactive_close() {
         let mut app = App::new();
-        app.add_observer(clear_orbit_view_history_on_twin_closed);
+        app.add_observer(clear_camera_return_state_on_twin_closed);
         let avatar = app
             .world_mut()
             .spawn((Embodiment, LocalEmbodiment, OrbitViewHistory::default()))

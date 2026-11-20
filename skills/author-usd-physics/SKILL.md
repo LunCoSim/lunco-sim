@@ -1079,3 +1079,10 @@ an aggregate body impulse cannot identify an individual collision source.
 Use the `native_force_drives`, `prismatic_spring`, differential and contact
 production gates before claiming correct actuation or reaction telemetry.
 `clock_snapshot().physics_substep_dt_s` exposes the native substep duration.
+
+When diagnosing a clock divergence after scene replacement, inspect the previous
+scene’s first runtime fault and the last native step. A rejected co-simulation
+input can stop an admitted fixed cycle before native integration. Exercise
+`scripts/api/test_connection_transaction.py --port <free-port>` to check
+that the stopped world retains the last completed master, fixed and native time,
+and the replacement world admits valid steps before its own first fault.

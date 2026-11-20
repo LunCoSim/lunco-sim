@@ -110,7 +110,7 @@ impl Plugin for AvatarCelestialCameraPlugin {
         app.add_systems(First, apply_pending_focus);
         app.add_systems(Update, transactions::avatar_init_system);
         transactions::register_orbit_history_hook(app);
-        app.add_observer(transactions::clear_orbit_view_history_on_twin_closed);
+        app.add_observer(transactions::clear_camera_return_state_on_twin_closed);
         app.add_observer(subject::on_bind_camera_target);
         app.add_observer(subject::on_clear_camera_binding);
         handoff::register(app);

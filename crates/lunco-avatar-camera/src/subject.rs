@@ -238,12 +238,28 @@ fn apply_subject_camera(
     Ok(())
 }
 
+/// Free or surface pose displaced by the first possession in a chain. This
+/// remains independent of an orbital excursion made while driving a subject.
+#[derive(Component)]
+pub(crate) struct PossessionViewReturn(OrbitViewReturn);
+
 /// Realize the camera half of an already committed `AcquireControl`.
 pub(crate) fn on_bind_camera_target(
     trigger: On<BindCameraTarget>,
     mut commands: Commands,
     q_avatar: Query<
-        (&Transform, Option<&SpringArmCamera>, Has<CameraPoseLock>),
+        (
+            &Transform,
+            &CellCoord,
+            &ChildOf,
+            Option<&SpringArmCamera>,
+            Has<CameraPoseLock>,
+            Option<&FreeFlightCamera>,
+            Option<&SurfaceCamera>,
+            Option<&GravityBody>,
+            Has<SurfaceRelativeMode>,
+            Has<PossessionViewReturn>,
+        ),
         (With<Embodiment>, With<LocalEmbodiment>),
     >,
     q_grids: Query<&Grid>,
@@ -261,7 +277,18 @@ pub(crate) fn on_bind_camera_target(
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     let request = trigger.event();
-    let Ok((camera_transform, existing_spring, cinematic_lock)) = q_avatar.get(request.camera)
+    let Ok((
+        camera_transform,
+        cell,
+        parent,
+        existing_spring,
+        cinematic_lock,
+        flight,
+        surface,
+        gravity,
+        surface_relative,
+        has_return,
+    )) = q_avatar.get(request.camera)
     else {
         replace_diagnostic(
             &mut diagnostics,
@@ -310,6 +337,24 @@ pub(crate) fn on_bind_camera_target(
         );
         replace_diagnostic(&mut diagnostics, Some(error));
         return;
+    }
+    if !has_return {
+        let behavior = surface
+            .cloned()
+            .map(OrbitReturnBehavior::Surface)
+            .or_else(|| flight.cloned().map(OrbitReturnBehavior::FreeFlight));
+        if let Some(behavior) = behavior {
+            commands
+                .entity(request.camera)
+                .try_insert(PossessionViewReturn(OrbitViewReturn::new(
+                    parent.parent(),
+                    *cell,
+                    *camera_transform,
+                    behavior,
+                    gravity.copied(),
+                    surface_relative,
+                )));
+        }
     }
     info!(camera = ?request.camera, target = ?request.target, "[possess] camera binding committed");
 }
@@ -398,10 +443,12 @@ pub(crate) fn on_clear_camera_binding(
             Option<&SurfaceCamera>,
             &ChildOf,
             Option<&OrbitViewReturn>,
+            Option<&PossessionViewReturn>,
             Option<&OrbitCamera>,
             Option<&mut OrbitViewHistory>,
             Has<OrbitUserInput>,
             Has<CameraPoseLock>,
+            Has<crate::transactions::OrbitReturnTransition>,
         ),
         (With<Embodiment>, With<LocalEmbodiment>),
     >,
@@ -418,16 +465,18 @@ pub(crate) fn on_clear_camera_binding(
         mut cell,
         surface,
         child_of,
-        return_state,
+        orbit_return,
+        possession_return,
         current_orbit,
         mut orbit_history,
         orbit_user_input,
         cinematic_lock,
+        returning_from_orbit,
     )) = q_avatar.get_mut(camera)
     else {
         return;
     };
-    if cinematic_lock {
+    if cinematic_lock && !returning_from_orbit {
         return;
     }
     if orbit_user_input {
@@ -443,7 +492,10 @@ pub(crate) fn on_clear_camera_binding(
             }
         }
     }
-    let return_state = return_state.cloned();
+    let return_state = possession_return
+        .map(|saved| &saved.0)
+        .or(orbit_return)
+        .cloned();
     if let Some(state) = &return_state {
         if child_of.parent() == state.parent_grid() {
             cell.set_if_neq(state.cell());
@@ -483,12 +535,15 @@ pub(crate) fn on_clear_camera_binding(
     };
 
     let mut camera_commands = commands.entity(camera);
+    if returning_from_orbit {
+        camera_commands.remove::<(crate::transactions::OrbitReturnTransition, CameraPoseLock)>();
+    }
     camera_commands
         .remove::<SpringArmCamera>()
         .remove::<OrbitCamera>()
         .remove::<FreeFlightCamera>()
         .remove::<SurfaceCamera>()
-        .remove::<OrbitViewReturn>()
+        .remove::<(OrbitViewReturn, PossessionViewReturn)>()
         .remove::<RadialArrival>()
         .remove::<CurrentRegionArrival>()
         .remove::<OrbitUserInput>();
@@ -539,6 +594,40 @@ pub(crate) fn on_clear_camera_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_twin_close_retires_a_possession_return_without_orbit_history() {
+        let mut app = App::new();
+        app.add_observer(crate::transactions::clear_camera_return_state_on_twin_closed);
+        let grid = app.world_mut().spawn_empty().id();
+        let avatar = app
+            .world_mut()
+            .spawn(PossessionViewReturn(OrbitViewReturn::new(
+                grid,
+                CellCoord::ZERO,
+                Transform::IDENTITY,
+                OrbitReturnBehavior::Surface(SurfaceCamera {
+                    heading: 0.1,
+                    pitch: 0.3,
+                }),
+                None,
+                false,
+            )))
+            .id();
+
+        for was_active in [false, true] {
+            app.world_mut().trigger(lunco_workspace::TwinClosed {
+                twin: lunco_workspace::TwinId::new(1),
+                root: std::path::PathBuf::from("/twin"),
+                was_active,
+            });
+            app.world_mut().flush();
+            assert_eq!(
+                app.world().get::<PossessionViewReturn>(avatar).is_some(),
+                !was_active
+            );
+        }
+    }
 
     #[test]
     fn orbital_release_restores_pose_and_mode_in_one_transition() {
