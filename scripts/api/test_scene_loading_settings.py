@@ -60,7 +60,10 @@ def inspect_document(session, doc, path="/World"):
     try:
         return execute(session, "InspectUsdDocument", doc_id=doc, path=path)
     except RuntimeError as error:
-        if "USD stage source asset is unavailable" in str(error):
+        if any(text in str(error) for text in (
+            "USD stage source asset is unavailable",
+            "the USD stage is loading; retry composed inspection",
+        )):
             return None
         raise
 

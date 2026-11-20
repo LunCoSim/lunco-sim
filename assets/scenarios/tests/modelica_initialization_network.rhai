@@ -151,6 +151,7 @@ fn check_clock(state, a, b, label) {
 
 fn step_clock_case(state, a, b) {
     let clock = clock_snapshot();
+    if state.phase == 7 { return check_history(state, clock.sim_tick); }
     if state.phase == 5 {
         // Match the pre-dispatch phase used by the other running samples.
         // Paused events observe the completed preceding transaction instead.
@@ -176,24 +177,40 @@ fn step_clock_case(state, a, b) {
         pause();
         emit(PAUSE_PROBE, 0);
     } else if state.phase == 6 {
-        let channels = query("ListTelemetryChannels", #{name: "solverTime"}).channels;
-        state.failures.push(t_true(channels.len == 2,
-            "both participants publish through the shared telemetry history owner"));
-        for channel in channels {
-            let history = query("QueryTelemetryHistory", #{key: channel.key, limit: 10});
-            let consistent = history.samples.len >= 3;
-            for i in 0..history.samples.len {
-                let sample = history.samples[i];
-                consistent = consistent && abs(sample.v - sample.t) < 1.0e-8;
-                if i > 0 { consistent = consistent && sample.t > history.samples[i - 1].t; }
-            }
-            state.failures.push(t_true(consistent,
-                "shared history retains ordered Modelica-time samples for " + channel.name));
-        }
-        set_rate(1.0);
-        return finish(state, state.failures);
+        state.phase = 7;
+        state.history_check_tick = clock.sim_tick;
+        return check_history(state, clock.sim_tick);
     }
     state
+}
+
+fn check_history(state, tick) {
+    let channels = query("ListTelemetryChannels", #{name: "solverTime"}).channels;
+    let series = [];
+    let ready = channels.len >= 2;
+    for channel in channels {
+        let samples = query("QueryTelemetryHistory", #{key: channel.key, limit: 10}).samples;
+        ready = ready && samples.len >= 3;
+        series.push(#{name: channel.name, samples: samples});
+    }
+    // Modelica history is retained during Update. A fixed cycle can reach this
+    // verdict between those publications, especially during a windowed catch-up.
+    if !ready && tick - state.history_check_tick < 120 { return state; }
+    state.failures.push(t_true(channels.len == 2,
+        "both participants publish through the shared telemetry history owner"));
+    for history in series {
+        let consistent = history.samples.len >= 3;
+        for i in 0..history.samples.len {
+            let sample = history.samples[i];
+            consistent = consistent && abs(sample.v - sample.t) < 1.0e-8;
+            if i > 0 { consistent = consistent && sample.t > history.samples[i - 1].t; }
+        }
+        state.failures.push(t_true(consistent,
+            "shared history retains ordered Modelica-time samples for " + history.name
+                + (if consistent { "" } else { " observed " + history.samples.to_string() })));
+    }
+    set_rate(1.0);
+    finish(state, state.failures)
 }
 
 fn on_start(me, ctx) { this = start_case(false); }
