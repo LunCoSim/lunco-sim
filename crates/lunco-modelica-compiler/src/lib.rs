@@ -404,6 +404,23 @@ pub struct AdmittedModelicaBindings {
     pub initial_inputs: Vec<(String, f64)>,
 }
 
+/// One resolved DAE input and the parameter transaction captured at admission.
+pub struct PreparedModelicaCompile {
+    model_name: String,
+    filename: String,
+    parameter_bindings: Vec<(String, f64)>,
+    strict: rumoca_compile::compile::StrictDaePreparation,
+    resolution_identity: lunco_hash::content::Cid,
+}
+
+impl PreparedModelicaCompile {
+    /// Exact resolved source identity, including the diagnostic URIs carried
+    /// by a persisted DAE. Captured from the same input that lowers the DAE.
+    pub fn resolution_identity(&self) -> &lunco_hash::content::Cid {
+        &self.resolution_identity
+    }
+}
+
 /// Compile Modelica models through one session-owned source-root admission
 /// boundary and one strict reachable-DAE call. Source roots are admitted from
 /// the parsed source before compilation; an unresolved dependency is a terminal
@@ -1062,6 +1079,44 @@ impl ModelicaCompiler {
         source_roots_admitted: bool,
         parameter_bindings: &[(String, f64)],
     ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let prepared = self.prepare_compile(
+            model_name,
+            source,
+            filename,
+            extras,
+            source_roots_admitted,
+            parameter_bindings,
+        )?;
+        self.compile_prepared(prepared)
+    }
+
+    pub fn prepare_compile_after_source_root_admission(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+        parameter_bindings: &[(String, f64)],
+    ) -> Result<PreparedModelicaCompile, String> {
+        self.prepare_compile(
+            model_name,
+            source,
+            filename,
+            extras,
+            true,
+            parameter_bindings,
+        )
+    }
+
+    fn prepare_compile(
+        &mut self,
+        model_name: &str,
+        source: &str,
+        filename: &str,
+        extras: &[(String, String)],
+        source_roots_admitted: bool,
+        parameter_bindings: &[(String, f64)],
+    ) -> Result<PreparedModelicaCompile, String> {
         self.clear_compile_diagnostics();
         let selected =
             self.seat_source_unit(model_name, source, filename, extras, source_roots_admitted)?;
@@ -1069,23 +1124,80 @@ impl ModelicaCompiler {
         if !root_bindings.is_empty() {
             self.session.set_structural_overrides(&root_bindings);
         }
-        let result = self.compile_loaded(&selected);
+        let strict = self.session.prepare_strict_dae_compilation(&selected);
         if !root_bindings.is_empty() {
             self.session.set_structural_overrides(&[]);
         }
-        let compiled = match result {
-            Ok(compiled) => compiled,
-            Err(failure) => {
-                self.last_compile_diagnostics = Some((
-                    model_name.to_owned(),
-                    filename.to_owned(),
-                    diagnostics_from_strict_failure(&failure, filename),
-                ));
-                return Err(failure.summary);
-            }
-        };
-        Self::validate_parameter_bindings(&compiled.dae, parameter_bindings)?;
+        let strict = strict
+            .map_err(|failure| self.retain_compile_failure(model_name, filename, &failure))?;
+        let resolution_identity = self.resolution_identity(strict.source_closure())?;
+        Ok(PreparedModelicaCompile {
+            model_name: model_name.to_owned(),
+            filename: filename.to_owned(),
+            parameter_bindings: parameter_bindings.to_vec(),
+            strict,
+            resolution_identity,
+        })
+    }
+
+    pub fn compile_prepared(
+        &mut self,
+        prepared: PreparedModelicaCompile,
+    ) -> Result<Box<rumoca_compile::compile::DaeCompilationResult>, String> {
+        let PreparedModelicaCompile {
+            model_name,
+            filename,
+            parameter_bindings,
+            strict,
+            ..
+        } = prepared;
+        let compiled = Self::report_compile(&model_name, || strict.compile())
+            .map_err(|failure| self.retain_compile_failure(&model_name, &filename, &failure))?;
+        Self::validate_parameter_bindings(&compiled.dae, &parameter_bindings)?;
         Ok(compiled)
+    }
+
+    fn retain_compile_failure(
+        &mut self,
+        model_name: &str,
+        filename: &str,
+        failure: &rumoca_compile::compile::StrictCompileFailure,
+    ) -> String {
+        self.last_compile_diagnostics = Some((
+            model_name.to_owned(),
+            filename.to_owned(),
+            diagnostics_from_strict_failure(failure, filename),
+        ));
+        failure.summary.clone()
+    }
+
+    fn resolution_identity(
+        &self,
+        closure: &rumoca_compile::compile::CompiledSourceClosure,
+    ) -> Result<lunco_hash::content::Cid, String> {
+        if closure.files.is_empty() {
+            return Err("resolved DAE preparation has no participating documents".into());
+        }
+        let mut bytes = b"LunCoResolvedDaeInputs\0\x01".to_vec();
+        source_content_field(&mut bytes, closure.target.as_bytes());
+        source_content_field(&mut bytes, &closure.dependency_fingerprint);
+        for file in &closure.files {
+            let document = self
+                .session
+                .document_source_text(&file.uri)
+                .ok_or_else(|| {
+                    format!(
+                        "participating source `{}` no longer has seated text",
+                        file.uri
+                    )
+                })?;
+            source_content_field(&mut bytes, file.uri.as_bytes());
+            source_content_field(
+                &mut bytes,
+                &lunco_hash::content::cid(document.as_bytes()).to_bytes(),
+            );
+        }
+        Ok(lunco_hash::content::cid(&bytes))
     }
 
     /// Seat the exact source unit through the shared parsed-document/root owner.
@@ -1222,6 +1334,13 @@ impl ModelicaCompiler {
         Box<rumoca_compile::compile::DaeCompilationResult>,
         Box<rumoca_compile::compile::StrictCompileFailure>,
     > {
+        Self::report_compile(model_name, || {
+            self.session
+                .compile_model_dae_strict_reachable_uncached_with_recovery_detailed(model_name)
+        })
+    }
+
+    fn report_compile<T, E>(model_name: &str, run: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
         let t_total = web_time::Instant::now();
 
         // Native diagnostic progress is scoped to this exact compile. Its
@@ -1237,9 +1356,7 @@ impl ModelicaCompiler {
             }
         };
 
-        let result = self
-            .session
-            .compile_model_dae_strict_reachable_uncached_with_recovery_detailed(model_name);
+        let result = run();
 
         log::info!(
             "[ModelicaCompiler] compile `{}` finished in {:.2}s ({})",

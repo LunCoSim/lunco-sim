@@ -2300,16 +2300,15 @@ fn compile_bound_variant(
         unit.source.len(),
         artifacts.len(),
     );
+    let prepared = compiler.prepare_compile_after_source_root_admission(
+        model_name,
+        &unit.source,
+        doc_uri,
+        &unit.extras,
+        numeric,
+    )?;
     #[cfg(not(target_arch = "wasm32"))]
-    let disk_key = match artifacts.disk_key(compiler, model_name, unit, doc_uri, numeric) {
-        Ok(key) => key,
-        Err(error) => {
-            log::warn!(
-                "[modelica-runtime] compiled artifact persistence not admitted for `{model_name}`: {error}"
-            );
-            None
-        }
-    };
+    let disk_key = artifacts.disk_key(prepared.resolution_identity(), numeric);
     #[cfg(not(target_arch = "wasm32"))]
     let mut policy_evaluated = false;
     #[cfg(not(target_arch = "wasm32"))]
@@ -2317,8 +2316,8 @@ fn compile_bound_variant(
         if let Some(disk_key) = &disk_key {
             let started = web_time::Instant::now();
             let _span = bevy::log::info_span!("modelica_compiled_artifact_lookup").entered();
-            match artifacts.load_disk(disk_key, numeric) {
-                Ok(Some(artifact)) if artifact.binding_schema == binding_schema => {
+            match artifacts.load_disk(disk_key, numeric, binding_schema) {
+                Ok(Some(artifact)) => {
                     let decision = lunco_assets_core::cache_policy::artifact_cache_decision(
                         "modelica_compiled",
                         modelica_cache_scope(doc_uri),
@@ -2336,9 +2335,6 @@ fn compile_bound_variant(
                         return Ok(artifact);
                     }
                 }
-                Ok(Some(_)) => log::warn!(
-                    "[modelica-runtime] compiled artifact binding schema rejected for `{model_name}`"
-                ),
                 Ok(None) => {}
                 Err(error) => log::warn!(
                     "[modelica-runtime] compiled artifact cache rejected for `{model_name}`: {error}"
@@ -2360,18 +2356,7 @@ fn compile_bound_variant(
             false,
         )?;
     }
-    let outcome = if unit.extras.is_empty() {
-        compiler.compile_str_after_source_root_admission(model_name, &unit.source, doc_uri, numeric)
-    } else {
-        compiler.compile_str_multi_after_source_root_admission(
-            model_name,
-            &unit.source,
-            doc_uri,
-            &unit.extras,
-            numeric,
-        )
-    };
-    let compiled = outcome?;
+    let compiled = compiler.compile_prepared(prepared)?;
     let checked_structural =
         ModelicaCompiler::structural_parameter_overrides(&compiled.dae, numeric)?;
     let structural_overrides = numeric

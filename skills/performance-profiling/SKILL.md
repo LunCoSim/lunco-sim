@@ -1340,8 +1340,9 @@ separate native CPU samples from JSON/Zstd work before attributing it to I/O or
 changing codecs. A disk hit does not bypass construction checks.
 For warm startup, distinguish a checked DAE hit from a prepared-solve or native
 code hit. Verify checked DAE reuse across fresh Twin mounts with the same source
-bytes and compiler context. The Modelica compiler receives canonical source
-URIs. The USD program owner retains exact mount leases for reads and result
+bytes and strict resolution dependencies. The Modelica compiler receives
+canonical source URIs and uses the same prepared target for the disk key and
+lowering. The USD program owner retains exact mount leases for reads and result
 admission, including retirement during preparation. Measure checked interface
 reuse on exact live requests separately from DAE lookup. Test an unrelated
 edit inside a participating source set and an edit to a participating model.
