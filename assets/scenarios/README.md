@@ -9,7 +9,7 @@ motion and contact, and scenarios sequence commands and react to events.
 
 | Source | Role | Example owner |
 |---|---|---|
-| [`crater_cup.rhai`](crater_cup.rhai) | Switches cameras and plots on possession, scores samples, times the sprint and operates the packing press. Kestrel uses the shared lander controls. | [Crater Cup](../scenes/luncosim/crater_cup.usda) |
+| [`crater_cup.rhai`](crater_cup.rhai) | Opens refinery plots at startup, switches plots on equipment selection, directs cameras, scores samples, times the sprint and operates the packing press. Kestrel uses the shared lander controls. | [Crater Cup](../scenes/luncosim/crater_cup.usda) |
 | [`crater_cup_fill.rhai`](crater_cup_fill.rhai) | Adds live cargo, propellant, facility inventory and battery charge values to the equipment's world labels. | [Crater Cup](../scenes/luncosim/crater_cup.usda) |
 | [`crater_relay.rhai`](crater_relay.rhai) | Dispatches the miner, residue hauler and propellant tender. Transfers Kestrel from automatic service to manual flight on pilot input and resumes pad guidance on release. | [Crater Cup](../scenes/luncosim/crater_cup.usda) |
 | [`regolith_haul.rhai`](regolith_haul.rhai) | Cuts between the feeder, travelling rover and factory intake during the USD haul animation. | [Regolith haul](../scenes/luncosim/regolith_haul.usda) |

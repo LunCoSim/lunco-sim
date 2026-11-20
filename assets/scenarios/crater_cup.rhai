@@ -114,7 +114,7 @@ fn dashboard(s) {
     if s.mode == "overview" {
         if s.inspection!="" {text=readout(s);actions.push(button("clear","Close info"));}
         actions.push(button("pad", if s.pad_view { "Avatar view" } else { "Pad camera" }));
-        actions.push(button("relay_graph", if s.flight_plot { "Hide plots" } else if s.inspection!="" && !signals_for(s.inspection).is_empty() { "Object plots" } else { "Plant plots" }));
+        actions.push(button("graph", if s.plots_visible { "Hide plots" } else if !signals_for(s.inspection).is_empty() { "Object plots" } else { "Plant plots" }));
         if s.started { actions.push(button("reset", "New heat")); }
     } else {
         if s.mode == "scout" {
@@ -129,7 +129,7 @@ fn dashboard(s) {
         } else if s.mode == "works" {
             actions.push(button("camera", if s.alternate { "Array cam" } else { "Press cam" }));
         }
-        actions += [button("graph", if s.instruments { "Hide plots" } else { "Plots" }),
+        actions += [button("graph", if s.plots_visible { "Hide plots" } else { "Plots" }),
                     button("overview","Avatar view")];
     }
     hint(text);
@@ -149,14 +149,14 @@ fn select_camera(mode, alternate) {
 }
 
 fn show_instruments(s) {
-    if (s.mode == "overview" && !s.flight_plot) || (s.mode != "overview" && !s.instruments) {
+    if !s.plots_visible {
         required(cmd("ActivatePerspective", #{id:"sandbox_view"}));
         return;
     }
     let traces = switch s.mode {
         "scout" => [["linear_speed","Rover speed"],["bus_power","Drive power (W)"]],
         "comet" => [["linear_speed","Road speed"],["position.y","Chassis height"]],
-        "overview" => [["process_w","Refinery power (W)"],["split_kg","Water electrolyzed (kg)"]],
+        "overview" => [["process_w","Refinery power"],["split_kg","Water split"]],
         "mine" => [["cargo_kg","Icy feed aboard (kg)"],["feed_kg","Retort feed (kg)"]],
         "tail" => [["tail_cargo_kg","Tailings aboard (kg)"],["dumped_kg","Spoil bank (kg)"]],
         "fuel" => [["tender_h2_kg","Hydrogen aboard (kg)"],["tender_o2_kg","Oxygen aboard (kg)"]],
@@ -174,6 +174,14 @@ fn show_instruments(s) {
     emit("crater_cup.graph_opened", s.mode);
 }
 
+fn inspect_station(name) {
+    let was_visible = this.plots_visible;
+    this.inspection = name;
+    this.plots_visible = !signals_for(name).is_empty();
+    if was_visible || this.plots_visible { show_instruments(this); }
+    dashboard(this);
+}
+
 // Scene picking and the Controls menu both commit to the local session registry.
 fn sync_subject() {
     let local = local_session_id();
@@ -184,16 +192,15 @@ fn sync_subject() {
         }
     }
     if ["mine","tail","fuel"].contains(mode) {
-        this.inspection=switch mode {"mine"=>"Auger","tail"=>"Mule",_=>"Dewar"};
         required(cmd("ReleaseControlSource",#{source:find_path("/World/Avatar")}));
-        dashboard(this);
+        this.inspect_station(switch mode {"mine"=>"Auger","tail"=>"Mule",_=>"Dewar"});
         return;
     }
     if mode == this.mode { return; }
     this.inspection="";
     this.mode = mode;
     this.pad_view = false;
-    this.flight_plot = false;
+    this.plots_visible = true;
     this.started = true;
     if !this.drive_hint_seen && (mode == "scout" || mode == "comet") {
         notify_kind("Drive " + input_hint("forward") + " / " + input_hint("backward")
@@ -211,14 +218,13 @@ fn sync_subject() {
 fn on_start(me, ctx) {
     this.phase = "Landing approach";
     this.pad_view = false;
-    this.flight_plot = false;
+    this.plots_visible = !is_unattended();
     this.scored = [];
     this.start_time = ();
     this.time = ();
     this.mode = "overview";
     this.sunward = false;
     this.running = true;
-    this.instruments = false;
     this.started = false;
     this.drive_hint_seen = false;
     this.inspection=""; this.last_hint="";
@@ -242,13 +248,13 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    if evt.name=="scene.pointer" && evt.value["button"]=="primary" && this.mode=="overview" {
+    if evt.name=="scene.pointer" && evt.value["button"]=="primary"
+        && evt.value["scene_interaction_mode"]=="simulation" && this.mode=="overview" {
         let path=evt.value["hit_path"];
         if path==() {path=evt.value["target_path"];}
         if path==() {return;}
-        this.inspection=station(path);
-        if this.flight_plot {show_instruments(this);}
-        dashboard(this);
+        let name = station(path);
+        if name != "" { this.inspect_station(name); }
         return;
     }
     if evt.name == "crater_relay.phase" {
@@ -291,7 +297,7 @@ fn on_event(me, evt, ctx) {
         }
         return;
     }
-    if evt.name == "crater_cup.graph_opened" && (this.instruments || this.flight_plot) && evt.value == this.mode {
+    if evt.name == "crater_cup.graph_opened" && this.plots_visible && evt.value == this.mode {
         for grid in query("InspectSignalGrid", #{}).grids {
             if grid.grid != 1 { continue; }
             for plot in grid.plots {
@@ -304,16 +310,11 @@ fn on_event(me, evt, ctx) {
     }
     if evt.name != "tutorial.action" { return; }
     switch evt.value {
-        "cup.clear" => {this.inspection="";this.flight_plot=false;show_instruments(this);},
+        "cup.clear" => { this.inspect_station(""); return; },
         "cup.pad" => {
             if this.mode != "overview" { return; }
             this.pad_view = !this.pad_view;
             required(set_camera(if this.pad_view { "/World/PadCam" } else { "/World/Avatar" }));
-        },
-        "cup.relay_graph" => {
-            if this.mode != "overview" { return; }
-            this.flight_plot = !this.flight_plot;
-            show_instruments(this);
         },
         "cup.photo" => {
             if this.mode == "scout" && !this.alternate { required(photo()); }
@@ -338,8 +339,7 @@ fn on_event(me, evt, ctx) {
             this.running = !this.running;
         },
         "cup.graph" => {
-            if this.mode == "overview" { return; }
-            this.instruments = !this.instruments;
+            this.plots_visible = !this.plots_visible;
             show_instruments(this);
         },
         "cup.overview" => {

@@ -12,10 +12,12 @@
   The avatar camera follows Comet's heading and stays level as Kestrel tilts.
   Equipment labels show live masses or battery charge. The ore and tailings
   meshes use object-space regolith detail to carry their surface with the rover.
-  Click a receiver for gas mass, absolute pressure and temperature. Click the
-  solar field or battery bank for live power and storage. **Object plots** opens
-  the selected equipment’s history. Drive Scout with WASD, aim its camera with
-  I/K (tilt) and J/L (pan), or race Comet over the jump. **Avatar view** returns
+  Live refinery power and water electrolysis plots open with the scene.
+  Click a receiver to plot gas mass, absolute pressure and temperature. The
+  solar field and battery bank open their own live plots. Taking control of a
+  vehicle opens its instruments. Use **Hide plots** to close the charts.
+  Drive Scout with WASD, aim its camera with I/K (tilt) and J/L (pan), or race
+  Comet over the jump. **Avatar view** returns
   to the base. The assay press packs a small side stream of the dry residue.
   The field has 64 tables of 96 m² each. Four 250 kWh cabinets buffer the 800 V
   bus. The fixed lighting rig represents one illuminated operating period.
