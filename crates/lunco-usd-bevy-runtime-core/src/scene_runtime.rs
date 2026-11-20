@@ -198,6 +198,7 @@ pub struct SetEmptyViewportReason {
 pub(crate) fn clear_scene_on_twin_closed(
     trigger: On<TwinClosed>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
     mut admission: ResMut<lunco_core_runtime::AsyncWorkAdmission>,
     mut backed: ResMut<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     mut registry: ResMut<DocumentRegistry<UsdDocument>>,
@@ -210,6 +211,7 @@ pub(crate) fn clear_scene_on_twin_closed(
     for key in pending_twin.release_twin(twin) {
         admission.cancel_queued(key);
     }
+    pending_twin.sync_scene_progress(&mut progress);
     for doc in backed.release_twin(twin) {
         if workspace.as_deref().is_some_and(|workspace| {
             workspace.document(doc).is_some_and(|entry| {
@@ -253,6 +255,7 @@ fn on_open_twin_scene(
     asset_server: Option<Res<AssetServer>>,
     usd_sources: Option<Res<Assets<UsdSourceBytes>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
+    mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
     let twin_id = lunco_workspace::TwinId::new(request.twin_id);
@@ -327,6 +330,7 @@ fn on_open_twin_scene(
         twin.root.join(relative),
         twin.root.clone(),
     );
+    pending_twin.sync_scene_progress(&mut progress);
     if source_failed {
         pending_twin.mark_failed(
             source_id,
@@ -1454,6 +1458,7 @@ mod restart_overlay_tests {
         for was_active in [false, true] {
             let mut app = App::new();
             app.init_resource::<crate::twin_projection::PendingTwinDocs>()
+                .init_resource::<lunco_core_runtime::SimulationProgress>()
                 .init_resource::<lunco_core_runtime::AsyncWorkAdmission>()
                 .init_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
                 .init_resource::<DocumentRegistry<UsdDocument>>()

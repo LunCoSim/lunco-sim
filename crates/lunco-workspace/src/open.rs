@@ -643,6 +643,11 @@ impl PendingTwinOpens {
         !self.tasks.is_empty()
     }
 
+    /// Whether a pending workspace scan has an explicitly requested scene.
+    pub fn is_scene_pending(&self) -> bool {
+        self.tasks.iter().any(|entry| entry.scene.is_some())
+    }
+
     /// Cancel scans superseded by a newer replacement request. Dropping the
     /// task handles prevents their results from being observed; the candidate
     /// that completes owns the next workspace commit.

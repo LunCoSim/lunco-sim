@@ -480,7 +480,11 @@ curl -s -X POST http://127.0.0.1:4101/api/commands \
 After `Exit`, verify that the process and `:4101` listener are gone before
 starting another session. A queued command or a reachable socket is not proof
 that a scene is ready; `/api/ready` is the gate for scene load, Modelica compile
-and participant initialization. For coupled Modelica admission, also inspect
+and participant initialization. For a requested Twin scene, `preparation`
+includes its pending workspace scan, document preparation and the admitted
+transition until the scene lifecycle takes over. Independently verify authored
+operator controls when readiness of the presentation is part of the test.
+For coupled Modelica admission, also inspect
 `CosimStatus.last_coupled_initialization` and the actual participant outputs.
 Successful constructors alone do not prove the connected initial coordinate was
 certified. The initialization-only worker preparation has no live actor or
