@@ -42,6 +42,9 @@ impl Plugin for UsdSceneRuntimePlugin {
             app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
         }
         app.init_resource::<lunco_core::SceneTransitionCoordinator>();
+        app.insert_resource(lunco_usd_commands::UsdFileOpenRoute(
+            scene_runtime::open_file,
+        ));
         app.init_resource::<lunco_core::RuntimeFaults>();
         app.init_resource::<lunco_usd_core::commands::EmptyViewportReason>();
         app.add_message::<lunco_usd_bevy_scene::UsdSceneProjectionReset>();

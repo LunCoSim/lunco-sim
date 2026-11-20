@@ -7,7 +7,17 @@ use lunco_core::{AppSceneExt, SceneResource};
 use lunco_core_runtime::{SimulationProgress, SimulationProgressKey};
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_stage::{UsdStageAsset, UsdStageProjectionPlan};
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+/// Asset identity resolved against the current scene's Twin mounts. Registry
+/// updates change availability independently of this source snapshot.
+struct Dependency {
+    uri: String,
+    runtime_required: bool,
+    address: Result<Option<(DatasetScope, PathBuf)>, String>,
+}
 
 #[derive(Resource, Default)]
 struct Inputs {
@@ -15,6 +25,7 @@ struct Inputs {
     plan: Option<Arc<UsdStageProjectionPlan>>,
     mounts_revision: Option<u64>,
     live: Option<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>>,
+    dependencies: Vec<Dependency>,
 }
 impl SceneResource for Inputs {}
 
@@ -37,44 +48,41 @@ fn update(
         .and_then(|prim| stages.get(&prim.stage_handle))
         .map(|stage| &stage.projection_plan);
     let revision = roots.as_ref().and_then(|roots| roots.revision().ok());
-    if root == inputs.root
-        && revision == inputs.mounts_revision
-        && match (&inputs.plan, plan) {
-            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
-            (None, None) => true,
-            _ => false,
-        }
-        && !registry
-            .as_ref()
-            .is_some_and(|registry| registry.is_changed())
-        && !requirements.is_changed()
-        && !inputs.is_changed()
-        && !runtime.as_ref().is_some_and(|runtime| runtime.is_changed())
-    {
-        return;
-    }
-    if root != inputs.root
+    let scene_changed = root != inputs.root
         || !match (&inputs.plan, plan) {
             (Some(old), Some(new)) => Arc::ptr_eq(old, new),
             (None, None) => true,
             _ => false,
-        }
+        };
+    let dependencies_changed = scene_changed
+        || revision != inputs.mounts_revision
+        || inputs.is_changed()
+        || runtime.as_ref().is_some_and(|runtime| runtime.is_changed());
+    if !dependencies_changed
+        && !registry
+            .as_ref()
+            .is_some_and(|registry| registry.is_changed())
+        && !requirements.is_changed()
     {
-        inputs.live = None;
+        return;
     }
-    inputs.root = root;
-    inputs.plan = plan.cloned();
-    inputs.mounts_revision = revision;
-    let mut next = SceneDatasetRequirements::default();
-    if let Some(registry) = registry.as_deref() {
-        next.scene = plan.and(root);
+    if dependencies_changed {
+        let _span = bevy::log::info_span!("usd_scene_dataset_dependencies").entered();
+        if scene_changed {
+            inputs.live = None;
+        }
+        inputs.root = root;
+        inputs.plan = plan.cloned();
+        inputs.mounts_revision = revision;
         let composed = inputs
             .live
             .as_ref()
             .or_else(|| plan.map(|plan| plan.asset_identifiers()));
+        let mut seen = HashSet::new();
         let composed = composed
             .into_iter()
             .flat_map(|paths| paths.values().flatten())
+            .filter(|uri| seen.insert(uri.as_str()))
             .map(|uri| (uri, false));
         let runtime = runtime
             .as_deref()
@@ -82,10 +90,23 @@ fn update(
             .into_iter()
             .flat_map(|runtime| &runtime.uris)
             .map(|uri| (uri, true));
-        for (reference, runtime_required) in composed.chain(runtime) {
-            let (scope, relative) = match DatasetScope::for_asset_uri(reference, roots.as_deref()) {
-                Ok(Some(address)) => address,
-                Ok(None) if !runtime_required => continue,
+        inputs.dependencies = composed
+            .chain(runtime)
+            .map(|(uri, runtime_required)| Dependency {
+                uri: uri.clone(),
+                runtime_required,
+                address: DatasetScope::for_asset_uri(uri, roots.as_deref()),
+            })
+            .collect();
+    }
+    let mut next = SceneDatasetRequirements::default();
+    if let Some(registry) = registry.as_deref() {
+        next.scene = plan.and(root);
+        for dependency in &inputs.dependencies {
+            let reference = &dependency.uri;
+            let (scope, relative) = match &dependency.address {
+                Ok(Some((scope, relative))) => (scope, relative),
+                Ok(None) if !dependency.runtime_required => continue,
                 Ok(None) => {
                     faults.raise("required-asset-undeclared", root, "Runtime asset dependency",
                         format!("No artifact is declared for {reference}. Correct the URI or declare it in Assets.toml."));
@@ -101,12 +122,12 @@ fn update(
                     continue;
                 }
             };
-            let scanned = registry.is_scope_scanned(&scope);
+            let scanned = registry.is_scope_scanned(scope);
             if !scanned {
                 next.pending_scopes.insert(scope.id());
             }
-            if let Some(entry) = registry.declared_artifact(&scope, &relative) {
-                let Some(uri) = scope.mounted_uri(&relative) else {
+            if let Some(entry) = registry.declared_artifact(scope, relative) {
+                let Some(uri) = scope.mounted_uri(relative) else {
                     faults.raise(
                         "required-asset-invalid",
                         root,
@@ -119,7 +140,7 @@ fn update(
                     .entry(entry.id.clone())
                     .or_default()
                     .insert(uri);
-            } else if runtime_required && scanned {
+            } else if dependency.runtime_required && scanned {
                 faults.raise("required-asset-undeclared", root, "Runtime asset dependency",
                     format!("No artifact is declared for {reference}. Correct the URI or declare it in Assets.toml."));
             }
@@ -174,6 +195,9 @@ pub(crate) fn stage_changed(
     id: AssetId<UsdStageAsset>,
     changes: &[lunco_usd_bevy_stage::canonical::RawStageChange],
 ) {
+    use lunco_usd_bevy_stage::native_paths::{
+        composed_layer_identifiers_for_active_prims, consumed_asset_identifiers_for_active_prims,
+    };
     use lunco_usd_bevy_stage::{UsdReadObject, canonical::CanonicalStages};
     let Some(root) = world
         .get_resource::<lunco_core::SceneMountState>()
@@ -226,15 +250,15 @@ pub(crate) fn stage_changed(
             stack.extend(view.children(&path));
         }
     }
-    let mut replacement = lunco_usd_bevy_stage::native_paths::consumed_asset_identifiers_for_prims(
-        &view,
-        paths.iter().cloned(),
-    );
+    let active_paths: Vec<_> = paths
+        .iter()
+        .filter(|path| view.is_active(path) == Ok(true))
+        .cloned()
+        .collect();
+    let mut replacement =
+        consumed_asset_identifiers_for_active_prims(&view, active_paths.iter().cloned());
     for (prim, identifiers) in
-        lunco_usd_bevy_stage::native_paths::composed_layer_identifiers_for_prims(
-            view.stage(),
-            paths.iter().cloned(),
-        )
+        composed_layer_identifiers_for_active_prims(view.stage(), active_paths)
     {
         replacement.entry(prim).or_default().extend(identifiers);
     }

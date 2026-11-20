@@ -368,6 +368,8 @@ pub struct GeneratedModelicaSource {
     pub doc_uri: String,
     /// Exact transient Modelica source sent to the compiler.
     pub source: String,
+    /// Syntax already checked by the synthesizer for a successful projection.
+    syntax: Option<Arc<StoredDefinition>>,
     /// Included composed USD component paths.
     pub component_paths: Vec<String>,
     /// `(prim path, source asset, instantiated class)` per member — the
@@ -1185,16 +1187,21 @@ fn queue_domain_projection(
     let task_plan = plan.clone();
     let work = move || {
         let view: &dyn ComposedReader = task_plan.as_ref();
-        if let Some(telemetry_index) = telemetry_index {
-            let _ =
-                telemetry_index.get_or_init(|| Arc::new(AuthoredTelemetryIndex::from_view(view)));
-        }
         let context = SynthContext {
             classes: &classes,
             member_paths: member_paths.as_deref(),
             runtime_context,
         };
-        synthesizer.synthesize(view, &task_root, &task_model_name, &context)
+        let result = synthesizer.synthesize(view, &task_root, &task_model_name, &context);
+        // Only publication consumes telemetry. Let all admitted Rhai synthesis
+        // jobs start independently and prepare the shared index before a result
+        // that needs it can reach the commit boundary.
+        if matches!(&result, Ok(SynthOutcome::Ready(_)))
+            && let Some(telemetry_index) = telemetry_index
+        {
+            telemetry_index.get_or_init(|| Arc::new(AuthoredTelemetryIndex::from_view(view)));
+        }
+        result
     };
     queue_domain_projection_work(
         admission,
@@ -1353,6 +1360,7 @@ fn commit_domain_projection(
                     network_root: prim.path.clone(),
                     doc_uri: format!("generated://{model_name}.mo"),
                     source: String::new(),
+                    syntax: None,
                     component_paths: Vec::new(),
                     members: Vec::new(),
                     source_roots: Vec::new(),
@@ -1475,6 +1483,7 @@ fn commit_domain_projection(
         network_root: prim.path.clone(),
         doc_uri,
         source: source_for_diagnostics,
+        syntax: Some(synthesized.syntax),
         component_paths: synthesized.component_paths,
         members: synthesized.members,
         source_roots: synthesized.source_roots.into_iter().collect(),
@@ -2065,6 +2074,17 @@ pub fn sync_generated_network_documents(
         if source.source.is_empty() {
             continue;
         }
+        let Some(syntax) = &source.syntax else {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "modelica-generated-source-admission-failed",
+                format!(
+                    "generated source {} has no validated syntax",
+                    source.doc_uri
+                ),
+            );
+            continue;
+        };
         // Generated documents use the same source-aware class resolver as
         // authored Modelica documents. The source-root registry owns identity,
         // load state, and dispatch to the Modelica worker.
@@ -2157,8 +2177,23 @@ pub fn sync_generated_network_documents(
             );
             continue;
         }
+        if !documents.reload_external_source(document, &source.source)
+            || !documents.host_mut(document).is_some_and(|host| {
+                host.document_mut()
+                    .offer_validated_syntax(&source.source, Arc::clone(syntax))
+            })
+        {
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                "modelica-generated-source-admission-failed",
+                format!(
+                    "generated source {} could not admit its document syntax",
+                    source.doc_uri
+                ),
+            );
+            continue;
+        }
         commands.entity(entity).try_insert(pin);
-        documents.reload_external_source(document, &source.source);
         if let Err(error) = documents.link(entity, document) {
             bevy::log::warn!(
                 "[ModelicaProjection] failed to link entity {entity} to document {document}: {error}"
@@ -2826,7 +2861,14 @@ pub fn resolve_member_classes(
             | AssetEvent::Unused { id }
             | AssetEvent::LoadedWithDependencies { id } => *id,
         };
-        if let Some(indexes) = telemetry_indexes.as_deref_mut() {
+        // Dependency readiness can arrive in a later update for the same
+        // immutable plan. Retire its telemetry slot only on actual asset
+        // replacement or removal.
+        if matches!(
+            event,
+            AssetEvent::Modified { .. } | AssetEvent::Removed { .. } | AssetEvent::Unused { .. }
+        ) && let Some(indexes) = telemetry_indexes.as_deref_mut()
+        {
             indexes.retire_asset(stage_id);
         }
         match event {
@@ -3591,6 +3633,7 @@ mod tests {
                 network_root: "/Rig".into(),
                 doc_uri: "generated://Rig.mo".into(),
                 source: "model Rig end Rig;".into(),
+                syntax: None,
                 component_paths: Vec::new(),
                 members: Vec::new(),
                 source_roots: Vec::new(),
@@ -4285,6 +4328,7 @@ def Scope "Rig"
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Rig.mo".into(),
                     source: "model Rig end Rig;".into(),
+                    syntax: None,
                     component_paths: vec!["/Battery".into()],
                     members: Vec::new(),
                     source_roots: Vec::new(),
@@ -4338,6 +4382,7 @@ def Scope "Rig"
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Generated.mo".into(),
                     source: "model Generated end Generated;".into(),
+                    syntax: None,
                     component_paths: Vec::new(),
                     members: Vec::new(),
                     source_roots: Vec::new(),
@@ -4425,6 +4470,7 @@ def Scope "Rig"
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Rig.mo".into(),
                     source: "model Rig end Rig;".into(),
+                    syntax: None,
                     component_paths: Vec::new(),
                     members: Vec::new(),
                     source_roots: Vec::new(),

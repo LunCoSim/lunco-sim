@@ -11528,6 +11528,7 @@ dependencies = [
  "lunco-usd-bevy-scene",
  "lunco-usd-bevy-stage",
  "lunco-usd-bevy-twin",
+ "lunco-usd-commands",
  "lunco-usd-compose",
  "lunco-usd-core",
  "lunco-usd-document",

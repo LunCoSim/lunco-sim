@@ -126,7 +126,10 @@ pub(crate) fn on_usd_viewport_click(
     };
 
     let root = session.scene_root();
-    let stage_id = session.stage_handle().id();
+    let Some(stage) = session.stage_handle() else {
+        return;
+    };
+    let stage_id = stage.id();
     let filter = |entity: Entity| lunco_usd_bevy_scene::is_preview_entity(entity, root, &q_parents);
     let settings = MeshRayCastSettings {
         // Preview projection visibility can lag the egui paint by one schedule;
@@ -498,9 +501,16 @@ pub fn on_select_usd_prim(
         );
         return;
     }
+    let Some(stage) = session.stage_handle() else {
+        warn!(
+            "SELECT_USD_PRIM: preview {} has no projected stage",
+            cmd.preview.0
+        );
+        return;
+    };
     let Some(target) = resolve_usd_prim_in_preview(
         session.scene_root(),
-        session.stage_handle().id(),
+        stage.id(),
         &cmd.path,
         &q_paths,
         &q_parents,

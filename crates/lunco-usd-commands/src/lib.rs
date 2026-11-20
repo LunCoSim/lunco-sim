@@ -3,8 +3,8 @@
 //! Plumbs USD into the shared workbench command bus described in
 //! `AGENTS.md` §4.2:
 //!
-//! - **Open**: observes [`OpenFile`]
-//!   and handles paths with a USD extension. Modelica observes the same
+//! - **Open**: observes [`OpenFile`] once for USD and dispatches the host's
+//!   USD file-open route. Modelica observes the same
 //!   command for `.mo`, and SysML handles `.sysml`/`.kerml`.
 //!   Each observer is responsible for its own extension gate so
 //!   an `OpenFile { path: "/foo.mo" }` doesn't end up parsed as USD.
@@ -74,6 +74,30 @@ use openusd_schemas::lux::tokens as ltok;
 /// added by the application-level USD runtime bundle so any binary that pulls
 /// in USD gets the document surface, even headless bins.
 pub struct UsdCommandsPlugin;
+
+/// The USD address selected by the shared Open File command.
+pub enum UsdOpenFileSource {
+    File {
+        path: PathBuf,
+        admission: FileDocumentAdmission,
+    },
+    Asset(String),
+}
+
+/// The host's USD file-open entry point. Document-only hosts open native
+/// documents. The scene runtime installs its exclusive document/scene router.
+#[derive(Resource)]
+pub struct UsdFileOpenRoute(pub fn(&mut World, UsdOpenFileSource));
+
+impl Default for UsdFileOpenRoute {
+    fn default() -> Self {
+        Self(|world, source| {
+            if let UsdOpenFileSource::File { path, admission } = source {
+                spawn_usd_load(world, path, admission);
+            }
+        })
+    }
+}
 
 /// Promote an authored document when the live twin projection is installed.
 ///
@@ -255,6 +279,7 @@ impl Plugin for UsdCommandsPlugin {
         }
         app.init_resource::<DocumentRegistry<UsdDocument>>();
         app.init_resource::<UsdEditSessions>();
+        app.init_resource::<UsdFileOpenRoute>();
         authoring_preparation::install(app);
         // Self-register with the workbench's plugin-driven document
         // kind registry. `init_resource` defends against the case where
@@ -451,10 +476,7 @@ fn retire_usd_discard_on_save(trigger: On<lunco_doc_bevy::DocumentSaved>, mut co
     commands.queue(move |world: &mut World| retire_pending_usd_discards(world, Some(doc)));
 }
 
-/// Observer for the workbench's typed [`OpenFile`] command. Picks up
-/// `.usda`, `.usd`, and `.usdc` paths so HTTP API / MCP / `Open` URI dispatch all route into
-/// the same async-load pipeline the Twin browser uses. Modelica's
-/// `on_open_file` ignores non-`.mo` paths, so the observers coexist.
+/// Decode the USD address and pass it to the host's single open route.
 #[on_command(OpenFile)]
 fn on_open_file_for_usd(
     trigger: On<OpenFile>,
@@ -462,29 +484,39 @@ fn on_open_file_for_usd(
     workspace: Option<Res<WorkspaceResource>>,
     connection: Option<Res<lunco_core_session::ClientConnection>>,
     replica: Option<Res<lunco_core_session::ReplicatedScene>>,
+    route: Res<UsdFileOpenRoute>,
 ) {
-    let path = trigger.event().path.clone();
-    let replication =
-        lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
-    let admission = FileDocumentAdmission::capture(
-        workspace.as_deref().map(|workspace| &workspace.0),
-        replication.as_ref(),
-    );
-    commands.queue(move |world: &mut World| {
-        let path = match lunco_storage::file_uri_to_path(&path) {
-            Ok(Some(path)) => path,
-            Ok(None) if lunco_assets_core::has_scheme(&path) => return,
-            Ok(None) => PathBuf::from(path),
-            Err(error) => {
-                bevy::log::warn!("[UsdOpenFile] {error}");
-                return;
+    let path = &trigger.event().path;
+    let file = |path| {
+        let replication = lunco_core_session::current_replication_owner(
+            connection.as_deref(),
+            replica.as_deref(),
+        );
+        UsdOpenFileSource::File {
+            path,
+            admission: FileDocumentAdmission::capture(
+                workspace.as_deref().map(|workspace| &workspace.0),
+                replication.as_ref(),
+            ),
+        }
+    };
+    let source = match lunco_storage::file_uri_to_path(path) {
+        Ok(Some(path)) if is_usd_path(&path.to_string_lossy()) => file(path),
+        Ok(None) if is_usd_path(path) => {
+            if lunco_assets_core::has_scheme(path) {
+                UsdOpenFileSource::Asset(path.clone())
+            } else {
+                file(PathBuf::from(path))
             }
-        };
-        if !is_usd_path(&path.to_string_lossy()) {
+        }
+        Ok(_) => return,
+        Err(error) => {
+            bevy::log::warn!("[UsdOpenFile] {error}");
             return;
         }
-        spawn_usd_load(world, path, admission);
-    });
+    };
+    let open = route.0;
+    commands.queue(move |world: &mut World| open(world, source));
 }
 
 /// Resolve through the shared asset owner on a worker, then use the document

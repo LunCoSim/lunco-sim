@@ -267,7 +267,9 @@ pub fn produce_usd_joint_view(
         let Ok(prim) = q.get(entity) else {
             continue;
         };
-        let handle = session.stage_handle();
+        let Some(handle) = session.stage_handle() else {
+            continue;
+        };
         if prim.stage_handle.id() != handle.id() {
             continue;
         }
@@ -405,10 +407,11 @@ fn preview_body_transform(
         return q_globals.get(session.scene_root()).ok().copied();
     }
 
+    let stage = session.stage_handle()?.id();
     q_prims
         .iter()
         .find(|(entity, prim, _)| {
-            prim.stage_handle.id() == session.stage_handle().id()
+            prim.stage_handle.id() == stage
                 && prim.path == path
                 && lunco_usd_bevy_scene::is_preview_entity(*entity, session.scene_root(), q_parents)
         })

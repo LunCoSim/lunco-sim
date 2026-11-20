@@ -2174,16 +2174,25 @@ fn compile_shared(
         compiler.source_unit_identity(model_name, &unit.source, doc_uri, &unit.extras)?;
     let checked_request = checked_compile_request_identity(&source_identity, unit);
     let mut force_rebuild = false;
-    if let Some(artifact) = artifacts.checked_request(&checked_request) {
+    if let Some(mut artifact) = artifacts.checked_request(&checked_request) {
         let parameters = merge_instance_values(
             &unit.parameter_overrides,
             &artifact.authored_bindings.parameter_overrides,
         );
         let key = shared_compile_hash(model_name, unit, doc_uri, library_gen, &parameters);
         if compiled_cache_allows_reuse(doc_uri, key)? {
-            log::debug!(
-                "[modelica-runtime] reused checked bindings and interface for `{model_name}`"
-            );
+            if unit.project_edit_interface && artifact.edit_interface.is_none() {
+                artifact.edit_interface = Some(Arc::new(compiler.interface_for_parameter_edits(
+                    model_name,
+                    &unit.source,
+                    doc_uri,
+                    &unit.extras,
+                    &artifact.compiled.dae,
+                    &parameters,
+                )?));
+                artifacts.insert(key, artifact.clone());
+            }
+            log::debug!("[modelica-runtime] reused checked compile request for `{model_name}`");
             return Ok(artifact);
         }
         force_rebuild = true;
@@ -2238,14 +2247,18 @@ fn compile_shared(
         &unit.authored_bindings.values,
         &unit.authored_bindings.external_inputs,
     )?;
-    artifact.edit_interface = Some(Arc::new(compiler.interface_for_parameter_edits(
-        model_name,
-        &unit.source,
-        doc_uri,
-        &unit.extras,
-        &artifact.compiled.dae,
-        &parameters,
-    )?));
+    artifact.edit_interface = if unit.project_edit_interface {
+        Some(Arc::new(compiler.interface_for_parameter_edits(
+            model_name,
+            &unit.source,
+            doc_uri,
+            &unit.extras,
+            &artifact.compiled.dae,
+            &parameters,
+        )?))
+    } else {
+        None
+    };
     if artifact.compiled.dae.external_tables().is_empty() {
         artifact.checked_request = Some(checked_request);
         artifacts.insert(key, artifact.clone());
@@ -3162,6 +3175,8 @@ struct CompileUnit {
     parameter_overrides: Vec<(String, f64)>,
     authored_bindings: lunco_modelica_runtime::ModelicaAuthoredBindings,
     expected_library_revision: Option<u64>,
+    /// Live actors and interface requests expose checked source editing facts.
+    project_edit_interface: bool,
 }
 
 fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> CompileUnit {
@@ -3171,6 +3186,7 @@ fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> 
         parameter_overrides: Vec::new(),
         authored_bindings: Default::default(),
         expected_library_revision: None,
+        project_edit_interface: true,
     }
 }
 
@@ -3725,6 +3741,7 @@ pub fn modelica_worker(
                             canonical_parameter_overrides(&parameter_overrides);
                         unit.authored_bindings = authored_bindings;
                         unit.expected_library_revision = expected_library_revision;
+                        unit.project_edit_interface = false;
                         let pending = initialization::PendingInitialization {
                             request_id,
                             model_name: model_name.clone(),
@@ -6235,14 +6252,23 @@ end CoupledArrays;
 
     #[test]
     fn prepared_closure_key_remains_with_shared_artifact_after_overlay_release() {
-        let unit = assemble_compile_unit(
+        let mut unit = assemble_compile_unit(
             "model Probe parameter Integer count=2; final parameter Real fixedGain=4; protected parameter Real hidden=7; public Real x(start=1); equation der(x)=-x; end Probe;",
             Vec::new(),
         );
         let mut compiler = ModelicaCompiler::new();
         let mut artifacts = CompiledArtifactCache::new(std::num::NonZeroUsize::new(2).unwrap());
+        unit.project_edit_interface = false;
+        let numerical =
+            compile_shared(&mut artifacts, &mut compiler, "Probe", &unit, "first.mo", 0)
+                .expect("numerical compile admits the checked DAE");
+        assert!(numerical.edit_interface.is_none());
+        compiler.clear_user_documents();
+
+        unit.project_edit_interface = true;
         let first = compile_shared(&mut artifacts, &mut compiler, "Probe", &unit, "first.mo", 0)
-            .expect("strict compile and identity capture succeed");
+            .expect("live compile admits the edit interface on the retained artifact");
+        assert!(Arc::ptr_eq(&numerical.compiled.dae, &first.compiled.dae));
         compiler.clear_user_documents();
         let reused = compile_shared(&mut artifacts, &mut compiler, "Probe", &unit, "first.mo", 0)
             .expect("shared artifact retains captured identity without seated overlays");

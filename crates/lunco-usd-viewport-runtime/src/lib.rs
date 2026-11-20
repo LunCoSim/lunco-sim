@@ -85,9 +85,10 @@ use lunco_usd_viewport_core::{
     ResetUsdPreviewView, SaveUsdInspectionPreset, SetUsdPreviewProjection, SetUsdPreviewTextLayer,
     SetUsdPreviewViewMode, SetUsdPrimDisplayMode, USD_PREVIEW_VIEW_PANEL_KIND, UsdInspectionPreset,
     UsdInspectionSettings, UsdPreviewExplodeAction, UsdPreviewExplodeState, UsdPreviewExplodedPart,
-    UsdPreviewId, UsdPreviewProjection, UsdPreviewSession, UsdPreviewView, UsdPreviewViewId,
-    UsdPreviewViewMeasured, UsdPreviewViewMode, UsdPrimDisplayModes, UsdViewportMeasured,
-    UsdViewportOrbitInput, UsdViewportState, ZoomUsdPreviewView,
+    UsdPreviewId, UsdPreviewProjection, UsdPreviewSession, UsdPreviewStage, UsdPreviewView,
+    UsdPreviewViewId, UsdPreviewViewMeasured, UsdPreviewViewMode, UsdPreviewViewPresented,
+    UsdPrimDisplayModes, UsdViewportMeasured, UsdViewportOrbitInput, UsdViewportState,
+    ZoomUsdPreviewView,
 };
 use lunco_workbench_core::scene_pick::{ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::PanelRects;
@@ -243,6 +244,7 @@ impl Plugin for UsdViewportPlugin {
         app.add_observer(on_set_usd_prim_display_mode);
         app.add_observer(on_doc_changed_for_preview_text);
         app.add_observer(on_usd_document_ready);
+        app.add_observer(on_preview_view_presented);
         app.add_observer(on_viewport_measured);
         app.add_observer(on_preview_view_measured);
         app.add_observer(on_viewport_orbit_input);
@@ -322,14 +324,17 @@ fn sync_usd_prim_display_mode_intents(
 ) {
     let sessions: Vec<_> = viewport
         .sessions()
-        .map(|session| {
-            (
+        .filter_map(|session| {
+            Some((
                 session.id(),
                 session.scene_root(),
-                session.stage_handle().id(),
-            )
+                session.stage_handle()?.id(),
+            ))
         })
         .collect();
+    if sessions.is_empty() {
+        return;
+    }
 
     for (entity, path, visual_target) in &prims {
         let Some((preview, _root, _)) = sessions.iter().find(|(_, root, stage)| {
@@ -394,12 +399,14 @@ fn request_preview_text_read(world: &mut World, preview: UsdPreviewId) {
         return;
     };
 
-    let stage_id = world
+    let Some(stage_id) = world
         .resource::<UsdViewportState>()
         .session(preview)
-        .expect("captured preview session exists")
-        .stage_handle
-        .id();
+        .and_then(UsdPreviewSession::stage_handle)
+        .map(Handle::id)
+    else {
+        return;
+    };
     let assets = world.resource::<Assets<UsdStageAsset>>();
     let Some(asset) = assets.get(stage_id) else {
         return;
@@ -552,6 +559,7 @@ fn drain_pending_usd_preview_text_reads(world: &mut World) {
                 continue;
             }
             let current = stage_current
+                && session.stage_handle().map(Handle::id) == Some(read.stage_id)
                 && current_generation == Some(read.generation)
                 && session.text.requested_generation == Some(read.generation);
             session.text.loading = false;
@@ -716,13 +724,13 @@ fn reconcile_preview_projection_state(
 ) {
     let sessions: Vec<_> = state
         .sessions()
-        .map(|session| {
-            (
+        .filter_map(|session| {
+            Some((
                 session.id(),
                 session.doc(),
                 session.scene_root(),
-                session.stage_handle().id(),
-            )
+                session.stage_handle()?.id(),
+            ))
         })
         .collect();
 
@@ -959,7 +967,7 @@ fn create_preview_session(
     id: UsdPreviewId,
     doc: DocumentId,
     edit_target: LayerId,
-    stage_handle: Handle<UsdStageAsset>,
+    stage: UsdPreviewStage,
     render_layer: usize,
     primary_view: UsdPreviewViewId,
 ) -> Option<UsdPreviewSession> {
@@ -996,7 +1004,7 @@ fn create_preview_session(
         doc,
         edit_target,
         scene_root,
-        stage_handle,
+        stage,
         render_layer,
         primary_view,
     ))
@@ -1212,7 +1220,8 @@ fn frame_preview_views(
             let Some(stage_id) = state
                 .view(view_id)
                 .and_then(|view| state.session(view.preview()))
-                .map(|session| session.stage_handle().id())
+                .and_then(UsdPreviewSession::stage_handle)
+                .map(Handle::id)
             else {
                 continue;
             };
@@ -1423,6 +1432,24 @@ fn preview_view_is_visible(
         || snapshot.is_tab_visible(TabId::instance(USD_PREVIEW_VIEW_PANEL_ID, view_id.0))
 }
 
+/// Use panel demand to mount a restored preview.
+fn on_preview_view_presented(trigger: On<UsdPreviewViewPresented>, mut commands: Commands) {
+    let view = trigger.event().view;
+    commands.queue(move |world: &mut World| {
+        let state = world.resource::<UsdViewportState>();
+        let Some(session) = state
+            .view(view)
+            .and_then(|view| state.session(view.preview()))
+        else {
+            return;
+        };
+        if matches!(session.stage, UsdPreviewStage::WaitingForView) {
+            let preview = session.id();
+            mount_preview_session(world, preview);
+        }
+    });
+}
+
 /// Apply persisted presentation settings after the requested preview camera
 /// and view state have both been created.
 fn apply_restored_preview_view_settings(
@@ -1614,13 +1641,10 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         }
-        let owner = match preview_runtime_owner(world, doc) {
-            Ok(owner) => owner,
-            Err(error) => {
-                report_preview_error(world, "usd-preview-open-failed", error);
-                return;
-            }
-        };
+        if let Err(error) = preview_runtime_owner(world, doc) {
+            report_preview_error(world, "usd-preview-open-failed", error);
+            return;
+        }
         let requested_view = world
             .resource_mut::<UsdViewportState>()
             .take_restore_primary_view(preview);
@@ -1658,6 +1682,14 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
                     kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
                     instance: view.0,
                 });
+            }
+            if requested_view.is_none()
+                && world
+                    .resource::<UsdViewportState>()
+                    .session(preview)
+                    .is_some_and(|session| session.stage_handle().is_none())
+            {
+                mount_preview_session(world, preview);
             }
             return;
         }
@@ -1699,42 +1731,18 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             );
             return;
         };
-        let Some((name, rel)) = viewport_twin_coords(world, doc) else {
-            report_preview_error(
-                world,
-                "usd-preview-open-failed",
-                format!("document {doc} has no loadable composed USD source"),
-            );
-            return;
+        remove_preview_session(world, preview);
+        let stage = if requested_view.is_some() {
+            UsdPreviewStage::WaitingForView
+        } else {
+            UsdPreviewStage::Unmounted
         };
-        let address = lunco_assets_core::twin_uri(&name, &rel);
-        let path = match lunco_assets_core::asset_path::load_asset_path(&address, None, None, None)
-        {
-            Ok(path) => path,
-            Err(error) => {
-                report_preview_error(
-                    world,
-                    "usd-preview-open-failed",
-                    format!("invalid preview source `{address}`: {error}"),
-                );
-                return;
-            }
-        };
-        let stage_handle = world.resource::<AssetServer>().load::<UsdStageAsset>(path);
-        if let Some(old_doc) = world
-            .resource::<UsdViewportState>()
-            .session(preview)
-            .map(UsdPreviewSession::doc)
-        {
-            remove_preview_session(world, preview);
-            release_preview_projection(world, old_doc);
-        }
         let Some(session) = create_preview_session(
             world,
             preview,
             doc,
             edit_target,
-            stage_handle,
+            stage,
             render_layer,
             primary_view,
         ) else {
@@ -1777,25 +1785,15 @@ fn on_open_usd_preview(trigger: On<OpenUsdPreview>, mut commands: Commands) {
             kind: USD_PREVIEW_VIEW_PANEL_ID.as_str().to_owned(),
             instance: primary_view.0,
         });
-        request_preview_text_read(world, preview);
-        {
-            let mut backed = world.resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>();
-            if let Some(twin) = owner.runtime.local_twin() {
-                backed.track(doc, twin, name, rel);
-            } else {
-                backed.track_preview(doc, name, rel);
-            }
-        }
-        world
-            .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
-            .acquire_preview(doc);
         let claimed = world
             .resource_mut::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
             .claim_user(doc);
         if claimed {
             world.trigger(lunco_usd_bevy_twin::UsdDocumentUserOwned { doc });
         }
-        mount_preview_session(world, preview);
+        if requested_view.is_none() {
+            mount_preview_session(world, preview);
+        }
     });
 }
 
@@ -2000,7 +1998,6 @@ fn on_close_usd_preview(trigger: On<CloseUsdPreview>, mut commands: Commands) {
                 .resource_mut::<UsdViewportState>()
                 .mark_preview_closed(doc);
         }
-        release_preview_projection(world, doc);
     });
 }
 
@@ -2610,7 +2607,7 @@ fn collect_preview_explode_targets(
     ),
     String,
 > {
-    let (root, stage_id, ready) = {
+    let (root, stage_id) = {
         let viewport = world
             .get_resource::<UsdViewportState>()
             .ok_or_else(|| "USD preview viewport state is unavailable".to_string())?;
@@ -2625,18 +2622,18 @@ fn collect_preview_explode_targets(
                 command.doc_id
             ));
         }
-        (
-            session.scene_root(),
-            session.stage_handle().id(),
-            session.projection_ready(),
-        )
+        let stage_id = session
+            .stage_handle()
+            .filter(|_| session.projection_ready())
+            .map(Handle::id)
+            .ok_or_else(|| {
+                format!(
+                    "USD preview {} has no ready composed projection",
+                    command.preview.0
+                )
+            })?;
+        (session.scene_root(), stage_id)
     };
-    if !ready {
-        return Err(format!(
-            "USD preview {} has no ready composed projection",
-            command.preview.0
-        ));
-    }
 
     if command.assembly.trim() != command.assembly
         || command.assembly.is_empty()
@@ -3100,7 +3097,6 @@ fn on_twin_closed_for_viewport(
                 for preview in sessions {
                     let _ = remove_preview_session(world, preview);
                 }
-                release_preview_projection(world, doc);
                 continue;
             }
             let needs_rehome = world
@@ -3118,7 +3114,13 @@ fn on_twin_closed_for_viewport(
                 .resource::<UsdViewportState>()
                 .session_ids_for_doc(doc);
             for preview in sessions {
-                mount_preview_session(world, preview);
+                if world
+                    .resource::<UsdViewportState>()
+                    .session(preview)
+                    .is_some_and(|session| session.stage_handle().is_some())
+                {
+                    mount_preview_session(world, preview);
+                }
             }
         }
     });
@@ -3133,7 +3135,6 @@ fn on_doc_closed_for_viewport(trigger: On<DocumentClosed>, mut commands: Command
         for preview in sessions {
             let _ = remove_preview_session(world, preview);
         }
-        release_preview_projection(world, doc);
     });
 }
 
@@ -3196,12 +3197,16 @@ fn preview_runtime_owner(
 /// only viewport-side stage binding; all ordinary and structural edits are
 /// still consumed by `sync_twin_overlays` and the canonical stage sink.
 fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
-    let Some(doc) = world
-        .resource::<UsdViewportState>()
-        .session(preview)
-        .map(UsdPreviewSession::doc)
-    else {
-        return;
+    let (doc, scene_root, has_lease) = {
+        let mut state = world.resource_mut::<UsdViewportState>();
+        let Some(session) = state.session_mut(preview) else {
+            return;
+        };
+        let has_lease = session.stage_handle().is_some();
+        if !has_lease {
+            session.stage = UsdPreviewStage::Unmounted;
+        }
+        (session.doc(), session.scene_root(), has_lease)
     };
     let owner = match preview_runtime_owner(world, doc) {
         Ok(owner) => owner,
@@ -3211,6 +3216,11 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         }
     };
     let Some((name, rel)) = viewport_twin_coords(world, doc) else {
+        report_preview_error(
+            world,
+            "usd-preview-open-failed",
+            format!("document {doc} has no loadable composed USD source"),
+        );
         return;
     };
     let address = lunco_assets_core::twin_uri(&name, &rel);
@@ -3233,15 +3243,11 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         } else {
             backed.track_preview(doc, name, rel);
         }
+        if !has_lease {
+            backed.acquire_preview(doc);
+        }
     }
     lunco_usd_bevy_twin::wake_twin_projection(world);
-    let Some(scene_root) = world
-        .resource::<UsdViewportState>()
-        .session(preview)
-        .map(UsdPreviewSession::scene_root)
-    else {
-        return;
-    };
     if let Ok(mut entity) = world.get_entity_mut(scene_root) {
         entity.remove::<UsdSceneProjected>();
         entity.despawn_related::<Children>();
@@ -3256,7 +3262,7 @@ fn mount_preview_session(world: &mut World, preview: UsdPreviewId) {
         .resource_mut::<UsdViewportState>()
         .session_mut(preview)
     {
-        session.stage_handle = handle;
+        session.stage = UsdPreviewStage::Mounted(handle);
         session.projected_generation = 0;
         session.projection_ready = false;
         session.explode = None;
@@ -3287,6 +3293,9 @@ fn remove_preview_session(world: &mut World, preview: UsdPreviewId) -> Option<Do
         .resource_mut::<UsdPrimDisplayModes>()
         .remove_preview(preview);
     let doc = session.doc;
+    if session.stage_handle().is_some() {
+        release_preview_projection(world, doc);
+    }
     if let Ok(mut entity) = world.get_entity_mut(session.scene_root) {
         entity.despawn_related::<Children>();
         entity.despawn();
@@ -3351,7 +3360,6 @@ fn close_preview_view(world: &mut World, view: UsdPreviewViewId) {
                     .resource_mut::<UsdViewportState>()
                     .mark_preview_closed(doc);
             }
-            release_preview_projection(world, doc);
         }
     }
 }
@@ -3686,7 +3694,7 @@ mod tests {
             preview,
             doc,
             LayerId::root(),
-            stage.clone(),
+            UsdPreviewStage::Mounted(stage.clone()),
             FIRST_PREVIEW_RENDER_LAYER,
             UsdPreviewViewId(1),
         )
@@ -3983,7 +3991,7 @@ mod tests {
             preview,
             DocumentId::new(4),
             LayerId::root(),
-            Handle::default(),
+            UsdPreviewStage::Mounted(Handle::default()),
             FIRST_PREVIEW_RENDER_LAYER,
             view_id,
         )
@@ -4065,7 +4073,7 @@ mod tests {
             DocumentId::new(21),
             LayerId::root(),
             root,
-            Handle::default(),
+            UsdPreviewStage::Mounted(Handle::default()),
             FIRST_PREVIEW_RENDER_LAYER,
             view_id,
         ));
@@ -4149,7 +4157,7 @@ mod tests {
             DocumentId::new(41),
             LayerId::root(),
             root,
-            Handle::default(),
+            UsdPreviewStage::Mounted(Handle::default()),
             FIRST_PREVIEW_RENDER_LAYER,
             view_id,
         ));
@@ -4210,7 +4218,7 @@ mod tests {
             preview,
             doc,
             LayerId::root(),
-            stage,
+            UsdPreviewStage::Mounted(stage),
             FIRST_PREVIEW_RENDER_LAYER,
             view_id,
         )
@@ -4368,7 +4376,7 @@ mod tests {
             UsdPreviewId(1),
             doc,
             LayerId::root(),
-            stage.clone(),
+            UsdPreviewStage::Mounted(stage.clone()),
             FIRST_PREVIEW_RENDER_LAYER,
             UsdPreviewViewId(1),
         )
@@ -4531,7 +4539,7 @@ mod tests {
             UsdPreviewId(1),
             DocumentId::new(1),
             LayerId::root(),
-            Handle::default(),
+            UsdPreviewStage::Mounted(Handle::default()),
             FIRST_PREVIEW_RENDER_LAYER,
             UsdPreviewViewId(1),
         )
@@ -4652,7 +4660,7 @@ mod tests {
             UsdPreviewId(1),
             DocumentId::new(1),
             LayerId::root(),
-            Handle::default(),
+            UsdPreviewStage::Mounted(Handle::default()),
             FIRST_PREVIEW_RENDER_LAYER,
             UsdPreviewViewId(1),
         )

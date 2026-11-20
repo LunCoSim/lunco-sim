@@ -30,6 +30,21 @@ fn workspace_view_layout_restored() {
     ]);
 }
 
+fn workspace_preview_restored(doc, view, projected) {
+    let previews = query("InspectUsdViewport", #{}).previews.filter(|preview| preview.doc_id == doc);
+    if previews.len() != 1 {
+        t_report([t_true(false, "the saved document has one preview session")]);
+        return;
+    }
+    let preview = previews[0];
+    t_report([
+        t_true(preview.views.len() == 1 && preview.views[0].view == view
+            && preview.views[0].projection == "orthographic", "the saved preview keeps its view and camera settings"),
+        t_true(preview.projection_ready == projected && (preview.stage_asset_id != ()) == projected,
+            "the restored preview acquires a stage only when the tab is shown")
+    ]);
+}
+
 if cmd_data("InspectCameraFeeds", #{}).views.is_empty() {
     workspace_view_layout_empty();
 } else {

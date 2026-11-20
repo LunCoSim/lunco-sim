@@ -295,7 +295,7 @@ mod tests {
                     doc,
                     Default::default(),
                     root,
-                    Handle::default(),
+                    lunco_usd_viewport_core::UsdPreviewStage::Mounted(Handle::default()),
                     1,
                     UsdPreviewViewId(preview.0),
                 ));

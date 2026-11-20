@@ -391,7 +391,17 @@ pub struct UsdPreviewTextState {
     pub request: u64,
 }
 
-/// One projected USD preview session shared by one or more presentation views.
+/// The projection lease for a preview session.
+pub enum UsdPreviewStage {
+    /// A restored session whose workbench tab has yet to be shown.
+    WaitingForView,
+    /// No stage lease is installed.
+    Unmounted,
+    /// The exact stage selected for this preview's projection.
+    Mounted(Handle<UsdStageAsset>),
+}
+
+/// One USD preview session shared by one or more presentation views.
 pub struct UsdPreviewSession {
     /// Stable session identity.
     pub id: UsdPreviewId,
@@ -401,8 +411,8 @@ pub struct UsdPreviewSession {
     pub edit_target: LayerId,
     /// Preview scene root entity.
     pub scene_root: Entity,
-    /// Composed stage handle used by the preview projection.
-    pub stage_handle: Handle<UsdStageAsset>,
+    /// Presentation demand and the current composed stage lease.
+    pub stage: UsdPreviewStage,
     /// Isolated render layer assigned by the render adapter.
     pub render_layer: usize,
     /// Document generation represented by the projection.
@@ -424,7 +434,7 @@ impl UsdPreviewSession {
         doc: DocumentId,
         edit_target: LayerId,
         scene_root: Entity,
-        stage_handle: Handle<UsdStageAsset>,
+        stage: UsdPreviewStage,
         render_layer: usize,
         primary_view: UsdPreviewViewId,
     ) -> Self {
@@ -433,7 +443,7 @@ impl UsdPreviewSession {
             doc,
             edit_target,
             scene_root,
-            stage_handle,
+            stage,
             render_layer,
             projected_generation: 0,
             projection_ready: false,
@@ -470,9 +480,12 @@ impl UsdPreviewSession {
         self.scene_root
     }
 
-    /// Return the composed USD stage handle.
-    pub const fn stage_handle(&self) -> &Handle<UsdStageAsset> {
-        &self.stage_handle
+    /// Return the composed USD stage handle once the projection is admitted.
+    pub const fn stage_handle(&self) -> Option<&Handle<UsdStageAsset>> {
+        match &self.stage {
+            UsdPreviewStage::Mounted(handle) => Some(handle),
+            _ => None,
+        }
     }
 
     /// Return the render layer assigned to this preview session.
@@ -751,6 +764,13 @@ impl UsdPrimDisplayModes {
     }
 }
 
+/// A preview panel has drawn a view that needs its composed stage.
+#[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
+pub struct UsdPreviewViewPresented {
+    /// View requesting its restored preview's stage.
+    pub view: UsdPreviewViewId,
+}
+
 /// Measurement emitted by a rendered USD viewport surface after layout.
 #[derive(bevy::ecs::event::Event, Debug, Clone, Copy)]
 pub struct UsdViewportMeasured {
@@ -996,7 +1016,8 @@ impl UsdViewportState {
 
     /// The focused stage handle.
     pub fn focused_stage_handle(&self) -> Option<&Handle<UsdStageAsset>> {
-        self.focused_session().map(|session| &session.stage_handle)
+        self.focused_session()
+            .and_then(UsdPreviewSession::stage_handle)
     }
 
     /// The focused preview scene root.
@@ -1171,9 +1192,10 @@ pub fn selected_entity_in_preview(
     q_paths: &bevy::ecs::system::Query<&UsdPrimPath>,
     q_parents: &bevy::ecs::system::Query<&ChildOf>,
 ) -> Option<Entity> {
+    let stage = session.stage_handle()?.id();
     let belongs = |entity: Entity| {
         q_paths.get(entity).is_ok_and(|path| {
-            path.stage_handle.id() == session.stage_handle().id()
+            path.stage_handle.id() == stage
                 && is_preview_entity(entity, session.scene_root(), q_parents)
         })
     };

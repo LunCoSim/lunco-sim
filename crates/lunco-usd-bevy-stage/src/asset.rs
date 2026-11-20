@@ -305,28 +305,20 @@ impl AssetLoader for UsdLoader {
             recipe,
             source_dependencies,
         } = fetched;
-        #[cfg(not(target_arch = "wasm32"))]
-        let (recipe, projection_plan) = {
-            AsyncComputeTaskPool::get()
-                .spawn(async move {
-                    let mut projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
-                    projection_plan.prepare_native_asset_paths(Some(origin), roots.as_ref());
-                    if let Some(paths) = projection_plan.native_asset_paths_snapshot() {
-                        paths.validate_owner(roots.as_ref())?;
-                    }
-                    Ok::<_, anyhow::Error>((recipe, projection_plan))
-                })
-                .await?
-        };
-        #[cfg(target_arch = "wasm32")]
-        let (recipe, projection_plan) = {
-            let mut projection_plan = UsdStageProjectionPlan::from_recipe(&recipe)?;
-            projection_plan.prepare_native_asset_paths(Some(origin), roots.as_ref());
+        let prepare = move || {
+            let projection_plan =
+                UsdStageProjectionPlan::prepare_recipe(&recipe, Some(origin), roots.as_ref())?;
             if let Some(paths) = projection_plan.native_asset_paths_snapshot() {
                 paths.validate_owner(roots.as_ref())?;
             }
-            (recipe, projection_plan)
+            Ok::<_, anyhow::Error>((recipe, projection_plan))
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let (recipe, projection_plan) = AsyncComputeTaskPool::get()
+            .spawn(async move { prepare() })
+            .await?;
+        #[cfg(target_arch = "wasm32")]
+        let (recipe, projection_plan) = prepare()?;
         self.document_inputs
             .validate_reader(&root_asset_path, input_reader.as_ref())?;
         if let (Some(owner), Some(captured)) = (&input_reader, &captured) {

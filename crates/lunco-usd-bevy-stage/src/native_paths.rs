@@ -101,16 +101,13 @@ pub fn native_references_for_prims(
 
 /// Canonical asset identities consumed by the active composed stage. Built
 /// with the projection snapshot on its worker, including arrays/time samples.
-/// Inactive prims and unselected variants do not contribute requirements.
-pub fn composed_asset_identifiers_for_prims(
+/// Pass the active prims from the admitted composition region.
+pub(crate) fn composed_asset_identifiers_for_active_prims(
     reader: &dyn UsdReadObject,
     prims: impl IntoIterator<Item = SdfPath>,
 ) -> std::collections::BTreeMap<String, BTreeSet<String>> {
     let mut by_prim = std::collections::BTreeMap::new();
     for prim in prims {
-        if reader.is_active(&prim) != Ok(true) {
-            continue;
-        }
         let mut identifiers = BTreeSet::new();
         for name in reader.attr_names(&prim) {
             collect_property(reader, &prim, &name, &mut |identifier, _| {
@@ -129,15 +126,13 @@ pub fn composed_asset_identifiers_for_prims(
 
 /// Consumer identities use the same prepared search-path contract as material
 /// and DEM readers. Call after native/search preparation has been admitted.
-pub fn consumed_asset_identifiers_for_prims(
+/// Pass only prims with validated active status.
+pub fn consumed_asset_identifiers_for_active_prims(
     reader: &dyn UsdReadObject,
     prims: impl IntoIterator<Item = SdfPath>,
 ) -> std::collections::BTreeMap<String, BTreeSet<String>> {
     let mut by_prim = std::collections::BTreeMap::new();
     for prim in prims {
-        if reader.is_active(&prim) != Ok(true) {
-            continue;
-        }
         let mut identifiers = BTreeSet::new();
         for name in reader.attr_names(&prim) {
             if !matches!(
@@ -190,8 +185,8 @@ pub fn consumed_asset_identifiers_for_prims(
 
 /// Native composition supplies the contributing spec sites, so only selected
 /// reference/payload layers (and unresolved arcs at those sites) participate.
-/// This never scans raw authored variant alternatives.
-pub fn composed_layer_identifiers_for_prims(
+/// Pass only prims with validated active status.
+pub fn composed_layer_identifiers_for_active_prims(
     stage: &openusd::usd::Stage,
     prims: impl IntoIterator<Item = SdfPath>,
 ) -> std::collections::BTreeMap<String, BTreeSet<String>> {
@@ -201,9 +196,6 @@ pub fn composed_layer_identifiers_for_prims(
         let Ok(prim) = stage.prim(path.clone()) else {
             continue;
         };
-        if !prim.is_active().is_ok_and(|active| active) {
-            continue;
-        }
         let Ok(sites) = prim.prim_stack() else {
             continue;
         };
@@ -384,11 +376,12 @@ def Scope "World" {
                 .to_vec(),
             )]),
         );
-        let mut plan = crate::UsdStageProjectionPlan::from_recipe(&recipe).unwrap();
-        plan.prepare_native_asset_paths(
+        let plan = crate::UsdStageProjectionPlan::prepare_recipe(
+            &recipe,
             Some(bevy::asset::AssetPath::parse(&source).into_owned()),
             Some(&roots),
-        );
+        )
+        .unwrap();
         let identities: BTreeSet<_> = plan
             .asset_identifiers()
             .values()

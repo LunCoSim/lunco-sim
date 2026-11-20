@@ -278,6 +278,11 @@ the event log. Accepted cancellation cannot be overwritten by queued progress;
 the worker's terminal result retires the operation. Closing a Twin retains the
 same cancellation/commit barrier and rejects late publication.
 
+USD scene admission resolves each distinct composed asset URI against the
+current Twin mounts. The scene retains those addresses until its projection,
+live asset references, runtime requirements, or mount revision changes.
+Dataset registry updates check availability against those resolved addresses.
+
 Required DEM datasets hold the existing `SimulationProgress` terrain key. Its
 reason identifies the required dataset and current phase or failure. UI and
 presentation continue while authoritative ticks wait. Once the delivered

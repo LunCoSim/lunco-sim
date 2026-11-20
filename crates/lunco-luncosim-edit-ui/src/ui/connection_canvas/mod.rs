@@ -591,10 +591,14 @@ pub fn produce_usd_canvas(
         );
     }
     for session in viewport.into_iter().flat_map(|v| v.sessions()) {
+        let Some(handle) = session.stage_handle() else {
+            views.sessions.remove(&session.id());
+            continue;
+        };
         let state = views.sessions.entry(session.id()).or_default();
         produce_usd_canvas_session(
             Some(session.doc()),
-            session.stage_handle().clone(),
+            handle.clone(),
             session.scene_root(),
             Some(session.edit_target().clone()),
             session.projected_generation(),
@@ -606,7 +610,7 @@ pub fn produce_usd_canvas(
             asset_roots.as_deref(),
             &mut canonical,
             state,
-            changes_by_stage.get(&session.stage_handle().id()),
+            changes_by_stage.get(&handle.id()),
             &server,
         );
     }

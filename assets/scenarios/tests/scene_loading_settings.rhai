@@ -76,6 +76,26 @@ fn verify_ephemeral_workspace() {
     ], "EPHEMERAL WORKSPACE", "EPHEMERAL_WORKSPACE")
 }
 
+fn verify_external_scene_file(source) {
+    let prim = query("QueryUsdPrim", #{path: "/World/ExplicitMarker"});
+    let count = 0;
+    let mounted_owner = false;
+    for doc in query("ListOpenDocuments", #{}).open_documents {
+        if doc.kind == "usd" && doc.origin.kind == "file" && doc.origin.path == source {
+            count += 1;
+            mounted_owner = doc.doc_id == prim.doc_id && doc.runtime_context.kind == "local_twin";
+        }
+    }
+    let preview_count = 0;
+    for preview in query("InspectUsdViewport", #{}).previews {
+        if preview.doc_id == prim.doc_id { preview_count += 1; }
+    }
+    report_verdict([
+        t_true(count == 1 && prim.spawned && mounted_owner, "the opened file has one Twin-owned document backing the projected scene"),
+        t_true(preview_count == 0, "the external scene open leaves the document with its scene lease")
+    ], "EXTERNAL SCENE FILE", "EXTERNAL_SCENE_FILE");
+}
+
 fn verify_project_write_failure() {
     let setting = query("GetSceneLoadingSettings", #{});
     report_verdict([

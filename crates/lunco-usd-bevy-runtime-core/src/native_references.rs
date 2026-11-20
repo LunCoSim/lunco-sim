@@ -516,9 +516,9 @@ pub(crate) fn advance(world: &mut World) {
                         let recipe = recipe
                             .reanchor(&root_id)
                             .map_err(|error| error.to_string())?;
-                        let mut plan = UsdStageProjectionPlan::from_recipe(&recipe)
-                            .map_err(|error| error.to_string())?;
-                        plan.prepare_native_asset_paths(origin, roots.as_ref());
+                        let plan =
+                            UsdStageProjectionPlan::prepare_recipe(&recipe, origin, roots.as_ref())
+                                .map_err(|error| error.to_string())?;
                         if let Some(paths) = plan.native_asset_paths_snapshot() {
                             paths
                                 .validate_owner(roots.as_ref())

@@ -253,7 +253,7 @@ impl CompiledArtifactCache {
             path.file_name()
                 .ok_or(ModelicaCacheWriteError::InvalidPath)?,
         );
-        PreparedSolveCache::retain_disk(&storage, &transaction, &incoming, limits)?;
+        retain_disk_artifacts(&storage, &transaction, &incoming, compressed.len(), limits)?;
         storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
         Ok(())
     }
@@ -341,6 +341,8 @@ impl<K: Eq + Hash, V> BoundedReuseCache<K, V> {
 pub struct ModelicaArtifactDiskLimits {
     /// Maximum records per current-version artifact family after publication.
     pub retained_entries: usize,
+    /// Maximum compressed bytes across one artifact family after publication.
+    pub retained_bytes: u64,
     pub compressed_bytes: usize,
     pub decoded_bytes: usize,
     /// Maximum zstd back-reference window, expressed as a base-two logarithm.
@@ -356,12 +358,13 @@ impl ModelicaArtifactDiskLimits {
         if self.retained_entries == 0
             || self.compressed_bytes == 0
             || self.compressed_bytes > Self::CODEC_MAX_DECODED_BYTES
+            || self.retained_bytes < self.compressed_bytes as u64
             || self.decoded_bytes == 0
             || self.decoded_bytes > Self::CODEC_MAX_DECODED_BYTES
             || !(10..=Self::MAX_WINDOW_LOG).contains(&self.zstd_window_log_max)
         {
             return Err(format!(
-                "invalid Modelica artifact disk-cache limits: retained entries must be positive, compressed/decoded byte budgets must be 1..={} and zstd window log must be 10..={}",
+                "invalid Modelica artifact disk-cache limits: retained entries must be positive, the directory byte budget must fit one maximum compressed record, compressed/decoded byte budgets must be 1..={} and zstd window log must be 10..={}",
                 Self::CODEC_MAX_DECODED_BYTES,
                 Self::MAX_WINDOW_LOG,
             ));
@@ -374,7 +377,8 @@ impl ModelicaArtifactDiskLimits {
 impl Default for ModelicaArtifactDiskLimits {
     fn default() -> Self {
         Self {
-            retained_entries: 32,
+            retained_entries: 128,
+            retained_bytes: 256 * 1024 * 1024,
             compressed_bytes: 64 * 1024 * 1024,
             decoded_bytes: Self::CODEC_MAX_DECODED_BYTES,
             zstd_window_log_max: 26,
@@ -731,64 +735,76 @@ impl PreparedSolveCache {
             path.file_name()
                 .ok_or(ModelicaCacheWriteError::InvalidPath)?,
         );
-        Self::retain_disk(storage, &transaction, &incoming, limits)?;
+        retain_disk_artifacts(storage, &transaction, &incoming, compressed.len(), limits)?;
         storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
         Ok(())
     }
+}
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn retain_disk(
-        storage: &FileStorage,
-        transaction: &lunco_storage::file_storage::DirectoryCacheTransaction,
-        incoming: &std::path::Path,
-        limits: ModelicaArtifactDiskLimits,
-    ) -> Result<(), ModelicaCacheWriteError> {
-        use std::collections::BTreeSet;
-        // Keep the N-1 most recently published or used other valid-size
-        // records; loads mark hits as used. Ties break by filename, so the
-        // choice is independent of OS enumeration order.
-        let mut recent = BTreeSet::new();
+#[cfg(not(target_arch = "wasm32"))]
+fn retain_disk_artifacts(
+    storage: &FileStorage,
+    transaction: &lunco_storage::file_storage::DirectoryCacheTransaction,
+    incoming: &std::path::Path,
+    incoming_bytes: usize,
+    limits: ModelicaArtifactDiskLimits,
+) -> Result<(), ModelicaCacheWriteError> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let Some(mut remaining_bytes) = limits.retained_bytes.checked_sub(incoming_bytes as u64) else {
+        return Err(ModelicaCacheWriteError::InvalidLimits(
+            "compressed artifact exceeds the directory byte budget".into(),
+        ));
+    };
+    // Loads record use in the modification time. Select a bounded prefix by
+    // recency, with filenames breaking ties independently of directory order.
+    let mut recent = BTreeMap::new();
+    for file in transaction.files()? {
+        let file = file?;
+        let StorageHandle::File(path) = file.handle else {
+            return Err(ModelicaCacheWriteError::InvalidPath);
+        };
+        if path != incoming
+            && owned_cache_filename(&path)
+            && file.bytes <= limits.compressed_bytes as u64
+        {
+            recent.insert((std::cmp::Reverse(file.modified), path), file.bytes);
+            if recent.len() >= limits.retained_entries {
+                recent.pop_last();
+            }
+        }
+    }
+    let mut keep = BTreeSet::new();
+    for ((_, path), bytes) in recent {
+        let Some(remaining) = remaining_bytes.checked_sub(bytes) else {
+            break;
+        };
+        remaining_bytes = remaining;
+        keep.insert(path);
+    }
+    loop {
+        // A bounded sorted batch avoids modifying a directory while its
+        // enumerator is live. Each pass makes progress through actual deletes.
+        let mut victims = BTreeSet::new();
         for file in transaction.files()? {
             let file = file?;
             let StorageHandle::File(path) = file.handle else {
                 return Err(ModelicaCacheWriteError::InvalidPath);
             };
-            if path != incoming
-                && owned_cache_filename(&path)
-                && file.bytes <= limits.compressed_bytes as u64
-            {
-                recent.insert((std::cmp::Reverse(file.modified), path));
-                if recent.len() >= limits.retained_entries {
-                    recent.pop_last();
+            if path != incoming && owned_cache_filename(&path) && !keep.contains(&path) {
+                victims.insert(path);
+                if victims.len() > limits.retained_entries {
+                    victims.pop_first();
                 }
             }
         }
-        let keep: BTreeSet<_> = recent.into_iter().map(|(_, path)| path).collect();
-        loop {
-            // A bounded sorted batch avoids modifying a directory while its
-            // enumerator is live. Each pass makes progress through actual deletes.
-            let mut victims = BTreeSet::new();
-            for file in transaction.files()? {
-                let file = file?;
-                let StorageHandle::File(path) = file.handle else {
-                    return Err(ModelicaCacheWriteError::InvalidPath);
-                };
-                if path != incoming && owned_cache_filename(&path) && !keep.contains(&path) {
-                    victims.insert(path);
-                    if victims.len() > limits.retained_entries {
-                        victims.pop_first();
-                    }
-                }
-            }
-            if victims.is_empty() {
-                break;
-            }
-            for path in victims.into_iter().rev() {
-                storage.delete_sync(&StorageHandle::File(path))?;
-            }
+        if victims.is_empty() {
+            break;
         }
-        Ok(())
+        for path in victims.into_iter().rev() {
+            storage.delete_sync(&StorageHandle::File(path))?;
+        }
     }
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1302,19 +1318,20 @@ mod tests {
     }
 
     #[test]
-    fn persistent_solve_cache_publication_retains_only_owned_regular_files() {
+    fn persistent_solve_cache_byte_quota_retains_recent_owned_regular_files() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("cache é");
         let storage = FileStorage::new();
         let limits = ModelicaArtifactDiskLimits {
-            retained_entries: 2,
+            retained_entries: 8,
+            retained_bytes: 64 * 1024,
             compressed_bytes: 64 * 1024,
             ..Default::default()
         };
         for source in 1..=8_u64 {
             let name = format!("{source:016x}-0000000000000000.bin.zst");
             storage
-                .write_sync(&StorageHandle::File(directory.join(name)), b"old")
+                .write_sync(&StorageHandle::File(directory.join(name)), &[0; 32 * 1024])
                 .unwrap();
         }
         // A later recorded use makes source 3 the most recent pre-existing record.
@@ -1360,19 +1377,22 @@ mod tests {
                 let StorageHandle::File(path) = file.handle else {
                     panic!("native file");
                 };
-                owned_cache_filename(&path).then_some(path)
+                owned_cache_filename(&path).then_some((path, file.bytes))
             })
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<std::collections::BTreeMap<_, _>>();
         assert_eq!(retained.len(), 2);
+        assert!(retained.values().sum::<u64>() <= limits.retained_bytes);
         assert!(
-            retained.contains(
+            retained.contains_key(
                 &transaction
                     .directory()
                     .join("0000000000000003-0000000000000000.bin.zst")
             ),
             "the most recently used record survives regardless of filename order"
         );
-        assert!(retained.contains(&transaction.directory().join(incoming.file_name().unwrap())));
+        assert!(
+            retained.contains_key(&transaction.directory().join(incoming.file_name().unwrap()))
+        );
         assert!(!bevy::tasks::block_on(
             storage.exists(&StorageHandle::File(oversized))
         ));
@@ -1493,7 +1513,15 @@ mod tests {
             PreparedSolveCache::save_disk_at(&storage, root.path(), &path, &key, &model, invalid),
             Err(ModelicaCacheWriteError::InvalidLimits(_))
         ));
-        assert_eq!(ModelicaArtifactDiskLimits::default().retained_entries, 32);
+        assert!(
+            ModelicaArtifactDiskLimits {
+                retained_bytes: 1,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert_eq!(ModelicaArtifactDiskLimits::default().retained_entries, 128);
         let (_command_tx, command_rx) = crossbeam_channel::unbounded();
         let (result_tx, result_rx) = crossbeam_channel::unbounded();
         super::super::modelica_worker(

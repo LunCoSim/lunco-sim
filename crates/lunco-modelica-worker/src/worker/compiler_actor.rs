@@ -159,13 +159,14 @@ impl CompilerActor {
     pub(super) fn submit_batch(
         &mut self,
         model_name: String,
-        unit: CompileUnit,
+        mut unit: CompileUnit,
         doc_uri: String,
         library_gen: u64,
         cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
         reply: Sender<Result<lunco_modelica_runtime::ModelicaBatchArtifact, String>>,
     ) -> Result<u64, String> {
         let id = self.allocate_id()?;
+        unit.project_edit_interface = false;
         self.sender()
             .send(Request::CompileBatch {
                 id,
@@ -642,13 +643,10 @@ mod tests {
         let compile_id = actor
             .submit_compile(
                 "ActorCompileProbe".into(),
-                CompileUnit {
-                    source: "model ActorCompileProbe\n  ActorLibrary.Rate rate;\n  Real x(start=0);\nequation\n  der(x) = rate.y;\nend ActorCompileProbe;\n".into(),
-                    extras: Vec::new(),
-                    parameter_overrides: Vec::new(),
-                    authored_bindings: Default::default(),
-                    expected_library_revision: None,
-                },
+                super::super::assemble_compile_unit(
+                    "model ActorCompileProbe\n  ActorLibrary.Rate rate;\n  Real x(start=0);\nequation\n  der(x) = rate.y;\nend ActorCompileProbe;\n",
+                    Vec::new(),
+                ),
                 "ActorCompileProbe.mo".into(),
                 0,
             )

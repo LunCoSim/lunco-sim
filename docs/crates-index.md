@@ -129,7 +129,7 @@ crates. Project declarations are generated from the schema source by
 | **`lunco-usd-bevy-scene-ports`** | Reusable Bevy adapter for USD-connected scene-property sinks: light intensity/radius/color channels and transform components. It owns the `PortBackend` and lifecycle markers; the aggregate USD runtime installs it explicitly. |
 | **`lunco-usd-bevy-runtime`** | Application-level composition of the USD runtime, visual, diagnostics, physics, simulation, and document-command plugins. The default `simulation` feature includes the standard vehicle/simulation projector; lean hosts can omit it, while the Modelica/Rhai co-simulation projection is opt-in through `cosim` (which implies `simulation`). |
 | **`lunco-usd-geometry`** | Render-free USD geometry substrate: BasisCurves evaluation, Truck rational curve/surface evaluation, double-precision trim-loop assembly, trimmed-domain tessellation, and rotation-minimizing curve-sweep mesh data. Isolates heavy numeric geometry dependencies from stage and camera policy. |
-| **`lunco-usd-bevy-stage`** | Renderer-independent composed-USD stage boundary: stage loading/composition, authored-layer reads, canonical stage ownership, instance identity, projection plans with immutable native asset admission tables, standard material/purpose/variant readers, transforms, units, authoring helpers, and stage integration tests. It has no runtime projection systems. |
+| **`lunco-usd-bevy-stage`** | Renderer-independent composed-USD stage boundary: stage loading/composition, authored-layer reads, canonical stage ownership, instance identity, projection plans that prepare immutable native asset paths and requirements in one operation, standard material/purpose/variant readers, transforms, units, authoring helpers, and stage integration tests. It has no runtime projection systems. |
 | **`lunco-usd-bevy-core`** | Small runtime projection-mechanism package: authored animation, live edits, mount coordination, point instancers, executable program runtime, and the shared stage-generation-keyed Modelica membership index consumed by authored-program projection and co-simulation wiring. It consumes `lunco-usd-bevy-stage`; stage readers and canonical APIs are not re-exported from this crate. |
 | **`lunco-usd-bevy-scene`** | Render-free Bevy scene contract shared by visual and domain projections: `UsdPrimPath`, scene/revision lifecycle markers, projection ordering boundaries, generic projection-reset and coalesced stage-change path/generation messages, visual-split markers, preview/ancestry ownership, authored billboard contracts, canonical USD primitive/mesh geometry readers, and composed collision/placement envelopes. It depends on the core reader and has no visual adapter or renderer dependency. |
 | **`lunco-usd-bevy-twin`** | Render-free Twin-backed USD document identity: document-to-`twin://` lookup, workspace/preview leases, separately owned document-private mounts, projection cursors, user-ownership events, the live-projection wake signal, and native source-input publication leases with retained stage asset handles. Stage decoding/composition belongs to `lunco-usd-bevy-stage`; ECS projection belongs to runtime core. It owns no rendering or UI. |
@@ -150,7 +150,7 @@ crates. Project declarations are generated from the schema source by
 | **`lunco-usd-sim`** | Vehicle-specific simulation-schema bridge (`UsdSimPlugin`): intercepts specialized schemas such as PhysX Vehicles and maps them to LunCo mobility models. It registers the vehicle wheel owner with `lunco-usd-bevy-core` for in-place live edits. It publishes avatar role/spatial identity only; camera behavior is owned by the avatar runtime and authored Rhai. It no longer installs the heavy USD cosim translator. |
 | **`lunco-usd-sim-authoring`** | Render-free composed readers for PhysX vehicle wheel-attachment and gear-drive authoring; gear drives reuse `lunco-usd-avian-reader` for standard drive units and validation, shared by vehicle projection and scene validation; it also publishes the corresponding typed USD lint facts. Runtime ECS resynchronization remains in `lunco-usd-sim`, registered through the generic live-edit owner in `lunco-usd-bevy-core`. |
 | **`lunco-usd-sim-core`** | Small render-free protocol package for the shared USD simulation schedule, processed marker, coalesced `PendingEntityWork`, pending differential contract with explicit hinge paths and a typed physics order key, reflected physical-wheel display state, and ground-collider readiness state used by vehicle, cosim, editor, authored vessel inspection, and scene-runner packages. It contains no projection systems. |
-| **`lunco-usd-sim-cosim`** | USD-authored program discovery, connection wiring, readiness, certified coupled Modelica initial admission, and Modelica/Rhai participant projection (`UsdSimCosimPlugin`). Mixed rigid-body/program interfaces consume `lunco-cosim`'s native Avian port declarations. API query providers are isolated in `lunco-usd-sim-cosim-api`; generic scene admission and mounting belong to `lunco-usd-bevy-runtime-core`. |
+| **`lunco-usd-sim-cosim`** | USD-authored program discovery, scene-owned early Modelica source reads, connection wiring, readiness, certified coupled Modelica initial admission, and participant projection (`UsdSimCosimPlugin`). Mixed rigid-body/program interfaces consume `lunco-cosim`'s native Avian port declarations. API query providers are isolated in `lunco-usd-sim-cosim-api`; generic scene admission and mounting belong to `lunco-usd-bevy-runtime-core`. |
 | **`lunco-usd-sim-cosim-api`** | Optional API query providers for cosimulation ports, status, causal traces, binding diagnostics, camera audits, and broken-connection reports. Camera audits expose opt-in native shadow fingerprints through `lunco-hash` and bounded exact-pose pages. It depends on the runtime projection but keeps API/JSON serialization out of the default cosimulation crate's direct source and dependency set. |
 | **`lunco-usd-sim-domain`** | Render-free USD domain projection: its public `network` module reads and validates component-network facts, `synthesis` owns Rhai-backed policies and generated-plan contracts, and the parent module owns Modelica member-class lifecycle, ECS projection, and lifecycle-queued generated-source document synchronization using `lunco-usd-sim-core::PendingEntityWork`. Generic USD actuator lowering lives in `lunco-usd-actuation`; its optional API query providers live in `lunco-usd-sim-domain-api`. |
 | **`lunco-usd-sim-domain-api`** | Optional typed API query providers for generated Modelica source inspection, bounded metadata reads, and linked-document source/generation checks. Kept outside the render-free domain projector so its direct dependency set does not include the `lunco-api` query surface. |
@@ -764,8 +764,8 @@ document package for authored-layer state.
 
 **`lunco-usd-commands`**
 Headless USD document and authoring command boundary. It registers the USD
-document kind, owns file/open/save and document-lifecycle observers, and lowers
-typed USD document commands through the canonical journal path. Scene
+document kind, owns the single USD `OpenFile` observer and document lifecycle,
+and lowers typed USD commands through the canonical journal path. Scene
 admission, Twin-backed stage loading, and live document projection belong to
 `lunco-usd-bevy-runtime-core`, so document-only hosts can use this package
 without the complete visual/simulation bundle. Public query-provider
@@ -797,8 +797,11 @@ updates every stage/path instance. These are engine ownership invariants, not
 changeable selection policy. Installs scene admission, Twin-backed
 stage loading, live document-to-stage projection, coalesced stage-change
 path/generation publication, authored control/program projection, scene
-commands, and the stage terminal-outcome contract. `ResetSceneRuntime` keeps
-the active Twin and mounted stage while rebuilding scene-owned runtime state.
+commands, and the stage terminal-outcome contract.
+The scene runtime supplies the host's USD file-open route for mounted
+documents, external Twin selection, and asset scene addresses.
+`ResetSceneRuntime` keeps the active Twin and mounted stage while rebuilding
+scene-owned runtime state.
 `RestartScene` reads and parses doc-backed sources asynchronously before
 teardown and rejects stale document/mount leases before commit. Default Twin admission
 parses the exact source revision and serializes the restored persistent
@@ -942,7 +945,8 @@ or document navigation.
 Render runtime for document-backed USD preview sessions. It owns preview
 lifecycle, offscreen images and egui texture registration, render cameras and
 lights, exact-stage consumed-generation readiness, render budgets, preview commands, measurements,
-and pointer-event handling. Presentation query providers live in
+and pointer-event handling. Restored tabs keep their view state and request a
+stage lease on first visibility or an explicit open. Presentation query providers live in
 `lunco-usd-viewport-ui`; the runtime does not register API queries or
 workbench panels.
 

@@ -156,6 +156,7 @@ pub struct ModelicaDocument {
     /// an O(n) string copy.
     source_arc: std::sync::OnceLock<Arc<str>>,
     syntax: Arc<SyntaxCache>,
+    prepared_syntax: Option<SyntaxCache>,
     index: ModelicaIndex,
     generation: u64,
     origin: DocumentOrigin,
@@ -238,6 +239,7 @@ impl ModelicaDocument {
             source,
             source_arc: std::sync::OnceLock::new(),
             syntax,
+            prepared_syntax: None,
             index,
             generation: 0,
             origin,
@@ -308,16 +310,39 @@ impl ModelicaDocument {
         self.syntax.generation != self.generation
     }
 
+    /// Offer a strict AST already validated by the authoritative source producer.
+    /// Engine sync admits it with this document revision and builds its index
+    /// through the normal syntax completion boundary.
+    pub fn offer_validated_syntax(&mut self, source: &str, ast: Arc<StoredDefinition>) -> bool {
+        if self.source != source {
+            return false;
+        }
+        if self.syntax_is_stale() {
+            self.prepared_syntax = Some(SyntaxCache {
+                generation: self.generation,
+                ast,
+                errors: Vec::new(),
+            });
+        }
+        true
+    }
+
+    pub fn prepared_syntax(&self) -> Option<&SyntaxCache> {
+        self.prepared_syntax.as_ref()
+    }
+
     pub fn install_parse_results(&mut self, syntax: SyntaxCache) {
         if syntax.generation != self.generation {
             return;
         }
+        self.prepared_syntax = None;
         self.syntax = Arc::new(syntax);
         self.rebuild_index();
         self.last_source_edit_at = None;
     }
 
     pub fn install_fresh_ast(&mut self, ast: Arc<StoredDefinition>) {
+        self.prepared_syntax = None;
         self.syntax = Arc::new(SyntaxCache {
             generation: self.generation,
             ast,
@@ -466,9 +491,11 @@ impl ModelicaDocument {
         // Recovering syntax retains healthy declarations and current source
         // diagnostics. Documents use this same local parser path for edits;
         // source-library bundle admission belongs to the engine.
-        self.syntax = Arc::new(SyntaxCache::from_source(&self.source, self.generation));
-        self.rebuild_index();
-        self.last_source_edit_at = None;
+        let syntax = self
+            .prepared_syntax
+            .take()
+            .unwrap_or_else(|| SyntaxCache::from_source(&self.source, self.generation));
+        self.install_parse_results(syntax);
     }
 
     pub fn changes_since(
@@ -569,6 +596,7 @@ impl ModelicaDocument {
         self.source.replace_range(range.clone(), &replacement);
         // Cached Arc<str> view is now stale.
         self.source_arc = std::sync::OnceLock::new();
+        self.prepared_syntax = None;
         self.generation = self.generation.saturating_add(1);
         self.last_source_edit_at = Some(web_time::Instant::now());
 

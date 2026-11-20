@@ -59,6 +59,17 @@ to improve a timing.
   and repeat with `--headless` using the same binary, Twin scene and cache
   conditions. Interleave the hosts and compare co-simulation construction
   profiles as well as first physics admission. See `scripts/perf/README.md`.
+  Use a private Twin copy to replay a saved workbench layout. The workbench
+  persists tab state beside the Twin even when application settings are
+  ephemeral. When profiling a preview, compare the composed-stage count and
+  the number of child spawns separately. An Editor preview can share the
+  stage asset and still project its own hierarchy.
+  For USD attribution, `usd_projection_facts` includes native traversal and
+  requirement discovery, with `usd_projection_native_paths` as a child zone
+  for asset-backed plans. Compare inclusive and child timings separately.
+  When timing a native external `OpenFile`, verify the loaded scene plan uses
+  the owning Twin's mount. Compare it with an additive open inside the Twin,
+  which prepares a document preview through the separate document lifetime.
 - The existing `scripts/perf/twin_startup.py` accepts
   `--window-size 2560x1440 --min-fps 150` for an owned Linux X11/XWayland run
   (`python3-xlib` required). Add `--pointer-passthrough` on an interactive
@@ -769,6 +780,8 @@ For dataset consent, check `publish_dataset_provisioning_surface` separately
 from its Rhai policy. Diagnostic-outbox drains must not mark registry catalog
 facts changed. Bevy excludes a system's own writes from its next change check;
 trace other writers before attributing repeated work to a publication cursor.
+For scene data holds, inspect `usd_scene_dataset_dependencies` when the source
+or mount revision changes. Registry-only updates reuse resolved addresses.
 Preserve real registry/workspace/command edits, policy replacement and interactive-window
 transitions. Run the windowed `dataset_provisioning_surface.rhai` gate with a
 declared missing scope; confirm unrelated dismissal preserves the view and
@@ -1016,7 +1029,10 @@ Inspect the separate `modelica_native_cache_load` and
 Also inspect `modelica_compiled_artifact_lookup` and
 `modelica_compiled_artifact_publish`: native-code hits do not imply equation
 compilation was reused. Check strict compiled-artifact hit logs across fresh
-processes, and distinguish source/admission changes from a warm complete input.
+processes. Isolate Modelica under `LUNCOSIM_CACHE` when concurrent sessions can
+evict records between parity runs. For retention changes, replay the same
+unrelated solves against equal starting inventories and count the original
+compiled records that remain available when the Twin reopens.
 Keep native checked DAE reconstruction, source/URI/structural-bit identity and
 external-resource eligibility intact; this cache retains no numerical state.
 The shared transport buffers serializer fragments before Zstd. Native artifacts
@@ -1332,6 +1348,11 @@ admission. Compile dispatch still checks current dependencies and waits for
 certified initial samples; earlier library I/O must not become earlier numerical
 initialization. Qualify changes with the `modelica_initialization_network` and
 `modelica_initialization_failure` production gates.
+
+For generated Modelica documents, compare Rhai synthesis, strict source
+validation and document syntax admission. The document worker reports
+`reused=true` when it takes the AST from synthesis for the exact revision.
+Time the session copy and index publication independently of parsing.
 
 For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 `prepare_fmi_component`, and ordered result commit. Prepared-cache lookup includes

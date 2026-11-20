@@ -9,9 +9,9 @@ use lunco_usd_viewport_core::{
     ApplyUsdInspectionPreset, CloseUsdPreviewView, DeleteUsdInspectionPreset, FocusUsdPreviewView,
     FrameUsdPreviewView, OpenUsdPreviewView, ResetUsdPreviewView, SaveUsdInspectionPreset,
     SetUsdPreviewProjection, SetUsdPreviewTextLayer, SetUsdPreviewViewMode, UsdInspectionSettings,
-    UsdPreviewId, UsdPreviewProjection, UsdPreviewTextLayer, UsdPreviewViewId,
-    UsdPreviewViewMeasured, UsdPreviewViewMode, UsdViewportClick, UsdViewportMeasured,
-    UsdViewportOrbitInput, UsdViewportState, preview_drag_channels,
+    UsdPreviewId, UsdPreviewProjection, UsdPreviewStage, UsdPreviewTextLayer, UsdPreviewViewId,
+    UsdPreviewViewMeasured, UsdPreviewViewMode, UsdPreviewViewPresented, UsdViewportClick,
+    UsdViewportMeasured, UsdViewportOrbitInput, UsdViewportState, preview_drag_channels,
 };
 use lunco_usd_viewport_runtime::{
     USD_PREVIEW_VIEW_PANEL_ID, USD_VIEWPORT_PANEL_ID, UsdPreviewRenderTargets,
@@ -99,34 +99,39 @@ fn render_preview_view(
     let tex_id = ctx
         .resource::<UsdPreviewRenderTargets>()
         .and_then(|targets| targets.texture_id(view_id));
-    let (focused_doc, next_view, projection, mode, text_layer, active_preset) = ctx
-        .resource::<UsdViewportState>()
-        .and_then(|state| {
-            let view = state.view(view_id)?;
-            let session = state.session(view.preview())?;
-            let next_view = singleton
-                .then(|| state.next_view_id())
-                .flatten()
-                .map(|view| (session.id(), view));
-            Some((
-                Some(session.doc()),
-                next_view,
-                view.projection(),
-                view.mode(),
-                view.text_layer(),
-                view.active_preset().map(str::to_owned),
-            ))
-        })
-        .unwrap_or_else(|| {
-            (
-                None,
-                None,
-                UsdPreviewProjection::default(),
-                UsdPreviewViewMode::default(),
-                UsdPreviewTextLayer::default(),
-                None,
-            )
-        });
+    let (focused_doc, next_view, projection, mode, text_layer, active_preset, waiting_for_view) =
+        ctx.resource::<UsdViewportState>()
+            .and_then(|state| {
+                let view = state.view(view_id)?;
+                let session = state.session(view.preview())?;
+                let next_view = singleton
+                    .then(|| state.next_view_id())
+                    .flatten()
+                    .map(|view| (session.id(), view));
+                Some((
+                    Some(session.doc()),
+                    next_view,
+                    view.projection(),
+                    view.mode(),
+                    view.text_layer(),
+                    view.active_preset().map(str::to_owned),
+                    matches!(session.stage, UsdPreviewStage::WaitingForView),
+                ))
+            })
+            .unwrap_or_else(|| {
+                (
+                    None,
+                    None,
+                    UsdPreviewProjection::default(),
+                    UsdPreviewViewMode::default(),
+                    UsdPreviewTextLayer::default(),
+                    None,
+                    false,
+                )
+            });
+    if waiting_for_view && ui.is_rect_visible(ui.max_rect()) {
+        ctx.trigger(UsdPreviewViewPresented { view: view_id });
+    }
     let name = focused_doc
         .and_then(|doc| {
             ctx.resource::<DocumentRegistry<UsdDocument>>()
@@ -634,7 +639,7 @@ mod tests {
             doc,
             LayerId::root(),
             root,
-            Handle::default(),
+            lunco_usd_viewport_core::UsdPreviewStage::Mounted(Handle::default()),
             1,
             view_id,
         );

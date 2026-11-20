@@ -638,6 +638,19 @@ receives a persistent owner in submission order. FIFO mailboxes keep its native
 state, JIT backend, stepping and teardown on that thread. Preparation cannot occupy a live owner thread. Only typed handles, immutable metadata and checked observations
 cross back to the command owner; native sessions never cross threads.
 
+The native USD co-simulation owner starts Modelica source reads from the mounted
+subtree's prepared stage as soon as Bevy reports that stage loaded. ECS geometry
+and physics projection proceed while the shared Modelica asset loader reads
+and parses those sources. A scene resource retains one handle per resolved
+address and drops them at scene teardown. Standalone and generated participants
+retain their own source and port admission, and the coupled solve waits for
+the settled wiring and authoritative initial samples in both native hosts.
+
+Independent network jobs evaluate their authored Rhai synthesizers on bounded
+workers. Successful jobs share a telemetry index for publication. The index
+is prepared after synthesis, allowing other networks to synthesize while it is
+built. Generated results commit in the existing ordered lifecycle boundary.
+
 The response bridge retains each accepted transaction as `ModelicaStepSample`;
 `ReadModelicaStepSamples` reads its exact input/output values and communication
 times. The opt-in `lunco_modelica_worker::step_audit` log target records session,
@@ -817,6 +830,12 @@ despawned, the generated document and browser metadata are retired. Authored
 Modelica documents keep the ordinary entity-removal behavior and are never
 deleted by this path.
 
+The synthesizer sends its strictly validated AST with the generated source.
+The document admits the AST for the exact source generation. The document
+worker prepares the editor session's owned copy and the regular completion
+queue publishes the index on the ECS thread. An authoritative source
+replacement retires pending syntax with the corresponding generation.
+
 Generated source roots use the ordinary Modelica search-path contract. The
 source-root registry resolves each qualified-name first segment to its
 registered source-set owner and dispatches it through the Modelica worker;
@@ -935,6 +954,11 @@ compilation, and the coupled initializer. The exact mount address and asset
 handle stay with the USD source lease for asset reads and result admission.
 Parameter bindings, solver instances, live state, and telemetry remain per
 entity.
+
+Initialization and batch requests reuse the checked DAE and binding validation.
+The compiler projects parameter edit metadata for live actors and interface
+requests. A live request that reuses a numerical artifact attaches the edit
+metadata from the same source unit and admitted library revision.
 
 `ModelicaLiveSolverSnapshot` is immutable per admitted solver plan. The worker
 cache, typed receipts and admitted `ModelicaModel` share it through `Arc` within
@@ -1066,14 +1090,14 @@ stale-owner deltas, load overlap, failed-publication recovery and corrupt record
 `modelica_source_target` consumes the
 accounting through production, including rejection/replacement lifecycle checks.
 
-Native prepared-solve disk reuse uses the cache-owned `ModelicaArtifactDiskLimits`
+Native compiled-DAE and prepared-solve disk reuse use the cache-owned `ModelicaArtifactDiskLimits`
 resource, captured before the worker starts. Insert it before
-`ModelicaExecutionPlugin` to configure retained entries, compressed bytes,
-decoded bytes, and the zstd window logarithm. Defaults are 32 retained records,
-64 MiB compressed, 256 MiB decoded, and a
-64 MiB zstd window (`zstd_window_log_max = 26`). Byte budgets must be positive
-and at most the named 256 MiB codec ceiling; window logarithms must be 10–28.
-The retained-entry budget must also be positive.
+`ModelicaExecutionPlugin` to configure directory retention and codec limits.
+Each artifact family retains up to 128 records and 256 MiB of compressed data
+by default. Each record allows 64 MiB compressed, 256 MiB decoded, and a
+64 MiB zstd window (`zstd_window_log_max = 26`). Record byte limits must be positive
+and at most the 256 MiB codec ceiling. Window logarithms must be 10–28. The
+directory must retain at least one maximum-size record.
 Invalid configuration reports a typed worker failure before the preparation
 pool starts. Changing the resource after startup does not change that worker's
 immutable snapshot.
@@ -1099,17 +1123,17 @@ handles use standard-library exclusive locking on Unix and Windows; dropping
 the guard releases the lock. The lock file is never removed or replaced.
 Heavy encoding happens before acquisition. Retention streams regular-file
 metadata, excluding symlinks and directories, and only owns exact lowercase
-`<16-hex-source>-<16-hex-key>.bin.zst` entries in `prepared-solve-v14`.
-It preserves the N−1 most recently published or used other records within the
-compressed byte budget (file modification time, filename as the tie-break, so
-enumeration order never decides); a verified disk hit records its use through
+`<16-hex-source>-<16-hex-key>.bin.zst` records in the current-version compiled-DAE
+or prepared-solve directory. It reserves space for the incoming record and
+keeps the newest prefix that fits the remaining count and aggregate byte
+budgets. Modification time orders records and the filename breaks ties.
+A verified disk hit records its use through
 `FileStorage::mark_cache_file_used`. It deletes excess/oversized records in bounded sorted batches after
 closing each enumerator, then atomically publishes the incoming record.
 Unrecognized files, nested directories, and other caches remain untouched.
 Independent cooperating processes serialize this transaction: each successful
 publication meets its writer's captured entry and compressed-byte limits.
-The resulting owned records occupy at most N times the compressed-byte budget;
-this excludes filesystem overhead, atomic staging, and unrelated files.
+The total excludes filesystem overhead, atomic staging, and unrelated files.
 Directory processing retains only bounded keeper/victim sets, rather than a
 directory-wide vector. Generic `persistent_solve_cache_` tests cover streaming
 budgets, owned-only cleanup, concurrent publication, and rejection; storage
