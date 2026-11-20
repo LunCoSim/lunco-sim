@@ -1,21 +1,19 @@
 # lunco-celestial — declared datasets.
 #
 # Body IMAGERY. The bodies themselves are code (radius, GM, rotation are
-# physics); how they LOOK is data, and this file is the whole of what the engine
-# knows about it. Nothing here is fetched on its own — these appear in
-# Settings ▸ Data & libraries and are downloaded when a user asks, exactly like
-# every other declared dataset. Without them Earth renders ocean blue and the
-# Moon regolith grey, which is a complete appearance, not a broken one.
+# physics). This manifest declares the imagery sources and prepared textures.
+# The desktop startup asset policy selects the default maps for background
+# preparation. Earth and Moon use their base colors until imagery is ready.
 #
 # `dest` is resolved against the shared engine cache (`lunco_assets_core::cache_dir`)
 # and holds the SOURCE download; `[*.process]` derives the file the renderer
 # actually samples. The processed files live in the shared user cache and are
-# available in Settings on request; they are not startup requirements or release-package data.
+# listed in Settings ▸ Data & libraries. They are outside the release payload.
 #
 # The `[*.body]` sub-table is DOMAIN metadata: it names the body these pixels
 # belong to, by NAIF id, so `bind_dataset_body_imagery` can apply an installed
-# texture without any crate hardcoding a path. Add a body's imagery by adding an
-# entry here — there is no second place to edit.
+# texture without any crate hardcoding a path. Register a body's imagery by
+# adding an entry here.
 
 [earth]
 name = "Earth Blue Marble (NASA Next Generation)"

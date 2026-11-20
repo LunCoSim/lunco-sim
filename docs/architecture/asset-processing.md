@@ -344,6 +344,36 @@ installed it can show **Building terrain maps** or **Preparing terrain views**
 while the simulation is already ready. Closing the dialog leaves transport
 alone, including a manual pause.
 
+## Desktop startup assets
+
+`lunco-luncosim-ui` invokes the application-owned `assets.startup.select`
+hook once when the desktop engine catalog is published. It sends an
+`Array<Map>` of dataset IDs, scope kinds, groups, keys and lifecycle states.
+The hook runs in Application/Lifecycle/Start with no simulation clock and
+returns an ordered array of declared dataset IDs. The shipped
+`startup_assets.rhai` policy selects the Earth and Moon engine declarations.
+Change that policy to select other resources on the next launch.
+
+Rust validates the complete returned list for unknown or repeated IDs before
+queuing work. Missing entries use `RequestDataset`, including existing
+verification, processing and cache publication. Installed entries are reused.
+An absent policy schedules no work, and an invalid result reports a dataset
+diagnostic and queues nothing. The application policy layer owns this call
+even if a Twin installs another implementation of the same seam.
+
+The separate, dismissible Built-in assets card projects the same registry
+states through the application `assets.provision` policy. Settings ▸ Data &
+libraries keeps progress, diagnostics and retry available after dismissal.
+When a scene-data notice is open, it takes the foreground and reports that
+built-in downloads continue in the background. Dismissing the scene notice
+restores the built-in card if it is still open. Both scopes share the
+configured transfer limit and keep their own lifecycle.
+Startup provisioning adds no simulation hold. A scene that explicitly refers
+to any missing declared artifact still uses the scene-readiness contract below.
+Browser, server and windowless runs use their regular artifact paths.
+The production `test_download_policies.rhai` gate covers startup selection,
+Twin exclusion, progress, failure and completion.
+
 Scene requirements and admission
 -------------------------------
 
@@ -372,9 +402,10 @@ read on installation.
 
 `ListDatasets.required_for_scene` and the provisioning hook consume that same
 resource. Recommendations do not define scene requirements. The prompt shows
-required data; Settings includes required, recommended and optional rows. Closing
-the prompt keeps a missing scene paused. Required consent has no persistent
-suppression setting. No network request starts without an explicit request.
+required data. Settings includes required, built-in, recommended and optional
+rows. Closing the prompt keeps a missing scene paused. Required consent has
+no persistent suppression setting. Scene requirements wait for an explicit
+request or an existing operation for the same dataset.
 
 Runtime dependencies use this same scene lease and registry. Actual Rhai
 scenario and tool-library consumers traverse their loaded source/import graph

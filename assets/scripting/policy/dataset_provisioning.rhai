@@ -122,7 +122,52 @@ fn simulation_preparation(facts) {
     let status=provision_choice(facts.playing==false,"Simulation paused","Simulation ready");
     #{ready:true,fault:false,status:status,detail:"",terrain:terrain}
 }
+fn startup_assets_view(ctx) {
+    let rows=[];
+    let ready=0;
+    let working=false;
+    let failed=false;
+    for dataset in ctx.datasets {
+        let state=dataset.state.kind;
+        let row=dataset_preparation_row(dataset,ctx.scope_id);
+        if row.ready {ready+=1;row.status="Ready";}
+        if state=="queued" {row.status="Queued";}
+        if state=="processing" {row.status="Preparing for the simulator";}
+        if state=="cancelling" {row.action_display="none";}
+        if dataset_working(state) {working=true;}
+        if state=="failed" || row.status=="Source validation failed" {failed=true;}
+        rows.push(row);
+    }
+    let complete=ready==rows.len();
+    let title="Preparing built-in assets";
+    let description="These downloads run once. You can keep using LunCoSim.";
+    let dismiss="Continue in background";
+    if complete {
+        title="Built-in assets ready";
+        description="These files are saved on this device for future launches.";
+        dismiss="Done";
+    } else if failed {
+        title="Built-in assets need attention";
+        description="Retry here or in Settings → Data & libraries.";
+        dismiss=provision_choice(working,"Continue in background","Close");
+    } else if !working {
+        title="Built-in asset setup paused";
+        description="Resume here or return later in Settings → Data & libraries.";
+        dismiss="Close";
+    }
+    let color=provision_choice(!complete && !failed && !working,"var(--muted-color)",
+        preparation_color(complete,working && !failed));
+    #{visible:ctx.interactive && ctx.scene_notice_visible!=true && !rows.is_empty(),
+      title:title,description:description,phase_color:color,
+      activity_display:provision_choice(working,"flex","none"),
+      scope_label:ready.to_string()+" / "+rows.len().to_string()+" ready",
+      simulation_status:"",simulation_detail:"",rows:rows,
+      actions:[#{key:"dismiss",label:dismiss,action:"dismiss",scope:"startup-assets"}]}
+}
+
 fn dataset_provisioning(ctx) {
+    if ctx.startup==true {return startup_assets_view(ctx);}
+    let settings=ctx.include_optional==true;
     let rows=[];
     let optional=[];
     let ready_rows=[];
@@ -134,7 +179,7 @@ fn dataset_provisioning(ctx) {
     let downloads_needed=0;
     for dataset in ctx.datasets {
         if type_of(dataset.required_for_scene)!="bool" {throw "Missing typed scene requirement fact: "+dataset.id;}
-        if dataset.required_for_scene!=true && ctx.include_optional!=true {continue;}
+        if dataset.required_for_scene!=true && !settings {continue;}
         recommended+=1;
         let state=dataset.state.kind;
         let idle=["missing","failed","cancelled"].contains(state);
@@ -143,22 +188,23 @@ fn dataset_provisioning(ctx) {
         if dataset_working(state) {busy+=1;}
         let row=dataset_preparation_row(dataset,ctx.scope_id);
         if state=="failed" || row.status=="Source validation failed" {failed+=1;}
-        if ctx.include_optional==true {
-            let prefix=provision_choice(dataset.required_for_scene==true,
-                "Required by scene · ",
-                provision_choice(dataset.recommended,"Recommended · ","Optional · "));
+        if settings {
+            let prefix="Optional · ";
+            if dataset.required_for_scene==true {prefix="Required by scene · ";}
+            else if dataset.selected_for_startup==true {prefix="Built-in · ";}
+            else if dataset.recommended {prefix="Recommended · ";}
             row.label=prefix+row.label;
         }
         if row.ready {installed_count+=1;}
-        if ctx.include_optional==true && dataset.required_for_scene!=true {optional.push(row);}
-        else if ctx.include_optional!=true && row.ready {ready_rows.push(row);}
+        if settings && dataset.required_for_scene!=true {optional.push(row);}
+        else if !settings && row.ready {ready_rows.push(row);}
         else {rows.push(row);}
     }
     for row in ready_rows {rows.push(row);}
     for row in optional {rows.push(row);}
     let complete=missing==0 && busy==0;
     let simulation=simulation_preparation(ctx.simulation);
-    if !complete && ctx.include_optional!=true && !simulation.fault {
+    if !complete && !settings && !simulation.fault {
         simulation.status="Simulation waiting for required data";
         simulation.detail="The application remains available. ";
         if failed>0 {simulation.detail+="Resolve the failed download or preparation above, then retry.";}
@@ -182,6 +228,7 @@ fn dataset_provisioning(ctx) {
         description=simulation.terrain.detail;
     }
     if simulation.fault {title="Simulation needs attention";}
+    if ctx.startup_working==true {description+=" Built-in downloads continue in the background.";}
     let working=busy>0 || (complete && ctx.simulation!=() && !simulation.fault
         && (!simulation.ready || simulation.terrain!=()));
     let dismiss=provision_choice(complete,"Close","Keep scene paused");

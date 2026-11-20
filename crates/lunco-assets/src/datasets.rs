@@ -344,10 +344,7 @@ fn spawn_download(
     let spec = entry.spec.clone();
     let scope = entry.scope.clone();
     let destination_root = scope.local_cache_root();
-    info!(
-        "[datasets] downloading '{}' ({}) — user-requested",
-        key, entry.name
-    );
+    info!("[datasets] preparing '{}' ({})", key, entry.name);
 
     bevy::tasks::AsyncComputeTaskPool::get().spawn(async move {
         let completion_status = status.clone();

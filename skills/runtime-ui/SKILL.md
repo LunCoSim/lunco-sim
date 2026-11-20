@@ -1,8 +1,8 @@
 ---
 name: runtime-ui
 description: >
-  Author or review a reloadable Twin-facing HTML/CSS-like runtime surface in
-  LunCoSim. Use this for HUDs, telemetry cards, progress overlays, view
+  Author or review a reloadable application or Twin HTML/CSS-like runtime
+  surface in LunCoSim. Use this for HUDs, telemetry cards, progress overlays, view
   switchers, runtime UI bindings, HTML/CSS hot reload, HUI, Flair,
   EngineExposures, or questions about the limits of the native HTML UI. Use
   lunco-ui instead for workbench/egui panels and docking internals.
@@ -43,9 +43,9 @@ telemetry summaries, and simple buttons.
 
 Use `lunco-workbench`/egui for the application shell, docking, code editors,
 large inspectors, rich text input, complex forms, modal dialogs, and controls
-that need semantics not present in the runtime contract. Runtime UI uses the existing
-egui host and dock geometry; it does not replace the workbench or create a
-second hit-test/camera system.
+that need semantics not present in the runtime contract. Runtime UI shares
+the workbench's dock geometry and pointer ownership. An authored overlay
+draws above the shell through the workbench overlay pass.
 
 The standard Twin, file and library Twin browser is the optional
 `lunco-workbench-browser` feature layered on the shell; do not recreate its
@@ -343,11 +343,19 @@ minimal `default_font` or a host-installed fallback.
 
 Add a surface entry to the application manifest or a Twin-owned JSON document
 with `kind: "lunco.runtime-ui-manifest.v1"`. Normal Twin loading discovers it
-through the shared JSON asset lifecycle. Twin entries replace matching shared
-surface IDs and add new ones; paths resolve from that scope's root. Use explicit
-`lunco://` references for shared imports. Do not compose a launcher-local copy
-of the application assets. Verify direct `OpenTwin`, same-Twin reopen and
-replacement with another Twin, including UI retirement and real button input.
+through the shared JSON asset lifecycle. Use the default `workspace` owner
+for scene and Twin controls. A Twin can add or replace shared workspace
+surfaces by ID. Set `"owner": "application"` in the application manifest for
+a surface that stays available across Twin changes. Its ID and namespace are
+reserved, and its actions carry no Twin target. Set `"overlay": true` when
+either kind of surface needs to draw above dock panels.
+[Ownership and publisher requirements](../../docs/architecture/runtime-authored-ui.md#application-and-workspace-surface-ownership)
+
+Paths resolve from the manifest's source root. Use explicit `lunco://`
+references for shared imports. Exercise application controls before a Twin opens
+and after changing or closing it. Verify workspace controls through direct
+`OpenTwin`, same-Twin reopen, and replacement with another Twin. Use the rendered
+controls to check retirement and callback routing.
 
 Example surface entry:
 
@@ -620,13 +628,16 @@ selector. UUID-backed Twins use `uuid-<simple-uuid>` as their source identity.
 UI admission validates source/owner lifetime, independently of loading status.
 Application-owned exposure namespaces retain owner-scoped callbacks; scene
 namespaces pin the live scene lifecycle. Simulation admission stays in the
-shared progress gate. Native button callbacks use pointer events, including
-same-frame clicks and held presses. The data window is non-modal; its panel
-uses HUI's explicit `pickable` style without claiming the entire viewport.
+shared progress gate. Use `"overlay": true` for a notice that must remain
+above dock panels. Its pickable HUI card reserves the measured rectangle in
+`ScenePickGate`, including while scene loading is held. The overlay layer
+and the surface owner's lifetime are independent.
 Validate Details, Download, Cancel, dismissal and application/Twin UI tools
-while data admission is held using
-`scripts/api/test_scene_asset_requirements.py --exercise-controls` with the
-measured 1280x720 native layout. Command-only tests do not prove button input.
+while data admission is held. With
+`scripts/api/test_scene_asset_requirements.py --exercise-controls`, use the
+captured control screenshots to enter logical coordinates. Pass the resulting
+`clicks.json` with `--clicks` to replay the same layout. Command-only tests
+do not prove button input.
 
 Retain retry/cancel actions. Dismissal means background work, and completion remains
 visible until dismissed. Use the owning terrain map and camera-cover states
@@ -675,6 +686,18 @@ The asset preparation surface receives `required_for_scene` separately from
 `recommended`. Only composed scene dependencies trigger its mandatory readiness
 flow. Queued operations offer cancellation; per-file progress names its source.
 Dismissing the window keeps missing scene data held and never starts transport.
+
+Desktop startup work has its own `startup-assets` namespace and compact
+authored overlay, available on the empty welcome screen. Change the selection
+and engine-scope rule in `assets/scripting/policy/startup_assets.rhai`. The
+`startup` fact of the
+application `assets.provision` policy projects the selected dataset states
+and scopes dismissal to the startup card. Open a Twin during a cold startup
+and check that its required-data controls take the foreground while both sets
+of transfers share the configured queue. Close that notice and check that the
+startup card returns with current progress. Verify a cold cache, failure and
+retry, dismissal during work, and a cached relaunch in the production desktop
+app. See the [startup asset contract](../../docs/architecture/asset-processing.md#desktop-startup-assets).
 
 For scrollable collections, add a sibling authored track and set the collection's
 `scrollbar` to its node id. The runtime binds native Bevy ScrollArea/Scrollbar;

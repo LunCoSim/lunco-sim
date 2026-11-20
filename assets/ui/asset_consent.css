@@ -1,6 +1,16 @@
 @import "runtime_fonts.css";
 @import "runtime_theme.css";
 
+:root {
+  --ui-activity-display: none;
+  --ui-phase-color: var(--text-color);
+  --ui-status-color: var(--text-color);
+  --ui-min-height: 112px;
+  --ui-details-display: none;
+  --ui-stages-display: flex;
+  --ui-action-display: flex;
+}
+
 #asset-consent-root {
   display: flex;
   width: 100%;

@@ -1,9 +1,9 @@
-//! Policy-owned dataset consent and progress presentation.
+//! Policy-owned startup, consent and dataset progress presentation.
 //!
 //! The dataset registry and downloader expose typed facts and generic commands.
 //! Rhai decides whether a scope is visible, which rows/actions exist, and what
-//! each mode means. The UI only validates the returned view model and publishes
-//! it to the generic HTML/CSS runtime surface.
+//! each mode means. Rust validates and publishes both independently scoped
+//! views through the shared authored UI runtime.
 
 use std::collections::HashSet;
 
@@ -13,15 +13,33 @@ use lunco_assets_datasets::{
 };
 use lunco_core::{AppSceneExt, Command, on_command, register_commands};
 use lunco_exposure_core::{EngineExposures, ExposureValue};
-use lunco_hooks::HookValue;
+use lunco_hooks::{HookValue, RegisteredHook};
+use lunco_scripting_rhai_world::policy::ScriptedPolicyRegistry;
 use lunco_workspace::WorkspaceResource;
 
 const SURFACE_NAMESPACE: &str = "asset-consent";
+const STARTUP_NAMESPACE: &str = "startup-assets";
+#[cfg(not(target_arch = "wasm32"))]
+const STARTUP_SELECTION_HOOK: &str = "assets.startup.select";
 const MAX_PROVISIONING_ROWS: usize = 256;
 const MAX_PROVISIONING_ACTIONS: usize = 32;
 
+#[cfg(not(target_arch = "wasm32"))]
+lunco_hooks::declare_hook! {
+    id: STARTUP_SELECTION_HOOK,
+    owner: "lunco-luncosim-ui",
+    description: "Select and order declared datasets for desktop startup provisioning.",
+    signature: [datasets: ArrayOfMap],
+    output: ArrayOfString,
+    deterministic: false,
+    required: false,
+    installable: true,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct DatasetProvisioningState {
+    startup_notice_open: bool,
+    startup_ids: HashSet<String>,
     pending: Vec<DatasetScope>,
     active: Option<DatasetScope>,
     dismissed: HashSet<String>,
@@ -56,6 +74,20 @@ pub(super) struct ProvisioningRow {
     pub(super) ready: bool,
     pub(super) rebuild_action: String,
     pub(super) rebuild_label: String,
+}
+
+impl ProvisioningRow {
+    pub(super) fn egui_status_color(&self, theme: &lunco_theme::Theme) -> bevy_egui::egui::Color32 {
+        if self.ready {
+            theme.tokens.success
+        } else if !self.detail.is_empty() {
+            theme.tokens.error
+        } else if self.action == "cancel" {
+            theme.tokens.accent
+        } else {
+            theme.tokens.text_subdued
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -390,6 +422,22 @@ fn state_value(state: &DatasetState) -> HookValue {
     ])
 }
 
+#[derive(Clone, Copy)]
+enum ViewMode<'a> {
+    Scene {
+        startup_working: bool,
+    },
+    Settings {
+        group: Option<&'a str>,
+        startup_ids: &'a HashSet<String>,
+    },
+    Startup {
+        ids: &'a HashSet<String>,
+        policy: Option<&'a RegisteredHook>,
+        scene_notice_visible: bool,
+    },
+}
+
 fn invoke_policy(
     registry: &DatasetRegistry,
     requirements: Option<&SceneDatasetRequirements>,
@@ -397,19 +445,29 @@ fn invoke_policy(
     interactive: bool,
     simulation: HookValue,
     expanded: Option<&HashSet<String>>,
-    include_optional: bool,
-    group: Option<&str>,
+    mode: ViewMode<'_>,
 ) -> Result<ProvisioningView, String> {
     let datasets = registry
         .entries()
         .iter()
-        .filter(|entry| &entry.scope == scope && group.is_none_or(|group| entry.group == group))
+        .filter(|entry| match mode {
+            ViewMode::Scene { .. } => &entry.scope == scope,
+            ViewMode::Settings { group, .. } => {
+                &entry.scope == scope && group.is_none_or(|group| entry.group == group)
+            }
+            ViewMode::Startup { ids, .. } => ids.contains(&entry.id),
+        })
         .map(|entry| {
             HookValue::map([
                 ("id", HookValue::str(entry.id.clone())),
                 ("key", HookValue::str(entry.key.clone())),
                 ("name", HookValue::str(entry.name.clone())),
                 ("recommended", HookValue::Bool(entry.recommended)),
+                (
+                    "selected_for_startup",
+                    HookValue::Bool(matches!(mode, ViewMode::Settings { startup_ids, .. }
+                        if startup_ids.contains(&entry.id))),
+                ),
                 (
                     "required_for_scene",
                     HookValue::Bool(
@@ -458,9 +516,42 @@ fn invoke_policy(
         ("interactive", HookValue::Bool(interactive)),
         ("datasets", HookValue::Array(datasets)),
         ("simulation", simulation),
-        ("include_optional", HookValue::Bool(include_optional)),
+        (
+            "include_optional",
+            HookValue::Bool(matches!(mode, ViewMode::Settings { .. })),
+        ),
+        (
+            "startup",
+            HookValue::Bool(matches!(mode, ViewMode::Startup { .. })),
+        ),
+        (
+            "startup_working",
+            HookValue::Bool(matches!(
+                mode,
+                ViewMode::Scene {
+                    startup_working: true
+                }
+            )),
+        ),
+        (
+            "scene_notice_visible",
+            HookValue::Bool(matches!(
+                mode,
+                ViewMode::Startup {
+                    scene_notice_visible: true,
+                    ..
+                }
+            )),
+        ),
     ]);
-    match lunco_hooks::invoke_unclassified(lunco_core_session::DATASET_PROVISION_HOOK, &[facts]) {
+    let args = [facts];
+    let result = match mode {
+        ViewMode::Startup { policy, .. } => {
+            policy.map(|policy| policy.invoke(&lunco_hooks::HookInvocation::unclassified(&args)))
+        }
+        _ => lunco_hooks::invoke_unclassified(lunco_core_session::DATASET_PROVISION_HOOK, &args),
+    };
+    match result {
         Some(Ok(value)) => parse_view(value),
         Some(Err(error)) => Err(format!("assets.provision failed: {error}")),
         None => Err("assets.provision is not installed".to_owned()),
@@ -533,9 +624,13 @@ fn exposure_map(view: &ProvisioningView) -> ExposureValue {
     ])
 }
 
-fn publish_view(view: Option<&ProvisioningView>, exposures: &mut EngineExposures) {
-    exposures.retain_across_scenes(SURFACE_NAMESPACE);
-    let mut writer = exposures.writer(SURFACE_NAMESPACE);
+fn publish_view(
+    namespace: &'static str,
+    view: Option<&ProvisioningView>,
+    exposures: &mut EngineExposures,
+) {
+    exposures.retain_across_scenes(namespace);
+    let mut writer = exposures.writer(namespace);
     writer.clear_properties();
     let Some(view) = view else {
         writer.visible(false);
@@ -589,6 +684,7 @@ fn advance_active(
 
 pub(crate) fn publish_dataset_provisioning_surface(
     registry: Res<DatasetRegistry>,
+    policies: Option<Res<ScriptedPolicyRegistry>>,
     requirements: Option<Res<SceneDatasetRequirements>>,
     workspace: Option<Res<WorkspaceResource>>,
     windows: Query<(), With<Window>>,
@@ -704,12 +800,14 @@ pub(crate) fn publish_dataset_provisioning_surface(
         || state.last_hook_generation != hook_generation
         || state.last_interactive != Some(interactive)
         || state.last_simulation.as_ref() != Some(&simulation)
-        || !exposures.surfaces.contains_key(SURFACE_NAMESPACE);
+        || !exposures.surfaces.contains_key(SURFACE_NAMESPACE)
+        || !exposures.surfaces.contains_key(STARTUP_NAMESPACE);
     if !dirty {
         return;
     }
     if requirements_changed
         || registry.is_changed()
+        || state.is_changed()
         || state.last_hook_generation != hook_generation
         || workspace.as_ref().is_some_and(|w| w.is_changed())
     {
@@ -734,8 +832,10 @@ pub(crate) fn publish_dataset_provisioning_surface(
                     interactive,
                     HookValue::Unit,
                     None,
-                    true,
-                    group.as_deref(),
+                    ViewMode::Settings {
+                        group: group.as_deref(),
+                        startup_ids: &state.startup_ids,
+                    },
                 )
                 .map(|view| view.rows);
                 DatasetSettingsGroup {
@@ -748,6 +848,16 @@ pub(crate) fn publish_dataset_provisioning_surface(
     }
     advance_active(&mut state, &registry, requirements.as_deref());
     let view = state.active.as_ref().and_then(|scope| {
+        let startup_working = state.startup_ids.iter().any(|id| {
+            matches!(
+                registry.state(id),
+                Some(
+                    DatasetState::Queued
+                        | DatasetState::Downloading { .. }
+                        | DatasetState::Processing { .. }
+                )
+            )
+        });
         invoke_policy(
             &registry,
             requirements.as_deref(),
@@ -755,13 +865,33 @@ pub(crate) fn publish_dataset_provisioning_surface(
             interactive,
             simulation.clone(),
             state.expanded.get(&scope.id()),
-            false,
-            None,
+            ViewMode::Scene { startup_working },
         )
         .map_err(|error| warn!("[datasets] {error}"))
         .ok()
     });
-    publish_view(view.as_ref(), &mut exposures);
+    let scene_notice_visible = view.as_ref().is_some_and(|view| view.visible);
+    publish_view(SURFACE_NAMESPACE, view.as_ref(), &mut exposures);
+    let startup = state.startup_notice_open.then(|| {
+        invoke_policy(
+            &registry,
+            None,
+            &DatasetScope::Engine,
+            interactive,
+            HookValue::Unit,
+            None,
+            ViewMode::Startup {
+                ids: &state.startup_ids,
+                policy: policies.as_deref().and_then(|policies| {
+                    policies.application_hook(lunco_core_session::DATASET_PROVISION_HOOK)
+                }),
+                scene_notice_visible,
+            },
+        )
+    });
+    let startup =
+        startup.and_then(|view| view.map_err(|error| warn!("[startup assets] {error}")).ok());
+    publish_view(STARTUP_NAMESPACE, startup.as_ref(), &mut exposures);
     state.last_hook_generation = hook_generation;
     state.last_interactive = Some(interactive);
     state.last_simulation = Some(simulation);
@@ -811,6 +941,10 @@ fn on_dismiss_dataset_provisioning(
     mut state: ResMut<DatasetProvisioningState>,
 ) {
     let requested = trigger.event().scope.as_str();
+    if requested == STARTUP_NAMESPACE {
+        state.startup_notice_open = false;
+        return;
+    }
     let id = if requested.is_empty() {
         state
             .active
@@ -848,11 +982,107 @@ pub(crate) fn on_dataset_scope_removed(
         .retain(|group| group.scope != scope.id());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn request_startup_assets(
+    ready: On<lunco_assets_datasets::DatasetScopeReady>,
+    registry: Res<DatasetRegistry>,
+    policies: Res<ScriptedPolicyRegistry>,
+    windows: Query<(), With<Window>>,
+    mut state: ResMut<DatasetProvisioningState>,
+    mut commands: Commands,
+) {
+    if ready.scope != DatasetScope::Engine || windows.is_empty() {
+        return;
+    }
+    let Some(policy) = policies.application_hook(STARTUP_SELECTION_HOOK) else {
+        return;
+    };
+    let entries = match startup_selection(policy, &registry) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warn!("[startup assets] {error}");
+            commands.trigger(lunco_assets_datasets::dataset_failed(error));
+            return;
+        }
+    };
+    state.startup_ids = entries.iter().map(|entry| entry.id.clone()).collect();
+    for entry in entries {
+        if entry.state.is_installed() {
+            continue;
+        }
+        state.startup_notice_open = true;
+        if matches!(entry.state, DatasetState::Missing) {
+            commands.trigger(lunco_assets_datasets::RequestDataset {
+                id: entry.id.clone(),
+            });
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn startup_selection<'a>(
+    policy: &RegisteredHook,
+    registry: &'a DatasetRegistry,
+) -> Result<Vec<&'a lunco_assets_datasets::DatasetEntry>, String> {
+    let datasets = HookValue::Array(
+        registry
+            .entries()
+            .iter()
+            .map(|entry| {
+                HookValue::map([
+                    ("id", HookValue::str(entry.id.clone())),
+                    ("scope", HookValue::str(scope_kind(&entry.scope))),
+                    ("group", HookValue::str(entry.group.clone())),
+                    ("key", HookValue::str(entry.key.clone())),
+                    ("state", HookValue::str(entry.state.kind())),
+                ])
+            })
+            .collect(),
+    );
+    let context = lunco_core::RuntimeExecutionContext {
+        route: Some(lunco_core::RuntimeRoute::application(
+            lunco_core::RuntimeCycle::Lifecycle,
+        )),
+        phase: lunco_core::RuntimePhase::Start,
+        ..lunco_core::RuntimeExecutionContext::unclassified()
+    };
+    let result = policy
+        .invoke(&lunco_hooks::HookInvocation::with_context(
+            &[datasets],
+            context,
+        ))
+        .map_err(|error| format!("{STARTUP_SELECTION_HOOK} failed: {error}"))?;
+    let HookValue::Array(ids) = result else {
+        return Err(format!(
+            "{STARTUP_SELECTION_HOOK} must return an array of dataset IDs"
+        ));
+    };
+    if ids.len() > MAX_PROVISIONING_ROWS {
+        return Err(format!(
+            "{STARTUP_SELECTION_HOOK} selected more than {MAX_PROVISIONING_ROWS} datasets"
+        ));
+    }
+    let mut seen = HashSet::new();
+    ids.iter()
+        .map(|id| {
+            let id = id.as_str().ok_or("Expected a dataset ID")?;
+            if !seen.insert(id) {
+                return Err(format!("{STARTUP_SELECTION_HOOK} repeated dataset '{id}'"));
+            }
+            registry.entry(id).ok_or_else(|| {
+                format!("{STARTUP_SELECTION_HOOK} selected undeclared dataset '{id}'")
+            })
+        })
+        .collect()
+}
+
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<DatasetProvisioningState>()
         .init_scene_resource::<EngineExposures>()
         .add_observer(on_dataset_scope_removed)
         .add_systems(Update, publish_dataset_provisioning_surface);
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_observer(request_startup_assets);
     register_all_commands(app);
 }
 

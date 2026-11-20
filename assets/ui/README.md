@@ -9,13 +9,21 @@ The committed baseline is `bevy_hui 0.8.0` with `bevy_flair 0.9.0` on Bevy
 `0.20.0`. HUI is the template/event layer and Flair is the retained Bevy CSS
 style layer; neither is a browser DOM.
 
-Twins can provide their own JSON manifest with
-`kind: "lunco.runtime-ui-manifest.v1"`. Normal Twin loading composes it over
-application surfaces by stable ID; closing the Twin restores shared surfaces.
-Paths in each manifest resolve from its application or Twin root. Shared
-imports from a Twin use explicit addresses such as
-`lunco://ui/runtime_fonts.css`. See the architecture's Twin-owned presentation
-contract for admission, validation and teardown.
+## Choose the surface owner
+
+Use `"owner": "application"` in the application manifest for controls that span
+Twin changes. The `startup-assets` entry is the shipped example.
+Use the default `workspace` owner for controls that act on the active Twin or
+scene. The `asset-consent` entry uses this default. Both entries use
+`"overlay": true` to paint above dock panels. Keep the visible card pickable so
+its measured bounds also own pointer input.
+[Manifest examples](runtime_surfaces.json)
+
+Application and Twin manifests use the same `lunco.runtime-ui-manifest.v1`
+format. A Twin can add or replace workspace entries by ID.
+Asset paths resolve relative to the manifest's application or Twin root. Use
+`lunco://ui/runtime_fonts.css` to import the shared fonts from a Twin.
+[Ownership and publisher requirements](../../docs/architecture/runtime-authored-ui.md#application-and-workspace-surface-ownership)
 
 ## Stable surface contract
 
@@ -70,6 +78,8 @@ the selected IDs against visible retained surfaces before capture.
 Each exposed value is projected into its declared template property. A manifest
 binding with `css: true` also projects a CSS custom property named
 `--ui-<property-name>`; ordinary prose never enters the CSS token stream.
+Give each bound surface property an explicit template default. HUI only
+registers a surface property when its declaration contains a value.
 The registry stores typed text,
 boolean, f64, array, and map values, not CSS or HUI types. A manifest binding
 may map exact rendered values such as `true`, `false`, or `301` into
@@ -202,18 +212,22 @@ On native desktop, the asset watcher handles the following without relaunching:
 | `runtime_surfaces.json` | Replaces registered roots and action mappings. |
 | `runtime_fonts.css` | Reapplies the font stylesheet; verify the font asset exists. |
 
+Use `ReadExposures` to check the namespace, visibility and bound properties
+when iterating on a surface. Exercise application controls with a Twin open
+and again after changing or closing the Twin. Exercise workspace controls
+against their current scene and check them again after replacement.
+
 Changing Rust producers or action observers still requires a rebuilt binary and
 a controlled session replacement. `ReloadShader` and `RunScenario` reload
 other systems and do not reload HTML/CSS. The headless/server feature does not
 link this UI or its file watcher; web builds use the normal bundled-asset cache
 workflow.
 
-The shipped surfaces are the rover HUD, camera-status card, celestial view
-switcher, terrain progress card, asset-consent modal, and networking
-scenario-download card. The
-asset-consent view retains active download/preparation rows and explicit
-completion, using scoped actions and Rhai-formatted progress. Its contract is
-documented in [runtime-authored UI](../../docs/architecture/runtime-authored-ui.md).
+The shipped surfaces include the rover HUD, camera-status card, celestial view
+switcher, terrain progress card, startup-assets card, scene asset-consent
+window, and networking scenario-download card. The two asset notices consume
+independent exposure namespaces and share the scoped Rhai action path.
+[Asset preparation contract](../../docs/architecture/asset-processing.md#desktop-startup-assets)
 
 The Settings ▸ HUD submenu is the user-facing view over the existing global HUD
 owners and the active Twin's camera-status setting; it does not add a second

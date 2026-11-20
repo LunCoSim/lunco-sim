@@ -576,8 +576,9 @@ download window. A scene does not probe for unrelated Twin data during startup.
 
 Step 4 still matters for asset references that have no dataset declaration.
 Declared datasets selected by scene policy are reported by the generic artifact
-reader when unavailable. Step 3 is deliberately *not* automatic materialisation
-— see the rule above; the resolver offers, the user decides.
+reader when unavailable. The resolver offers missing assets for explicit
+provisioning. The desktop application also submits requests from its
+[startup policy](asset-processing.md#desktop-startup-assets).
 
 Content addressing by `sha256` (rather than URL hash) remains open, and buys
 what path-keyed caches cannot: a changed URL with an unchanged hash is a cache
@@ -590,10 +591,9 @@ shadow the other. The workspace `assets/` dir is just a root with an
 
 ## Bodies and their textures
 
-Body imagery is **declared data, not a path in Rust**. `lunco-celestial`'s
-`Assets.toml` carries the Earth and Moon maps like any other dataset — listed in
-Settings ▸ Data & libraries, fetched only when a user asks — and each entry
-names the body it belongs to in a domain sub-table:
+The Earth and Moon maps are declared in `assets/manifests/celestial.toml`
+and listed in Settings ▸ Data & libraries. Each entry names the body it
+belongs to in a domain sub-table:
 
 ```toml
 [earth.process]
@@ -627,10 +627,10 @@ Earth without touching the engine's manifests.
 
 Three arrival routes, one code path: downloaded now into the global cache,
 found there from an earlier run, or supplied by the Twin in its own authored
-tree/cache. Earth and Moon imagery is intentionally not bundled: it is a
-user-consented resource, and a first-run resource prompt explains what is
-missing and offers download plus processing. A body with no imagery renders its
-own colour (ocean blue, regolith grey) while the status surface remains honest.
+tree/cache. The desktop startup policy selects the default Earth and Moon
+maps for background download and processing when they are missing. The
+Built-in assets card shows progress and recovery actions. A body with no
+imagery renders its own colour (ocean blue, regolith grey).
 
 A derived dataset is only ready when its **completed process output** exists,
 not its download. The processor's `.bakekey` completion stamp is part of that
@@ -673,8 +673,8 @@ bundle target and cannot be recommended downloads. The runtime registry does
 not admit them. DejaVu Sans is a runtime catalog entry for explicit download or
 retry, and is bundled for offline use by every native and web application
 target. The egui theme and USD diagnostic labels wait until the registry reports
-the font installed, then load it through `lunco-assets-runtime`. Earth/Moon
-imagery and source libraries remain user-requested downloads.
+the font installed, then load it through `lunco-assets-runtime`. Earth and Moon
+imagery is prepared on desktop startup. Source libraries are provisioned on request.
 
 Target names distinguish delivery profiles where the same binary has different
 packaging owners: `lunica-native`, `luncosim-native`, `lunica-web`, and
@@ -689,8 +689,7 @@ separator or platform-reserved character to become a directory or invalid
 filename; the final artifact still lands only at the `entry_dest_path` resolved
 above.
 
-This keeps the manifest authoritative without bundling runtime datasets that
-must remain user-consented. The packaged `lunco://` reader checks authored and
+The manifest keeps package selection explicit. The packaged `lunco://` reader checks authored and
 packaged assets, then the shared global cache; Twin reads additionally check
 the Twin's authored files and `.cache` before that same global cache.
 

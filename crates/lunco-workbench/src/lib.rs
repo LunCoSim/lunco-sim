@@ -586,11 +586,6 @@ register_commands!(on_focus_panel, on_open_tab, on_close_tab);
 use lunco_workspace::WorkspaceResource;
 pub use viewport::{ViewportPanel, WorkbenchEguiHost, WorkbenchViewportPlugin};
 
-/// Get the backdrop colour from the active theme.
-fn get_panel_backdrop(theme: &lunco_theme::Theme) -> egui::Color32 {
-    theme.colors.mantle
-}
-
 /// Resolve the one themed surface used behind ordinary workbench panels.
 fn panel_surface_fill(theme: &lunco_theme::Theme, translucent_tab_content: bool) -> egui::Color32 {
     if translucent_tab_content {

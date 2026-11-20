@@ -2,7 +2,7 @@
 //!
 //! ## Architecture (read this if anything here looks weird)
 //!
-//! Two cameras share the window's Bevy main texture, with the scene camera
+//! The window cameras share Bevy's main texture, with the scene camera
 //! rendering the full window behind the active workbench layout:
 //!
 //! 1. The scene `Camera3d` (order 0), declared by the canonical
@@ -12,9 +12,11 @@
 //!    for egui occlusion and scene-picking geometry; it is not a camera crop.
 //! 2. The egui host `Camera2d` (order 1) — [`WorkbenchEguiHost`], carrying
 //!    `PrimaryEguiContext`, auto-spawned by [`ensure_egui_host`]. bevy_egui
-//!    paints the chrome into the same main texture after the scene pass, with
-//!    `ClearColorConfig::None`, so opaque panels cover the scene and transparent
-//!    regions keep the scene pixels.
+//!    paints the chrome into the same main texture after the scene pass. With
+//!    a scene rendering, its clear stays disabled so transparent areas keep
+//!    the scene pixels.
+//! 3. The retained overlay camera (order 2) paints authored notices above
+//!    the dock shell, with no clear and the same texture key.
 //!
 //! The host exists as its own camera because scene cameras are transient — USD
 //! scenes spawn them, `camera_switch` swaps them, avatars despawn them — while
@@ -22,7 +24,7 @@
 //!
 //! ## The framebuffer contract (the load-bearing invariant)
 //!
-//! **The two cameras must share one main texture.** Bevy keys a target's main
+//! **The window cameras must share one main texture.** Bevy keys a target's main
 //! textures by `(target, usages, format, msaa)`. The scene camera clears that
 //! texture; egui paints on the cleared scene pixels. The host therefore follows
 //! the active scene camera's usages, MSAA and HDR format, and the sync is change-driven
@@ -52,10 +54,8 @@
 //! ## When NO 3D camera renders the window
 //!
 //! Design-style perspectives and the Modelica workbench have no active window
-//! `Camera3d`, so nothing clears the target. `render_layout` covers exactly
-//! that case by painting a full-window backdrop on egui's background layer
-//! (`needs_full_backdrop`). That is why chrome-only apps are not affected by
-//! the invariant above.
+//! `Camera3d`. The host clears to the workbench backdrop before the
+//! retained UI and egui passes, so both can render during a scene transition.
 //!
 //! ## What goes where
 //!
@@ -86,7 +86,7 @@ use lunco_render::SceneCamera;
 use lunco_status_core::status_bus::{INPUT_SOURCE, StatusBus, StatusLevel};
 use lunco_viewport_core::PanelRect;
 use lunco_viewport_core::SceneViewport;
-use lunco_workbench_core::presentation::ViewportPlaceholder;
+use lunco_workbench_core::presentation::{ViewportPlaceholder, WorkbenchOverlayCamera};
 use lunco_workbench_core::scene_pick::{EguiPointerState, ScenePickGate, SceneTarget};
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
@@ -105,7 +105,10 @@ struct InputBindingsStatus {
 
 /// The chrome backend consumes window coordinates. Only world views supply
 /// rays to spatial picking backends, including offscreen preview views.
-fn exclude_egui_host_rays(mut rays: ResMut<RayMap>, hosts: Query<(), With<WorkbenchEguiHost>>) {
+fn exclude_egui_host_rays(
+    mut rays: ResMut<RayMap>,
+    hosts: Query<(), Or<(With<WorkbenchEguiHost>, With<WorkbenchOverlayCamera>)>>,
+) {
     rays.map.retain(|id, _| !hosts.contains(id.camera));
 }
 
@@ -210,8 +213,8 @@ impl Panel for ViewportPanel {
 ///
 /// This is change-driven and covers every owner transition: camera quality
 /// changes, camera replacement/activation, a newly bound scene camera, and
-/// scene-camera removal. If no active window scene camera exists, the layout
-/// paints its own opaque backdrop and there is no valid scene texture to share.
+/// scene-camera removal. When the host supplies the backdrop, its texture key
+/// also determines the overlay key.
 pub(crate) fn sync_egui_host_framebuffer(
     dirty: Query<
         (),
@@ -231,7 +234,7 @@ pub(crate) fn sync_egui_host_framebuffer(
     mut removed: RemovedComponents<SceneCamera>,
     mut removed_hdr: RemovedComponents<Hdr>,
     mut removed_usages: RemovedComponents<CameraMainTextureUsages>,
-    host_added: Query<(), Added<WorkbenchEguiHost>>,
+    host_added: Query<(), Or<(Added<WorkbenchEguiHost>, Added<WorkbenchOverlayCamera>)>>,
     scene_cams: Query<
         (
             Entity,
@@ -245,8 +248,17 @@ pub(crate) fn sync_egui_host_framebuffer(
     >,
     viewport: Option<Res<SceneViewport>>,
     mut host: Query<
-        (Entity, &mut Msaa, Has<Hdr>, &mut CameraMainTextureUsages),
-        (With<WorkbenchEguiHost>, Without<SceneCamera>),
+        (
+            Entity,
+            &mut Msaa,
+            Has<Hdr>,
+            &mut CameraMainTextureUsages,
+            Has<WorkbenchEguiHost>,
+        ),
+        (
+            Or<(With<WorkbenchEguiHost>, With<WorkbenchOverlayCamera>)>,
+            Without<SceneCamera>,
+        ),
     >,
     mut commands: Commands,
 ) {
@@ -260,19 +272,22 @@ pub(crate) fn sync_egui_host_framebuffer(
     }
 
     let is_window = |target: &RenderTarget| matches!(target, RenderTarget::Window(_));
-    let Some(active_camera) = viewport.as_deref().and_then(|vp| vp.active_camera) else {
-        return;
-    };
-    let want = scene_cams
-        .get(active_camera)
-        .ok()
+    let want = viewport
+        .as_deref()
+        .and_then(|vp| vp.active_camera)
+        .and_then(|entity| scene_cams.get(entity).ok())
         .filter(|(_, camera, _, target, _, _)| camera.is_active && is_window(target))
         .map(|(_, _, msaa, _, hdr, usages)| (*msaa, hdr, *usages));
-    let Some((want_msaa, want_hdr, want_usages)) = want else {
+    let Some((want_msaa, want_hdr, want_usages)) = want.or_else(|| {
+        host.iter_mut()
+            .find_map(|(_, msaa, hdr, usages, is_primary)| {
+                is_primary.then_some((*msaa, hdr, *usages))
+            })
+    }) else {
         return;
     };
 
-    for (entity, mut msaa, host_hdr, mut usages) in &mut host {
+    for (entity, mut msaa, host_hdr, mut usages, _) in &mut host {
         if usages.0 != want_usages.0 {
             *usages = want_usages;
         }
@@ -293,11 +308,43 @@ pub(crate) fn sync_egui_host_framebuffer(
 fn egui_host_camera() -> Camera {
     Camera {
         // The scene camera is order 0; egui paints into the shared main texture
-        // after it. Its clear operation must remain disabled so it cannot wipe
-        // the scene before the UI pass.
+        // after it. The workbench layout enables the host clear only while
+        // presenting a full-window backdrop.
         order: 1,
         clear_color: ClearColorConfig::None,
         ..default()
+    }
+}
+
+pub(super) fn set_workbench_backdrop(
+    world: &mut World,
+    host: Option<Entity>,
+    backdrop: Option<egui::Color32>,
+) {
+    let Some(mut camera) = host.and_then(|entity| world.get_mut::<Camera>(entity)) else {
+        return;
+    };
+    let desired = backdrop.map(|color| Color::srgb_u8(color.r(), color.g(), color.b()));
+    match (camera.clear_color, desired) {
+        (ClearColorConfig::None, None) => {}
+        (ClearColorConfig::Custom(current), Some(next)) if current == next => {}
+        (_, Some(color)) => camera.clear_color = ClearColorConfig::Custom(color),
+        (_, None) => camera.clear_color = ClearColorConfig::None,
+    }
+}
+
+/// Reserve the painted overlay geometry in egui so its covered widgets
+/// cannot act on a press delivered to Bevy's higher-order UI camera.
+pub(super) fn reserve_overlay_pointer(ctx: &egui::Context, regions: &[(Entity, egui::Rect)]) {
+    for &(entity, rect) in regions {
+        egui::Area::new(egui::Id::new(("retained-overlay", entity)))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(rect.min)
+            .default_size(rect.size())
+            .constrain(false)
+            .fade_in(false)
+            .sense(egui::Sense::CLICK | egui::Sense::DRAG)
+            .show(ctx, |ui| ui.set_min_size(rect.size()));
     }
 }
 

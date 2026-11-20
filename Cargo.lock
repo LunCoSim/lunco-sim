@@ -9491,6 +9491,7 @@ dependencies = [
  "lunco-scripting-bridge-core",
  "lunco-scripting-rhai-core",
  "lunco-scripting-rhai-runtime",
+ "lunco-scripting-rhai-world",
  "lunco-settings",
  "lunco-status-core",
  "lunco-storage",
