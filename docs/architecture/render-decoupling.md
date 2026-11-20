@@ -35,6 +35,17 @@ wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "r
 code.** The gate is *which plugins you add*, not conditional compilation sprinkled through the
 simulation.
 
+## Initial scene presentation
+
+The interactive application keeps the main scene camera inactive during scene
+replacement and initial simulation preparation. Its existing workbench
+progress notice stays visible. The viewport keeps its camera binding, and the
+camera reconciler resumes rendering when the mounted scene's preparation and
+readiness waits settle. Terminal failures remain visible through the status
+and diagnostic surfaces. Later runtime edits and individual participant waits
+leave the view available. Headless and offscreen hosts retain their own output
+contracts.
+
 ## Live camera observations
 
 `lunco-capture::camera_feed` owns `CreateCameraFeed`, `SetCameraFeed`,

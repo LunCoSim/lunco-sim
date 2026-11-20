@@ -1353,6 +1353,7 @@ pub(crate) fn needs_full_backdrop(
 pub(crate) fn scene_camera_is_rendering(world: &World) -> bool {
     let Some(active_camera) = world
         .get_resource::<lunco_viewport_core::SceneViewport>()
+        .filter(|viewport| !viewport.loading)
         .and_then(|viewport| viewport.active_camera)
     else {
         return false;

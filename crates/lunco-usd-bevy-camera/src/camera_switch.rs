@@ -825,8 +825,8 @@ pub fn on_activate_camera(
 /// `is_active` + `viewport`.
 ///
 /// Reads the [`SceneViewport`] (active-camera binding + visibility + rect) and
-/// actuates it: exactly the bound camera is active (and only when visible); all
-/// other window cameras are off. An image-target camera participates in the
+/// actuates it: the bound camera is active when visible and ready for
+/// presentation; all other window cameras are off. An image-target camera participates in the
 /// binding only when it is an explicit non-writing pose owner; ordinary RTT
 /// cameras remain ignored. Also updates the persistent BigSpace
 /// [`OriginAnchor`] to the active camera's `WorldGrid` cell using the
@@ -919,7 +919,7 @@ pub fn reconcile_scene_viewport(
         vp.active_camera = active;
     }
 
-    let visible = vp.visible;
+    let visible = vp.visible && !vp.loading;
     let rect = vp.rect;
 
     // ── Actuate: the ONE writer of window-camera is_active + viewport ────
@@ -3184,7 +3184,7 @@ mod tests {
     /// When the viewport is not visible (workbench Design perspective), no
     /// window camera renders — but the binding is preserved for restore.
     #[test]
-    fn invisible_viewport_deactivates_all() {
+    fn hidden_or_loading_viewport_preserves_the_camera_binding() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
@@ -3211,6 +3211,22 @@ mod tests {
             Some(b),
             "binding preserved across a hide"
         );
+
+        {
+            let mut vp = app.world_mut().resource_mut::<SceneViewport>();
+            vp.visible = true;
+            vp.loading = true;
+        }
+        app.update();
+        assert!(active_set(&mut app).is_empty());
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            Some(b)
+        );
+
+        app.world_mut().resource_mut::<SceneViewport>().loading = false;
+        app.update();
+        assert!(app.world().get::<Camera>(b).unwrap().is_active);
     }
 
     #[test]

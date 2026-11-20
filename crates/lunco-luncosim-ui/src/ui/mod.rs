@@ -36,6 +36,7 @@ mod rhai_editor_panel;
 /// In-app rhai REPL panel (web + native). Empty unless the API bridge is
 /// available — the file carries its own `#![cfg(…)]`.
 mod rhai_repl_panel;
+mod scene_presentation;
 /// Generic workbench host for application menus contributed by Rhai policies.
 mod scripted_menus;
 /// Typed intent emitted by the authored terrain-progress surface.
@@ -509,6 +510,7 @@ impl Plugin for LunCoSimUiPlugin {
         }
 
         add_runtime_ui_layer(app);
+        scene_presentation::install(app);
         crate::register_save_scenario_command(app);
         // A windowed host requires a presentation contract. Authored tracks and
         // LocalEmbodiment cameras remain authoritative; the USD projection may add

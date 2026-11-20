@@ -374,6 +374,8 @@ pub struct UsdVisualProjectionSettings {
     pub child_spawn_budget: std::time::Duration,
     /// Maximum number of child entities admitted in one `Update`.
     pub max_child_spawns_per_update: usize,
+    /// Multiplier for these limits during an admitted scene transition.
+    pub loading_budget_scale: std::num::NonZeroU32,
 }
 
 impl Default for UsdVisualProjectionSettings {
@@ -386,6 +388,7 @@ impl Default for UsdVisualProjectionSettings {
             max_prim_work_items_per_update: 128,
             child_spawn_budget: std::time::Duration::from_millis(1),
             max_child_spawns_per_update: 128,
+            loading_budget_scale: std::num::NonZeroU32::new(3).unwrap(),
         }
     }
 }
@@ -397,6 +400,7 @@ struct UsdProjectionPass;
 /// scene identity and resets before each admitted projection update.
 #[derive(Resource, Default)]
 struct UsdProjectionWorkBudget {
+    limits: UsdVisualProjectionSettings,
     prim_work: usize,
     child_spawns: usize,
     prim_elapsed: std::time::Duration,
@@ -411,16 +415,46 @@ struct UsdProjectionWorkBudget {
 fn drain_usd_projection(world: &mut World) {
     let _span = bevy::log::info_span!("usd_projection_update").entered();
     let settings = *world.resource::<UsdVisualProjectionSettings>();
-    *world.resource_mut::<UsdProjectionWorkBudget>() = UsdProjectionWorkBudget::default();
+    // Initial projection gates admission of the new scene. Spend a larger,
+    // still bounded slice before returning to the host's status and input.
+    let loading = world
+        .get_resource::<lunco_core::SceneTransitionCoordinator>()
+        .is_some_and(|coordinator| coordinator.active().is_some());
+    let mut limits = settings;
+    if loading {
+        let scale = settings.loading_budget_scale.get();
+        limits.frame_budget = settings.frame_budget.saturating_mul(scale);
+        limits.child_spawn_budget = settings.child_spawn_budget.saturating_mul(scale);
+        limits.max_prim_work_items_per_update = settings
+            .max_prim_work_items_per_update
+            .saturating_mul(scale as usize);
+        limits.max_child_spawns_per_update = settings
+            .max_child_spawns_per_update
+            .saturating_mul(scale as usize);
+    }
+    if limits.frame_budget.is_zero()
+        || limits.max_prim_work_items_per_update == 0
+        || limits.child_spawn_budget.is_zero()
+        || limits.max_child_spawns_per_update == 0
+    {
+        error!(
+            "[usd-bevy] USD visual projection requires non-zero prim and child work budgets; refusing invalid configuration"
+        );
+        return;
+    }
+    *world.resource_mut::<UsdProjectionWorkBudget>() = UsdProjectionWorkBudget {
+        limits,
+        ..Default::default()
+    };
     let started = web_time::Instant::now();
     loop {
         let before = world.resource::<UsdProjectionWorkBudget>().progress;
         world.run_schedule(UsdProjectionPass);
         if world.resource::<UsdProjectionWorkBudget>().progress == before
             || started.elapsed()
-                >= settings
+                >= limits
                     .frame_budget
-                    .saturating_add(settings.child_spawn_budget)
+                    .saturating_add(limits.child_spawn_budget)
         {
             break;
         }
@@ -2177,7 +2211,6 @@ fn process_queued_usd_visuals(
     mut meshes: ResMut<Assets<Mesh>>,
     mut primitives: ResMut<PrimitiveMeshAssets>,
     quality: Res<lunco_render::RenderingQualitySettings>,
-    settings: Res<UsdVisualProjectionSettings>,
     mut commands: Commands,
 ) {
     let _span = bevy::log::info_span!("usd_visual_projection_batch").entered();
@@ -2205,16 +2238,6 @@ fn process_queued_usd_visuals(
             return;
         }
     };
-    if settings.frame_budget.is_zero()
-        || settings.max_prim_work_items_per_update == 0
-        || settings.child_spawn_budget.is_zero()
-        || settings.max_child_spawns_per_update == 0
-    {
-        error!(
-            "[usd-bevy] USD visual projection requires non-zero prim and child work budgets; refusing invalid configuration"
-        );
-        return;
-    }
     let budget = &mut visual_state.budget;
     let started = web_time::Instant::now();
     let mut projected = 0usize;
@@ -2223,11 +2246,11 @@ fn process_queued_usd_visuals(
 
     while !visual_state.queued.is_empty() {
         if (visited != 0 || budget.prim_work != 0)
-            && budget.prim_elapsed.saturating_add(started.elapsed()) >= settings.frame_budget
+            && budget.prim_elapsed.saturating_add(started.elapsed()) >= budget.limits.frame_budget
         {
             break;
         }
-        if budget.prim_work + visited >= settings.max_prim_work_items_per_update {
+        if budget.prim_work + visited >= budget.limits.max_prim_work_items_per_update {
             break;
         }
         let Some((_, entity)) = visual_state.queued.pop_first() else {
@@ -2341,7 +2364,6 @@ fn has_pending_usd_children(pending: Res<UsdPendingChildAdmissions>) -> bool {
 
 #[derive(SystemParam)]
 struct UsdChildAdmissionContext<'w, 's> {
-    settings: Res<'w, UsdVisualProjectionSettings>,
     parent: Query<
         'w,
         's,
@@ -2386,15 +2408,6 @@ fn admit_pending_usd_children(
     mut budget: ResMut<UsdProjectionWorkBudget>,
     mut commands: Commands,
 ) {
-    if context.settings.child_spawn_budget.is_zero()
-        || context.settings.max_child_spawns_per_update == 0
-    {
-        error!(
-            "[usd-bevy] USD child admission requires non-zero time and entity budgets; refusing invalid configuration"
-        );
-        return;
-    }
-
     let started = web_time::Instant::now();
     let mut admitted = 0usize;
     let mut visited = 0usize;
@@ -2402,11 +2415,11 @@ fn admit_pending_usd_children(
     while !pending_children.ready.is_empty() {
         if (visited != 0 || !budget.child_elapsed.is_zero())
             && budget.child_elapsed.saturating_add(started.elapsed())
-                >= context.settings.child_spawn_budget
+                >= budget.limits.child_spawn_budget
         {
             break;
         }
-        if budget.child_spawns + admitted >= context.settings.max_child_spawns_per_update {
+        if budget.child_spawns + admitted >= budget.limits.max_child_spawns_per_update {
             break;
         }
         let Some((child_path_text, parent)) = pending_children.pop_first_ready() else {

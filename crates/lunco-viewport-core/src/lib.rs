@@ -24,8 +24,10 @@ pub struct SceneViewport {
     /// The camera bound to the main scene output. `None` is an intentional no-camera
     /// state and is never replaced by an implicit camera choice.
     pub active_camera: Option<Entity>,
-    /// Whether the 3D scene is visible at all.
+    /// Whether the host layout requests the main scene view.
     pub visible: bool,
+    /// The interactive host is showing scene preparation status.
+    pub loading: bool,
     /// Physical `(position, size)` sub-rect inside the window, or `None` for
     /// the full window.
     pub rect: Option<(UVec2, UVec2)>,
@@ -36,6 +38,7 @@ impl Default for SceneViewport {
         Self {
             active_camera: None,
             visible: true,
+            loading: false,
             rect: None,
         }
     }

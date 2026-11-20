@@ -190,6 +190,12 @@ admission. Analytic cylinders and raycast wheels avoid that warning, as do
 explicitly visual-only meshes. Prefer those contact models for ordinary tires;
 retained mesh contact needs measured rolling, slip and penetration validation.
 
+`UsdVisualProjectionSettings` gives initial scene transitions a larger bounded
+projection slice. Its default loading scale of three applies to the time and
+entity limits for both prim projection and direct-child admission. The host
+returns between updates to service status and input. A completed scene uses
+the regular budgets for subsequent updates and edits.
+
 `UsdSimulationProjectionSettings` keeps simulation and ownerless marker work
 separately bounded (32 and 128 per Update by default); zero limits raise a
 runtime fault before consuming queued work. Neither limit changes physics

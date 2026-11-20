@@ -1534,6 +1534,11 @@ native root and its scoped ECS subtree.
 insertion, including deferred reference descendants. `usd_visual_projection_batch`
 measures the bounded per-update component and visual projection pass; keep its
 frame cost separate from total time until the last descendant is admitted.
+For an initial scene transition, also compare the number and spacing of
+`usd_projection_update` batches. It uses a larger bounded budget during loading
+than during live editing. Verify the workbench progress notice while the main
+scene camera is held, then verify the scene is presented after initial
+simulation readiness. Use the same warm cache and scene for both hosts.
 
 Use `usd_projection_plan`, `usd_projection_facts`, and
 `usd_projection_native_paths` to separate native composition, immutable fact

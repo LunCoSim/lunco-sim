@@ -1161,11 +1161,17 @@ pub(super) fn render_layout(
     // Never in Design mode, where Camera3d is inactive and the centre
     // is chrome. Centered on the window, which is the viewport region
     // in View mode and close enough in Build.
-    let placeholder = world.get_resource::<ViewportPlaceholder>().and_then(|p| {
-        p.message
-            .as_ref()
-            .map(|message| (message.clone(), p.guidance.clone(), p.actions.clone()))
-    });
+    let scene_loading = world
+        .get_resource::<lunco_viewport_core::SceneViewport>()
+        .is_some_and(|viewport| viewport.loading);
+    let placeholder = world
+        .get_resource::<ViewportPlaceholder>()
+        .filter(|_| !scene_loading)
+        .and_then(|p| {
+            p.message
+                .as_ref()
+                .map(|message| (message.clone(), p.guidance.clone(), p.actions.clone()))
+        });
     if let Some((message, guidance, actions)) = placeholder {
         let viewport_visible = viewport::layout_is_empty(layout)
             || world
