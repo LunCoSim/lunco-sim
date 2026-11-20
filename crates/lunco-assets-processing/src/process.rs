@@ -19,7 +19,8 @@ use lunco_assets_datasets::{
 };
 use resvg::tiny_skia;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use usvg::{Options, Tree};
@@ -243,10 +244,6 @@ pub fn process_asset_with_registry(
     control.check()?;
     let output_path = process_output_path(process, Some(cache_root), twin_root)?;
 
-    // Create output directory if needed
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     if process.kind == "pipeline" {
         return crate::pipeline::process(
             source_path,
@@ -303,7 +300,12 @@ fn process_asset_to(
         )
     })?;
 
-    let key = bake_key(source_path, process)?;
+    let key = bake_key(source_path, process).map_err(|error| {
+        file_error(
+            error,
+            format_args!("Fingerprint source '{}'", source_path.display()),
+        )
+    })?;
     transaction(
         &output_path,
         process,
@@ -313,7 +315,19 @@ fn process_asset_to(
         "processed_asset",
         cache_scope,
         &format!("{}/{}", process.output_root, process.output),
-        |stage_output| (processor.run)(source_path, stage_output, process, control),
+        |stage_output, _work| {
+            (processor.run)(source_path, stage_output, process, control).map_err(|error| {
+                file_error(
+                    error,
+                    format_args!(
+                        "Run {} processor from '{}' to '{}'",
+                        process.kind,
+                        source_path.display(),
+                        stage_output.display(),
+                    ),
+                )
+            })
+        },
     )
 }
 
@@ -327,7 +341,7 @@ pub(crate) fn transaction(
     artifact_kind: &str,
     cache_scope: &str,
     logical_id: &str,
-    run: impl FnOnce(&Path) -> std::io::Result<()>,
+    run: impl FnOnce(&Path, &Path) -> io::Result<()>,
 ) -> std::io::Result<()> {
     let cache_hit = !control.force
         && std::fs::read_to_string(bake_stamp_path(output_path, process))
@@ -350,132 +364,280 @@ pub(crate) fn transaction(
         return Ok(());
     }
 
-    let stage_root = staging_root(&output_path)?;
-    let _stage_cleanup = StageCleanup(stage_root.clone());
-    let stage_output = stage_root.join(output_path.file_name().ok_or_else(|| {
+    let parent = output_path
+        .parent()
+        .ok_or_else(|| io_err(format!("Output has no parent: {}", output_path.display())))?;
+    let output_name = output_path.file_name().ok_or_else(|| {
         io_err(format!(
-            "processing output has no file name: {}",
+            "Output has no file name: {}",
             output_path.display()
         ))
-    })?);
+    })?;
+    create_directory(parent)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".lunco-process-")
+        .tempdir_in(parent)
+        .map_err(|error| {
+            file_error(
+                error,
+                format_args!("Create staging directory in '{}'", parent.display()),
+            )
+        })?;
 
-    run(&stage_output)?;
+    let result = (|| {
+        let delivery = staging.path().join("delivery");
+        create_directory(&delivery)?;
+        let stage_output = delivery.join(output_name);
+        run(&stage_output, &staging.path().join("work"))?;
+        control.check()?;
 
-    control.check()?;
-    // Stamp only after a fully successful bake, so a failed/interrupted run
-    // never masquerades as fresh. The staged artifact and all of its sidecars
-    // become visible together under the commit gate.
-    std::fs::write(bake_stamp_path(&stage_output, process), &key)?;
-    commit_staged_output(&stage_root, output_path, process, sidecars, control)?;
+        let stamp = bake_stamp_path(&stage_output, process);
+        std::fs::write(&stamp, key).map_err(|error| {
+            file_error(
+                error,
+                format_args!("Write bake stamp '{}'", stamp.display()),
+            )
+        })?;
+
+        control.report_step("publishing prepared artifacts");
+        commit_staged_output(
+            &delivery,
+            output_path,
+            process,
+            sidecars,
+            staging.path(),
+            control,
+        )
+    })();
+
+    let result = match result {
+        Err(PublishError::Restore {
+            error,
+            rollback_error,
+        }) => {
+            let recovery = staging.keep();
+            return Err(io::Error::new(
+                error.kind(),
+                format!(
+                    "{error} Could not roll back publication. {rollback_error} Recovery files kept in '{}'.",
+                    recovery.display(),
+                ),
+            ));
+        }
+        Err(PublishError::Failed(error)) => Err(error),
+        Ok(()) => Ok(()),
+    };
+    let staging_path = staging.path().to_path_buf();
+    if let Err(error) = staging.close() {
+        log::warn!(
+            "Could not clean asset preparation directory '{}': {error}",
+            staging_path.display()
+        );
+    }
+    result?;
 
     println!("  ✓ processed → {}", output_path.display());
     Ok(())
 }
 
-struct StageCleanup(std::path::PathBuf);
-
-impl Drop for StageCleanup {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+pub(crate) fn file_error(error: io::Error, action: std::fmt::Arguments<'_>) -> io::Error {
+    let hint = match (cfg!(windows), error.raw_os_error()) {
+        (true, Some(5)) => {
+            " Check the file or folder permissions and Windows Security Protection History."
+        }
+        (true, Some(32 | 33)) => " Close applications using this path, then retry preparation.",
+        _ => "",
+    };
+    io::Error::new(error.kind(), format!("{action}: {error}.{hint}"))
 }
 
-fn staging_root(output_path: &Path) -> Result<std::path::PathBuf, std::io::Error> {
-    let parent = output_path.parent().ok_or_else(|| {
-        io_err(format!(
-            "processing output has no parent: {}",
-            output_path.display()
-        ))
-    })?;
-    static STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let id = STAGE.fetch_add(1, Ordering::Relaxed);
-    let root = parent.join(format!(".lunco-process-{}-{id}", std::process::id()));
-    std::fs::create_dir(&root)?;
-    Ok(root)
+pub(crate) fn create_directory(path: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(path)
+        .map_err(|error| file_error(error, format_args!("Create directory '{}'", path.display())))
+}
+
+enum PublishError {
+    Failed(io::Error),
+    Restore {
+        error: io::Error,
+        rollback_error: io::Error,
+    },
+}
+
+impl From<io::Error> for PublishError {
+    fn from(error: io::Error) -> Self {
+        Self::Failed(error)
+    }
 }
 
 fn commit_staged_output(
-    stage_root: &Path,
-    output_path: &Path,
+    delivery: &Path,
+    output: &Path,
     process: &ProcessConfig,
     sidecars: &[&str],
+    staging: &Path,
     control: &ProcessControl,
-) -> Result<(), std::io::Error> {
-    let _gate = control.commit_guard()?;
+) -> Result<(), PublishError> {
     control.check()?;
+    let backup = staging.join("backup");
+    create_directory(&backup)?;
+    let stamp = bake_stamp_path(output, process);
+    let separate_stamp = !stamp.starts_with(output);
+    let mut destinations = vec![output.to_path_buf()];
+    if output.extension().is_some() {
+        destinations.extend(sidecars.iter().map(|suffix| output.with_extension(suffix)));
+    }
+    if separate_stamp {
+        destinations.insert(0, stamp.clone());
+    }
 
-    let stamp = bake_stamp_path(output_path, process);
-    let mut destinations = vec![output_path.to_path_buf()];
-    if !stamp.starts_with(output_path) {
-        destinations.push(stamp);
+    let mut staged = Vec::new();
+    for entry in std::fs::read_dir(delivery).map_err(|error| {
+        file_error(
+            error,
+            format_args!("List staged artifacts in '{}'", delivery.display()),
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            file_error(
+                error,
+                format_args!("Read staged artifact in '{}'", delivery.display()),
+            )
+        })?;
+        let name = entry.file_name();
+        let destination = destinations
+            .iter()
+            .find(|path| path.file_name() == Some(name.as_os_str()))
+            .ok_or_else(|| {
+                io_err(format!(
+                    "Undeclared staged artifact '{}'",
+                    entry.path().display()
+                ))
+            })?;
+        staged.push((entry.path(), destination.clone()));
     }
-    if output_path.extension().is_some() {
-        destinations.extend(
-            sidecars
-                .iter()
-                .map(|suffix| output_path.with_extension(suffix)),
-        );
+    if !staged.iter().any(|(_, destination)| destination == output) {
+        return Err(io_err(format!(
+            "Processor produced no artifact at '{}'",
+            output.display()
+        ))
+        .into());
     }
-    let backup_root = stage_root.with_file_name(format!(
-        ".{}-backup",
-        stage_root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("lunco-process")
-    ));
-    std::fs::create_dir(&backup_root)?;
-    let mut backups = Vec::new();
-    let backup_result = (|| {
-        for (index, destination) in destinations.iter().enumerate() {
-            if destination.exists() {
-                let backup = backup_root.join(index.to_string());
-                std::fs::rename(destination, &backup)?;
-                backups.push((destination.clone(), backup));
+    // Retire the old stamp before moving its payload. Publish the new stamp last.
+    staged.sort_by_key(|(_, destination)| *destination == stamp);
+
+    let mut delays = [50, 100, 200].into_iter();
+    loop {
+        let failure = {
+            let _gate = control.commit_guard()?;
+            control.check()?;
+            match publish_moves(&destinations, &staged, &backup, |from, to| {
+                std::fs::rename(from, to)
+            }) {
+                Ok(()) => return Ok(()),
+                Err(failure) => failure,
+            }
+        };
+        if let Some(rollback_error) = failure.rollback_error {
+            return Err(PublishError::Restore {
+                error: failure.error,
+                rollback_error,
+            });
+        }
+        if failure.windows_contention
+            && let Some(delay) = delays.next()
+        {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+            continue;
+        }
+        return Err(PublishError::Failed(failure.error));
+    }
+}
+
+struct MoveFailure {
+    error: io::Error,
+    windows_contention: bool,
+    rollback_error: Option<io::Error>,
+}
+
+impl From<io::Error> for MoveFailure {
+    fn from(error: io::Error) -> Self {
+        Self {
+            error,
+            windows_contention: false,
+            rollback_error: None,
+        }
+    }
+}
+
+fn publish_moves(
+    destinations: &[PathBuf],
+    staged: &[(PathBuf, PathBuf)],
+    backup: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> Result<(), MoveFailure> {
+    let mut moved = Vec::new();
+    let mut move_entry = |from: &Path, to: &Path, action| -> Result<(), MoveFailure> {
+        rename(from, to).map_err(|error| {
+            // Windows can report ERROR_ACCESS_DENIED for an in-use directory.
+            // Retry only the rename transaction and only after a complete rollback.
+            let windows_contention =
+                cfg!(windows) && matches!(error.raw_os_error(), Some(5 | 32 | 33));
+            MoveFailure {
+                error: file_error(
+                    error,
+                    format_args!("{action} '{}' → '{}'", from.display(), to.display()),
+                ),
+                windows_contention,
+                rollback_error: None,
+            }
+        })?;
+        moved.push((from.to_path_buf(), to.to_path_buf()));
+        Ok(())
+    };
+
+    let result: Result<(), MoveFailure> = (|| {
+        for destination in destinations {
+            match std::fs::symlink_metadata(destination) {
+                Ok(_) => {
+                    let name = destination.file_name().ok_or_else(|| {
+                        io_err(format!(
+                            "Artifact has no file name: '{}'",
+                            destination.display()
+                        ))
+                    })?;
+                    move_entry(destination, &backup.join(name), "Back up existing artifact")?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(file_error(
+                        error,
+                        format_args!("Inspect existing artifact '{}'", destination.display()),
+                    )
+                    .into());
+                }
             }
         }
-        Ok::<(), std::io::Error>(())
-    })();
-    if let Err(error) = backup_result {
-        for (destination, backup) in backups.iter().rev() {
-            let _ = std::fs::rename(backup, destination);
+        for (from, to) in staged {
+            move_entry(from, to, "Publish prepared artifact")?;
         }
-        drop(_gate);
-        let _ = std::fs::remove_dir_all(&backup_root);
-        return Err(error);
-    }
-
-    let result = (|| {
-        for entry in std::fs::read_dir(stage_root)? {
-            let entry = entry?;
-            let destination = output_path
-                .parent()
-                .ok_or_else(|| io_err("staged output has no parent".into()))?
-                .join(entry.file_name());
-            std::fs::rename(entry.path(), destination)?;
-        }
-        Ok::<(), std::io::Error>(())
+        Ok(())
     })();
 
-    if let Err(error) = result {
-        for (index, destination) in destinations.iter().rev().enumerate() {
-            if destination.exists() {
-                // A failed commit must not recursively delete a large
-                // replacement while Twin teardown waits on the barrier. Move
-                // it aside in O(1); the cleanup runs after the guard drops.
-                let _ = std::fs::rename(destination, backup_root.join(format!("failed-{index}")));
+    result.map_err(|mut failure| {
+        for (from, to) in moved.into_iter().rev() {
+            if let Err(error) = rename(&to, &from) {
+                // Keep the remaining backup, including the old stamp, if its
+                // payload could not be restored.
+                failure.rollback_error = Some(file_error(
+                    error,
+                    format_args!("Restore '{}' from '{}'", from.display(), to.display()),
+                ));
+                break;
             }
         }
-        for (destination, backup) in backups.iter().rev() {
-            let _ = std::fs::rename(backup, destination);
-        }
-        drop(_gate);
-        let _ = std::fs::remove_dir_all(&backup_root);
-        return Err(error);
-    }
-
-    drop(_gate);
-    let _ = std::fs::remove_dir_all(&backup_root);
-    Ok(())
+        failure
+    })
 }
 
 fn process_texture(
@@ -2032,6 +2194,113 @@ fn tiff_io_err(e: tiff::TiffError) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn publication_failure_restores_bundle_or_preserves_recovery_files() {
+        use std::{fs, io};
+
+        for block_rollback in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let output = dir.path().join("product.png");
+            let stamp = dir.path().join("product.png.bakekey");
+            let replacement = dir.path().join("replacement");
+            let next_stamp = dir.path().join("next-stamp");
+            let backup = dir.path().join("backup");
+            fs::create_dir(&backup).unwrap();
+            fs::write(&output, "previous payload").unwrap();
+            fs::write(&stamp, "previous key").unwrap();
+            fs::write(&replacement, "replacement payload").unwrap();
+            fs::write(&next_stamp, "replacement key").unwrap();
+
+            let failure = super::publish_moves(
+                &[stamp.clone(), output.clone()],
+                &[
+                    (replacement.clone(), output.clone()),
+                    (next_stamp.clone(), stamp.clone()),
+                ],
+                &backup,
+                |from, to| {
+                    if from == next_stamp || (block_rollback && to == replacement) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "file in use",
+                        ));
+                    }
+                    fs::rename(from, to)
+                },
+            )
+            .unwrap_err();
+            assert!(
+                failure
+                    .error
+                    .to_string()
+                    .contains("Publish prepared artifact")
+            );
+            assert!(failure.error.to_string().contains(stamp.to_str().unwrap()));
+            if block_rollback {
+                assert!(failure.rollback_error.is_some());
+                assert!(!stamp.exists());
+                assert_eq!(
+                    fs::read_to_string(backup.join("product.png.bakekey")).unwrap(),
+                    "previous key"
+                );
+                assert_eq!(
+                    fs::read_to_string(backup.join("product.png")).unwrap(),
+                    "previous payload"
+                );
+            } else {
+                assert!(failure.rollback_error.is_none());
+                assert_eq!(fs::read_to_string(&stamp).unwrap(), "previous key");
+                assert_eq!(fs::read_to_string(&output).unwrap(), "previous payload");
+                assert_eq!(
+                    fs::read_to_string(&replacement).unwrap(),
+                    "replacement payload"
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_locked_artifact_is_preserved_and_can_be_replaced_after_release() {
+        use std::{fs, os::windows::fs::OpenOptionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("product.png");
+        let config: super::ProcessConfig =
+            toml::from_str("kind='texture'\noutput='product.png'").unwrap();
+        let stamp = super::bake_stamp_path(&output, &config);
+        fs::write(&output, "previous payload").unwrap();
+        fs::write(&stamp, "previous key").unwrap();
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&output)
+            .unwrap();
+        let control = super::ProcessControl::unrestricted();
+        let publish = || {
+            super::transaction(
+                &output,
+                &config,
+                "replacement key",
+                &[],
+                &control,
+                "processed_asset",
+                "application",
+                "cache/product.png",
+                |stage, _work| fs::write(stage, "replacement payload"),
+            )
+        };
+        let error = publish().unwrap_err().to_string();
+        assert!(error.contains("Back up existing artifact"), "{error}");
+        assert!(error.contains("product.png"), "{error}");
+        assert_eq!(fs::read_to_string(&stamp).unwrap(), "previous key");
+        drop(locked);
+        assert_eq!(fs::read_to_string(&output).unwrap(), "previous payload");
+        publish().unwrap();
+        assert_eq!(fs::read_to_string(&stamp).unwrap(), "replacement key");
+        assert_eq!(fs::read_to_string(&output).unwrap(), "replacement payload");
+    }
+
+    #[test]
     fn texture_decode_budget_is_enforced_and_can_be_explicitly_increased() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("elevation.tif");
@@ -2493,7 +2762,8 @@ END
         lunco_storage::write_file_sync(&bake_stamp_path(&output, &cfg), b"old-key")
             .expect("old stamp");
 
-        let stage = tmp.path().join(".lunco-process-stage");
+        let staging = tmp.path().join(".lunco-process-stage");
+        let stage = staging.join("delivery");
         lunco_storage::ensure_directory_sync(&stage).expect("stage directory");
         lunco_storage::write_file_sync(&stage.join("texture.png"), b"new").expect("staged output");
         lunco_storage::write_file_sync(&stage.join("texture.png.bakekey"), b"new-key")
@@ -2501,7 +2771,7 @@ END
 
         let control = ProcessControl::unrestricted();
         control.cancel.store(true, Ordering::Release);
-        assert!(commit_staged_output(&stage, &output, &cfg, &[], &control).is_err());
+        assert!(commit_staged_output(&stage, &output, &cfg, &[], &staging, &control).is_err());
         assert_eq!(
             lunco_storage::read_file_sync(&output).expect("output remains"),
             b"old"

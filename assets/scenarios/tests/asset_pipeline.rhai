@@ -151,7 +151,12 @@ fn verify_preparation_view(scope,key,action,error) {
         checks.push(t_true(row.download_status.contains("Source files"),"download readiness is separate from preparation"));
         checks.push(t_true(row.preparation_status!="","preparation status remains explicit"));
         checks.push(t_eq(row.action,action,"the action matches source and artifact readiness"));
-        if error!="" {checks.push(t_true(row.detail.contains(error),"the full preparation error remains visible"));}
+        if error!="" {
+            checks.push(t_true(row.detail.contains(error),"the full preparation error remains visible"));
+            if action=="process" {
+                checks.push(t_true(row.preparation_status.contains("failed"),"artifact preparation shows the failed stage"));
+            }
+        }
     }
     t_report(checks);
 }

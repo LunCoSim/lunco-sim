@@ -23,9 +23,11 @@ lunco-modelica-runner = { path = "../lunco-modelica-runner", optional = true }
 lunco-experiments = { path = "../lunco-experiments", optional = true }
 web-time = { workspace = true, optional = true }
 image = { workspace = true }
+log = "0.4"
 draco-gltf = { workspace = true }
 resvg = { workspace = true }
 tiff = { workspace = true }
+tempfile = { workspace = true }
 usvg = { workspace = true }
 
 [features]
@@ -34,7 +36,6 @@ modelica-processing = ["dep:lunco-modelica-compiler", "dep:lunco-modelica-runner
 
 [dev-dependencies]
 lunco-storage = { path = "../lunco-storage" }
-tempfile = { workspace = true }
 toml = { workspace = true }
 
 [lints]

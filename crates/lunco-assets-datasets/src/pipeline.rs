@@ -331,20 +331,19 @@ pub fn input_digests(
     paths: &BTreeMap<String, PathBuf>,
 ) -> std::io::Result<BTreeMap<String, String>> {
     use sha2::{Digest, Sha256};
-    use std::io::Read;
     paths
         .iter()
         .map(|(id, path)| {
-            let mut file = std::fs::File::open(path)?;
             let mut hash = Sha256::new();
-            let mut buffer = [0u8; 65536];
-            loop {
-                let n = file.read(&mut buffer)?;
-                if n == 0 {
-                    break;
-                }
-                hash.update(&buffer[..n]);
-            }
+            crate::manifest::hash_file_into(path, &mut hash).map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!(
+                        "Fingerprint pipeline input '{id}' at '{}': {error}",
+                        path.display()
+                    ),
+                )
+            })?;
             Ok((
                 id.clone(),
                 hash.finalize()

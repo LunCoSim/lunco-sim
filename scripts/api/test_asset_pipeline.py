@@ -177,7 +177,8 @@ def main():
     verdicts = []
     log = output / "runtime.log"
     try:
-        with ProductionSession(args.port, windowed=True, log_path=log) as session:
+        with ProductionSession(args.port, windowed=True, log_path=log,
+                               extra_args=["--load-default-scene"]) as session:
             process=session.process
             pid = session.process.pid
             if Path(f"/proc/{pid}/cwd").resolve() != ROOT or Path(f"/proc/{pid}/exe").resolve() != BINARY.resolve():
@@ -250,6 +251,23 @@ def main():
                 list(before), list(after), .5, result["times"], result["series"]["y"], 2.0, .000001)) + ");")
             verdict("verify_preserved_artifact(" + json.dumps((artifact / "image.png").read_bytes().hex()) + "," + json.dumps((artifact / "copy.png").read_bytes().hex()) + ");")
             old = (artifact / "image.png").read_bytes().hex()
+            products = artifact.parent
+            saved_products = products.with_name("saved-products")
+            products.rename(saved_products)
+            products.write_text("blocks preparation directory creation")
+            try:
+                execute(session, "ProcessDataset", id=row["id"], force=True)
+                wait_for(lambda: terminal(scope, "product", "failed"), "blocked preparation directory")
+                diagnostic = f"Resolve pipeline path '{artifact}'"
+                verdict(f'verify_pipeline_failure({json.dumps(scope)},"product",{json.dumps(diagnostic)});')
+                capture_view(scope, "product", "process", "blocked-preparation-path", diagnostic)
+            finally:
+                products.unlink()
+                saved_products.rename(products)
+            execute(session, "ProcessDataset", id=row["id"], force=False)
+            wait_for(lambda: terminal(scope, "product", "installed"), "preparation after directory recovery")
+            verdict("verify_force_runs(" + json.dumps(requests) + ",2);")
+            verdict("verify_preserved_artifact(" + json.dumps(old) + "," + json.dumps((artifact / "image.png").read_bytes().hex()) + ");")
             planner=dynamic/"tools/plan.rhai"
             valid_planner=planner.read_text()
             planner.write_text('fn plan(facts) { let plan=facts.plan; plan.steps[1].target_resolution=[4294967295,4294967295]; plan }\n')
@@ -326,7 +344,8 @@ def main():
         assert_render_log_clean(log)
 
         log = output / "griffin-runtime.log"
-        with ProductionSession(args.port, windowed=True, log_path=log) as session:
+        with ProductionSession(args.port, windowed=True, log_path=log,
+                               extra_args=["--load-default-scene"]) as session:
             process=session.process
             pid = session.process.pid
             if Path(f"/proc/{pid}/cwd").resolve() != ROOT or Path(f"/proc/{pid}/exe").resolve() != BINARY.resolve():
@@ -371,7 +390,7 @@ def main():
                 if readiness.get("faulted"):
                     (output/"readiness-failure.json").write_text(json.dumps(readiness,indent=2))
                     raise RuntimeError("Griffin readiness failed: "+str(readiness["fault"]))
-                return readiness.get("ready")
+                return readiness["ready"] and not readiness["world_hold"]
             wait_for(scene_ready,"complete Griffin runtime readiness")
             library=execute(session,"RegisterToolLibrary",name="flip_panel_visibility",
                 source=assertions+"\n"+(griffin/"scenarios/tests/flip_panel_visibility.rhai").read_text())
@@ -384,7 +403,10 @@ def main():
             verdict(f'certify_paused({tick});')
             entity=int(execute(session,"RunRhai",code='print(find_path("/Griffin1SurfaceOps/Lander"));')["stdout"].strip())
             execute(session,"SetTimeTransport",playing=True)
-            wait_for(lambda:int(execute(session,"RunRhai",code="print(clock_snapshot().sim_tick);")["stdout"].strip())>tick,"simulation resumes after resident terrain admission")
+            def resumed_ready():
+                current_tick = int(execute(session, "RunRhai", code="print(clock_snapshot().sim_tick);")["stdout"].strip())
+                return current_tick > tick and scene_ready()
+            wait_for(resumed_ready, "simulation resumes after resident terrain admission")
             verdict(f'certify_resumed({tick},"/Griffin1SurfaceOps/Lander",{entity});')
             execute(session,"SetTimeTransport",playing=False)
             execute(session,"DismissDatasetProvisioning",scope=scope)

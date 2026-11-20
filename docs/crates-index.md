@@ -459,7 +459,9 @@ Native offline processors and ordered artifact execution. Uses standard GeoTIFF
 sampling, native raster operations, the shared Rhai hook interpreter, optional
 offline WESL GPU kernels and optional Modelica compiler/batch-runner adapters.
 External stages use declared inputs, explicit process arguments and captured
-logs. One staging/validation/commit boundary publishes leaf and bundle artifacts.
+logs. One staging/validation/commit boundary publishes leaf and bundle
+artifacts with separate scratch and rollback storage and operation-level
+filesystem diagnostics.
 Lightweight recipe/receipt types remain in `lunco-assets-datasets`; policy stays
 authored. See [artifact processing](architecture/asset-processing.md).
 
