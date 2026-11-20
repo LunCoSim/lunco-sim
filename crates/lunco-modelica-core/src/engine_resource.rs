@@ -47,7 +47,22 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::engine::ModelicaEngine;
 use lunco_doc::{Document, DocumentId};
+use lunco_modelica_document::SyntaxCache;
 use lunco_modelica_library::worker_bridge::ModelicaWorkerBridge;
+
+enum DocumentSyntaxInput {
+    Source(Arc<str>),
+    Prepared { syntax: SyntaxCache, bytes: usize },
+}
+
+impl DocumentSyntaxInput {
+    fn len(&self) -> usize {
+        match self {
+            Self::Source(source) => source.len(),
+            Self::Prepared { bytes, .. } => *bytes,
+        }
+    }
+}
 
 /// Process-wide accessor for the workbench's engine handle. Set
 /// once during plugin init and read from non-Bevy contexts (static
@@ -540,15 +555,15 @@ impl ModelicaEngineHandle {
     ///
     /// Returns `true` only when the job is accepted. A duplicate leaves the
     /// existing parse pending; a rejected submission releases its reservation.
-    /// Parsing and syntax preparation run off-lock on the admitted worker.
+    /// Parsing or ownership preparation of validated syntax runs off-lock.
     /// Session installation queues the exact spawn generation's result under
     /// the engine mutex. `admit_fn` must accept the task or reject it without
     /// running it.
-    pub fn upsert_document_async<F>(
+    fn upsert_document_async<F>(
         &self,
         doc_id: DocumentId,
         r#gen: u64,
-        source: std::sync::Arc<str>,
+        input: DocumentSyntaxInput,
         admit_fn: F,
     ) -> bool
     where
@@ -565,33 +580,39 @@ impl ModelicaEngineHandle {
             engine.uri_for(doc_id)
         };
         let me = self.clone();
-        let bytes = source.len();
+        let bytes = input.len();
         let admitted_at = web_time::Instant::now();
         let accepted = admit_fn(Box::new(move || {
             let t_total = web_time::Instant::now();
             let wait_ms = admitted_at.elapsed().as_secs_f64() * 1000.0;
-            // Lenient parser: always produces a usable tree.
-            let t_parse = web_time::Instant::now();
-            let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
-            let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
-            let has_errors = recovery.has_errors();
-            // Prepare the document's exact syntax result on the worker while
-            // the source and recovery diagnostics are still available.
-            let diags: Vec<lunco_doc::Diagnostic> = recovery
-                .parse_errors()
-                .iter()
-                .map(|e| lunco_modelica_document::parse_diag_from_error(e, &source))
-                .collect();
-            let syntax = lunco_modelica_document::SyntaxCache {
-                generation: r#gen,
-                ast: std::sync::Arc::new(recovery.best_effort().clone()),
-                errors: diags,
+            let (syntax, parse_ms, reused) = match input {
+                DocumentSyntaxInput::Source(source) => {
+                    let t_parse = web_time::Instant::now();
+                    let recovery = rumoca_phase_parse::parse_to_syntax(&source, &uri);
+                    let parse_ms = t_parse.elapsed().as_secs_f64() * 1000.0;
+                    let errors = recovery
+                        .parse_errors()
+                        .iter()
+                        .map(|e| lunco_modelica_document::parse_diag_from_error(e, &source))
+                        .collect();
+                    (
+                        SyntaxCache {
+                            generation: r#gen,
+                            ast: Arc::new(recovery.best_effort().clone()),
+                            errors,
+                        },
+                        parse_ms,
+                        false,
+                    )
+                }
+                DocumentSyntaxInput::Prepared { syntax, .. } => (syntax, 0.0, true),
             };
+            let has_errors = syntax.has_errors();
             let t_install = web_time::Instant::now();
             me.install_worker_parse_results(doc_id, syntax);
             let install_ms = t_install.elapsed().as_secs_f64() * 1000.0;
             bevy::log::info!(
-                "[engine] async parse doc={} gen={} bytes={} wait={:.1}ms parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={}",
+                "[engine] async syntax doc={} gen={} bytes={} wait={:.1}ms parse={:.1}ms install={:.1}ms total={:.1}ms has_errors={} reused={}",
                 doc_id.raw(),
                 r#gen,
                 bytes,
@@ -600,6 +621,7 @@ impl ModelicaEngineHandle {
                 install_ms,
                 t_total.elapsed().as_secs_f64() * 1000.0,
                 has_errors,
+                reused,
             );
         }));
         if !accepted {
@@ -851,7 +873,7 @@ pub fn drive_engine_sync(
     // and async path (no AST or stale).
     enum SyncPlan {
         Sync(std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>),
-        Async(std::sync::Arc<str>),
+        Async(DocumentSyntaxInput),
     }
     let mut to_upsert: Vec<(DocumentId, u64, SyncPlan)> = Vec::new();
     let mut alive: HashSet<DocumentId> = HashSet::new();
@@ -878,7 +900,16 @@ pub fn drive_engine_sync(
         };
         let plan = match fresh_ast {
             Some(ast) => SyncPlan::Sync(ast),
-            None => SyncPlan::Async(doc.source_arc()),
+            None => {
+                let input = match doc.prepared_syntax() {
+                    Some(syntax) => DocumentSyntaxInput::Prepared {
+                        syntax: syntax.clone(),
+                        bytes: doc.source().len(),
+                    },
+                    None => DocumentSyntaxInput::Source(doc.source_arc()),
+                };
+                SyncPlan::Async(input)
+            }
         };
         to_upsert.push((doc_id, r#gen, plan));
     }
@@ -902,7 +933,7 @@ pub fn drive_engine_sync(
         u64,
         std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
     )> = Vec::new();
-    let mut async_only: Vec<(DocumentId, u64, std::sync::Arc<str>)> = Vec::new();
+    let mut async_only = Vec::new();
     for (doc_id, r#gen, plan) in to_upsert {
         match plan {
             SyncPlan::Sync(ast) => sync_only.push((doc_id, r#gen, ast)),
@@ -968,7 +999,7 @@ pub fn drive_engine_sync(
     let max_in_flight = pacing.max_in_flight.max(1);
     let mut next_debounce_at: Option<web_time::Instant> = None;
 
-    for (doc_id, r#gen, source) in async_only {
+    for (doc_id, r#gen, input) in async_only {
         let pending_count = {
             let Some(eng) = handle.try_lock() else {
                 return;
@@ -1005,7 +1036,7 @@ pub fn drive_engine_sync(
             None => (false, None),
         };
         if was_parsed {
-            let debounce_ms = ast_debounce_for_size(source.len());
+            let debounce_ms = ast_debounce_for_size(input.len());
             let deadline = last_edit
                 .map(|edited| edited + std::time::Duration::from_millis(debounce_ms as u64));
             if let Some(wake_at) = deadline.filter(|deadline| now < *deadline) {
@@ -1016,7 +1047,7 @@ pub fn drive_engine_sync(
                 continue;
             }
         }
-        let src_len = source.len();
+        let src_len = input.len();
         // Wasm path: ship parsing to the off-thread Web Worker. The worker
         // bundle has its own wasm instance; parsing there leaves the UI
         // thread free to render. The result lands via the parse-done channel
@@ -1028,6 +1059,13 @@ pub fn drive_engine_sync(
         #[cfg(target_arch = "wasm32")]
         let dispatched_to_worker = match handle.mark_pending_for_worker(doc_id) {
             Some(uri) => {
+                let source = match input {
+                    DocumentSyntaxInput::Source(source) => source,
+                    DocumentSyntaxInput::Prepared { syntax, .. } => {
+                        handle.install_worker_parse_results(doc_id, syntax);
+                        continue;
+                    }
+                };
                 // source library-bundle short-circuit: every file under
                 // `Modelica/` (and the extra-library trees) was
                 // pre-parsed at build time and bincode-shipped in
@@ -1126,15 +1164,16 @@ pub fn drive_engine_sync(
                 0,
             );
             let mut rejection = None;
-            let accepted = handle.upsert_document_async(doc_id, r#gen, source, |task| {
-                match admission.submit(priority, key, task) {
-                    Ok(()) => true,
-                    Err(error) => {
-                        rejection = Some(error);
-                        false
+            let accepted =
+                handle.upsert_document_async(doc_id, r#gen, input, |task| {
+                    match admission.submit(priority, key, task) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            rejection = Some(error);
+                            false
+                        }
                     }
-                }
-            });
+                });
             if !accepted {
                 if let Some(error) = rejection {
                     bevy::log::warn!(
@@ -1465,12 +1504,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_completion_moves_the_exact_worker_syntax() {
+    fn prepared_syntax_completion_moves_the_exact_validated_ast() {
         let handle = ModelicaEngineHandle::default();
         let doc_id = DocumentId::new(81);
-        let syntax = lunco_modelica_document::SyntaxCache::from_source("model A end A;", 7);
+        let source = "model A end A;";
+        let syntax = SyntaxCache::from_source(source, 7);
         let ast = std::sync::Arc::clone(&syntax.ast);
-        handle.install_worker_parse_results(doc_id, syntax);
+        assert!(handle.upsert_document_async(
+            doc_id,
+            7,
+            DocumentSyntaxInput::Prepared {
+                syntax,
+                bytes: source.len(),
+            },
+            |task| {
+                task();
+                true
+            },
+        ));
         // A session mutation cannot change the already queued generation's AST.
         handle.lock().upsert_document_with_ast(
             doc_id,
@@ -1493,7 +1544,7 @@ mod tests {
         assert!(handle.upsert_document_async(
             doc_id,
             3,
-            std::sync::Arc::from("model Broken Real x = ; end Broken;"),
+            DocumentSyntaxInput::Source(Arc::from("model Broken Real x = ; end Broken;")),
             |task| {
                 task();
                 true
@@ -1546,7 +1597,7 @@ mod tests {
         let accepted = handle.upsert_document_async(
             doc_id,
             4,
-            std::sync::Arc::from("model M end M;"),
+            DocumentSyntaxInput::Source(Arc::from("model M end M;")),
             |_task| false,
         );
 

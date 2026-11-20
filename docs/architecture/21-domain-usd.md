@@ -852,7 +852,10 @@ Labeled read receipts preserve source-change reloads through Bevy's asset
 dependency graph. On native, USD composition and prepared-plan extraction run
 on Bevy's async-compute pool so they do not occupy an asset I/O worker. The
 browser path still composes on the browser main thread until a Web Worker
-transport is available. A missing sublayer, reference, or payload does not
+transport is available. `UsdStageProjectionPlan::prepare_recipe` composes the
+asset-backed snapshot and publishes requirements from the same anchored asset
+paths used by runtime consumers. Plans for externally composed stages use
+their composed asset identities. A missing sublayer, reference, or payload does not
 discard already available siblings. The loader publishes the available stage, leaves
 the missing authored arc unresolved as required by OpenUSD, and records a
 scene-scoped `RuntimeDiagnostics` warning with both logical layer identifiers.
@@ -912,7 +915,7 @@ section.
 | User intent | Operation | Surface |
 |---|---|---|
 | **Open a Twin** | Open a folder → designated stage becomes active → Grid renders it | existing `OpenFolder`/`OpenTwin` + folder picker |
-| **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` document observer plus `UsdSceneRuntimePlugin` scene transition |
+| **Open a loose scene** | Open a `.usda` → owning-folder scan → folder Twin → doc-first `twin://…` scene becomes active → Grid | `OpenFile` through the [USD file-open route](55-scene-addressing-and-roots.md#4-one-mount-path-always-doc-first) |
 | **Built-in demo** | implicit Twin opened at startup | startup |
 | **Add object / import** | author into the explicit document: `ApplyUsdOp { doc_id, parent_gen, op: AddPrim { reference: Some(...) } }` (primitives use `reference: None`); recompose into Grid; save with `SaveDocument` | existing `ApplyUsdOp` |
 | **Attach a simulation program** | `AttachProgram { doc_id, spec }`; author a `LunCoProgramAPI` child, declared scalar ports, defaults, and USD connections as one change set | `lunco-usd-bevy-runtime-core::program_runtime` + normal USD projection |

@@ -47,6 +47,39 @@ mod tests {
     }
 
     #[test]
+    fn validated_syntax_retires_when_source_changes() {
+        let mut host = doc();
+        let source = host.document().source_snapshot();
+        let syntax = SyntaxCache::from_source(&source, host.generation());
+        assert!(
+            !host
+                .document_mut()
+                .offer_validated_syntax("model Different end Different;", syntax.ast.clone(),)
+        );
+        assert!(
+            host.document_mut()
+                .offer_validated_syntax(&source, syntax.ast)
+        );
+        let queued = host.document().prepared_syntax().unwrap().clone();
+        host.apply(ModelicaOp::ReplaceSource {
+            new: "model Replacement end Replacement;".into(),
+        })
+        .unwrap();
+        host.document_mut().install_parse_results(queued);
+        assert!(host.document().prepared_syntax().is_none());
+        assert!(host.document().syntax_is_stale());
+        host.document_mut().refresh_ast_now();
+        assert!(
+            host.document()
+                .ast()
+                .ast()
+                .classes
+                .contains_key("Replacement")
+        );
+        assert!(!host.document().ast().ast().classes.contains_key("Empty"));
+    }
+
+    #[test]
     fn undo_restores_previous_source() {
         let mut host = doc();
         host.apply(ModelicaOp::ReplaceSource {

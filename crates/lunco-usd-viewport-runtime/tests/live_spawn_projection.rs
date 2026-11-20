@@ -99,6 +99,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
         .session(UsdPreviewId(1))
         .unwrap()
         .stage_handle()
+        .unwrap()
         .id();
     app.world_mut().trigger(OpenUsdPreview {
         preview: UsdPreviewId(2),
@@ -174,7 +175,7 @@ fn add_prim_projects_live_via_sink_no_reload() {
     ] {
         let session = state.session(preview).unwrap();
         assert_eq!(session.scene_root(), root);
-        assert_eq!(session.stage_handle().id(), stage);
+        assert_eq!(session.stage_handle().unwrap().id(), stage);
     }
 }
 
@@ -211,6 +212,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
         .session(UsdPreviewId(1))
         .expect("first assembly has an open preview")
         .stage_handle()
+        .unwrap()
         .id();
     let first_root = app
         .world()
@@ -255,7 +257,7 @@ fn simultaneous_assembly_previews_keep_identical_paths_isolated() {
     let second_session = state
         .session(UsdPreviewId(2))
         .expect("second assembly has an open preview");
-    let second_handle = second_session.stage_handle().id();
+    let second_handle = second_session.stage_handle().unwrap().id();
     let second_root = second_session.scene_root();
     assert_ne!(first_stage, second_handle);
     assert_ne!(first_root, second_root);

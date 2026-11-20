@@ -1,8 +1,8 @@
 //! USD → cosim translator.
 //!
-//! Reads `lunco:modelicaModel` / `lunco:pythonModel` and native
-//! `connectionPaths` from USD prims after the bounded USD visual projection
-//! has spawned the entity, and drives the full cosim lifecycle end-to-end:
+//! Reads `LunCoProgramAPI` and native `connectionPaths` from the composed USD
+//! stage and drives the participant lifecycle as structural projection admits
+//! entities:
 //!
 //! - **Modelica**: resolves the loaded class interface asynchronously through
 //!   the compiler's admitted source set before publishing causal ports. Initial
@@ -374,6 +374,84 @@ impl Default for PendingUsdCosimPrimWork {
     }
 }
 
+/// Keep early Modelica source loads owned by the scene until its teardown.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct SceneModelicaSourceLoads(HashMap<bevy::asset::AssetPath<'static>, Handle<ModelicaSource>>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl lunco_core::SceneResource for SceneModelicaSourceLoads {}
+
+/// Start source IO and parsing from the prepared, mounted USD subtree while ECS
+/// projection continues. Participant and network owners later use the same
+/// typed asset identity and retain all of their normal admission checks.
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_scene_modelica_sources(
+    mut events: MessageReader<AssetEvent<UsdStageAsset>>,
+    in_flight: Option<Res<SceneLoadInFlight>>,
+    mounts: Res<lunco_core::SceneMountState>,
+    prims: Query<&UsdPrimPath>,
+    stages: Res<Assets<UsdStageAsset>>,
+    server: Res<AssetServer>,
+    roots: Option<Res<lunco_assets_core::TwinRoots>>,
+    mut loads: ResMut<SceneModelicaSourceLoads>,
+) {
+    let Some(load) = in_flight else {
+        events.clear();
+        return;
+    };
+    let mut accepted = false;
+    for event in events.read() {
+        accepted |=
+            matches!(event, AssetEvent::LoadedWithDependencies { id } if *id == load.stage_id);
+    }
+    if !accepted {
+        return;
+    }
+    let Some(root) = mounts
+        .active_root()
+        .and_then(|entity| prims.get(entity).ok())
+    else {
+        return;
+    };
+    if root.stage_handle.id() != load.stage_id {
+        return;
+    }
+    let Some(stage) = stages.get(load.stage_id) else {
+        return;
+    };
+    let plan = stage.projection_plan.as_ref();
+    let Some(root_path) = lunco_usd_bevy_stage::resolve_stage_prim_path(plan, &root.path) else {
+        return;
+    };
+    let paths = plan.native_asset_paths_snapshot();
+    let before = loads.0.len();
+    for prim in plan.prim_paths_matching(&[], &["LunCoProgramAPI"]) {
+        if !lunco_usd_bevy_stage::is_descendant_or_self(&prim, &root_path) {
+            continue;
+        }
+        let Ok(source) = lunco_usd_bevy_core::program::modelica_source_ref(plan, &prim) else {
+            continue;
+        };
+        if let Ok(path) = lunco_usd_bevy_stage::asset::resolve_stage_asset_path(
+            &server,
+            load.stage_id,
+            &source.asset,
+            roots.as_deref(),
+            paths.as_deref(),
+        ) {
+            loads
+                .0
+                .entry(path.clone())
+                .or_insert_with(|| server.load(path));
+        }
+    }
+    debug!(
+        count = loads.0.len() - before,
+        "prepared Modelica scene source loads"
+    );
+}
+
 /// Lifecycle-queued Modelica owners that still need their shared port surface.
 #[derive(Resource)]
 struct PendingModelicaWrapWork(PendingEntityWork);
@@ -499,9 +577,8 @@ fn reset_modelica_wrap_work(mut pending: ResMut<PendingModelicaWrapWork>) {
     pending.0.clear();
 }
 
-/// Reads cosim attributes from USD prims and dispatches model
-/// compilation + wires. Runs in `Update` after `sync_usd_visuals` so
-/// `Transform` / `Mesh3d` / `Material` are already present.
+/// Admit the authored program and port contracts for queued structural prims.
+/// Source reads can proceed while meshes and physics projection finish.
 /// Run condition: the initial discovery or a queued prim lifecycle is pending.
 fn any_unprocessed_usd_cosim(pending: Res<PendingUsdCosimPrimWork>) -> bool {
     pending.0.has_work()
@@ -2426,6 +2503,8 @@ impl Plugin for UsdSimCosimPlugin {
     fn build(&self, app: &mut App) {
         use lunco_core::AppSceneExt;
         app.init_scene_resource::<preparations::ModelicaPreparations>();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.init_scene_resource::<SceneModelicaSourceLoads>();
         app.add_observer(interfaces::cancel_removed_interface);
         app.add_observer(interfaces::cancel_removed_source::<PendingModelicaSource>);
         app.add_observer(interfaces::cancel_removed_source::<GeneratedModelicaSource>);
@@ -2636,6 +2715,16 @@ impl Plugin for UsdSimCosimPlugin {
             )
                 .chain()
                 .in_set(CosimUpdateSet::Scene),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
+            Update,
+            prepare_scene_modelica_sources
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<UsdStageAsset>>,
+                )
+                .after(lunco_usd_bevy_scene::UsdSceneSyncSet)
+                .before(lunco_usd_bevy_scene::UsdPrimProjectionSet),
         );
 
         // Python source-load drain runs every Update only when the Python feature

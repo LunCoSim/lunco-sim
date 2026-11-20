@@ -565,7 +565,7 @@ fn preview_drag_owner(
         return None;
     }
     let prim = q_paths.get(entity).ok()?;
-    if prim.stage_handle.id() != session.stage_handle().id()
+    if prim.stage_handle.id() != session.stage_handle()?.id()
         || prim.path.is_empty()
         || !is_preview_entity(entity, session.scene_root(), q_parents)
     {

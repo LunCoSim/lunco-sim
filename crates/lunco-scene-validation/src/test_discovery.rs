@@ -432,9 +432,9 @@ def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
                 &id,
                 std::collections::HashMap::from([(id.clone(), layer.into_bytes())]),
             );
-            let mut plan = UsdStageProjectionPlan::from_recipe(&recipe)
-                .map_err(|error| format!("cannot prepare scene: {error}"))?;
-            plan.prepare_native_asset_paths(Some(origin.clone()), Some(&roots));
+            let plan =
+                UsdStageProjectionPlan::prepare_recipe(&recipe, Some(origin.clone()), Some(&roots))
+                    .map_err(|error| format!("cannot prepare scene: {error}"))?;
             super::classify_scene_programs(
                 &plan,
                 &origin,
@@ -506,8 +506,9 @@ def Scope "Program" (prepend apiSchemas = ["LunCoProgramAPI"])
                 ),
             ]),
         );
-        let mut plan = UsdStageProjectionPlan::from_recipe(&recipe).unwrap();
-        plan.prepare_native_asset_paths(Some(origin.clone()), Some(&roots));
+        let plan =
+            UsdStageProjectionPlan::prepare_recipe(&recipe, Some(origin.clone()), Some(&roots))
+                .unwrap();
         assert_eq!(
             super::classify_scene_programs(&plan, &origin, &roots, None, Path::new("root.usda"))
                 .unwrap(),

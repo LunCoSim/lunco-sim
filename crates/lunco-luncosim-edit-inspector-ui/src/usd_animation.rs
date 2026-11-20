@@ -149,7 +149,9 @@ pub fn produce_usd_animation_view(
         let Ok(prim) = q.get(entity) else {
             continue;
         };
-        let handle = session.stage_handle();
+        let Some(handle) = session.stage_handle() else {
+            continue;
+        };
         if prim.stage_handle.id() != handle.id() {
             continue;
         }

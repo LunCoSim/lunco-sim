@@ -2783,13 +2783,12 @@ fn submit_pending_dependent_stage_refreshes(world: &mut World) {
                                 revision
                             )
                             .entered();
-                            let mut plan = UsdStageProjectionPlan::from_recipe(&recipe)
-                                .map_err(|error| error.to_string())?;
-                            plan.prepare_native_asset_paths(
+                            UsdStageProjectionPlan::prepare_recipe(
+                                &recipe,
                                 worker_origin.clone(),
                                 worker_roots.as_ref(),
-                            );
-                            plan
+                            )
+                            .map_err(|error| error.to_string())?
                         };
                         Ok(Some(PreparedDependentStagePlan {
                             recipe,

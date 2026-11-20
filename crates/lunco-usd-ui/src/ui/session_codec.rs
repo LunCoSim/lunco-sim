@@ -772,7 +772,7 @@ mod tests {
                 doc,
                 LayerId::root(),
                 Entity::PLACEHOLDER,
-                Handle::default(),
+                lunco_usd_viewport_core::UsdPreviewStage::Mounted(Handle::default()),
                 1,
                 view,
             ));
@@ -830,7 +830,7 @@ mod tests {
             doc,
             LayerId::root(),
             Entity::PLACEHOLDER,
-            Handle::default(),
+            lunco_usd_viewport_core::UsdPreviewStage::Mounted(Handle::default()),
             1,
             view,
         ));

@@ -1054,7 +1054,7 @@ fn focused_preview_transform_context(
     if !session.projection_ready() {
         return None;
     }
-    if prim.stage_handle.id() != session.stage_handle().id() || prim.path.is_empty() {
+    if prim.stage_handle.id() != session.stage_handle()?.id() || prim.path.is_empty() {
         return None;
     }
 

@@ -154,9 +154,12 @@ pub fn produce_usd_prim_tree(
     let scene_changes: Vec<_> = scene_changes.read().collect();
 
     for session in viewport.sessions() {
+        let Some(handle) = session.stage_handle() else {
+            view.sessions.remove(&session.id());
+            continue;
+        };
         let session_view = view.sessions.entry(session.id()).or_default();
         let preview_root = session.scene_root();
-        let handle = session.stage_handle().clone();
         let stage_id = handle.id();
         let doc = session.doc();
         let identity_changed =
@@ -264,7 +267,7 @@ pub fn produce_usd_prim_tree(
 
         // Ensure the canonical stage is built so we can read the type per prim.
         if canonical.get(stage_id).is_none() {
-            if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
+            if let Some(recipe) = stages.get(handle).and_then(|a| a.recipe.clone()) {
                 canonical.get_or_build(stage_id, &recipe);
             }
         }

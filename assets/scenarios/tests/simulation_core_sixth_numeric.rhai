@@ -12,7 +12,7 @@ fn settled() {
 fn state(path) {query("QueryPhysicsState",#{id:find_path(path)})}
 fn modelica_clock(path) {
     for model in query("CosimStatus",#{include_values:false}).entities {
-        if model.name==path && model.status=="Running" {
+        if model.name==path && (model.status=="Idle" || model.status=="Running") {
             return [model.modelica_current_time,model.modelica_target_time,
                 model.modelica_next_communication_time,model.modelica_is_stepping];
         }

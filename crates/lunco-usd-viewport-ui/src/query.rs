@@ -45,23 +45,16 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
         let previews: Vec<ApiValue> = sessions
             .into_iter()
             .map(|session| {
-                let (stage_asset_path, recipe_layers) = world
-                    .get_resource::<Assets<UsdStageAsset>>()
-                    .and_then(|assets| assets.get(session.stage_handle()))
-                    .map(|asset| {
-                        let mut layers = asset
-                            .recipe
-                            .as_ref()
-                            .map(|recipe| recipe.bytes.keys().cloned().collect::<Vec<_>>())
-                            .unwrap_or_default();
-                        layers.sort();
-                        let path = world
-                            .get_resource::<AssetServer>()
-                            .and_then(|server| server.get_path(session.stage_handle().id()))
-                            .map(|path| path.path().to_string_lossy().into_owned());
-                        (path, layers)
-                    })
-                    .unwrap_or((None, Vec::new()));
+                let stage = session.stage_handle();
+                let stage_asset_path = stage
+                    .and_then(|handle| world.get_resource::<AssetServer>()?.get_path(handle.id()))
+                    .map(|path| path.path().to_string_lossy().into_owned());
+                let mut recipe_layers = stage
+                    .and_then(|handle| world.get_resource::<Assets<UsdStageAsset>>()?.get(handle))
+                    .and_then(|asset| asset.recipe.as_ref())
+                    .map(|recipe| recipe.bytes.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                recipe_layers.sort();
                 let mut preview_views: Vec<_> = viewport
                     .views()
                     .filter(|view| view.preview() == session.id())
@@ -94,7 +87,7 @@ impl ApiQueryProvider for InspectUsdViewportProvider {
                     "preview": session.id().0,
                     "doc_id": session.doc().raw(),
                     "edit_target": session.edit_target().as_str(),
-                    "stage_asset_id": format!("{:?}", session.stage_handle().id()),
+                    "stage_asset_id": stage.map(|handle| format!("{:?}", handle.id())),
                     "stage_asset_path": stage_asset_path,
                     "recipe_layers": recipe_layers,
                     "projected_generation": session.projected_generation(),

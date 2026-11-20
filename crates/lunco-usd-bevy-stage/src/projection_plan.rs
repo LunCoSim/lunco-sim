@@ -113,8 +113,13 @@ struct UsdStageProjectionData {
 pub struct UsdStageProjectionPlan {
     native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
     asset_identifiers: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
-    layer_identifiers: std::collections::BTreeMap<String, std::collections::BTreeSet<String>>,
     data: Arc<UsdStageProjectionData>,
+}
+
+/// Asset-source context captured for an asset-backed projection.
+struct AssetPreparation<'a> {
+    origin: Option<bevy::asset::AssetPath<'static>>,
+    roots: Option<&'a lunco_assets_core::TwinRoots>,
 }
 
 impl UsdStageProjectionPlan {
@@ -132,76 +137,62 @@ impl UsdStageProjectionPlan {
         self.native_paths.clone()
     }
 
-    /// Prepare native asset references through the authoritative asset owner.
-    /// Called only on the same worker that prepares this composed snapshot.
-    pub fn prepare_native_asset_paths(
-        &mut self,
-        origin: Option<bevy::asset::AssetPath<'static>>,
-        roots: Option<&lunco_assets_core::TwinRoots>,
-    ) {
-        let _span = bevy::log::info_span!("usd_projection_native_paths").entered();
-        let references =
-            crate::native_paths::native_references_for_prims(self, UsdRead::prim_paths(self));
-        self.native_paths = Some(Arc::new(
-            lunco_assets_core::asset_path::PreparedAssetPaths::prepare_on_worker(
-                references, origin, roots,
-            ),
-        ));
-        self.asset_identifiers = crate::native_paths::consumed_asset_identifiers_for_prims(
-            self,
-            UsdRead::prim_paths(self),
-        );
-        for (prim, identifiers) in &self.layer_identifiers {
-            self.asset_identifiers
-                .entry(prim.clone())
-                .or_default()
-                .extend(identifiers.iter().cloned());
-        }
-    }
-
     /// Build the initial projection from the same composed OpenUSD stage that
     /// runtime readers use. The stage is local to this worker call and is
     /// dropped before the plan crosses the async asset boundary.
     pub fn from_recipe(recipe: &StageRecipe) -> Result<Self> {
+        Self::project_recipe(recipe, None)
+    }
+
+    /// Compose an asset-backed stage and prepare its consuming asset identities
+    /// in the same worker operation.
+    pub fn prepare_recipe(
+        recipe: &StageRecipe,
+        origin: Option<bevy::asset::AssetPath<'static>>,
+        roots: Option<&lunco_assets_core::TwinRoots>,
+    ) -> Result<Self> {
+        Self::project_recipe(recipe, Some(AssetPreparation { origin, roots }))
+    }
+
+    fn project_recipe(recipe: &StageRecipe, assets: Option<AssetPreparation<'_>>) -> Result<Self> {
         let _span = bevy::log::info_span!("usd_projection_plan", root = %recipe.root_id).entered();
         let (stage, _) = crate::compose::build_stage_with_resolver(recipe)?;
-        Self::from_stage(&stage)
+        Self::project_stage(&stage, assets)
     }
 
     /// Snapshot an already-composed stage into the owned read surface used by
     /// an external native adapter. The caller retains the live stage separately
     /// for explicit authoring; this plan owns no OpenUSD handles.
     pub fn from_stage(stage: &Stage) -> Result<Self> {
+        Self::project_stage(stage, None)
+    }
+
+    fn project_stage(stage: &Stage, assets: Option<AssetPreparation<'_>>) -> Result<Self> {
         let _span = bevy::log::info_span!("usd_projection_facts").entered();
         let reader = StageView::new(stage);
         let _ = crate::units::stage_convention(&reader)
             .map_err(|error| anyhow!("invalid stage convention: {error}"))?;
         let traversal_span = bevy::log::debug_span!("usd_projection_traversal").entered();
         let mut paths = Vec::new();
-        let mut seen = std::collections::HashSet::new();
         stage
             .traverse(openusd::usd::PrimPredicate::DEFAULT, |path| {
-                if seen.insert(path.clone()) {
-                    paths.push(path.clone());
-                }
+                paths.push((path.clone(), true));
             })
             .map_err(|error| anyhow!("native stage traversal failed: {error}"))?;
+        let active_count = paths.len();
         // Explicit queries retain inactive identity and metadata. Keep the
         // projection region identical to native default traversal, including
         // its payload and abstract-prim boundaries.
-        let mut all_paths = Vec::new();
+        let inactive = openusd::usd::PrimPredicate::new(
+            openusd::usd::PrimStatus::empty(),
+            openusd::usd::PrimStatus::ACTIVE,
+        )
+        .with_instance_proxies(true);
         stage
-            .traverse(openusd::usd::PrimPredicate::ALL, |path| {
-                if !seen.contains(path) {
-                    all_paths.push(path.clone());
-                }
+            .traverse(inactive, |path| {
+                paths.push((path.clone(), false));
             })
             .map_err(|error| anyhow!("native stage traversal failed: {error}"))?;
-        for path in all_paths {
-            if !reader.is_active(&path).map_err(|error| anyhow!(error))? {
-                paths.push(path);
-            }
-        }
         drop(traversal_span);
         let mut data = UsdStageProjectionData {
             default_prim: reader.default_prim(),
@@ -230,11 +221,9 @@ impl UsdStageProjectionPlan {
         // Native purpose info is valid only within this immutable stage. Reuse
         // its inheritable state through the existing prim index during traversal.
         let mut purpose_infos = Vec::<PurposeInfo>::new();
-        for path in paths {
+        let mut prim_paths = Vec::with_capacity(active_count);
+        for (path, active) in paths {
             let path_string = path.to_string();
-            let active = reader
-                .is_active(&path)
-                .map_err(|error| anyhow!("{path_string}: {error}"))?;
             let transform_span = bevy::log::debug_span!("usd_projection_transforms").entered();
             let prepared_transform =
                 crate::transform::prepare_transform_at(&reader, &path, 0.0, active)
@@ -549,6 +538,9 @@ impl UsdStageProjectionPlan {
                     .insert((path_string.clone(), instance), members);
             }
             drop(collections_span);
+            if active {
+                prim_paths.push(path);
+            }
         }
         bevy::log::debug!(
             collection_requests,
@@ -582,19 +574,28 @@ impl UsdStageProjectionPlan {
             data: Arc::new(data),
             ..Self::default()
         };
-        plan.asset_identifiers = crate::native_paths::composed_asset_identifiers_for_prims(
-            &plan,
-            UsdRead::prim_paths(&plan),
-        );
-        plan.layer_identifiers = crate::native_paths::composed_layer_identifiers_for_prims(
+        let layer_identifiers = crate::native_paths::composed_layer_identifiers_for_active_prims(
             stage,
-            UsdRead::prim_paths(&plan),
+            prim_paths.iter().cloned(),
         );
-        for (prim, identifiers) in &plan.layer_identifiers {
+        plan.asset_identifiers = if let Some(AssetPreparation { origin, roots }) = assets {
+            let _span = bevy::log::info_span!("usd_projection_native_paths").entered();
+            let references =
+                crate::native_paths::native_references_for_prims(&plan, prim_paths.iter().cloned());
+            plan.native_paths = Some(Arc::new(
+                lunco_assets_core::asset_path::PreparedAssetPaths::prepare_on_worker(
+                    references, origin, roots,
+                ),
+            ));
+            crate::native_paths::consumed_asset_identifiers_for_active_prims(&plan, prim_paths)
+        } else {
+            crate::native_paths::composed_asset_identifiers_for_active_prims(&plan, prim_paths)
+        };
+        for (prim, identifiers) in layer_identifiers {
             plan.asset_identifiers
-                .entry(prim.clone())
+                .entry(prim)
                 .or_default()
-                .extend(identifiers.iter().cloned());
+                .extend(identifiers);
         }
         Ok(plan)
     }
@@ -1568,14 +1569,15 @@ def Xform "Unordered" {
             r#"#usda 1.0
 def Scope "Good" {}
 def Scope "Inactive" (active = false) { def Scope "Child" {} }
-def Scope "Invalid" {}
+class Scope "Abstract" { def Scope "Invalid" {} }
 "#,
         );
+        let invalid = SdfPath::new("/Abstract/Invalid").unwrap();
         let mut data = lunco_usd_compose::parse_usda(
             std::str::from_utf8(&recipe.bytes["scene.usda"]).unwrap(),
         )
         .unwrap();
-        data.spec_mut(&SdfPath::new("/Invalid").unwrap())
+        data.spec_mut(&invalid)
             .unwrap()
             .add("active", openusd::sdf::Value::String("invalid".into()));
         let bytes = openusd::sdf::LayerRegistry::find_by_extension("usdc")
@@ -1600,7 +1602,7 @@ def Scope "Invalid" {}
                 .unwrap(),
             false
         );
-        assert!(live.is_active(&SdfPath::new("/Invalid").unwrap()).is_err());
+        assert!(live.is_active(&invalid).is_err());
         assert!(UsdStageProjectionPlan::from_stage(&stage).is_err());
     }
 

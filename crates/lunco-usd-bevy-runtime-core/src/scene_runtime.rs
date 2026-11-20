@@ -16,10 +16,11 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command, register_commands};
 use lunco_doc::{Document as _, OpenOutcome};
-use lunco_doc_bevy::{DocumentChanged, DocumentRegistry, OpenFile};
+use lunco_doc_bevy::{DocumentChanged, DocumentRegistry};
 use lunco_storage::Storage;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
 use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages, source::UsdSourceBytes};
+use lunco_usd_commands::UsdOpenFileSource;
 use lunco_usd_core::commands::{EmptyViewportReason, is_usd_path};
 use lunco_usd_document::document::{PreparedUsdSource, UsdDocument};
 use lunco_workspace::open::{PendingTwinOpens, TwinOpenMode, spawn_twin_scan};
@@ -287,18 +288,23 @@ fn on_open_twin_scene(
     let roots = roots
         .as_deref()
         .ok_or_else(|| "TwinRoots is not installed".to_owned())?;
+    let identity = lunco_assets_core::logical_twin_source_identity(twin);
     let authority = roots
-        .authority_for_root(&twin.root)
+        .mounted_authority_for_logical(&identity)
         .map_err(|_| "Twin asset source is unavailable".to_owned())?
         .ok_or_else(|| "Twin asset source is unavailable".to_owned())?;
+    if !roots
+        .root_for(&authority)
+        .is_ok_and(|root| root.as_ref() == Some(&twin.root))
+    {
+        return Err("Twin asset source is unavailable".to_owned());
+    }
     let (Some(asset_server), Some(usd_sources)) = (asset_server, usd_sources) else {
         return Err("the USD asset pipeline is not installed".to_owned());
     };
 
     let internal_scene_uri = lunco_assets_core::twin_uri(&authority, &request.relative_path);
-    let scene_uri =
-        lunco_assets_core::asset_path::source_uri_for_address(&internal_scene_uri, Some(roots))
-            .map_err(|_| "Twin scene source is unavailable".to_owned())?;
+    let scene_uri = lunco_assets_core::twin_uri(&identity, &request.relative_path);
     info!(
         "[twin] doc-backing starting scene `{scene_uri}` (twin `{}`) — mount follows",
         twin.root.display()
@@ -1369,49 +1375,19 @@ fn publish_restart_document_overlays(
 // OpenFile — gated on USD extensions
 // ─────────────────────────────────────────────────────────────────────
 
-// `OpenFile` for a USD path drives two independent halves, each its own
-// observer so headless bins get both without the UI:
-//
-//   1. `on_open_file_for_usd` — document **registration**: async read via
-//      `lunco-storage`, idempotent allocate into `DocumentRegistry<UsdDocument>`.
-//   2. `on_open_file` (this one) — scene-root selection: external files open
-//      their owning Twin and enter the doc-first mount; files inside the active
-//      Twin remain document-only.
-//
-// Only the admitted typed `LoadScene` observer calls `spawn_scene_root_world`,
-// so no OpenFile path can create a second raw stage beside the Twin mount.
-#[on_command(OpenFile)]
-fn on_open_file(
-    trigger: On<OpenFile>,
-    workspace: Option<Res<WorkspaceResource>>,
-    mut pending: Option<ResMut<PendingTwinOpens>>,
-    mut commands: Commands,
-) {
-    let raw_path = &trigger.event().path;
-    let path = match lunco_storage::file_uri_to_path(raw_path) {
-        Ok(Some(path)) => path,
-        Ok(None) if lunco_assets_core::has_scheme(raw_path) => {
-            // Asset schemes enter the shared typed scene transition; decoded
-            // native file URIs keep their filesystem identity below.
-            if is_usd_path(raw_path) {
-                commands.trigger(LoadScene {
-                    path: raw_path.clone(),
-                    root_prim: String::new(),
-                });
-            }
-            return;
-        }
-        Ok(None) => std::path::PathBuf::from(raw_path),
-        Err(error) => {
-            warn!("[OpenFile] {error}");
+/// Route a USD file-open through its existing document or scene owner.
+pub(crate) fn open_file(world: &mut World, source: UsdOpenFileSource) {
+    let (path, admission) = match source {
+        UsdOpenFileSource::File { path, admission } => (path, admission),
+        UsdOpenFileSource::Asset(path) => {
+            world.trigger(LoadScene {
+                path,
+                root_prim: String::new(),
+            });
             return;
         }
     };
-    if !is_usd_path(&path.to_string_lossy()) {
-        return;
-    }
-
-    let Some(workspace) = workspace else {
+    let Some(workspace) = world.get_resource::<WorkspaceResource>() else {
         warn!(
             "[OpenFile] cannot open USD filesystem scene `{}`: WorkspacePlugin is not installed",
             path.display()
@@ -1428,56 +1404,43 @@ fn on_open_file(
             return;
         }
     };
-    // A USD file already inside the active Twin is an additive document open;
+    // A USD file already inside an open Twin is an additive document open;
     // the Twin browser uses this to inspect reusable layers without replacing
     // the running world. External scenes replace the workspace at the root.
     if workspace
         .twins()
         .any(|(_, twin)| abs.starts_with(&twin.root))
     {
+        lunco_usd_commands::spawn_usd_load(world, abs, admission);
         return;
     }
-    let Some(pending) = pending.as_deref_mut() else {
+    let Some(mut pending) = world.get_resource_mut::<PendingTwinOpens>() else {
         warn!(
             "[OpenFile] cannot open USD filesystem scene `{}`: WorkspacePlugin is not installed",
             path.display()
         );
         return;
     };
-    spawn_twin_from_scene(&abs, pending, "OpenFile");
-}
-
-/// Open the root that owns `scene` and select that scene.
-///
-/// This root-relative scan is owned by the USD scene domain so GUI and headless
-/// `OpenFile` requests cannot mount one file through competing paths.
-fn spawn_twin_from_scene(scene: &Path, pending: &mut PendingTwinOpens, log_tag: &str) {
-    let abs = match lunco_storage::canonicalize_file_path(scene) {
-        Ok(abs) => abs,
-        Err(error) => {
-            warn!(
-                "[{log_tag}] cannot resolve USD filesystem scene `{}`: {error}",
-                scene.display()
-            );
-            return;
-        }
-    };
     let root = lunco_twin::root_for_file(&abs);
-    let rel = abs
-        .strip_prefix(&root)
-        .map(lunco_assets_path::slashed)
-        .unwrap_or_else(|_| {
-            abs.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        });
-    spawn_twin_scan(&root, pending, log_tag, Some(rel), TwinOpenMode::Replace);
+    let Ok(relative) = abs.strip_prefix(&root) else {
+        warn!(
+            "[OpenFile] {} is outside its Twin root {}",
+            abs.display(),
+            root.display()
+        );
+        return;
+    };
+    spawn_twin_scan(
+        &root,
+        &mut pending,
+        "OpenFile",
+        Some(lunco_assets_path::slashed(relative)),
+        TwinOpenMode::Replace,
+    );
 }
 
 register_commands!(
     on_load_scene,
-    on_open_file,
     on_open_twin_scene,
     on_set_empty_viewport_reason
 );

@@ -177,6 +177,7 @@ class ProductionSession:
         windowed: bool = False,
         subcommand: str | None = None,
         require_readiness: bool = True,
+        expected_exit_code: int = 0,
     ) -> None:
         self.port = port
         self.extra_args = list(extra_args)
@@ -184,6 +185,7 @@ class ProductionSession:
         self.windowed = windowed
         self.subcommand = subcommand
         self.require_readiness = require_readiness
+        self.expected_exit_code = expected_exit_code
         self._log = None
         self.process: subprocess.Popen[bytes] | None = None
 
@@ -255,8 +257,11 @@ class ProductionSession:
                 self.process.wait(timeout=EXIT_TIMEOUT_S)
             if self.process.poll() is None:
                 raise RuntimeError(f"process did not exit within {EXIT_TIMEOUT_S:g}s")
-            if self.process.returncode != 0:
-                raise RuntimeError(f"production process exited with code {self.process.returncode}")
+            if self.process.returncode != self.expected_exit_code:
+                raise RuntimeError(
+                    f"production process exited with code {self.process.returncode}, "
+                    f"expected {self.expected_exit_code}"
+                )
             deadline = time.monotonic() + EXIT_TIMEOUT_S
             while port_is_open(self.port) and time.monotonic() < deadline:
                 time.sleep(POLL_INTERVAL_S)

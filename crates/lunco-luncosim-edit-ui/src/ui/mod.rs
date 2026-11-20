@@ -95,8 +95,9 @@ fn preview_path_for_entity(
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<String> {
+    let stage = preview.stage_handle()?.id();
     q_paths.get(entity).ok().and_then(|(_, path)| {
-        (path.stage_handle.id() == preview.stage_handle().id()
+        (path.stage_handle.id() == stage
             && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then(|| path.path.clone())
     })
@@ -108,8 +109,9 @@ fn preview_entity_for_path(
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
+    let stage = preview.stage_handle()?.id();
     let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
-        (prim.stage_handle.id() == preview.stage_handle().id()
+        (prim.stage_handle.id() == stage
             && prim.path == path
             && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
         .then_some(entity)

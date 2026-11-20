@@ -463,6 +463,10 @@ callers.
 Source-interface parameter/input bindings and explicit causal ports belong to
 the selected class. Generated source uses its exact validated root class;
 sibling, nested, and connector declarations do not merge into that boundary.
+For native Twin startup, Modelica asset reads and parsing start from the mounted
+composed snapshot before USD finishes ECS projection. Inspect the same source,
+port, wiring, and initial-sample admission used by both native hosts when
+diagnosing delayed solver readiness.
 Source-root admission still covers the complete source definition. Inheritance,
 alias causality, evaluated defaults, and runtime metadata come from checked
 compiler facts. The production `modelica_source_target.rhai` gate checks scoped
@@ -505,6 +509,9 @@ source roots; unrelated editor documents are not sibling inputs. The reserved
 bundled `generated/` filename namespace records provenance. Cache identity uses
 exact declarations and participating bytes. Verify repeat-load cache reuse while changing document-open
 order; authored Modelica documents retain their multi-document source sets.
+Generated documents reuse the synthesis worker's strict AST for the same
+source generation. Check indexed generated classes, model readiness and
+document retirement through the production runtime after changing this path.
 
 Domain discovery does not resynthesize ordinary scene-owned networks when a
 content prim receives its GID: that identity does not enter their namespace.
@@ -516,6 +523,8 @@ their own fixed-clock admission hold is present and no prior projection is
 installed. Live replacements remain one per Update; repeated results for a
 root wait for ECS publication. Worker completion never bypasses the oldest
 request or its Twin/stage/source-revision validation.
+Independent prepared networks evaluate Rhai on bounded worker jobs and share
+one telemetry index at publication.
 
 On native runs, one dedicated Rumoca actor owns the mutable session and shared
 DAE cache. Native experiment `CompileBatch` requests use this same actor and
@@ -585,8 +594,9 @@ release the owned thread.
 
 Native optional Modelica artifact persistence captures the cache-owned
 `lunco_modelica_worker::worker::ModelicaArtifactDiskLimits` resource before
-`ModelicaExecutionPlugin` starts the worker. Defaults are 32 retained records, 64 MiB compressed,
-256 MiB decoded, and a 64 MiB zstd window; see
+`ModelicaExecutionPlugin` starts the worker. Each compiled-DAE or prepared-solve
+family retains up to 128 records and 256 MiB. The record limits are 64 MiB compressed,
+256 MiB decoded, and a 64 MiB zstd window. See
 [the cache ownership contract](../../docs/architecture/20-domain-modelica.md) for
 valid ranges and configuration timing. Missing records are cache misses;
 rejected existing records warn and recompute admitted equations. Invalid limits
@@ -1326,6 +1336,9 @@ mailbox; source, session, generation and library-cohort receipts fence publicati
 Live construction reuses that checked artifact and its exact binding intent.
 Acyclic inputs initialize from finite producer samples; feedback uses a bounded
 initialization-only worker job followed by live-participant certification.
+Initialization-only and batch compilation use the checked DAE and bindings. Live
+and interface requests project parameter edit metadata from the same source
+context, including when they reuse a numerical artifact.
 
 A readable Modelica constant, input or parameter is not a directional output port. Native
 outputs remain with their registered owners, including when a Modelica input on

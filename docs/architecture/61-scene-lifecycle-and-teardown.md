@@ -451,7 +451,7 @@ contain no execution-mode marker, retry branch, or mid-frame mutation path.
 Invalid `LoadScene` addresses, including internal Twin mount authorities, and
 a missing asset pipeline return terminal command rejections with a warning
 before admission; they never acknowledge a load that cannot run. Native
-filesystem paths and file URIs enter through `OpenFile`.
+filesystem paths and file URIs enter through [the USD file-open route](55-scene-addressing-and-roots.md#4-one-mount-path-always-doc-first).
 
 Loading closes from the authoritative asset/structural-projection outcome in
 `Last`, after normal projection schedules have finished. Async CPU mesh builds
@@ -472,6 +472,12 @@ are canceled. An in-flight transaction receives its matching failure edge before
 complete that transaction. Closing an inactive Twin only releases its documents
 and admissions. Retirement edges carry the same typed transaction identity, so
 an old close cannot stop a replacement scene's clock.
+
+Restored USD Editor tabs carry document and view identity immediately. The
+preview runtime binds their composed stage and projects their prims on first
+tab visibility or explicit preview open. A hidden restored tab holds no
+projection lease, and closing it leaves any other view's lease intact. On
+`TwinClosed`, the viewport owner retires the pending tab with its document.
 
 USD visual projection is the deliberate exception to all-at-once scene
 materialisation. The asset loader composes the fetched layer closure on its
@@ -500,6 +506,13 @@ Transform preparation validates the authored stack once, then uses one native
 `XformQuery` for local composition, reset and time-variation facts. Inactive
 prims retain metadata without evaluating a matrix. The shared conversion keeps
 canonical geometry in `DMat4` and narrows only for the render transform.
+The worker uses activity facts from native traversal. Default traversal
+determines the projection region, and a native inactive predicate retains
+query-only prims, including those below abstract scopes.
+After stage admission, native co-simulation starts Modelica source reads for the
+mounted subtree before draining structural projection. The handles belong to
+the scene and feed the ordinary typed asset loader. Program binding and initial
+state still require their own lifecycle admission.
 
 `UsdVisualProjectionSettings::frame_budget` bounds prim binding because entity
 allocation and Bevy asset mutation are main-thread responsibilities. A prim

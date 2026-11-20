@@ -60,7 +60,10 @@ def inspect_document(session, doc, path="/World"):
     try:
         return execute(session, "InspectUsdDocument", doc_id=doc, path=path)
     except RuntimeError as error:
-        if "USD stage source asset is unavailable" in str(error):
+        if any(text in str(error) for text in (
+            "USD stage source asset is unavailable",
+            "the USD stage is loading; retry composed inspection",
+        )):
             return None
         raise
 
@@ -238,6 +241,17 @@ def main():
         manifest = tomllib.loads((root / "twin.toml").read_text())
         if manifest["usd"]["default_scene"] != "default.usda":
             raise RuntimeError(f"explicit scene changed the authored default: {manifest}")
+        previous = twin_id(session)
+        source = plain / "plain.usda"
+        execute(session, "OpenFile", path=source.as_uri())
+        wait_selection(session, previous, False, "cli", "explicit", require_tool=False)
+        verdict(session, "verify_ephemeral_workspace")
+        verdict(session, "verify_external_scene_file", str(source))
+        missing = source.with_name("missing.usda")
+        execute(session, "OpenFile", path=missing.as_uri())
+        wait_for(session, lambda: f"cannot resolve USD filesystem scene `{missing}`"
+                 in session.log_path.read_text(errors="replace"), "missing scene file diagnostic")
+        verdict(session, "verify_external_scene_file", str(source))
 
     with ProductionSession(args.port, windowed=True, extra_args=("--no-load-default-scene",), log_path=area / "cli-empty.log") as session:
         execute(session, "OpenTwin", path=str(root))

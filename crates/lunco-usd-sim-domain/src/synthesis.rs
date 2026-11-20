@@ -103,6 +103,8 @@ pub struct DomainProjectionError {
 pub struct SynthesisPlan {
     /// The Modelica source to compile.
     pub source: String,
+    /// Strict syntax of the exact generated source for document admission.
+    pub syntax: std::sync::Arc<StoredDefinition>,
     /// The interface extracted from the validated source. Keeping it beside
     /// the source makes validation and installation share one AST parse.
     pub interface: ModelInterface,
@@ -414,7 +416,7 @@ impl HookSynthesizer {
                 message,
             }]
         })?;
-        let interface =
+        let (syntax, interface) =
             validate_generated_source(source, model_name, &network, &units, &member_output_aliases)
                 .map_err(|message| {
                     vec![DomainProjectionError {
@@ -427,6 +429,7 @@ impl HookSynthesizer {
                 })?;
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
+            syntax: std::sync::Arc::new(syntax),
             interface,
             inputs: network.inputs.clone(),
             input_bindings: BTreeMap::new(),
@@ -734,7 +737,8 @@ fn parse_validated_root_interface(
     outputs: &BTreeSet<String>,
     aliases: &[(String, String, String)],
 ) -> Result<StoredDefinition, String> {
-    let ast = rumoca_phase_parse::parse_to_ast(source, "generated-policy.mo")
+    let uri = format!("generated://{model_name}.mo");
+    let ast = rumoca_phase_parse::parse_to_ast(source, &uri)
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = ast
         .get_class_by_qualified_name(model_name)
@@ -804,7 +808,7 @@ fn validate_generated_source(
     network: &DomainNetwork,
     units: &[SynthesisUnit],
     aliases: &[(String, String, String)],
-) -> Result<ModelInterface, String> {
+) -> Result<(StoredDefinition, ModelInterface), String> {
     let outputs: BTreeSet<String> = network.outputs.keys().cloned().collect();
     let ast =
         parse_validated_root_interface(source, model_name, &network.inputs, &outputs, aliases)?;
@@ -984,8 +988,9 @@ fn validate_generated_source(
             }
         }
     }
-    model_interface_for_class(&ast, model_name)
-        .ok_or_else(|| format!("root class `{model_name}` has no source interface"))
+    let interface = model_interface_for_class(&ast, model_name)
+        .ok_or_else(|| format!("root class `{model_name}` has no source interface"))?;
+    Ok((ast, interface))
 }
 
 /// Read a policy-owned unit partition and prove that it is only rearranging
@@ -2007,7 +2012,7 @@ impl ActuatorWrenchSynthesizer {
             .into_iter()
             .chain(input_bindings.keys().cloned())
             .collect();
-        let interface = parse_validated_root_interface(source, &model_name, &inputs, &outputs, &[])
+        let syntax = parse_validated_root_interface(source, &model_name, &inputs, &outputs, &[])
             .map_err(|message| {
                 vec![DomainProjectionError {
                     path: root_string.clone(),
@@ -2016,7 +2021,7 @@ impl ActuatorWrenchSynthesizer {
                     ),
                 }]
             })?;
-        let interface = model_interface_for_class(&interface, &model_name).ok_or_else(|| {
+        let interface = model_interface_for_class(&syntax, &model_name).ok_or_else(|| {
             vec![DomainProjectionError {
                 path: root_string.clone(),
                 message: format!("root class `{model_name}` has no source interface"),
@@ -2039,6 +2044,7 @@ impl ActuatorWrenchSynthesizer {
         // that does not exist.
         Ok(SynthOutcome::Ready(Box::new(SynthesisPlan {
             source: source.to_string(),
+            syntax: std::sync::Arc::new(syntax),
             interface,
             inputs,
             input_bindings,

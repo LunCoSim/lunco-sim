@@ -15,6 +15,7 @@ from runtime import BINARY, ROOT, ProductionSession
 
 SCENE = ROOT / "assets/scenes/tests/sun_disc_occlusion.usda"
 AUTHORED_VIEW_TEST = ROOT / "assets/scripting/tests/test_workspace_view_layout.rhai"
+TEST_ASSERTIONS = ROOT / "assets/scripting/tests/lib/test_assert.rhai"
 RHAI_TEST_RUNNER = ROOT / "scripts/api/run_rhai_test.sh"
 
 
@@ -42,6 +43,25 @@ def authored_verdict(session):
         raise RuntimeError(
             f"authored View layout verdict failed: {result.stdout}\n{result.stderr}"
         )
+
+
+def scene_preview(session, source):
+    document = next((row for row in execute(session, "ListOpenDocuments")["open_documents"]
+                     if row["kind"] == "usd" and row["origin"].get("path") == str(source)), None)
+    if document is None:
+        return None
+    return next((row for row in execute(session, "InspectUsdViewport")["previews"]
+                 if row["doc_id"] == document["doc_id"]), None)
+
+
+def preview_verdict(session, preview, projected):
+    view = preview["views"][0]["view"]
+    code = (TEST_ASSERTIONS.read_text() + "\n" + AUTHORED_VIEW_TEST.read_text()
+            + f"\nworkspace_preview_restored({preview['doc_id']}, {view}, {json.dumps(projected)});")
+    output = execute(session, "RunRhai", code=code).get("stdout", "")
+    print(output.rstrip(), flush=True)
+    if "TESTS_OK" not in output or "TESTS_FAIL" in output:
+        raise RuntimeError(f"authored USD preview verdict failed: {output}")
 
 
 def assert_owned_session(session, port):
@@ -262,6 +282,11 @@ def main():
         authored_verdict(session)
         twin_id = workspace_twin_id(session)
         source = wait_for(session, lambda: camera_source(session), bool, "stable camera identity")
+        execute(session, "ActivatePerspective", id="editor")
+        execute(session, "OpenFile", path=str(scene_path))
+        preview = wait_for(session, lambda: scene_preview(session, scene_path),
+                           lambda value: value and value["projection_ready"], "initial USD preview")
+        execute(session, "SetUsdPreviewProjection", view=preview["views"][0]["view"], projection="orthographic")
         execute(session, "ActivatePerspective", id="sandbox_view")
         create_camera_view(session, source)
         create_graph_view(session)
@@ -287,6 +312,17 @@ def main():
             raise RuntimeError(f"expected one restored camera feed, got {restored}")
         authored_verdict(session)
         session.capture_screenshot(evidence / "camera-view-restored.png")
+        preview = wait_for(session, lambda: scene_preview(session, scene_path),
+                           lambda value: value and value["views"][0]["projection"] == "orthographic",
+                           "restored hidden USD preview tab")
+        preview_verdict(session, preview, False)
+        execute(session, "ActivatePerspective", id="editor")
+        execute(session, "FocusUsdPreviewView", view=preview["views"][0]["view"])
+        wait_for(session, lambda: scene_preview(session, scene_path),
+                 lambda value: value and value["projection_ready"] and value["views"][0]["image_rect"],
+                 "shown USD preview")
+        preview_verdict(session, preview, True)
+        execute(session, "ActivatePerspective", id="sandbox_view")
         execute(session, "ResetTwinViewLayout", twin=twin_id)
         wait_for(
             session,

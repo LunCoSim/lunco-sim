@@ -26,6 +26,7 @@ pub(super) fn execute_wasm(
     unit.parameter_overrides = canonical_parameter_overrides(&parameter_overrides);
     unit.authored_bindings = authored_bindings;
     unit.expected_library_revision = expected_library_revision;
+    unit.project_edit_interface = false;
     let compiler = state.compiler.get_or_insert_with(ModelicaCompiler::new);
     let compiled = compile_shared(
         &mut state.compiled_artifacts,

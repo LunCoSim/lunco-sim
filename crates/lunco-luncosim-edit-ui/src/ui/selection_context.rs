@@ -223,7 +223,10 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         };
         let doc = session.doc();
         let edit_target = session.edit_target().as_str().to_string();
-        let stage_id = session.stage_handle().id();
+        let Some(stage) = session.stage_handle() else {
+            return no_preview_selection_context();
+        };
+        let stage_id = stage.id();
         let scene_root = session.scene_root();
         let focused = viewport.focused_preview_id() == Some(preview);
 

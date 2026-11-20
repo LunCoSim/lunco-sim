@@ -163,9 +163,12 @@ The worker snapshots the native fact; live authoring uses
 plan before a canonical stage opens and live state after edits. Missing lazy
 stage state does not imply that a projected referenced child is uneditable.
 
-Read activation through fallible `UsdRead::is_active`. Native read errors reject
-worker snapshot admission, visual hierarchy admission, structural reconciliation,
-physics bounds/collider reads and inspection; they never imply an active prim.
+Use native traversal activity facts when preparing a projection snapshot and
+fallible `UsdRead::is_active` at live read boundaries. Native errors reject worker
+snapshot admission, visual hierarchy admission, structural reconciliation,
+physics bounds/collider reads and inspection. Use
+`UsdStageProjectionPlan::prepare_recipe` for asset-backed plans so the asset
+requirements and consumers share the prepared path identities.
 Program-owner activation errors retire its executable binding and raise the
 runtime fault. `scripts/api/test_native_activity.py --port <free-port>` exercises
 subtree deactivation/reactivation and terminal malformed-command rejection.
@@ -348,7 +351,9 @@ document identity. Panel writes use the session's explicit `DocumentId`,
 
 The active Twin's asynchronous workspace restore recreates saved view tabs over
 the same document-scoped preview session and restores each view's camera and
-presentation settings. Reopening the same file reuses the registered document;
+presentation settings. A restored session acquires its stage when a tab becomes
+visible or an explicit open requests the preview. A hidden restored tab has no
+stage asset or projected prim hierarchy. Reopening the same file reuses the registered document;
 use the explicit **Open view** action to add another perspective. A view tab
 without a restored session is dropped from the saved dock layout rather than
 shown empty.
@@ -359,7 +364,8 @@ owns one session-local light and excludes authored scene-wide
 `SphereLight`/`RectLight` prims remain part of the assembly. A preview is
 ready only after its root and descendants are synced and that subtree's visual
 queue plus asynchronous mesh phase have settled. Consumers use the typed
-`projection_ready` state from `InspectUsdViewport`; they do not infer
+`projection_ready` state from `InspectUsdViewport`. Its `stage_asset_id`
+is absent while the restored session waits for presentation. Consumers do not infer
 readiness from a document generation or camera state.
 
 Each `UsdPreviewView` also exposes Visual and Text modes over that same
@@ -380,9 +386,13 @@ generation with document inspection and typed edit commands. Never infer
 identity from a tab title, filesystem basename, entity order, or the live
 simulation viewport.
 
-The Files section sends a `.usda`, `.usd`, or `.usdc` click through the existing
-`BrowserAction::OpenFile` and async document pipeline. The emitting Twin's resolved absolute path is
-preserved, so an inactive Twin is not accidentally anchored on the active one.
+The Files section sends a `.usda`, `.usd`, or `.usdc` click through
+`BrowserAction::OpenFile`. The USD route opens files in the emitting mounted
+Twin through the additive document pipeline and preserves that Twin's
+absolute source path. External scene commands mount through the workspace's
+owning Twin scan. `OpenTwinScene` looks up the selected Twin's live asset
+authority by its logical source identity. A private preview may share its
+directory. Use `OpenUsdSourceDocument` for an explicit source-only inspection.
 Once the document is admitted, the viewport derives its document-backed
 `UsdPreviewId::for_document` with `LayerId::root()`, opens the session's primary
 `UsdPreviewView` as an instance-backed dock tab, and focuses that exact tab.

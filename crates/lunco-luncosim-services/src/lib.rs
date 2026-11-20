@@ -967,8 +967,7 @@ fn load_startup_scene(world: &mut World, scene_path: String) {
     };
 
     // The root that owns this scene — nearest `twin.toml` ancestor, else the
-    // containing folder. Shared with the runtime open path (`OpenFile` →
-    // `spawn_twin_from_scene`) so boot and commands cannot disagree about what
+    // containing folder. Shared with the runtime's `OpenFile` route so both agree about what
     // "the root" is for a given file.
     let twin_root = lunco_twin::root_for_file(&abs_path);
 

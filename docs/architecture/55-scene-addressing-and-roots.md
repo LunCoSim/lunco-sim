@@ -31,10 +31,9 @@ The current entry points are deliberately split by ownership:
   registered scene schemes and rejects bare or filesystem paths.
 - `lunco_assets_core::engine_asset_uri` — converts an in-tree library reference to
   its canonical `lunco://` address at command boundaries.
-- `load_startup_scene` (`lunco-luncosim-services/src/lib.rs`) and the USD `on_open_file`
-observer (`lunco-usd-commands/src/lib.rs`) both resolve the owning root and enter
-  the same asynchronous Twin scan; its completion registers the root and
-  enters the same doc-first `LoadScene` path.
+- `load_startup_scene` and the USD scene runtime's external-file route use
+  `lunco_twin::root_for_file` and the same asynchronous Twin scan. Its
+  completion registers the root and enters the doc-first `LoadScene` path.
 
 The root resolver and async Twin scan are shared; only the entry-point adapter
 differs (startup configuration versus the typed `OpenFile` command).
@@ -415,6 +414,10 @@ bytes and silently drops placed waypoints, runtime spawns, and moved transforms.
 If the owning root cannot be opened, the load reports an error and stops; it
 does not fall through to a base-only `LoadScene`.
 
+`OpenTwinScene` resolves the selected Twin's logical source identity to its
+live authority and checks that the authority owns the selected Twin root.
+An editor preview can have a separate authority backed by the same directory.
+
 ## Commands: no new ones
 
 Four commands already cover the surface. They become thin delegates over one
@@ -427,11 +430,13 @@ implementation:
 | `OpenTwin { path }` | folder, strict (requires `twin.toml`) | same mount |
 | `LoadScene { path }` | `lunco://` or stable `twin://<source-identity>/…` | loads an already-addressable asset; internal mount authorities are rejected |
 
-`OpenFile` is already the UI's File→Open command and already accepts an
-arbitrary path, so opening any `.usda` anywhere works from the UI with **no new
-command and no new UI surface**. The USD observer resolves the owning folder,
-uses the shared asynchronous Twin scan, selects the requested file, and lets
-the `TwinAdded` observer perform the same doc-first mount as startup.
+One USD observer decodes `OpenFile` and calls the host's file-open route.
+Document-only hosts use the USD document loader for native files. The scene
+runtime routes native files inside an open Twin to the additive document
+loader, other native files to the owning Twin scan, and scene asset addresses
+to `LoadScene`. For an external scene, Twin admission owns creation of the
+scene document and its initial composition. `OpenUsdSourceDocument` explicitly
+opens a source for editing without selecting a scene.
 
 ### Why `LoadScene` does not take filesystem paths
 

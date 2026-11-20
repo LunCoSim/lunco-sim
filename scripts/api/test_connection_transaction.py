@@ -24,8 +24,8 @@ def main():
     os.environ["LUNCOSIM_EPHEMERAL_SETTINGS"] = "1"
     os.environ["LUNCOSIM_ISOLATED_RUN"] = "1"
     log = ROOT / "target" / ("connection-transaction-ui.log" if args.windowed else "connection-transaction.log")
-    scene = ROOT / "assets/scenes/tests/connection_transaction.usda"
-    with ProductionSession(args.port, windowed=args.windowed, extra_args=("--scene", str(scene)),
+    scene = "lunco://scenes/tests/connection_transaction.usda"
+    with ProductionSession(args.port, windowed=args.windowed, extra_args=("--no-load-default-scene",),
                            log_path=log) as session:
         pid = session.process.pid
         process = Path("/proc") / str(pid)
@@ -33,8 +33,10 @@ def main():
                                 or (process / "exe").resolve() != BINARY.resolve()):
             raise RuntimeError("owned process does not match this checkout/binary")
         print(f"OWNED PID={pid} port={args.port} binary={BINARY}", flush=True)
+        offset = log.stat().st_size
+        execute(session, "LoadScene", {"path": scene})
         wait_for_authored_verdict(session, title="CONNECTION TRANSACTION", check_count=18,
-                                  allow_runtime_fault=True, timeout_s=60)
+                                  offset=offset, allow_runtime_fault=True, timeout_s=60)
         # Make the native recorder due on the rejected fourth interval of the
         # replacement scene. Settings are ephemeral in this process.
         execute(session, "ControlTelemetry", {"rate_hz": 60.0})
