@@ -45,6 +45,7 @@ use lunco_exposure_core::{EngineExposures, ExposureValue};
 use lunco_hooks::HookValue;
 use lunco_render::SceneCamera;
 use lunco_viewport_core::SceneViewport;
+use lunco_workbench_core::presentation::WorkbenchOverlayCamera;
 use lunco_workbench_core::scene_pick::ScenePickGate;
 use lunco_workbench_core::viewport::PanelRects;
 use lunco_workbench_core::{PanelId, WorkbenchSnapshot};
@@ -155,6 +156,7 @@ pub struct RuntimeUiActionScope {
     pub owner_twin_id: Option<u64>,
     /// Optional scene target, independent of the UI's execution cadence.
     pub lifetime: lunco_core::InteractionLifetime,
+    application: bool,
 }
 
 impl RuntimeUiActionScope {
@@ -166,6 +168,7 @@ impl RuntimeUiActionScope {
         Self {
             owner_twin_id: workspace.and_then(|w| w.active_twin).map(|id| id.raw()),
             lifetime: lunco_core::InteractionLifetime::capture_scene(scene),
+            application: false,
         }
     }
 
@@ -174,6 +177,25 @@ impl RuntimeUiActionScope {
         Self {
             owner_twin_id: workspace.and_then(|w| w.active_twin).map(|id| id.raw()),
             lifetime: lunco_core::InteractionLifetime::Owner,
+            application: false,
+        }
+    }
+
+    /// An application action has no active-Twin target.
+    fn application() -> Self {
+        Self {
+            owner_twin_id: None,
+            lifetime: lunco_core::InteractionLifetime::Owner,
+            application: true,
+        }
+    }
+
+    /// The presentation layer entitled to interpret this action.
+    pub fn surface_owner(self) -> RuntimeUiSurfaceOwner {
+        if self.application {
+            RuntimeUiSurfaceOwner::Application
+        } else {
+            RuntimeUiSurfaceOwner::Workspace
         }
     }
 
@@ -183,7 +205,9 @@ impl RuntimeUiActionScope {
         workspace: Option<&lunco_workspace::WorkspaceResource>,
         scene: Option<&lunco_core::SceneTransitionCoordinator>,
     ) -> Result<(), String> {
-        if self.owner_twin_id != workspace.and_then(|w| w.active_twin).map(|id| id.raw()) {
+        if !self.application
+            && self.owner_twin_id != workspace.and_then(|w| w.active_twin).map(|id| id.raw())
+        {
             return Err("UI action belongs to a retired Twin".into());
         }
         self.lifetime.validate(scene)
@@ -194,20 +218,14 @@ fn authored_action_scope(
     world: &bevy::ecs::world::DeferredWorld,
     source: Entity,
 ) -> Option<RuntimeUiActionScope> {
-    let mut scope = RuntimeUiActionScope::capture(
-        world.get_resource::<lunco_workspace::WorkspaceResource>(),
-        world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
-    );
     let mut entity = source;
     loop {
         if let Some(surface) = world.get::<RuntimeUiSurface>(entity) {
-            if world
-                .get_resource::<EngineExposures>()
-                .is_some_and(|exposures| exposures.is_application_surface(&surface.namespace))
-            {
-                scope.lifetime = lunco_core::InteractionLifetime::Owner;
-            }
-            return Some(scope);
+            return Some(surface.action_scope(
+                world.get_resource::<WorkspaceResource>(),
+                world.get_resource::<lunco_core::SceneTransitionCoordinator>(),
+                world.get_resource::<EngineExposures>(),
+            ));
         }
         let parent = world.get::<ChildOf>(entity)?;
         entity = parent.parent();
@@ -377,9 +395,11 @@ fn register_action(functions: &mut HtmlFunctions, callback: impl Into<String>, a
 /// Bind the HUI `tag:action` convention once. The action value is a
 /// dynamic template property, so Twin/Rhai can choose it without adding a
 /// manifest callback or a Rust enum arm.
+const DYNAMIC_ACTION_CALLBACK: &str = "runtime_ui_authored_action";
+
 fn register_dynamic_action(functions: &mut HtmlFunctions) {
     functions.register(
-        "runtime_ui_authored_action",
+        DYNAMIC_ACTION_CALLBACK,
         |In(source): In<Entity>, mut world: bevy::ecs::world::DeferredWorld| {
             let Some(tags) = world.get::<Tags>(source) else {
                 return;
@@ -518,7 +538,8 @@ fn on_set_runtime_ui_collection_data(
     let collection_key = match collection_in_manifest {
         Some(collection_key) => collection_key,
         None => surfaces.iter().find_map(|surface| {
-            (surface.namespace == event.namespace)
+            (surface.namespace == event.namespace
+                && surface.owner == RuntimeUiSurfaceOwner::Workspace)
                 .then(|| {
                     surface
                         .collections
@@ -1082,12 +1103,21 @@ fn update_runtime_ui_form_text(
 }
 
 /// Authored registration for runtime UI surfaces.
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeUiManifest {
     #[serde(default, rename = "kind")]
     _kind: String,
     pub surfaces: Vec<RuntimeUiSurfaceDefinition>,
+}
+
+/// Ownership of the authored surface and its interaction context.
+#[derive(Debug, Default, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeUiSurfaceOwner {
+    #[default]
+    Workspace,
+    Application,
 }
 
 /// One authored perspective or a bounded set, using the same field and gate
@@ -1137,6 +1167,11 @@ pub struct RuntimeUiSurfaceDefinition {
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
+    #[serde(default)]
+    pub owner: RuntimeUiSurfaceOwner,
+    /// Paint in the workbench overlay pass above docked panels.
+    #[serde(default)]
+    pub overlay: bool,
     #[serde(default)]
     pub bindings: HashMap<String, RuntimeUiBindingDefinition>,
     #[serde(default)]
@@ -1283,14 +1318,47 @@ pub enum RuntimeUiWindowAnchor {
 }
 
 impl RuntimeUiManifest {
-    pub fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
-        self.surfaces.iter().find_map(|surface| {
-            surface
-                .dropdowns
-                .iter()
-                .find(|dropdown| dropdown.trigger_action == action)
-                .map(|dropdown| runtime_ui_dropdown_key(&surface.id, &dropdown.id))
-        })
+    fn apply_workspace_layer(&mut self, layer: &Self) -> Result<(), String> {
+        for surface in &layer.surfaces {
+            if surface.owner == RuntimeUiSurfaceOwner::Application {
+                return Err(format!(
+                    "Twin runtime UI surface '{}' cannot declare application ownership",
+                    surface.id
+                ));
+            }
+            if self.surfaces.iter().any(|existing| {
+                existing.owner == RuntimeUiSurfaceOwner::Application
+                    && (existing.id == surface.id || existing.namespace == surface.namespace)
+            }) {
+                return Err(format!(
+                    "Twin runtime UI surface '{}' conflicts with an application surface",
+                    surface.id
+                ));
+            }
+            if let Some(existing) = self.surfaces.iter_mut().find(|s| s.id == surface.id) {
+                *existing = surface.clone();
+            } else {
+                self.surfaces.push(surface.clone());
+            }
+        }
+        self.validate()
+    }
+
+    fn dropdown_key_for_action(
+        &self,
+        action: &str,
+        owner: RuntimeUiSurfaceOwner,
+    ) -> Option<String> {
+        self.surfaces
+            .iter()
+            .filter(|surface| surface.owner == owner)
+            .find_map(|surface| {
+                surface
+                    .dropdowns
+                    .iter()
+                    .find(|dropdown| dropdown.trigger_action == action)
+                    .map(|dropdown| runtime_ui_dropdown_key(&surface.id, &dropdown.id))
+            })
     }
 
     pub fn dropdown_for_key(
@@ -1335,6 +1403,12 @@ impl RuntimeUiManifest {
                 require_non_empty("surface gate", gate)?;
             }
             if let Some(setting) = &surface.setting {
+                if surface.owner == RuntimeUiSurfaceOwner::Application {
+                    return Err(format!(
+                        "application surface '{}' cannot bind a Twin setting",
+                        surface.id
+                    ));
+                }
                 lunco_twin::TwinManifest::validate_setting_key(setting)?;
             }
             if surface.draggable
@@ -1474,6 +1548,12 @@ impl RuntimeUiManifest {
             for action in &surface.actions {
                 require_non_empty("action callback", &action.callback)?;
                 require_non_empty("action name", &action.action)?;
+                if action.callback == DYNAMIC_ACTION_CALLBACK {
+                    return Err(format!(
+                        "runtime UI callback '{}' is reserved",
+                        action.callback
+                    ));
+                }
                 if !callbacks.insert(action.callback.as_str()) {
                     return Err(format!(
                         "duplicate runtime UI callback `{}`",
@@ -1671,7 +1751,7 @@ impl Plugin for RuntimeUiPlugin {
                     mount_runtime_ui_surfaces
                         .after(sync_runtime_ui_manifest)
                         .before(bevy_hui::HuiSystems::Build),
-                    bind_runtime_ui_to_camera.after(sync_runtime_ui_manifest),
+                    bind_runtime_ui_to_camera.after(apply_runtime_ui_exposures),
                     apply_runtime_ui_exposures
                         .after(sync_runtime_ui_manifest)
                         .after(bevy_hui::HuiSystems::Build)
@@ -1746,6 +1826,8 @@ pub struct RuntimeUiManifestState {
     // and are retired by exact TwinClosed identity.
     scopes: HashMap<Option<TwinId>, Result<Option<RuntimeUiManifest>, String>>,
     revision: u64,
+    application_revision: u64,
+    applied_application: Option<u64>,
     selected: Option<TwinId>,
     manifest: Option<RuntimeUiManifest>,
     error: Option<String>,
@@ -1766,71 +1848,68 @@ impl RuntimeUiManifestState {
         self.manifest.as_ref()
     }
 
+    fn workspace_layer(
+        &self,
+        selected: Option<TwinId>,
+    ) -> Result<Option<&RuntimeUiManifest>, String> {
+        selected
+            .and_then(|id| self.scopes.get(&Some(id)))
+            .map(|layer| layer.as_ref().map(Option::as_ref).map_err(Clone::clone))
+            .transpose()
+            .map(Option::flatten)
+    }
+
     fn find_collection(
         &self,
         selected: Option<TwinId>,
         namespace: &str,
         source: &str,
     ) -> Result<Option<Option<String>>, String> {
-        if self.selected == selected
-            && let Some(manifest) = &self.manifest
-        {
-            return Ok(Some(
-                manifest
-                    .surfaces
-                    .iter()
-                    .find(|surface| surface.namespace == namespace)
-                    .and_then(|surface| {
-                        surface
-                            .collections
-                            .iter()
-                            .find(|collection| collection.source == source)
-                    })
-                    .map(|collection| collection.key.clone()),
-            ));
-        }
-
-        // Before the first manifest reconciliation, the per-scope source
-        // cache is already the authoritative authored declaration. Merge it
-        // with the same Twin-over-application identity rule used by the live
-        // surface builder.
-        let mut surfaces = HashMap::new();
-        let mut scope_loaded = false;
-        if let Some(application) = self.scopes.get(&None) {
-            scope_loaded = true;
-            if let Some(manifest) = application.as_ref().map_err(Clone::clone)? {
-                for surface in &manifest.surfaces {
-                    surfaces.insert(surface.id.clone(), surface.clone());
-                }
-            }
-        }
-        if let Some(twin) = selected.and_then(|id| self.scopes.get(&Some(id))) {
-            scope_loaded = true;
-            if let Some(manifest) = twin.as_ref().map_err(Clone::clone)? {
-                for surface in &manifest.surfaces {
-                    surfaces.insert(surface.id.clone(), surface.clone());
-                }
-            }
-        }
-        if !scope_loaded {
-            return Ok(None);
-        }
-        Ok(Some(
-            surfaces
-                .values()
-                .find(|surface| surface.namespace == namespace)
+        let resolve = |manifest: &RuntimeUiManifest| {
+            manifest
+                .surfaces
+                .iter()
+                .find(|surface| {
+                    surface.namespace == namespace
+                        && surface.owner == RuntimeUiSurfaceOwner::Workspace
+                })
                 .and_then(|surface| {
                     surface
                         .collections
                         .iter()
                         .find(|collection| collection.source == source)
                 })
-                .map(|collection| collection.key.clone()),
-        ))
+                .map(|collection| collection.key.clone())
+        };
+        if self.selected == selected
+            && let Some(manifest) = &self.manifest
+        {
+            return Ok(Some(resolve(manifest)));
+        }
+
+        // Early Twin publication uses the same composition as retained roots.
+        let app = self.scopes.get(&None);
+        if app.is_none() && !selected.is_some_and(|id| self.scopes.contains_key(&Some(id))) {
+            return Ok(None);
+        }
+        let mut manifest = app
+            .map(|layer| layer.as_ref().map_err(Clone::clone))
+            .transpose()?
+            .and_then(Option::as_ref)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(layer) = self.workspace_layer(selected)? {
+            manifest.apply_workspace_layer(layer)?;
+        }
+        Ok(Some(resolve(&manifest)))
     }
 
-    pub fn dropdown_key_for_action(&self, action: &str) -> Option<String> {
-        self.manifest()?.dropdown_key_for_action(action)
+    pub fn dropdown_key_for_action(
+        &self,
+        action: &str,
+        owner: RuntimeUiSurfaceOwner,
+    ) -> Option<String> {
+        self.manifest()?.dropdown_key_for_action(action, owner)
     }
 }
 
@@ -1976,6 +2055,8 @@ struct ResolvedRuntimeUiPlacement {
 pub struct RuntimeUiSurface {
     layout_id: String,
     namespace: String,
+    owner: RuntimeUiSurfaceOwner,
+    overlay: bool,
     template: Handle<HtmlTemplate>,
     stylesheet: Handle<StyleSheet>,
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
@@ -2019,6 +2100,21 @@ pub struct RuntimeUiSurface {
 pub struct RuntimeUiImagePending(pub String);
 
 impl RuntimeUiSurface {
+    fn action_scope(
+        &self,
+        workspace: Option<&WorkspaceResource>,
+        scene: Option<&lunco_core::SceneTransitionCoordinator>,
+        exposures: Option<&EngineExposures>,
+    ) -> RuntimeUiActionScope {
+        if self.owner == RuntimeUiSurfaceOwner::Application {
+            RuntimeUiActionScope::application()
+        } else if exposures.is_some_and(|values| values.is_application_surface(&self.namespace)) {
+            RuntimeUiActionScope::capture_owner(workspace)
+        } else {
+            RuntimeUiActionScope::capture(workspace, scene)
+        }
+    }
+
     /// Whether this retained surface covers scene labels in its layout rectangle.
     /// Modal roots cover their viewport. Other viewport roots are transparent
     /// containers; their visible controls cover labels individually.
@@ -2034,6 +2130,8 @@ impl RuntimeUiSurface {
         Ok(Self {
             layout_id: definition.id.clone(),
             namespace: definition.namespace.clone(),
+            owner: definition.owner,
+            overlay: definition.overlay,
             template,
             stylesheet,
             bindings: definition.bindings.clone(),
@@ -2737,6 +2835,9 @@ fn admit_runtime_ui_manifest(
     })();
     state.scopes.insert(scope.twin_id, result);
     state.revision += 1;
+    if scope.twin_id.is_none() {
+        state.application_revision = state.revision;
+    }
 }
 
 fn retire_runtime_ui_manifest(event: On<TwinClosed>, mut state: ResMut<RuntimeUiManifestState>) {
@@ -2752,7 +2853,7 @@ fn sync_runtime_ui_manifest(
     mut commands: Commands,
     workspace: Option<Res<WorkspaceResource>>,
     mut state: ResMut<RuntimeUiManifestState>,
-    roots: Query<Entity, With<RuntimeUiSurface>>,
+    roots: Query<(Entity, &RuntimeUiSurface)>,
     server: Res<AssetServer>,
     mut functions: HtmlFunctions,
     mut surface_layouts: ResMut<RuntimeSurfaceLayouts>,
@@ -2765,38 +2866,46 @@ fn sync_runtime_ui_manifest(
     let Some(application) = state.scopes.get(&None) else {
         return;
     };
-    let resolved = (|| -> Result<RuntimeUiManifest, String> {
-        let mut manifest = application
-            .as_ref()
-            .map_err(Clone::clone)?
-            .clone()
-            .ok_or_else(|| "application UI manifest is missing".to_string())?;
-        if let Some(twin) = selected.and_then(|id| state.scopes.get(&Some(id))) {
-            if let Some(twin) = twin.as_ref().map_err(Clone::clone)? {
-                for surface in &twin.surfaces {
-                    if let Some(existing) =
-                        manifest.surfaces.iter_mut().find(|s| s.id == surface.id)
-                    {
-                        *existing = surface.clone();
-                    } else {
-                        manifest.surfaces.push(surface.clone());
-                    }
-                }
+    let application = application
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|manifest| {
+            manifest
+                .clone()
+                .ok_or_else(|| "application UI manifest is missing".to_string())
+        });
+    let resolved = application
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(|application| {
+            let mut manifest = application.clone();
+            if let Some(layer) = state.workspace_layer(selected)? {
+                manifest.apply_workspace_layer(layer)?;
             }
-        }
-        manifest.validate()?;
-        Ok(manifest)
-    })();
+            Ok(manifest)
+        });
+    let keep_application = state.applied_application == Some(state.application_revision);
     state.selected = selected;
     state.applied = Some(state.revision);
+    state.applied_application = application
+        .as_ref()
+        .ok()
+        .map(|_| state.application_revision);
     state.rebuild_pending = true;
-    for root in &roots {
-        commands.entity(root).try_despawn();
+    let mut retained = HashSet::new();
+    for (entity, surface) in &roots {
+        if keep_application && surface.owner == RuntimeUiSurfaceOwner::Application {
+            retained.insert(surface.layout_id.as_str());
+        } else {
+            commands.entity(entity).try_despawn();
+        }
     }
     let manifest = match resolved {
-        Ok(manifest) => manifest,
+        Ok(manifest) => {
+            state.error = None;
+            manifest
+        }
         Err(error) => {
-            state.manifest = None;
             state.error = Some(error.clone());
             faults.raise(
                 "runtime-ui-manifest-invalid",
@@ -2805,11 +2914,18 @@ fn sync_runtime_ui_manifest(
                 &error,
             );
             lunco_core::trigger_runtime_error(&mut commands, "runtime-ui-manifest-invalid", error);
-            return;
+            let Ok(mut application) = application else {
+                state.manifest = None;
+                return;
+            };
+            // A rejected workspace layer cannot retire independent app controls.
+            application
+                .surfaces
+                .retain(|surface| surface.owner == RuntimeUiSurfaceOwner::Application);
+            application
         }
     };
     state.manifest = Some(manifest.clone());
-    state.error = None;
     register_dynamic_action(&mut functions);
     let ids = manifest
         .surfaces
@@ -2825,7 +2941,9 @@ fn sync_runtime_ui_manifest(
                 action.action.clone(),
             );
         }
-        spawn_runtime_ui_surface(&mut commands, surface, &server);
+        if !retained.contains(surface.id.as_str()) {
+            spawn_runtime_ui_surface(&mut commands, surface, &server);
+        }
     }
 }
 
@@ -3019,9 +3137,18 @@ fn active_twin_setting_is_true(
 fn bind_runtime_ui_to_camera(
     mut commands: Commands,
     viewport: Option<Res<SceneViewport>>,
-    cameras: Query<(Entity, &Camera, Has<PrimaryEguiContext>, Has<SceneCamera>)>,
+    cameras: Query<
+        (Entity, &Camera, Has<PrimaryEguiContext>, Has<SceneCamera>),
+        Without<WorkbenchOverlayCamera>,
+    >,
+    mut overlay: Query<(Entity, &mut Camera), With<WorkbenchOverlayCamera>>,
     ui_picking_cameras: Query<(), With<UiPickingCamera>>,
-    roots: Query<(Entity, Option<&UiTargetCamera>), With<RuntimeUiSurface>>,
+    roots: Query<(
+        Entity,
+        &RuntimeUiSurface,
+        &Visibility,
+        Option<&UiTargetCamera>,
+    )>,
 ) {
     // Windowed runtime UI is owned by the single egui host. Windowless
     // recording has no host and therefore uses the viewport's explicitly
@@ -3054,7 +3181,42 @@ fn bind_runtime_ui_to_camera(
         commands.entity(camera).insert(UiPickingCamera);
     }
 
-    for (entity, target) in &roots {
+    let overlay_active = egui_camera.is_some()
+        && roots.iter().any(|(_, surface, visibility, _)| {
+            surface.overlay && *visibility == Visibility::Visible
+        });
+    let overlay_camera = if let Ok((entity, mut overlay)) = overlay.single_mut() {
+        if overlay.is_active != overlay_active {
+            overlay.is_active = overlay_active;
+        }
+        egui_camera.map(|_| entity)
+    } else if overlay_active {
+        Some(
+            commands
+                .spawn((
+                    Camera2d,
+                    Camera {
+                        order: 2,
+                        clear_color: bevy::camera::ClearColorConfig::None,
+                        ..default()
+                    },
+                    bevy::camera::visibility::RenderLayers::none(),
+                    UiPickingCamera,
+                    WorkbenchOverlayCamera,
+                    Name::new("WorkbenchOverlayCamera"),
+                ))
+                .id(),
+        )
+    } else {
+        None
+    };
+
+    for (entity, surface, _, target) in &roots {
+        let camera = if surface.overlay {
+            overlay_camera.unwrap_or(camera)
+        } else {
+            camera
+        };
         if target.is_none_or(|target| target.entity() != camera) {
             commands.entity(entity).try_insert(UiTargetCamera(camera));
         }
@@ -3930,21 +4092,32 @@ fn register_runtime_ui_input_regions(
                 .then_some(entity)
         })
         .collect();
+    let overlay_roots: HashSet<Entity> = roots
+        .iter()
+        .filter_map(|(entity, surface, visibility)| {
+            (surface.overlay && surface.interactive && *visibility == Visibility::Visible)
+                .then_some(entity)
+        })
+        .collect();
 
     if interactive_roots.is_empty() && surface_gesture_roots.is_empty() {
         return;
     }
 
-    if roots
-        .iter()
-        .any(|(_, surface, visibility)| surface.modal && matches!(*visibility, Visibility::Visible))
-    {
-        if let Some(window) = windows.iter().next() {
+    if let Some(window) = windows.iter().next() {
+        for (entity, surface, visibility) in &roots {
+            if !surface.modal || *visibility != Visibility::Visible {
+                continue;
+            }
             let rect = egui::Rect::from_min_max(
                 egui::pos2(0.0, 0.0),
                 egui::pos2(window.width(), window.height()),
             );
-            gate.record_chrome_panel(rect, rect);
+            if surface.overlay {
+                gate.record_overlay_region(entity, rect);
+            } else {
+                gate.record_chrome_panel(rect, rect);
+            }
         }
     }
 
@@ -3991,7 +4164,11 @@ fn register_runtime_ui_input_regions(
             continue;
         }
         if let Some(rect) = runtime_ui_input_rect(node, transform) {
-            gate.record_native_ui_region(rect);
+            if is_descendant_of_runtime_surface(entity, &overlay_roots, &parents) {
+                gate.record_overlay_region(entity, rect);
+            } else {
+                gate.record_native_ui_region(rect);
+            }
         }
     }
 }
@@ -4018,10 +4195,7 @@ fn dismiss_runtime_ui(
     let Some(action) = surface.dismiss_action.clone() else {
         return;
     };
-    let mut scope = RuntimeUiActionScope::capture(workspace.as_deref(), scene.as_deref());
-    if exposures.is_application_surface(&surface.namespace) {
-        scope.lifetime = lunco_core::InteractionLifetime::Owner;
-    }
+    let scope = surface.action_scope(workspace.as_deref(), scene.as_deref(), Some(&exposures));
     commands.trigger(RuntimeUiAction {
         scope,
         action,
@@ -5287,6 +5461,7 @@ mod tests {
         assert!(scope.validate(None, None).is_ok());
         let outgoing = super::RuntimeUiActionScope {
             owner_twin_id: Some(17),
+            application: false,
             lifetime: lunco_core::InteractionLifetime::Owner,
         };
         assert!(outgoing.validate(None, None).is_err());
@@ -5294,6 +5469,48 @@ mod tests {
         incoming.active_twin = Some(lunco_workspace::TwinId::new(23));
         assert!(scope.validate(Some(&incoming), None).is_err());
         assert!(outgoing.validate(Some(&incoming), None).is_err());
+        let application = super::RuntimeUiActionScope::application();
+        assert!(application.validate(Some(&incoming), None).is_ok());
+        assert_eq!(application.owner_twin_id, None);
+    }
+
+    #[test]
+    fn workspace_layer_preserves_reserved_application_surfaces() {
+        let parse = |text| {
+            super::parse_runtime_ui_manifest("test manifest", text)
+                .unwrap()
+                .unwrap()
+        };
+        let application = parse(
+            r#"{
+            "kind":"lunco.runtime-ui-manifest.v1","surfaces":[
+              {"id":"global","owner":"application","namespace":"global-state","template":"global.html","stylesheet":"a.css","placement":{"mode":"viewport"}},
+              {"id":"local","namespace":"local-state","template":"local.html","stylesheet":"a.css","placement":{"mode":"viewport"}}
+            ]}"#,
+        );
+        let workspace = parse(
+            r#"{
+            "kind":"lunco.runtime-ui-manifest.v1","surfaces":[
+              {"id":"local","namespace":"local-state","template":"edited.html","stylesheet":"a.css","placement":{"mode":"viewport"}}
+            ]}"#,
+        );
+        let mut merged = application.clone();
+        merged.apply_workspace_layer(&workspace).unwrap();
+        assert_eq!(merged.surfaces[0].template, "global.html");
+        assert_eq!(merged.surfaces[1].template, "edited.html");
+        for (id, owner, namespace) in [
+            ("global", "workspace", "other"),
+            ("other", "workspace", "global-state"),
+            ("other", "application", "other"),
+        ] {
+            let layer = parse(&format!(
+                r#"{{
+                "kind":"lunco.runtime-ui-manifest.v1","surfaces":[
+                  {{"id":"{id}","owner":"{owner}","namespace":"{namespace}","template":"twin.html","stylesheet":"a.css","placement":{{"mode":"viewport"}}}}
+                ]}}"#
+            ));
+            assert!(application.clone().apply_workspace_layer(&layer).is_err());
+        }
     }
 
     use super::*;
@@ -5838,6 +6055,8 @@ mod tests {
             .spawn((
                 Node::default(),
                 RuntimeUiSurface {
+                    owner: RuntimeUiSurfaceOwner::Workspace,
+                    overlay: false,
                     layout_id: "view-switcher".to_owned(),
                     namespace: "view-switcher".to_owned(),
                     template: Handle::default(),
@@ -5940,6 +6159,8 @@ mod tests {
             .spawn((
                 Node::default(),
                 RuntimeUiSurface {
+                    owner: RuntimeUiSurfaceOwner::Workspace,
+                    overlay: false,
                     layout_id: "resizable-window".to_owned(),
                     namespace: "resizable-window".to_owned(),
                     template: Handle::default(),
@@ -6145,6 +6366,8 @@ mod tests {
             .spawn((
                 Node::default(),
                 RuntimeUiSurface {
+                    owner: RuntimeUiSurfaceOwner::Workspace,
+                    overlay: false,
                     layout_id: "hud".to_owned(),
                     namespace: "hud".to_owned(),
                     template: Handle::default(),
@@ -6255,6 +6478,8 @@ mod tests {
                 InlineStyle::default(),
                 TemplateProperties::default().with("value", "initial"),
                 RuntimeUiSurface {
+                    owner: RuntimeUiSurfaceOwner::Workspace,
+                    overlay: false,
                     layout_id: "control-hud".to_owned(),
                     namespace: "control-hud".to_owned(),
                     template: Handle::default(),
@@ -6309,6 +6534,8 @@ mod tests {
     #[test]
     fn presentation_generation_tracks_visibility_lifecycle_not_value_updates() {
         let mut surface = RuntimeUiSurface {
+            owner: RuntimeUiSurfaceOwner::Workspace,
+            overlay: false,
             layout_id: "recorded".to_owned(),
             namespace: "recorded".to_owned(),
             template: Handle::default(),
@@ -6378,6 +6605,8 @@ mod tests {
                 InlineStyle::default(),
                 TemplateProperties::default(),
                 RuntimeUiSurface {
+                    owner: RuntimeUiSurfaceOwner::Workspace,
+                    overlay: false,
                     layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
                     template: Handle::default(),
@@ -6447,6 +6676,8 @@ mod tests {
                 InlineStyle::default(),
                 TemplateProperties::default(),
                 RuntimeUiSurface {
+                    owner: RuntimeUiSurfaceOwner::Workspace,
+                    overlay: false,
                     layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
                     template: Handle::default(),

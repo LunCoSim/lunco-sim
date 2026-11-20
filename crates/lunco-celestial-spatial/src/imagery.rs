@@ -4,9 +4,8 @@
 //! What it LOOKS like is data, and data that is far too big for git: the Blue
 //! Marble mosaic and the LROC colour map are hundreds of megabytes of source
 //! that get resized into 4K textures. So they are DECLARED in this crate's
-//! manifest (`assets/manifests/celestial.toml`), listed in
-//! Settings ▸ Data & libraries with everything else,
-//! and fetched only when a user asks.
+//! manifest (`assets/manifests/celestial.toml`). The desktop application
+//! prepares the default maps in the background when missing.
 //!
 //! There is deliberately no path to a texture anywhere in this crate, and no
 //! compiled-in copy of the manifest either. The declaration is DATA read from

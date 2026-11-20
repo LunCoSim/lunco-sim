@@ -588,6 +588,9 @@ specific HUD (`HudTier::Specific`: lesson or vehicle readouts). Create HUD areas
 with `HudTier::area`/`HudTier::layer`; the workbench applies
 `stack_hud_layers` once per pass. Never give a persistent overlay `Foreground`.
 Authored runtime HUI paints before egui and stays below every egui tier.
+The workbench host clears the window behind both UI passes during loading
+and on the welcome screen, so authored download notices can draw before
+the scene camera is available.
 Tutorial rings, coach/recovery cards, and completion prompts use
 `lunco_workbench_guided_ui::GUIDED_OVERLAY_ORDER` (`UI_ORDER`); the lesson HUD is
 a specific-HUD readout;
@@ -873,21 +876,18 @@ for history, admission budgets and publication fencing.
 
 ## Runtime-authored HTML/CSS surfaces
 
-For a Twin-facing HUD, telemetry card, progress overlay, or simple runtime
+For an application or Twin HUD, telemetry card, progress overlay, or simple runtime
 control that should change without a Rust rebuild, use the dedicated
 [runtime-ui skill](../runtime-ui/SKILL.md) and
 [`docs/architecture/runtime-authored-ui.md`](../../docs/architecture/runtime-authored-ui.md).
 
-This is a separate presentation path built on HUI/Flair. It uses the generic
-`EngineExposures` capability registry, the existing `WorkbenchEguiHost` camera,
-and the workbench's authoritative dock/pick geometry. The host is the persistent
-Bevy UI layer: it paints into the scene camera's shared cleared main texture,
-with its MSAA/HDR key synchronized to the active scene camera. This keeps UI
-state correct across camera replacement and perspective changes without a
-load-preserving accumulation target. It does not replace
-`Panel`/egui, create a second UI camera, or permit templates to mutate domain
-state. Use this skill for workbench panels and use `runtime-ui` for authored
-HTML/CSS surfaces; do not create a hybrid shim for one widget. The
+HUI/Flair reads the generic `EngineExposures` registry and shares the
+workbench's dock and pointer geometry. Ordinary surfaces draw on
+`WorkbenchEguiHost`. Surfaces with `"overlay": true` draw above dock panels
+on `WorkbenchOverlayCamera`. Both share the scene camera's main texture and
+MSAA/HDR key. Use `"owner": "application"` in the application manifest when a
+surface needs to survive scene teardown and Twin changes. Use `Panel`/egui for
+docked editors and `runtime-ui` for authored HTML/CSS surfaces. The
 manifest controls the retained surface's outer rectangle: the runtime pins its
 minimum and maximum size to the resolved placement and clips overflow, while
 the authored CSS/profile must fit its contents inside that boundary. The

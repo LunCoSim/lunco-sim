@@ -127,7 +127,7 @@ parse check into runtime evidence.
 |---|---|
 | [**lunco-ui**](lunco-ui/SKILL.md) | Build workbench panels using the reactive `Panel`/widget patterns |
 | [**lunco-theme**](lunco-theme/SKILL.md) | Use the centralized design tokens (colours, schematic palette) |
-| [**runtime-ui**](runtime-ui/SKILL.md) | Author a reloadable Twin-facing HTML/CSS-like surface, bind engine capabilities, or add a semantic runtime UI action |
+| [**runtime-ui**](runtime-ui/SKILL.md) | Author a reloadable application or Twin HTML/CSS-like surface, bind engine capabilities, or add a semantic runtime UI action |
 
 ## Work at scale
 
@@ -244,7 +244,7 @@ only when its contract is needed:
 | Build a Twin-wide mission | `compose-multidomain-twin` | `author-scenario` for mission policy and `author-tutorial` for lessons |
 | Author or verify SysML requirements | `sysml-requirements` | `validate-assets` for parse-only gates; `compose-multidomain-twin` for complete Twin composition; `test-via-api` for generic runtime evidence |
 | Workbench UI | `lunco-ui` | `lunco-theme` for tokens |
-| Twin-facing UI | `runtime-ui` | `lunco-theme` for tokens; `test-via-api` for proof |
+| Application or Twin runtime UI | `runtime-ui` | `lunco-theme` for tokens; `test-via-api` for proof |
 | Install or register MCP | `mcp-integration` | `luncosim-onboarding` for general routing; `test-via-api` for live API proof |
 | Deploy networking or a headless host | `networking-deployment` | `packaged-builds` for desktop artifact acceptance |
 | Verify an official desktop package | `packaged-builds` | `mcp-integration` for packaged MCP registration |

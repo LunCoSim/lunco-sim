@@ -546,8 +546,10 @@ Closing a Twin retires its contribution; paused scene replacement republishes
 the effective settings before input processing. Invalid or ambiguous typed
 profiles report an owner fault and stop simulation admission without crashing.
 
-Runtime UI composition and scoped asset paths are documented in
-[runtime-authored UI](runtime-authored-ui.md#twin-owned-presentation-assets).
+A Twin runtime UI manifest adds or replaces workspace surfaces. The application
+manifest reserves IDs and namespaces for application-owned surfaces that stay
+available across Twin changes.
+[Runtime UI ownership and scoped asset paths](runtime-authored-ui.md#application-and-workspace-surface-ownership)
 
 ## 3a. Twin is the simulation control surface — ASPIRATIONAL (not yet built)
 

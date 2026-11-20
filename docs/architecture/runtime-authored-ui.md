@@ -2,11 +2,10 @@
 
 > Status: Active · Audience: Twin authors, UI contributors, and engine maintainers
 
-LunCoSim has a small runtime-authored presentation layer for HUDs, telemetry
-cards, progress overlays, and other Twin-facing surfaces. It looks like HTML
-and CSS, but it is not a browser: templates become retained Bevy UI entities,
-and styles become Bevy `Node`/visual components through `bevy_hui` and
-`bevy_flair`.
+LunCoSim has a small runtime-authored presentation layer for application and
+Twin HUDs, telemetry cards, and progress overlays. `bevy_hui` builds retained
+Bevy UI entities from HTML-like templates. `bevy_flair` applies styles as Bevy
+`Node` and visual components.
 
 The design goal is a fast, reloadable interface boundary that can be shared by
 native and web-facing presentation work without moving simulation authority into
@@ -103,10 +102,11 @@ control, while `always` remains visible when its subject is available.
 Explicitly possessed HUDs therefore remain visible through preparation, and
 the default unpossessed HUD stays hidden at startup.
 
-The application dataset surface uses the existing `assets.provision` hook,
-declared by `lunco-core-session` and installed by application/Twin policy.
-Its typed input map contains scope identity, scene requirements, and registry
-dataset states, including unsigned byte counters and processing/failure detail.
+The application dataset surfaces use the `assets.provision` hook declared by
+`lunco-core-session`. Its `startup` fact selects the built-in asset view, and
+`include_optional` includes the full catalog in Settings. The typed input map
+contains scope identity, scene requirements, and
+registry dataset states, including unsigned byte counters and processing/failure detail.
 It also receives simulation admission, transport, derived terrain map and
 camera-cover progress from their owners. A completed artifact row means its
 files are available. The window labels that count as datasets installed and
@@ -123,6 +123,17 @@ and publishes no consent view, while the native resource panel and registry
 remain available. It does not authorize network activity; user actions dispatch
 the typed dataset commands.
 
+The desktop startup card uses the application policy layer and the
+`startup-assets` exposure. The layouts for the startup and scene-data
+notices live in `assets/ui/`. Both use the authored `overlay` layer to remain
+above dock panels during welcome and scene loading. The startup card appears
+when a dataset from the [startup selection](asset-processing.md#desktop-startup-assets)
+needs work. It reports transfer, preparation, completion and recovery from
+the same dataset registry. `assets.provision` receives the current scene
+notice visibility and startup activity. When scene data needs attention,
+its controls take the foreground and the built-in card returns after
+scene notice dismissal. A cached launch keeps the built-in card hidden.
+
 Requirement and registry changes reconsider every non-ready required scope,
 including work already in flight; an explicit dismissal remains effective until
 the scene requirements change. An accepted download stays visible through
@@ -137,11 +148,11 @@ application tool into Twin code. An inherited caller retains its route, clock,
 phase and exact target.
 
 The data window is non-modal and can be dismissed while its work continues.
-The application's menus, editors and diagnostics stay available. Its background
-panel uses HUI's existing explicit `pickable` style to consume clicks within the
-panel; the rest of the viewport stays interactive. Completion stays visible until
-dismissed. A required-data hold never changes transport Play/Pause. New runtime
-requirements reopen the window. `TwinClosed` retires the exact scope.
+The application's menus, editors and diagnostics stay available. The card
+uses HUI's `pickable` style to reserve its measured rectangle in
+`ScenePickGate`. Completion stays visible until dismissed.
+A required-data hold preserves transport Play/Pause. New runtime requirements
+reopen the window. `TwinClosed` retires the exact scope.
 
 Interactive runtime surfaces transfer HUI `on_press` metadata to the runtime's native
 `PointerPress` observer. The observer uses HUI's public function registry;
@@ -224,15 +235,35 @@ of domain calculations. Modelica and Rhai own domain values and
 policy, while `lunco-workbench` supplies the
 egui host camera, dock rectangles, and scene-pick ownership.
 
-## Twin-owned presentation assets
+## Application and workspace surface ownership
 
 The shared `JsonAssetScopeChanged` lifecycle admits one typed
 `lunco.runtime-ui-manifest.v1` document per application or open Twin scope.
-The application manifest supplies shared surfaces; the active Twin's manifest
-replaces matching surface IDs and adds new ones. Duplicate IDs/namespaces within
-a composed manifest, duplicate manifests in one scope, and invalid contracts
-produce a structured runtime fault. No generated copy of application assets is
-needed. Unrelated JSON kinds retain their own owners.
+
+| `owner` | Where to declare it | Lifetime and interaction |
+|---|---|---|
+| `application` | Application manifest only | The retained surface survives scene teardown and Twin replacement. Its semantic actions run with application ownership and no Twin target. |
+| `workspace` (default) | Application or Twin manifest | The active Twin can replace a shared workspace surface by ID or add one. The runtime reconciles these surfaces for the current workspace and retires callbacks from the outgoing Twin. |
+
+Choose the owner by what the control acts on. The built-in download card is
+application-owned. The required-data notice is declared in the same manifest
+and uses workspace ownership because its actions act on the current data
+scope. Both set `"overlay": true` to draw above dock panels. This flag controls
+paint order and pointer priority independently of the owner.
+[Shipped manifest entries](../../assets/ui/runtime_surfaces.json)
+
+For an application surface, reserve a dedicated `id` and `namespace` and
+publish the snapshot through `EngineExposures` with
+`retain_across_scenes(namespace)`. The manifest field controls the retained UI
+and callback lifetime. The publisher controls the snapshot lifetime.
+Application surfaces get their collection data from the application exposure
+publisher. `SetRuntimeUiCollectionData` targets workspace surfaces, and the
+`setting` field binds workspace surfaces to the active Twin's settings.
+
+The runtime rejects a Twin manifest that claims application ownership or
+reuses an application-owned ID or namespace. It raises the
+`runtime-ui-manifest-invalid` fault and keeps valid application-owned surfaces
+available. Duplicate manifests in one scope also raise this fault.
 
 Template, stylesheet and collection-template paths in a manifest are relative
 to that scope's asset root. The owner qualifies them with the exact `lunco://`
@@ -241,13 +272,13 @@ URIs are also accepted; a Twin stylesheet can import shared fonts with
 `@import "lunco://ui/runtime_fonts.css";`. The native asset readers own subsequent
 HTML/CSS dependencies and reloads.
 
-The manifest cache belongs to open source scopes. Scene teardown retires the
-resolved presentation and republishes it even while paused; exact `TwinClosed`
-identity removes that Twin's source. Late snapshots from a retired Twin are
-rejected. Replacing the active Twin rebuilds the retained surface roots from the
-current composition, restoring application surfaces when no override exists.
-Rhai still owns exposure contents, visibility and action meaning. Rust owns only
-source admission, validated composition and retained-tree lifecycle.
+The manifest cache belongs to open source scopes. Scene teardown retires
+workspace roots and republishes the current workspace layer even while paused.
+Exact `TwinClosed` identity removes that Twin's source. Late snapshots from a
+retired Twin are rejected. Reloading the application manifest refreshes its
+retained roots through the same asset owner.
+Rhai owns exposure contents, visibility and action meaning. Rust owns source
+admission, validated composition and retained-tree lifecycle.
 
 ## Authoring a surface
 
@@ -293,6 +324,8 @@ The fields are:
 | `visible_in_perspective` | Optional workbench perspective id or array of 1–32 distinct nonempty ids. The same filter gates interactive rendering and capture readiness; omission means unrestricted. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
+| `owner` | `workspace` by default. See [surface ownership](#application-and-workspace-surface-ownership) for application lifetime, callback scope, and reserved identities. |
+| `overlay` | `false` by default. Set `true` for a surface that must paint above the desktop dock shell. Authored pickable regions reserve the matching pointer areas in the shell. Use `owner` independently for lifetime. |
 | `setting_default` | Value used when `setting` is absent, including when no Twin is active. This is authored per surface; Rust has no per-setting field. |
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
 | `modal` | Requires an interactive viewport surface and makes its visible root claim the full-window scene-pick gate. This is the generic simple-modal primitive, not a rich dialog queue. |
@@ -752,9 +785,10 @@ rather than repeatedly waiting for an invalid policy.
 
 ## Placement and workbench coexistence
 
-Runtime surfaces use the existing `WorkbenchEguiHost` / `PrimaryEguiContext`
-camera. They do not spawn a second UI camera and do not duplicate egui hit
-testing.
+Runtime surfaces draw on `WorkbenchEguiHost` by default. On desktop,
+`"overlay": true` draws a visible surface on the shared
+`WorkbenchOverlayCamera` above dock panels. The two passes share the main
+texture and the workbench uses measured overlay bounds to route pointer input.
 
 The three placement modes are:
 
@@ -768,9 +802,9 @@ Set `interactive: true` only when the surface contains controls that should own
 pointer input. A control becomes an input owner by declaring HUI
 `on_press="callback"`; the runtime uses that explicit marker plus Bevy's
 computed layout rectangle and registers it with the same scene/chrome press
-latch as egui dock cards. The surface root is never registered: a full-window
-HUD therefore remains transparent to scene clicks and camera drags everywhere
-except on its authored buttons.
+latch as egui dock cards. An explicit pickable card also reserves its
+rectangle. A non-modal viewport root leaves the rest of the viewport open
+to scene clicks and camera drags.
 
 The manifest owns the outer rectangle; CSS owns the internal layout. HUI
 replaces a template root's `Node` while building, so placement is applied after
@@ -785,8 +819,8 @@ negative position.
 
 Use the workbench for the editor shell, docking tree, rich text/code editors,
 large inspectors, and controls that need semantics not provided by this small
-runtime layer. Use runtime HTML/CSS for authored Twin-facing presentation that
-should be changed without recompiling Rust.
+runtime layer. Use runtime HTML/CSS for authored application or Twin
+presentation that should change without recompiling Rust.
 
 ## Reloading without relaunching
 

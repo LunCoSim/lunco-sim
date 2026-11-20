@@ -40,7 +40,8 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-modelica-assets`** | Native Modelica asset packaging and indexing: bundles source-library files and pre-parsed Rumoca definitions for the web runtime and provides the shared editor-index tools; keeps Modelica build-only dependencies out of the generic asset manager. |
 | The shared dataset read contract includes worker-prepared input availability
 and source URLs; `lunco-assets` updates it with the existing operation progress
-channel. `assets.provision` owns download/preparation wording and actions. The
+channel. `assets.startup.select` chooses desktop startup datasets and
+`assets.provision` owns download/preparation wording and actions. The
 workbench's `OpenWebUrl` command uses its existing egui browser output adapter
 for validated HTTP(S) links. The production artifact pipeline gate exercises
 these dataset facts and the authored consent view.
@@ -1319,8 +1320,11 @@ regions, render-readiness acknowledgement, and open semantic action transport.
 Labelled press controls join keyboard navigation and the accessible Controls menu;
 the workbench forwards platform requests through the active egui tree. Generic
 admission validates the exact live, visible, enabled callback lease.
-Semantic input carries the Twin and committed scene captured at emission, so
-deferred delivery cannot acquire a replacement scene or Twin.
+Workspace callbacks pin the active Twin and capture the scene generation when
+the action is scene-bound. Application-owned surfaces reserve their IDs
+and exposure namespaces across workspace changes. Their callbacks use an
+application lifetime with no Twin target.
+[Runtime UI surface ownership](architecture/runtime-authored-ui.md#application-and-workspace-surface-ownership)
 The `lunco-luncosim-ui` host supplies capture mode and named gates and handles
 application actions; the runtime UI crate does not name cameras, terrain, or
 models. Runtime surface assets remain under `assets/ui/` and are loaded through

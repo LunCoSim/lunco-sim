@@ -351,6 +351,7 @@
     },
     {
       "id": "asset-consent",
+      "overlay": true,
       "template": "ui/asset_consent.html",
       "stylesheet": "ui/asset_consent.css",
       "namespace": "asset-consent",
@@ -383,6 +384,56 @@
       "modal": false,
       "dismiss_action": "dismiss",
       "placement": { "mode": "viewport" }
+    },
+    {
+      "id": "startup-assets",
+      "owner": "application",
+      "overlay": true,
+      "template": "ui/startup_assets.html",
+      "stylesheet": "ui/startup_assets.css",
+      "namespace": "startup-assets",
+      "bindings": {
+        "title": {
+          "source": "title"
+        },
+        "description": {
+          "source": "description"
+        },
+        "scope_label": {
+          "source": "scope_label"
+        },
+        "phase_color": {
+          "source": "phase_color",
+          "css": true
+        },
+        "activity_display": {
+          "source": "activity_display",
+          "css": true
+        }
+      },
+      "collections": [
+        {
+          "source": "rows",
+          "container": "startup-assets-rows",
+          "template": "ui/startup_assets_row.html",
+          "key": "id",
+          "css": [
+            "action_display",
+            "status_color"
+          ],
+          "scrollbar": "startup-assets-scrollbar"
+        },
+        {
+          "source": "actions",
+          "container": "startup-assets-actions",
+          "template": "ui/asset_consent_action.html",
+          "key": "key"
+        }
+      ],
+      "interactive": true,
+      "placement": {
+        "mode": "viewport"
+      }
     },
     {
       "id": "scenario-download",

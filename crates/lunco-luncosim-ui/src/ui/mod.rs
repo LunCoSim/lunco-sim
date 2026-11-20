@@ -865,7 +865,9 @@ fn on_runtime_ui_action(
                 return;
             }
             let action = action.to_owned();
-            if let Some(key) = manifest_state.dropdown_key_for_action(&action) {
+            if let Some(key) = manifest_state
+                .dropdown_key_for_action(&action, trigger.event().scope.surface_owner())
+            {
                 dropdowns.toggle(&key);
                 return;
             }
@@ -1630,17 +1632,7 @@ fn render_download_asset_row(
 
     let status_color = theme.map_or_else(
         || ui.visuals().text_color(),
-        |theme| {
-            if row.ready {
-                theme.tokens.success
-            } else if !row.detail.is_empty() {
-                theme.tokens.error
-            } else if row.action == "cancel" {
-                theme.tokens.accent
-            } else {
-                theme.tokens.text_subdued
-            }
-        },
+        |theme| row.egui_status_color(theme),
     );
     let frame = match theme {
         Some(theme) => egui::Frame::group(ui.style())
@@ -1750,7 +1742,7 @@ fn register_downloadable_assets_settings(world: &mut World) {
         );
         ui.label(
             egui::RichText::new(
-                "Scene assets download when needed. DejaVu Sans ships with native and web builds.",
+                "Manage cached assets and retry downloads.",
             )
             .weak(),
         );

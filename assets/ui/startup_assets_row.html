@@ -1,0 +1,16 @@
+<template>
+  <property name="label" />
+  <property name="status" />
+  <property name="action" />
+  <property name="action_label" />
+  <property name="parameter_id" />
+  <property name="scope" />
+
+  <node id="startup-assets-row">
+    <node id="startup-assets-row-copy">
+      <text id="startup-assets-row-label">{label}</text>
+      <text id="startup-assets-row-status">{status}</text>
+    </node>
+    <button id="startup-assets-row-action" on_press="runtime_ui_authored_action" tag:action="{action}" tag:id="{parameter_id}" tag:scope="{scope}" tag:aria_description="{label}"><text>{action_label}</text></button>
+  </node>
+</template>

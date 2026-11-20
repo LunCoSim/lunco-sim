@@ -280,6 +280,13 @@ pub struct ScriptedPolicyRegistry {
     pub(crate) revision: u64,
 }
 
+impl ScriptedPolicyRegistry {
+    /// Access a policy owned by the application for an application-only operation.
+    pub fn application_hook(&self, id: &str) -> Option<&lunco_hooks::RegisteredHook> {
+        self.application_hooks.get(id).map(Arc::as_ref)
+    }
+}
+
 #[derive(Default)]
 struct StartupInstallState {
     definitions: Vec<PolicyDef>,

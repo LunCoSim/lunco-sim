@@ -48,8 +48,10 @@ def main():
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--ui-phase",choices=["missing","second","fault"],default="second")
     parser.add_argument("--ui-review",action="store_true",help="retain the owned window until <output>/ui-reviewed exists")
-    parser.add_argument("--exercise-controls",action="store_true",help="exercise the measured 1280x720 native preparation controls through pointer input")
+    parser.add_argument("--exercise-controls",action="store_true",help="exercise the preparation controls through native pointer input")
+    parser.add_argument("--clicks",type=Path,help="observed logical x/y pairs keyed by control name")
     args=parser.parse_args()
+    clicks=json.loads(args.clicks.read_text()) if args.clicks else {}
     output=args.output.resolve();output.mkdir(parents=True,exist_ok=False)
     twin=output/"Scene Data Ж";twin.mkdir()
     (twin/"twin.toml").write_text('name="SceneDataProbe"\nversion="0.1.0"\n[usd]\ndefault_scene="first.usda"\nscenes=["*.usda"]\n')
@@ -131,11 +133,17 @@ def main():
             if args.ui_review and args.ui_phase=="missing":
                 print("UI REVIEW READY "+str(output),flush=True)
                 wait_for(lambda:(output/"ui-reviewed").exists(),"visual review completion",timeout=900)
-            def click(x,y):
-                run(f'input_pointer_move({x}.0,{y}.0);')
-                run(f'input_click("primary",{x}.0,{y}.0);')
             if args.exercise_controls:
+                def point(control):
+                    screenshot=output/f"control-{control}.png"
+                    session.capture_screenshot(screenshot)
+                    x,y=clicks.get(control) or input(f"{screenshot}\n{control} x y: ").split()
+                    clicks[control]=[float(x),float(y)]
+                    (output/"clicks.json").write_text(json.dumps(clicks,indent=2))
+                    return clicks[control]
+
                 def native_click(x,y):
+                    execute(session,"InjectWindowInput",event={"PointerMove":{"x":float(x),"y":float(y)}})
                     for state in ["Pressed","Released"]:
                         execute(session,"InjectWindowInput",event={"PointerButton":{
                             "button":"Primary","state":state,"x":float(x),"y":float(y)}})
@@ -143,19 +151,20 @@ def main():
                 native_click(25,18)
                 session.capture_screenshot(output/"file-menu-during-preparation.png")
                 native_click(200,100)
-                click(480,290)
+                native_click(*point("details"))
                 wait_for(lambda:execute(session,"ReadExposures",surface="asset-consent")["surfaces"]["asset-consent"]["properties"]["rows"][0]["details_display"]=="flex","Details responds during scene preparation")
                 verdict('let view=query("ReadExposures",#{surface:"asset-consent"}).surfaces["asset-consent"];t_report([t_true(view.properties.rows[0].details_display=="flex","native Details click works while scene admission is held")]);')
                 session.capture_screenshot(output/"details-click.png")
-                run('input_pointer_press("primary",480.0,290.0);')
+                x,y=point("hide-details")
+                run(f'input_pointer_press("primary",{x},{y});')
                 time.sleep(.2)
-                run('input_pointer_release("primary",480.0,290.0);')
+                run(f'input_pointer_release("primary",{x},{y});')
                 wait_for(lambda:execute(session,"ReadExposures",surface="asset-consent")["surfaces"]["asset-consent"]["properties"]["rows"][0]["details_display"]=="none","collapse source details")
                 verdict('let view=query("ReadExposures",#{surface:"asset-consent"}).surfaces["asset-consent"];t_report([t_true(view.properties.rows[0].details_display=="none","held press toggles details once and release does not invoke again")]);')
-                click(810,215)
+                native_click(*point("download-single"))
                 wait_for(lambda:next(row for row in rows() if row["key"]=="a")["state"]["kind"]=="downloading","native Download button starts the selected asset")
                 session.capture_screenshot(output/"download-click.png")
-                click(840,215)
+                native_click(*point("cancel-single"))
                 wait_for(lambda:next(row for row in rows() if row["key"]=="a")["state"]["kind"]=="cancelling","native cancellation is admitted before completing the transfer")
                 # Let the controlled server finish its current read so the
                 # cooperative worker can acknowledge cancellation promptly.
@@ -168,9 +177,9 @@ def main():
             tick=run('print(clock_snapshot().sim_tick);').strip()
             verdict('t_report([t_true(!query("GetReadiness",#{}).ready,"API readiness includes scene data hold")]);')
             if args.exercise_controls:
-                click(700,611)
+                native_click(*point("download-required"))
                 wait_for(lambda:any(row["state"]["kind"] in ["queued","downloading"] for row in rows()),"native bulk download click")
-                click(840,611)
+                native_click(*point("dismiss"))
                 wait_for(lambda:not execute(session,"ReadExposures",surface="asset-consent")["surfaces"]["asset-consent"]["visible"],"native Keep scene paused click dismisses the window")
                 verdict('let view=query("ReadExposures",#{surface:"asset-consent"}).surfaces["asset-consent"];t_report([t_true(!view.visible && !query("GetReadiness",#{}).ready,"native dismissal keeps missing scene data held")]);')
             else:execute(session,"RunRhai",code=f'let r=assets::request_required({json.dumps(scope)});if !r.ok {{throw r.error;}}')
