@@ -59,22 +59,26 @@ fn apply_egui_debug_overlays(ctx: &egui::Context, enabled: bool) {
 
 pub(crate) fn render_workbench(
     world: &mut World,
-    state: &mut bevy::ecs::system::SystemState<(EguiContexts, Res<WorkbenchMenuRegistry>)>,
+    state: &mut bevy::ecs::system::SystemState<(
+        EguiContexts,
+        Res<WorkbenchMenuRegistry>,
+        Query<Entity, With<viewport::WorkbenchEguiHost>>,
+    )>,
     mut menu_snapshot: Local<Option<WorkbenchMenuRegistry>>,
     mut direct_menu_labels: Local<Vec<String>>,
     mut direct_menu_twin: Local<Option<u64>>,
     mut direct_menu_initialized: Local<bool>,
     mut anchor_rects: Local<Vec<(Cow<'static, str>, egui::Rect)>>,
 ) {
-    let (ctx, menu_registry_changed) = {
-        let Ok((mut contexts, menus)) = state.get_mut(world) else {
+    let (ctx, menu_registry_changed, host_camera) = {
+        let Ok((mut contexts, menus, host)) = state.get_mut(world) else {
             return;
         };
         let ctx = match contexts.ctx_mut() {
             Ok(ctx) => ctx.clone(),
             Err(_) => return,
         };
-        (ctx, menus.is_changed())
+        (ctx, menus.is_changed(), host.single().ok())
     };
     if menu_registry_changed || menu_snapshot.is_none() {
         let snapshot = world.resource::<WorkbenchMenuRegistry>().clone();
@@ -193,6 +197,7 @@ pub(crate) fn render_workbench(
             &ctx,
             &mut layout,
             world,
+            host_camera,
             &theme,
             &menus,
             &direct_menu_labels,
@@ -205,6 +210,9 @@ pub(crate) fn render_workbench(
         .expect("workbench render queue was installed above");
     deferred.apply(world);
     crate::navigation::render_search(&ctx, world);
+    if let Some(gate) = world.get_resource::<ScenePickGate>() {
+        viewport::reserve_overlay_pointer(&ctx, gate.overlay_regions());
+    }
     // No scene-pointer gate is computed here: scene picking is bevy_picking-driven
     // and egui occlusion is handled by bevy_egui's picking backend.
 }

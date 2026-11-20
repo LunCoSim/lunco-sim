@@ -322,10 +322,16 @@ use the same stop boundary. The runtime fault remains terminal until scene
 retirement. Ordinary rejected user commands keep their command-result contract.
 
 `python3 scripts/api/test_connection_transaction.py --port <free-port>` runs the
-ten-check authored Modelica-to-native failure gate; `--windowed` runs that same
-observer in the visible host. It warms up with valid samples, then verifies
+eighteen-check authored Modelica-to-native failure gate twice in one process; `--windowed` runs that same
+observer in the visible host. It checks master, native and Modelica endpoints after three
+successful exchanges, then verifies
 mass/centre-of-mass preservation, stopped native integration and stopped
-Modelica advancement at the rejected communication point.
+Modelica advancement at the rejected communication point, and the completed master,
+fixed, native and mission clocks while the original fault is still active. It also
+checks retained parameter and native physics histories. On restart the native
+recorder runs at 60 Hz and its final timestamp must be the third completed tick. It restarts the faulted
+scene and requires the entire sequence to pass again. The incoming world must
+be able to integrate valid points before encountering its own rejected input.
 
 Joint measurements consume the completed native solve: prismatic `force` (N)
 and revolute `torque` (N m) are signed on body2 along the positive coordinate

@@ -5,7 +5,7 @@
 //! offscreen scene panels depend on the contract without depending on the
 //! concrete dock shell.
 
-use bevy::prelude::Resource;
+use bevy::prelude::{Entity, Resource};
 
 use crate::PanelId;
 
@@ -41,6 +41,7 @@ pub struct ScenePickGate {
     scene_leaf: Option<SceneTarget>,
     chrome_cards: Vec<(egui::Rect, egui::Rect)>,
     native_ui_regions: Vec<egui::Rect>,
+    overlay_regions: Vec<(Entity, egui::Rect)>,
     dock_rect: Option<egui::Rect>,
     scene_viewport_rect: Option<egui::Rect>,
     resolved: PointerOwner,
@@ -88,6 +89,24 @@ impl ScenePickGate {
         self.native_ui_regions.push(rect);
     }
 
+    /// Reserve retained UI above the dock shell with the same measured hit rectangle.
+    pub fn record_overlay_region(&mut self, entity: Entity, rect: egui::Rect) {
+        if self
+            .overlay_regions
+            .iter()
+            .any(|(_, region)| region.contains_rect(rect))
+        {
+            return;
+        }
+        self.overlay_regions
+            .retain(|(_, region)| !rect.contains_rect(*region));
+        self.overlay_regions.push((entity, rect));
+    }
+
+    pub fn overlay_regions(&self) -> &[(Entity, egui::Rect)] {
+        &self.overlay_regions
+    }
+
     /// Record the dock's extent in egui points.
     pub fn set_dock_rect(&mut self, rect: egui::Rect) {
         self.dock_rect = Some(rect);
@@ -114,6 +133,7 @@ impl ScenePickGate {
         self.scene_leaf = None;
         self.chrome_cards.clear();
         self.native_ui_regions.clear();
+        self.overlay_regions.clear();
         self.dock_rect = None;
         self.scene_viewport_rect = None;
         self.tool_pointer_capture = false;
@@ -153,7 +173,14 @@ impl ScenePickGate {
         let native_ui = egui_state
             .hover_pos
             .is_some_and(|pos| self.native_ui_regions.iter().any(|rect| rect.contains(pos)));
-        let candidate = if egui_state.over_egui_overlay {
+        let over_overlay = egui_state.hover_pos.is_some_and(|pos| {
+            self.overlay_regions
+                .iter()
+                .any(|(_, rect)| rect.contains(pos))
+        });
+        let candidate = if over_overlay {
+            PointerOwner::NativeUi
+        } else if egui_state.over_egui_overlay {
             PointerOwner::Egui
         } else if native_ui && !egui_state.using_pointer {
             PointerOwner::NativeUi

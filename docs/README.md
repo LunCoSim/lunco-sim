@@ -21,7 +21,7 @@ The authoritative home for LunCoSim architecture, design, and reference docs.
 | Write rhai behaviour | [`scripting-guide.md`](scripting-guide.md) · [`behaviour-trees.md`](behaviour-trees.md) |
 | Build or inspect a USD assembly with human/AI tools | [`architecture/48-assembly-editor.md`](architecture/48-assembly-editor.md) · [`scripting-guide.md#model-and-assembly-authoring-human-and-ai`](scripting-guide.md#model-and-assembly-authoring-human-and-ai) |
 | Build a rover or lander | [`architecture/55-building-vessels-rovers-and-landers.md`](architecture/55-building-vessels-rovers-and-landers.md) |
-| Build a Twin-facing HTML/CSS surface | [`architecture/runtime-authored-ui.md`](architecture/runtime-authored-ui.md) · [`../skills/runtime-ui/SKILL.md`](../skills/runtime-ui/SKILL.md) |
+| Build an application or Twin HTML/CSS surface | [`architecture/runtime-authored-ui.md`](architecture/runtime-authored-ui.md) · [`../skills/runtime-ui/SKILL.md`](../skills/runtime-ui/SKILL.md) |
 | Record a video / frame-exact capture | [`offline-recording.md`](offline-recording.md) |
 | Understand how it all fits together | [`architecture/README.md`](architecture/README.md) |
 | Know the rules before writing code | [`principles.md`](principles.md) · [`../AGENTS.md`](../AGENTS.md) |
@@ -73,7 +73,7 @@ The full catalogue with trigger phrases is in
 | [mcp-integration](../skills/mcp-integration/SKILL.md) | Install/register MCP and read the portable skill bundle |
 | [networking-deployment](../skills/networking-deployment/SKILL.md) | Configure multiplayer, WebTransport, or headless deployment |
 | [packaged-builds](../skills/packaged-builds/SKILL.md) | Verify official desktop installers and Velopack updates |
-| [runtime-ui](../skills/runtime-ui/SKILL.md) | Author reloadable Twin-facing HTML/CSS-like runtime surfaces |
+| [runtime-ui](../skills/runtime-ui/SKILL.md) | Author reloadable application or Twin HTML/CSS-like runtime surfaces |
 | [sysml-requirements](../skills/sysml-requirements/SKILL.md) | Author and verify Twin-owned SysML v2 requirements and verification cases |
 
 ## Documentation map

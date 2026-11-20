@@ -33,7 +33,7 @@ mod lifecycle;
 pub use lifecycle::{SimulationLifecycleChanged, SimulationLifecycleTransition};
 
 pub mod stepping;
-pub use stepping::{SimulationStepControl, StepSimulation};
+pub use stepping::{SimulationStepControl, StepSimulation, fixed_cycle_integrated};
 
 mod realtime;
 pub use realtime::set_time_update_strategy;
@@ -218,9 +218,6 @@ struct TimeUpdateTimingInput {
 
 #[derive(Resource, Default)]
 struct SimulationTimingStart {
-    tick_started_at: Option<Instant>,
-    tick_started: u64,
-    tick_service_budget_secs: f64,
     loop_started: u64,
 }
 
@@ -484,38 +481,16 @@ fn capture_time_update_timing(
         !virtual_time.is_paused() && input.effective_rate.is_finite() && input.effective_rate > 0.0;
 }
 
-fn begin_fixed_tick_timing(
-    tick: Res<SimTick>,
-    fixed_time: Res<Time<Fixed>>,
-    input: Res<TimeUpdateTimingInput>,
-    mut start: ResMut<SimulationTimingStart>,
-) {
-    start.tick_started_at = Some(Instant::now());
-    start.tick_started = tick.0;
-    start.tick_service_budget_secs = fixed_time.timestep().as_secs_f64() / input.effective_rate;
-}
-
-fn finish_fixed_tick_timing(
-    tick: Res<SimTick>,
-    mut start: ResMut<SimulationTimingStart>,
-    mut profile: ResMut<SimulationTimingProfile>,
-) {
-    let Some(started_at) = start.tick_started_at.take() else {
-        return;
-    };
-    let completed_ticks = tick.0.wrapping_sub(start.tick_started);
-    if completed_ticks != 1
-        || !start.tick_service_budget_secs.is_finite()
-        || start.tick_service_budget_secs <= 0.0
-    {
-        return;
-    }
-    let service_secs = started_at.elapsed().as_secs_f64();
-    if service_secs.is_finite() {
-        profile.record_tick(FixedTickTimingSample {
-            service_secs,
-            service_budget_secs: start.tick_service_budget_secs,
-        });
+fn record_completed_tick_timing(world: &mut World, started: Instant, timestep: Duration) {
+    let rate = world.resource::<TimeUpdateTimingInput>().effective_rate;
+    let service_budget_secs = timestep.as_secs_f64() / rate;
+    if service_budget_secs.is_finite() && service_budget_secs > 0.0 {
+        world
+            .resource_mut::<SimulationTimingProfile>()
+            .record_tick(FixedTickTimingSample {
+                service_secs: started.elapsed().as_secs_f64(),
+                service_budget_secs,
+            });
     }
 }
 
@@ -685,6 +660,11 @@ fn run_pending_fixed_main_schedule(
         if !continue_service() {
             break;
         }
+        // Systems inside FixedMain use the prospective endpoint to order controls
+        // and exchanges. The host publishes it only after settling the attempt.
+        let completed_fixed = *world.resource::<Time<Fixed>>();
+        let completed_tick = *world.resource::<SimTick>();
+        let manual_virtual = manual_step.then(|| *world.resource::<Time<Virtual>>());
         if manual_step {
             world.resource_mut::<SimulationStepControl>().consume();
             world
@@ -705,11 +685,26 @@ fn run_pending_fixed_main_schedule(
         fixed.advance_by(timestep);
         drop(fixed);
         *world.resource_mut::<Time>() = world.resource::<Time<Fixed>>().as_generic();
-        world.resource_mut::<SimulationStepControl>().active_cycle = true;
+        world.resource_mut::<SimulationStepControl>().cycle = stepping::FixedCycle::Running;
         budget.cycles += 1;
+        let started = Instant::now();
         let outcome =
             world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| schedule.run(world));
-        world.resource_mut::<SimulationStepControl>().active_cycle = false;
+        let cycle = std::mem::take(&mut world.resource_mut::<SimulationStepControl>().cycle);
+        if outcome.is_err()
+            || matches!(
+                cycle,
+                stepping::FixedCycle::Unintegrated | stepping::FixedCycle::InvalidEndpoint
+            )
+        {
+            *world.resource_mut::<Time<Fixed>>() = completed_fixed;
+            *world.resource_mut::<SimTick>() = completed_tick;
+            if let Some(before_step) = manual_virtual {
+                *world.resource_mut::<Time<Virtual>>() = before_step;
+            }
+        } else if world.resource::<SimTick>().0.wrapping_sub(completed_tick.0) == 1 {
+            record_completed_tick_timing(world, started, timestep);
+        }
         if let Err(error) = outcome {
             world.resource_mut::<lunco_core::RuntimeFaults>().raise(
                 "simulation-fixed-schedule-missing",
@@ -1040,6 +1035,11 @@ pub struct ClockProjectionSet;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimulationAdmissionSet;
 
+/// Native owners settle their integration outcome here before completed-interval
+/// observers sample the candidate time in `FixedLast`.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FixedCycleVerificationSet;
+
 /// System set publishing the completed physical tick as [`WorldTime`].
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WorldTimeSet;
@@ -1226,8 +1226,6 @@ impl Plugin for TimePlugin {
                     .after(RunFixedMainLoopSystems::FixedMainLoop)
                     .before(RunFixedMainLoopSystems::AfterFixedMainLoop),
             )
-            .add_systems(FixedFirst, begin_fixed_tick_timing)
-            .add_systems(FixedLast, finish_fixed_tick_timing)
             .add_systems(First, project_time_transport.in_set(ClockProjectionSet))
             .add_systems(
                 First,

@@ -263,7 +263,7 @@ name = "luncosim"
 version = "0.1.0"
 description = "…"
 [usd]
-default_scene = "sandbox_scene.usda"   # active stage on open when default-scene loading is enabled
+default_scene = "crater_cup.usda"   # active stage on open when default-scene loading is enabled
 ```
 
 Everything the mission needs lives under that folder: the scene, referenced

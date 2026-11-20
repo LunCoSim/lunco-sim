@@ -9,6 +9,7 @@ pub(super) fn render_layout(
     ctx: &egui::Context,
     layout: &mut WorkbenchLayout,
     world: &mut World,
+    host_camera: Option<Entity>,
     theme: &lunco_theme::Theme,
     menus: &WorkbenchMenuRegistry,
     direct_menu_labels: &[String],
@@ -40,6 +41,7 @@ pub(super) fn render_layout(
         }
         // Presentation panels are deliberate scene overlays, just like a HUD;
         // they survive clean capture without restoring any shell chrome.
+        viewport::set_workbench_backdrop(world, host_camera, None);
         render_floating_panels(ctx, layout, world, theme, ctx.content_rect());
         return;
     }
@@ -105,60 +107,19 @@ pub(super) fn render_layout(
         }
     }
 
-    // ── Opaque-mode backdrop (must run first) ───────────────────────
-    // Paint `get_panel_backdrop(theme)` on the background layer BEFORE
-    // any panel shapes. egui draws within a layer in shape-issue order,
-    // so a rect_filled issued AFTER the menu bar / dock / status bar
-    // would paint over them — exactly the "invisible menu" regression
-    // the opaque-backdrop change once introduced. Running it first
-    // keeps the fill underneath.
-    //
-    // The trigger is "are there dock tabs?", not "any registered panel
-    // transparent?". The latter included transparent side-panels
-    // (Inspector, Spawn Palette, …) registered globally but unused in
-    // the current perspective, suppressing the backdrop incorrectly
-    // and letting the 3D camera bleed through Welcome in
-    // modelica_analyze. The dock-tabs check matches the 3D-app vs
-    // dock-app branch below — dock mode wants an opaque backdrop;
-    // 3D-app mode leaves the centre transparent for Bevy to render
-    // through.
-    // Backdrop strategy (egui paints over the 3D framebuffer, alpha-
-    // blended; only Camera3d's viewport rect is left transparent so
-    // 3D shows). Three cases:
-    //   - View (empty layout)  → no backdrop. Camera3d paints full
-    //     window; chrome (menu/status) overpaints on top.
-    //   - Design (no ViewportPanel) → full-window backdrop. Camera3d
-    //     is inactive; backdrop fills the framebuffer so no garbage.
-    //   - Build (ViewportPanel in layout) → backdrop EVERYWHERE
-    //     EXCEPT the ViewportPanel rect. Painted as four strips
-    //     around the rect so the dock-leaf gaps (tab-strip header
-    //     above the panel, padding below) match theme instead of
-    //     showing uncleared framebuffer pixels as a black hole.
-    // Only a chrome-only perspective (no ViewportPanel and no full-window
-    // scene contract) needs a full-window backdrop to fill the framebuffer —
-    // Camera3d is inactive there. A scene-backed perspective keeps Camera3d
-    // running full-window; egui chrome opaquely overlays where panels are and
-    // the rest stays transparent so 3D shows through (including dock-leaf
-    // gaps).
-    // An active placeholder message means the scene is empty — and so the USD
-    // avatar `Camera3d` was despawned. View mode (empty layout) normally skips
-    // the backdrop because `Camera3d` paints the full window; with no camera
-    // that assumption breaks and the *last rendered frame* (stale rovers) would
-    // show through. The selected camera's actual render state is the
-    // authoritative signal: cover the framebuffer until that camera is
-    // active, even before the domain placeholder resource catches up after
-    // deferred scene teardown. Painted here (before the menu/status panels)
-    // so it stays on the background layer *under* the chrome — painting it
-    // after the panels would overdraw them.
+    // Clear the shared target before either UI pass when the scene has no
+    // drawable backdrop. Retained surfaces and workbench chrome can then
+    // paint over the same themed background.
     let viewport_empty = world
         .get_resource::<ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
     let no_active_scene_camera = !scene_camera_is_rendering(world);
     let needs_full_backdrop = needs_full_backdrop(layout, viewport_empty, no_active_scene_camera);
-    if needs_full_backdrop {
-        let painter = ctx.layer_painter(egui::LayerId::background());
-        painter.rect_filled(ctx.content_rect(), 0.0, get_panel_backdrop(theme));
-    }
+    viewport::set_workbench_backdrop(
+        world,
+        host_camera,
+        needs_full_backdrop.then_some(theme.colors.mantle),
+    );
 
     // ── Menu bar ────────────────────────────────────────────────────
     // Doubles as the OS title bar (window chrome is disabled in the

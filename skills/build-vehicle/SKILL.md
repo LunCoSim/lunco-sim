@@ -376,6 +376,9 @@ from an exemplar — that is the intended way to extend, not a Rust change.
     the turn as well as drift after the brake engages. The travel-only output
     `guidance_travel_throttle` excludes this physical hold correction.
   * `drive_laws/modelica_ackermann.usda` (ackermann_rover):
+    `max_heading` bounds the inner steering knuckle at full lock. The drivetrain
+    derives the virtual bicycle angle from wheelbase and track before computing
+    both wheel headings. Exercise full left and right against the joint limits.
     `RoverAckermannDrivetrain.mo` publishes the front wheel heading outputs and
     the drive outputs consumed by the raycast or physical realization.
   * `drive_laws/modelica_six_independent.usda` (six_wheel_independent): the

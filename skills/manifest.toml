@@ -233,7 +233,7 @@ evidence = "skills/lunco-ui/SKILL.md"
 [[skills]]
 name = "runtime-ui"
 category = "ui"
-primary_for = ["Twin runtime UI"]
+primary_for = ["Application runtime UI", "Twin runtime UI"]
 defer_to = ["lunco-theme", "test-via-api"]
 evidence = "skills/runtime-ui/SKILL.md"
 

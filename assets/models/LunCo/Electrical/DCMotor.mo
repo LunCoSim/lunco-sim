@@ -13,6 +13,8 @@ model DCMotor
   parameter Real no_load_speed = 2400.0 "Motor-shaft no-load speed, rad/s";
   parameter Real rated_power = 500.0 "Continuous electrical nameplate rating, W; not stall power";
   parameter Real v_rated = 28.0 "Bus voltage the drive is rated at, V";
+  parameter Real winding_current_limit(unit="A") = 0.0
+    "Bidirectional drive current limit; zero specifies a voltage drive without current regulation";
 
   input Real demand "Normalized motor demand, -1..1";
   parameter Real coast_at_zero(unit="1") = 0.0
@@ -33,6 +35,8 @@ model DCMotor
   output Real shaft_speed(unit="rad/s") "Solved motor-shaft speed";
 
   Real winding_voltage(unit="V");
+  Real requested_winding_voltage(unit="V");
+  Real requested_winding_current(unit="A");
   Real winding_current(unit="A");
   Real back_emf(unit="V");
   Real resistance(unit="Ohm");
@@ -49,19 +53,29 @@ equation
   back_emf_constant = v_rated / no_load_speed;
   torque_constant = back_emf_constant;
   assert(resistance_scale > 0.0, "DCMotor requires a positive resistance scale");
+  assert(winding_current_limit >= 0.0, "DCMotor current limit must be nonnegative");
   resistance = torque_constant * v_rated / stall_torque * resistance_scale;
 
   shaft_speed = speed;
   // Open-circuit idle is distinct from the legacy zero-voltage short.
   // The open winding carries its back-EMF but no current, torque or heat.
-  winding_voltage = if noEvent(coast_at_zero > 0.5 and abs(demand) <= 0.0)
+  requested_winding_voltage = if noEvent(coast_at_zero > 0.5 and abs(demand) <= 0.0)
     then back_emf else demand * p.v;
   back_emf = back_emf_constant * shaft_speed;
-  winding_current = (winding_voltage - back_emf) / resistance;
+  requested_winding_current = (requested_winding_voltage - back_emf) / resistance;
+  winding_current = if winding_current_limit > 0.0 then
+    (if noEvent(abs(p.v) > 0.0) then
+      noEvent(max(-winding_current_limit, min(winding_current_limit, requested_winding_current)))
+    else 0.0) else requested_winding_current;
+  winding_voltage = if winding_current_limit > 0.0 then
+    back_emf + resistance * winding_current else requested_winding_voltage;
 
   // An ideal duty-controlled drive transforms bus current into winding
-  // current. The product p.v*p.i therefore equals winding_voltage*winding_current.
-  p.i = demand * winding_current;
+  // current. With a current regulator, use the realized winding power so
+  // limit engagement preserves the power balance in both drive directions.
+  p.i = if winding_current_limit > 0.0 then
+    (if noEvent(abs(p.v) > 0.0) then winding_voltage * winding_current / p.v else 0.0)
+    else demand * winding_current;
   shaft_torque = torque_constant * winding_current;
 
   electrical_power = p.i * p.v;

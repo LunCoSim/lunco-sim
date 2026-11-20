@@ -1,0 +1,12 @@
+kind = "lunco.policy.v1"
+scope = "twin"
+
+[startup]
+source = "instruments.rhai"
+entry = "install"
+
+[[policies]]
+hook = "workbench.perspectives.twin"
+source = "instruments.rhai"
+entry = "instruments"
+skip_when_hook_unavailable = true

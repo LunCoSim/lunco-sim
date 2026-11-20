@@ -28,9 +28,9 @@ import bevy_pbr::render::{
 //!@default bus_color   0.85,0.85,0.90
 //!@ui      frame_color color "Frame border colour"
 //!@default frame_color 0.35,0.35,0.38
-//!@ui      cell_rows   1 32  "Cell rows (along U)"
+//!@ui      cell_rows   1 96  "Cell rows (along U)"
 //!@default cell_rows   12
-//!@ui      cell_cols   1 32  "Cell cols (along V)"
+//!@ui      cell_cols   1 96  "Cell cols (along V)"
 //!@default cell_cols   6
 //!@ui      cell_gap    0 0.1 "Cell gap (UV)"
 //!@default cell_gap    0.02
@@ -58,10 +58,18 @@ struct Material {
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
 
-/// True if `p` is within `half_w` of the nearest grid line at `spacing`.
-fn on_line(p: f32, spacing: f32, half_w: f32) -> bool {
-    let d = abs(fract(p / spacing - 0.5) - 0.5) * spacing;
-    return d < half_w;
+// Integral of a periodic line mask. Averaging over the pixel footprint
+// preserves conductor coverage when an entire table projects to a few pixels.
+fn stripe_integral(x: f32, duty: f32) -> f32 {
+    return floor(x) * duty + min(fract(x), duty);
+}
+
+fn line_coverage(uv: f32, count: f32, width: f32, footprint: f32) -> f32 {
+    let duty = clamp(width * count, 0.0, 1.0);
+    let center = uv * count + 0.5 * duty;
+    let span = max(footprint * count, 0.0001);
+    return clamp((stripe_integral(center + 0.5 * span, duty)
+                - stripe_integral(center - 0.5 * span, duty)) / span, 0.0, 1.0);
 }
 
 @fragment
@@ -73,21 +81,15 @@ fn fragment(input: VertexOutput, @builtin(front_facing) is_front: bool) -> @loca
     let bus    = mat.bus_width;
     let border = mat.border;
 
-    let sx = 1.0 / rows;
-    let sy = 1.0 / cols;
-
-    var color = mat.cell_color;  // silicon cell
-
-    let gap_x = gap * 0.5;
-    let gap_y = gap * 0.5 * mat.v_scale;
-    let bus_x = bus * 0.5;
-    let bus_y = bus * 0.5 * mat.v_scale;
-
-    if (on_line(uv.x, sx, bus_x) || on_line(uv.y, sy, bus_y)) {
-        color = mix(mat.cell_color, mat.bus_color, 0.9);         // metallic bus line
-    } else if (on_line(uv.x, sx, gap_x) || on_line(uv.y, sy, gap_y)) {
-        color = vec3<f32>(0.02, 0.02, 0.02);                     // dark cell gap
-    }
+    let footprint = fwidth(uv);
+    let gap_x = line_coverage(uv.x, rows, max(gap,bus), footprint.x);
+    let gap_y = line_coverage(uv.y, cols, max(gap,bus) * mat.v_scale, footprint.y);
+    let bus_x = line_coverage(uv.x, rows, bus, footprint.x);
+    let bus_y = line_coverage(uv.y, cols, bus * mat.v_scale, footprint.y);
+    let seam = gap_x + gap_y - gap_x * gap_y;
+    let metal = bus_x + bus_y - bus_x * bus_y;
+    var color = mat.cell_color * (1.0 - seam) + vec3<f32>(0.02) * (seam - metal)
+              + mix(mat.cell_color, mat.bus_color, 0.9) * metal;
 
     let border_x = (mat.seamless_u < 0.5) && (uv.x < border || uv.x > 1.0 - border);
     let border_y = uv.y < border || uv.y > 1.0 - border;

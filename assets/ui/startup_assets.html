@@ -1,0 +1,23 @@
+<template>
+  <property name="title">Built-in assets</property>
+  <property name="description">Checking the local cache…</property>
+  <property name="scope_label">…</property>
+  <property name="phase_color">var(--text-color)</property>
+  <property name="activity_display">none</property>
+
+  <node id="startup-assets-root">
+    <node id="startup-assets-card" pickable="true false">
+      <node id="startup-assets-heading">
+        <node id="startup-assets-indicator" />
+        <text id="startup-assets-title">{title}</text>
+        <text id="startup-assets-count">{scope_label}</text>
+      </node>
+      <text id="startup-assets-description">{description}</text>
+      <node id="startup-assets-list">
+        <node id="startup-assets-rows" />
+        <node id="startup-assets-scrollbar" />
+      </node>
+      <node id="startup-assets-actions" />
+    </node>
+  </node>
+</template>

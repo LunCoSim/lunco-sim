@@ -255,7 +255,7 @@ the value's measured width.
 | | today |
 |---|---|
 | Channel declaration | `lunco_telemetry_core::Parameter { name, unit, source, target, rate_hz, enabled, deadband, retention }` — a `Reflect` Component with `ReflectDefault`, so scripts can author it via `add(id, "Parameter", #{…})`; USD uses `LunCoTelemetryAPI`. A declaration on a prim with its own sampled port may omit `lunco:telemetry:target` and self-target; otherwise its optional target relationship names exactly one composed measured prim. Missing, multiple, or unresolved targets are runtime diagnostics and USD lint errors. Referenced component relationships stay on the stable assembly prim, while a variant deactivates an absent realization through standard USD `active` authoring. |
-| Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedUpdate` |
+| Sampling | `lunco-telemetry::sample_parameters` — reflection-driven, exclusive `&mut World`, `FixedLast` after fixed-cycle verification |
 | **Rate** | Per-channel `rate_hz` in the channel's bound simulation clock; `FIXED_HZ` is the execution ceiling |
 | Transport | `SampledParameter` (pull/continuous) and `TelemetryEvent` (push/discrete) — Bevy events; both carry the simulation seconds and fixed tick used to correlate records |
 | Subscription | `lunco_api::subscription` with explicit name/severity/rate filtering |
@@ -271,8 +271,10 @@ registry and do not maintain or write a second live history.
 
 `LunCoTelemetryPlugin` is registered in the shared simulation composition.
 Sampling is `run_if`-gated on a `Parameter` existing and runs on the fixed
-clock. When channels exist, the exclusive sampler checks one deadline heap per
-active clock on each fixed tick and pops only due channels. It reads live
+clock. On a completed interval the exclusive sampler checks one deadline heap per
+active clock and pops only due channels. A rejected, unintegrated interval
+leaves channel deadlines and numerical history unchanged. It can still produce
+discrete fault events. The sampler reads live
 ECS/port state only for those channels, then queues immutable, tick-stamped
 samples for bounded `PostUpdate` delivery, so retention, subscriber, and logging
 observers do not run inline with physics. Plan rebuilds sort declarations by
@@ -304,9 +306,8 @@ from `MissionClock`. `timestamp` is the derived TDB epoch for calendar labels;
 `sim_secs` is the precise plotting/differencing timebase and `sim_tick` is the
 integer correlation key. Producers may run in `Update`, `FixedUpdate`, or an
 observer, but telemetry never derives time from render cadence or a wall-clock
-accumulator. Parameter collection runs after the runtime's tick-advance set;
-physics collection runs after the physics step, and Modelica collection uses the
-solver's landed simulation time.
+accumulator. Parameter and native physics collection both run after fixed-cycle
+verification. Modelica collection uses the solver's landed simulation time.
 
 ### Physics and UI cost contract
 

@@ -1074,13 +1074,13 @@ pub fn validate_physics_clock(
 fn verify_completed_physics_clock(
     physics_time: Res<Time<Physics>>,
     fixed_time: Res<Time<Fixed>>,
-    control: Option<Res<lunco_time::SimulationStepControl>>,
+    control: Option<ResMut<lunco_time::SimulationStepControl>>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
 ) {
-    if control.is_none() || faults.active() {
-        return;
-    }
-    if let Err(error) = validate_physics_clock(&physics_time, &fixed_time, false) {
+    let Some(mut control) = control else { return };
+    if !faults.active()
+        && let Err(error) = validate_physics_clock(&physics_time, &fixed_time, false)
+    {
         error!("[physics] {error}");
         faults.raise(
             "simulation-physics-clock-diverged",
@@ -1089,6 +1089,11 @@ fn verify_completed_physics_clock(
             error,
         );
     }
+    // A terminal fault can occur on either side of native integration.
+    // The runner owns settlement of the prospective tick and its observations.
+    if faults.active() {
+        control.observe_faulted_native_endpoint(&fixed_time, physics_time.elapsed());
+    }
 }
 
 /// Clear all scene-owned physics admission state before the outgoing entities
@@ -1096,6 +1101,7 @@ fn verify_completed_physics_clock(
 /// from its own authored and runtime state. The time owner separately retires
 /// shared deliberate-step demand.
 fn reset_scene_physics_state(
+    fixed_time: Option<Res<Time<Fixed>>>,
     mut progress: Option<ResMut<lunco_core_runtime::SimulationProgress>>,
     mut physics_time: Option<ResMut<Time<Physics>>>,
 ) {
@@ -1103,6 +1109,14 @@ fn reset_scene_physics_state(
         progress.release(lunco_core_runtime::SimulationProgressKey::physics_integration());
     }
     if let Some(mut physics_time) = physics_time.take() {
+        // Exchange can fault after Fixed advances but before Avian integrates.
+        // The incoming world starts at the retained application clock epoch.
+        if let Some(fixed) = fixed_time {
+            let mut clock = Time::new_with(*physics_time.context());
+            clock.set_wrap_period(physics_time.wrap_period());
+            clock.advance_to(fixed.elapsed());
+            *physics_time = clock;
+        }
         physics_time.unpause();
         physics_time.advance_by(Duration::ZERO);
     }
@@ -1263,7 +1277,7 @@ impl Plugin for PhysicsGatePlugin {
                 apply_physics_holds.in_set(lunco_time::SimulationAdmissionSet),
             )
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
-            .add_systems(FixedLast, verify_completed_physics_clock)
+            .add_systems(FixedLast, verify_completed_physics_clock.in_set(lunco_time::FixedCycleVerificationSet))
             // Refresh native admission at the shared fixed-cycle boundary.
             .add_systems(bevy::prelude::FixedPreUpdate, apply_physics_holds)
             .add_plugins(escape::EscapeDiagnosticPlugin)
@@ -1592,6 +1606,53 @@ mod tests {
     }
 
     #[test]
+    fn terminal_cycle_accounts_for_native_integration_and_fixed_debt() {
+        use lunco_core_runtime::SimTick;
+        for integrated in [false, true] {
+            let mut app = App::new();
+            app.add_plugins((bevy::time::TimePlugin, lunco_time::TimePlugin))
+                .init_resource::<Time<Physics>>()
+                .add_systems(FixedUpdate, |mut tick: ResMut<SimTick>| tick.0 += 1)
+                .add_systems(
+                    FixedPostUpdate,
+                    move |fixed: Res<Time<Fixed>>,
+                          mut native: ResMut<Time<Physics>>,
+                          mut faults: ResMut<lunco_core::RuntimeFaults>| {
+                        if integrated {
+                            native.advance_by(fixed.timestep());
+                        }
+                        faults.raise(
+                            "test-terminal-fault",
+                            None,
+                            "native integration",
+                            "injected",
+                        );
+                    },
+                )
+                .add_systems(
+                    FixedLast,
+                    verify_completed_physics_clock.in_set(lunco_time::FixedCycleVerificationSet),
+                );
+            app.update();
+            let world = app.world_mut();
+            let step = Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK);
+            world.resource_mut::<Time<Fixed>>().set_timestep(step);
+            world.resource_mut::<Time<Virtual>>().advance_by(step * 2);
+            world.run_schedule(bevy::app::RunFixedMainLoop);
+            let fixed = world.resource::<Time<Fixed>>();
+            let completed = u32::from(integrated);
+            assert_eq!(world.resource::<SimTick>().0, u64::from(completed));
+            assert_eq!(
+                world.resource::<Time<Physics>>().elapsed(),
+                step * completed
+            );
+            assert_eq!(fixed.elapsed(), step * completed);
+            assert_eq!(fixed.overstep(), step * (2 - completed));
+            assert!(world.resource::<lunco_core::RuntimeFaults>().active());
+        }
+    }
+
+    #[test]
     fn shared_clock_validation_distinguishes_active_and_completed_cycles() {
         let mut fixed = Time::<Fixed>::from_hz(60.0);
         let mut physical = Time::<Physics>::default();
@@ -1725,11 +1786,12 @@ mod tests {
     }
 
     #[test]
-    fn scene_teardown_clears_physics_holds_and_integration_admission() {
+    fn replacement_scene_starts_at_shared_time_after_an_unintegrated_cycle() {
         let mut app = App::new();
         app.init_scene_resource::<PhysicsHolds>()
             .init_resource::<lunco_core_runtime::SimulationProgress>()
             .init_resource::<Time<Physics>>()
+            .init_resource::<Time<Fixed>>()
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state);
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimulationProgress>()
@@ -1740,7 +1802,13 @@ mod tests {
         app.world_mut()
             .resource_mut::<PhysicsHolds>()
             .set(PhysicsHolds::READINESS, true);
-        app.world_mut().resource_mut::<Time<Physics>>().pause();
+        let step = app.world().resource::<Time<Fixed>>().timestep();
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .advance_by(step * 2);
+        let mut native = app.world_mut().resource_mut::<Time<Physics>>();
+        native.advance_by(step);
+        native.pause();
         lunco_core::run_scene_teardown(app.world_mut());
         let world = app.world();
         assert!(!world.resource::<PhysicsHolds>().is_held());
@@ -1751,6 +1819,7 @@ mod tests {
         );
         assert!(!world.resource::<Time<Physics>>().is_paused());
         assert_eq!(world.resource::<Time<Physics>>().delta(), Duration::ZERO);
+        assert_eq!(world.resource::<Time<Physics>>().elapsed(), step * 2);
     }
 
     /// A kinematic drive is an interface-clock operation: it updates the Avian

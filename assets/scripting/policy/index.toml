@@ -80,6 +80,12 @@ deterministic = true
 required = true
 
 [[policies]]
+hook = "assets.startup.select"
+source = "startup_assets.rhai"
+entry = "select_startup_assets"
+skip_when_hook_unavailable = true
+
+[[policies]]
 hook = "assets.provision"
 source = "dataset_provisioning.rhai"
 entry = "dataset_provisioning"

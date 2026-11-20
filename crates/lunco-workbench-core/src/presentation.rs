@@ -6,6 +6,10 @@ use std::collections::HashMap;
 
 use crate::{PanelCtx, PanelId};
 
+/// A window camera for retained overlays that stack above the dock shell.
+#[derive(bevy::prelude::Component)]
+pub struct WorkbenchOverlayCamera;
+
 /// Screen-space rectangles of named UI landmarks, refreshed by their renderers.
 ///
 /// Guided overlays and other presentation adapters use these stable keys to

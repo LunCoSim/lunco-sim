@@ -294,7 +294,13 @@ realization, and collision-aware local locomotion are in
 `lunco-control-core`, and generic camera commands are in `lunco-camera-core`. The
 viewport reconciler decides *which* camera is shown; a rig
 decides *how* its pose is solved. They compose: possession changes the avatar
-camera's rig without changing which camera the viewport shows.
+camera's rig without changing which camera the viewport shows. The first possession
+from free flight or surface navigation captures the avatar’s grid, cell, transform
+and navigation mode. Switching subjects retains that return pose. Release restores
+it even when a separate mounted or factory camera occupied the viewport.
+Releasing control during an animated return from orbit cancels that transition
+and restores the avatar in the same operation. Closing the active Twin retires
+both return poses, including on avatars that have never entered orbital view.
 
 The celestial camera adapter is `lunco-camera-celestial`. It resolves the
 camera's body-fixed ENU frame from its own live BigSpace pose and

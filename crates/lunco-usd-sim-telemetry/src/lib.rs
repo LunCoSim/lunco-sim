@@ -8,7 +8,7 @@
 
 use avian3d::prelude::{
     AngularVelocity, ComputedAngularInertia, ComputedCenterOfMass, ComputedMass, ContactGraph,
-    LinearVelocity, PhysicsSystems, Position, RigidBody, Rotation,
+    LinearVelocity, Position, RigidBody, Rotation,
 };
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -35,11 +35,10 @@ impl Plugin for PhysicsTelemetryPlugin {
     fn build(&self, app: &mut App) {
         app.init_scene_resource::<PhysicsTelemetryState>()
             .add_systems(
-                FixedPostUpdate,
+                FixedLast,
                 retain_physics_telemetry
-                    .after(PhysicsSystems::StepSimulation)
-                    .after(lunco_physics::kinematics::BodyAccelerationSampleSet)
-                    .after(lunco_mobility::WheelRaycastResultsSet),
+                    .after(lunco_time::FixedCycleVerificationSet)
+                    .run_if(lunco_time::fixed_cycle_integrated),
             );
     }
 }
@@ -60,7 +59,7 @@ impl SceneResource for PhysicsTelemetryState {}
 
 /// Retain post-step rigid-body kinematics in the shared signal registry.
 ///
-/// The system is installed in `FixedPostUpdate` after Avian's physics step, so
+/// The system runs in `FixedLast` after native clock verification, so
 /// one retained sample corresponds to one integrated physics state. The
 /// shared registry policy applies the same rate, retention, and channel-limit
 /// rules as all other runtime recorders; display deadband never removes a
@@ -138,7 +137,7 @@ fn retain_physics_telemetry(
         return;
     };
 
-    // `FixedPostUpdate` may run several times in one rendered frame. The
+    // `FixedLast` may run several times in one rendered frame. The
     // Bevy fixed accumulator is a cadence implementation detail, so its
     // elapsed value is not the simulation timestamp. `SimTick` advances once
     // per integrated fixed step and `MissionClock` owns its seconds mapping;

@@ -263,25 +263,28 @@ or text-only document therefore completes without rendering its diagram.
 
 ### 3.1 Rendering contract — how chrome and 3D share the window
 
-The window is drawn by **two layered cameras**, not by tiling:
+Window cameras draw the scene, the dock shell, and any active retained overlay
+in that order:
 
 | Order | Camera | Role |
 |-------|--------|------|
 | 0 | scene `Camera3d` (`lunco_render::SceneCamera` intent) | renders the 3D **full-window**; **clears** the target |
 | 1 | egui host `Camera2d` (`WorkbenchEguiHost`, holds `PrimaryEguiContext`) | paints chrome into the scene camera's shared main texture |
+| 2 | retained overlay `Camera2d` (`WorkbenchOverlayCamera`) | paints visible surfaces declared with `overlay: true` above dock panels |
 
 The workbench host receives chrome hits in window coordinates. The workbench
 removes that host's ray from Bevy's pointer ray map during input processing,
 before spatial picking starts. Scene and preview cameras keep their own rays.
 
 The host is a separate camera because scene cameras are transient (USD spawns
-them, `camera_switch` swaps them) while the egui context must be stable. Both
-cameras target the window's shared main texture, with the scene clear preceding
-the egui pass.
+them, `camera_switch` swaps them) while the egui context must be stable.
+All window passes share the main texture. The optional retained overlay
+camera activates only while an authored overlay is visible. Measured
+pickable overlay regions also reserve the corresponding egui pointer area.
 
-The host is deliberately keyed to the scene camera's shared Bevy main texture.
-Its `clear_color: None` leaves the scene pixels intact while the scene camera's
-lower-order pass clears and redraws that same texture every frame. Because
+The host is keyed to the scene camera's shared Bevy main texture. In the
+scene-backed layout, its `clear_color: None` preserves the scene pixels while
+the scene camera's lower-order pass clears and redraws that texture. Because
 Bevy includes texture usages, MSAA and HDR format in the texture key, the workbench's
 change-driven `sync_egui_host_framebuffer` follows the active scene camera across
 quality changes, camera replacement, resize, and Twin teardown. A private
@@ -294,8 +297,8 @@ cameras already exist and neither camera's components changed.
 
 When no window `Camera3d` is active at all (a central-content perspective, the
 Modelica workbench, or the short handoff while a selected camera is being
-activated), the workbench paints a full-window themed backdrop on egui's
-background layer. It checks the selected camera's actual `Camera::is_active`
+activated), the workbench host clears to the active theme's backdrop color
+before the retained UI and egui render passes. It checks the selected camera's actual `Camera::is_active`
 state, not only the selection binding, so direct perspective switches show an
 intentional loading surface until the scene camera is ready. A perspective that
 uses the full window as its viewport declares that contract through
@@ -484,7 +487,7 @@ Tutorial catalogs use the same replaceable menu provider and live under
 Scenarios → Tutorials → track → lesson. Rhai also publishes their existing
 lesson actions as Tutorials quick-navigation entries. Catalog policy can mark
 one lesson as the empty viewport's featured action; application-scope featured
-lessons are visible only while no Twin is active. **Explore demo sandbox** is
+lessons are visible only while no Twin is active. **Play Crater Cup** is
 also an authored policy action; **Open Twin** is the generic shell entry point
 when no Twin is active.
 The shared `tutorials` Rhai tool owns tour cursors and continuation. Domain

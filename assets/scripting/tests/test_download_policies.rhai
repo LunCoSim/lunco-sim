@@ -10,9 +10,11 @@ fn provisioned_view(facts) {
 let checks = [];
 let hooks = list_hooks();
 let provisioning_hook = ();
+let startup_selection_hook = ();
 let download_prepare_hook = ();
 for hook in hooks {
     if hook.id == "assets.provision" { provisioning_hook = hook; }
+    if hook.id == "assets.startup.select" { startup_selection_hook = hook; }
     if hook.id == "assets.download.prepare" { download_prepare_hook = hook; }
 }
 
@@ -58,7 +60,8 @@ for state in [
     #{kind: "cancelled", detail: ()},
 ] {
     facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain",
-        required_for_scene: true, recommended: false, processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",state:"missing",error:()}], state: state}];
+        required_for_scene: true, recommended: false, selected_for_startup: false,
+        processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",state:"missing",error:()}], state: state}];
     let view = provisioned_view(facts);
     checks.push(t_true(view.visible && view.rows.len() == 1,
         "consent retains " + state.kind + " work without another missing row"));
@@ -163,6 +166,48 @@ checks.push(t_true(unknown_total.contains("MiB received") && !unknown_total.cont
 facts.datasets[0].state = #{kind: "invalid", detail: ()};
 checks.push(t_true(invoke_hook("assets.provision", [facts]).ok == false,
     "an invalid dataset phase is rejected visibly"));
+
+facts.datasets[0].state=#{kind:"missing",detail:()};
+facts.startup_working=true;
+checks.push(t_true(provisioned_view(facts).description.contains("Built-in downloads continue in the background."),
+    "scene consent explains continuing startup work"));
+facts.startup_working=false;
+
+if startup_selection_hook != () {
+    let selected = invoke_hook("assets.startup.select", [[
+        #{id:"engine/celestial/earth", scope:"engine", group:"celestial", key:"earth", state:"installed"},
+        #{id:"twin/mission/moon", scope:"twin", group:"celestial", key:"moon", state:"missing"},
+        #{id:"engine/terrain/moon", scope:"engine", group:"terrain", key:"moon", state:"missing"},
+        #{id:"engine/celestial/moon", scope:"engine", group:"celestial", key:"moon", state:"missing"},
+        #{id:"engine/celestial/mars", scope:"engine", group:"celestial", key:"mars", state:"missing"},
+    ]]);
+    checks.push(t_true(selected.ok && selected.value == ["engine/celestial/earth", "engine/celestial/moon"],
+        "startup selects the authored engine datasets and excludes matching Twin keys and other engine datasets"));
+}
+
+facts.startup=true;
+facts.scope="engine";
+facts.scope_id="engine";
+facts.datasets[0].required_for_scene=false;
+facts.datasets[0].state=#{kind:"processing",detail:"texture"};
+let startup=provisioned_view(facts);
+checks.push(t_true(startup.visible && startup.rows[0].status=="Preparing for the simulator"
+    && startup.actions[0].scope=="startup-assets" && startup.simulation_status=="",
+    "startup progress is independent of scene consent"));
+facts.scene_notice_visible=true;
+let background_startup=provisioned_view(facts);
+checks.push(t_true(!background_startup.visible && background_startup.rows[0].status==startup.rows[0].status,
+    "the scene-data notice takes the foreground while startup retains its progress"));
+facts.scene_notice_visible=false;
+facts.datasets[0].state=#{kind:"failed",detail:"processing failed: test failure"};
+let failed_startup=provisioned_view(facts);
+checks.push(t_true(failed_startup.rows[0].action_label=="Retry preparation"
+    && failed_startup.description.contains("Data & libraries") && failed_startup.actions[0].label=="Close",
+    "failed startup assets keep an actionable recovery path"));
+facts.datasets[0].state=#{kind:"installed",detail:()};
+let ready_startup=provisioned_view(facts);
+checks.push(t_true(ready_startup.title=="Built-in assets ready" && ready_startup.actions[0].label=="Done",
+    "startup reports completed cache installation"));
 
 checks.push(t_true(download_prepare_hook != ()
         && download_prepare_hook.declared == true

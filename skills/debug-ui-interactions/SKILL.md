@@ -96,6 +96,14 @@ Check authored avatars while simulation transport is paused as well as playing.
 Their `LocalEmbodiment` role keeps camera input on the interaction clock even
 when USD supplies a stable entity identity. A possessed vehicle must still obey
 simulation pause. Verify movement, release, and the unchanged simulation clock.
+For a possession-return report, capture the free avatar’s grid pose and heading
+before the first pick. Switch directly to a second subject, release, and compare
+the restored pose and navigation behavior. Then possess again, enter orbit,
+request an orbital return, and release while `CameraPoseLock` is active.
+Check that the old spring arm stays detached and that the restored position,
+forward and up vectors match after the transition would have finished. On the open
+Crater Cup demo, run `lunco://scenarios/tests/crater_cup_camera.rhai` with
+`RunScenarioAsset` owned by the active Twin. Its windowed verdict is `CRATER CAMERA`.
 
 For a modifier gesture, use separate event phases and allow a frame between
 them when the result matters:

@@ -18,6 +18,8 @@ model RoverAckermannDrivetrain
   parameter Real wheelbase = 2.45 "Front/rear axle spacing (m)";
   parameter Real track = 2.0 "Front wheel centre spacing (m)";
   parameter Real max_heading = 0.5 "Maximum front-wheel heading (rad)";
+  final parameter Real max_center_heading = atan2(wheelbase*tan(max_heading),
+    wheelbase + 0.5*track*tan(max_heading)) "Virtual bicycle heading at the inner knuckle stop";
   parameter Real forward_yaw_offset = 0.0 "Body-local travel heading relative to native -Z (rad)";
 
   input Real throttle "Normalized forward command, -1..1";
@@ -65,6 +67,8 @@ model RoverAckermannDrivetrain
   output Real guidance_steer "Modelica waypoint steer command";
   output Real guidance_heading_error "Modelica waypoint heading error (rad)";
 equation
+  assert(wheelbase>0 and track>0 and max_heading>=0 and max_heading<1.5707963267948966,
+    "Ackermann steering requires positive wheelbase and track and a wheel limit below pi/2");
   selected_throttle = authority.direct_gate * throttle
     + authority.guidance_gate * guidance.throttle_cmd;
   selected_steer = authority.direct_gate * steer
@@ -75,7 +79,7 @@ equation
   der(t) = (max(-1.0, min(1.0, selected_throttle)) - t) / tau_m;
   drive_left = t;
   drive_right = t;
-  heading_command = -max(-1.0, min(1.0, selected_steer)) * max_heading;
+  heading_command = -max(-1.0, min(1.0, selected_steer)) * max_center_heading;
   tangent_heading = tan(heading_command);
   heading_fl = atan2(wheelbase * tangent_heading,
                      wheelbase - 0.5 * track * tangent_heading);

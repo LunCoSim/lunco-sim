@@ -163,7 +163,7 @@ stage_twins() {
     if [ -z "$entries" ]; then
         # No twin baked in → boot the lightweight demo scene (staged under
         # assets/scenes/luncosim/). The moonbase arrives from the server on connect.
-        printf '{"default":"lunco://scenes/luncosim/sandbox_scene.usda","scenes":[]}\n' > "$dist/scenes.json"
+        printf '{"default":"lunco://scenes/luncosim/crater_cup.usda","scenes":[]}\n' > "$dist/scenes.json"
         info "Wrote scenes.json (default: lightweight demo; moonbase via server)"
         return 0
     fi
