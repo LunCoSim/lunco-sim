@@ -159,14 +159,50 @@ fn relative_path_uri(
     Ok(uri)
 }
 
+fn logical_source_file_uri(
+    label: &str,
+    source_uri: &str,
+) -> Result<String, ModelicaSourceRootContentError> {
+    use std::path::Path;
+
+    if source_uri.is_empty() {
+        return Err(ModelicaSourceRootContentError::EmptyFileUri);
+    }
+    if is_file_uri(source_uri) {
+        return Err(ModelicaSourceRootContentError::NonPortableFileUri {
+            source_uri: source_uri.to_owned(),
+        });
+    }
+    let path = Path::new(source_uri);
+    let logical_uri = if path.is_absolute() {
+        let relative = path.strip_prefix(Path::new(label)).map_err(|_| {
+            ModelicaSourceRootContentError::NonPortableFileUri {
+                source_uri: source_uri.to_owned(),
+            }
+        })?;
+        relative_path_uri(relative, source_uri)?
+    } else if has_windows_drive_prefix(source_uri)
+        || source_uri.starts_with("\\\\")
+        || source_uri.starts_with("//")
+    {
+        return Err(ModelicaSourceRootContentError::NonPortableFileUri {
+            source_uri: source_uri.to_owned(),
+        });
+    } else if uri_scheme(source_uri).is_some() {
+        source_uri.to_owned()
+    } else {
+        let normalized_path = source_uri.replace('\\', "/");
+        relative_path_uri(Path::new(&normalized_path), source_uri)?
+    };
+    Ok(logical_uri)
+}
+
 fn source_root_content_closure(
     id: &str,
     label: &str,
     source_files: &[(String, String)],
     diagnostics: &[String],
 ) -> Result<ModelicaSourceRootContent, ModelicaSourceRootContentError> {
-    use std::path::Path;
-
     if !diagnostics.is_empty() {
         return Err(ModelicaSourceRootContentError::SourceSetHasDiagnostics);
     }
@@ -181,35 +217,7 @@ fn source_root_content_closure(
 
     let mut files = Vec::with_capacity(source_files.len());
     for (source_uri, source) in source_files {
-        if source_uri.is_empty() {
-            return Err(ModelicaSourceRootContentError::EmptyFileUri);
-        }
-        if is_file_uri(source_uri) {
-            return Err(ModelicaSourceRootContentError::NonPortableFileUri {
-                source_uri: source_uri.clone(),
-            });
-        }
-        let path = Path::new(source_uri);
-        let logical_uri = if path.is_absolute() {
-            let relative = path.strip_prefix(Path::new(label)).map_err(|_| {
-                ModelicaSourceRootContentError::NonPortableFileUri {
-                    source_uri: source_uri.clone(),
-                }
-            })?;
-            relative_path_uri(relative, source_uri)?
-        } else if has_windows_drive_prefix(source_uri)
-            || source_uri.starts_with("\\\\")
-            || source_uri.starts_with("//")
-        {
-            return Err(ModelicaSourceRootContentError::NonPortableFileUri {
-                source_uri: source_uri.clone(),
-            });
-        } else if uri_scheme(source_uri).is_some() {
-            source_uri.clone()
-        } else {
-            let normalized_path = source_uri.replace('\\', "/");
-            relative_path_uri(Path::new(&normalized_path), source_uri)?
-        };
+        let logical_uri = logical_source_file_uri(label, source_uri)?;
         files.push(ModelicaSourceFileContent {
             source_uri: logical_uri,
             cid: lunco_hash::content::cid(source.as_bytes()),
@@ -453,6 +461,7 @@ pub struct ModelicaCompiler {
     /// These are computed from bytes already read by the admission boundary;
     /// the prepared solve cache uses the aggregate without rescanning disk.
     library_revisions: std::collections::HashMap<String, u64>,
+    admitted_context: std::sync::OnceLock<Result<lunco_hash::content::Cid, String>>,
     /// Source-content state for committed roots and failed latest admissions.
     source_root_content_closures: std::collections::HashMap<
         String,
@@ -465,6 +474,7 @@ pub struct ModelicaCompiler {
 
 #[derive(Clone)]
 struct SourceSetContribution {
+    label: String,
     source_files: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
     roots: std::collections::HashSet<String>,
     revision: u64,
@@ -497,6 +507,7 @@ impl ModelicaCompiler {
             seated_user_uris: std::collections::HashSet::new(),
             seated_source_unit: None,
             library_revisions: std::collections::HashMap::new(),
+            admitted_context: std::sync::OnceLock::new(),
             source_root_content_closures: std::collections::HashMap::new(),
             failed_source_roots: std::collections::HashMap::new(),
         }
@@ -1365,6 +1376,7 @@ impl ModelicaCompiler {
                 self.source_set_contributions.insert(
                     id.clone(),
                     SourceSetContribution {
+                        label: label.clone(),
                         source_files,
                         roots: parsed_roots,
                         revision,
@@ -1451,6 +1463,7 @@ impl ModelicaCompiler {
     }
 
     fn rebuild_source_set_indexes(&mut self) {
+        self.admitted_context.take();
         self.installed_roots.clear();
         self.library_revisions.clear();
         self.source_root_content_closures.clear();
@@ -1497,6 +1510,12 @@ impl ModelicaCompiler {
         if !self.failed_source_roots.is_empty() {
             return Err("the latest source-root admission failed".into());
         }
+        self.admitted_context
+            .get_or_init(|| self.hash_admitted_context())
+            .clone()
+    }
+
+    fn hash_admitted_context(&self) -> Result<lunco_hash::content::Cid, String> {
         let mut bytes = b"LunCoModelicaAdmittedCompilationContext\0\x01".to_vec();
         for id in &self.source_set_order {
             let contribution = self
@@ -1537,9 +1556,8 @@ impl ModelicaCompiler {
     }
 
     /// Portable identity of the successfully seated compile input closure.
-    /// Includes the exact target, seated source bytes, and admitted library
-    /// bytes. Runtime mount IDs and host paths never contribute to this CID.
-    /// Capture before clearing the admitted user-document overlay.
+    /// Uses the resolved target's participating documents and the exact table
+    /// values admitted by the checked DAE. Capture before retiring the overlay.
     pub fn compiled_source_content_identity(
         &self,
         compiled: &rumoca_compile::compile::DaeCompilationResult,
@@ -1551,55 +1569,68 @@ impl ModelicaCompiler {
         if closure.files.is_empty() {
             return Err("strict compile has no participating source files".into());
         }
-        let mut bytes = b"LunCoModelicaCompileClosure\0\x01".to_vec();
+        let mut bytes = b"LunCoModelicaCompileClosure\0\x02".to_vec();
         source_content_field(&mut bytes, closure.target.as_bytes());
-        let mut overlays = Vec::new();
-        let mut contributing_roots = std::collections::HashSet::new();
+        let mut sources = Vec::with_capacity(closure.files.len());
         for participant in &closure.files {
-            if self.seated_user_uris.contains(&participant.uri) {
-                let document = self
-                    .session
-                    .document_source_text(&participant.uri)
-                    .ok_or("participating overlay no longer has seated text")?;
-                overlays.push(lunco_hash::content::cid(document.as_bytes()));
-            } else {
-                if participant.source_set_keys.is_empty() {
-                    return Err(format!(
-                        "participating source `{}` has no admitted byte owner",
+            let document = self
+                .session
+                .document_source_text(&participant.uri)
+                .ok_or_else(|| {
+                    format!(
+                        "participating source `{}` no longer has seated text",
                         participant.uri
-                    ));
-                }
-                contributing_roots.extend(participant.source_set_keys.iter().cloned());
+                    )
+                })?;
+            let logical_uri = if self.seated_user_uris.contains(&participant.uri) {
+                // Instance/editor URIs do not change the equations. Loaded
+                // external data is represented by its realized values below.
+                String::new()
+            } else {
+                let owner = participant
+                    .source_set_keys
+                    .iter()
+                    .find_map(|id| self.source_set_contributions.get(id))
+                    .ok_or_else(|| {
+                        format!(
+                            "participating source `{}` has no admitted byte owner",
+                            participant.uri
+                        )
+                    })?;
+                owner
+                    .content_closure
+                    .as_ref()
+                    .map_err(|error| error.to_string())?;
+                logical_source_file_uri(&owner.label, &participant.uri)
+                    .map_err(|error| error.to_string())?
+            };
+            sources.push((
+                logical_uri,
+                lunco_hash::content::cid(document.as_bytes()).to_bytes(),
+            ));
+        }
+        sources.sort_unstable();
+        source_content_field(&mut bytes, &(sources.len() as u64).to_le_bytes());
+        for (uri, cid) in sources {
+            source_content_field(&mut bytes, uri.as_bytes());
+            source_content_field(&mut bytes, &cid);
+        }
+        let tables = compiled.dae.external_tables();
+        source_content_field(&mut bytes, &(tables.len() as u64).to_le_bytes());
+        for table in tables {
+            source_content_field(&mut bytes, &table.id.to_le_bytes());
+            source_content_field(&mut bytes, &table.smoothness.to_le_bytes());
+            source_content_field(&mut bytes, &table.extrapolation.to_le_bytes());
+            source_content_field(&mut bytes, &(table.columns.len() as u64).to_le_bytes());
+            for &column in &table.columns {
+                source_content_field(&mut bytes, &(column as u64).to_le_bytes());
             }
-        }
-        overlays.sort_by_key(|cid| cid.to_bytes());
-        for cid in overlays {
-            source_content_field(&mut bytes, &cid.to_bytes());
-        }
-        // Preserve actual first-wins admission order while excluding unrelated
-        // roots. A contributing source set is conservatively represented in full.
-        let mut ordered = self
-            .source_set_order
-            .iter()
-            .filter(|id| contributing_roots.contains(*id))
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut remaining = contributing_roots
-            .into_iter()
-            .filter(|id| !ordered.contains(id))
-            .collect::<Vec<_>>();
-        remaining.sort();
-        ordered.extend(remaining);
-        for id in ordered {
-            let content = self
-                .source_root_content_closures
-                .get(&id)
-                .ok_or_else(|| format!("participating source root `{id}` has no byte identity"))?
-                .as_ref()
-                .map_err(|error| error.to_string())?;
-            for file in &content.files {
-                source_content_field(&mut bytes, file.source_uri.as_bytes());
-                source_content_field(&mut bytes, &file.cid.to_bytes());
+            source_content_field(&mut bytes, &(table.data.len() as u64).to_le_bytes());
+            for row in &table.data {
+                source_content_field(&mut bytes, &(row.len() as u64).to_le_bytes());
+                for &value in row {
+                    source_content_field(&mut bytes, &value.to_bits().to_le_bytes());
+                }
             }
         }
         Ok(lunco_hash::content::cid(&bytes))

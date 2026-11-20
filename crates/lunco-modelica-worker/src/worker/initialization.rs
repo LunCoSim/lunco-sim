@@ -176,7 +176,6 @@ pub(super) struct PendingInterface {
     pub(super) request_id: ModelicaPreparationId,
     pub(super) entity: Entity,
     pub(super) session_id: u64,
-    pub(super) model_name: String,
     pub(super) doc_uri: String,
     pub(super) library_gen: u64,
 }

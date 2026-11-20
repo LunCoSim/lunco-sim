@@ -39,7 +39,7 @@ impl CompiledArtifactCache {
         &mut self,
         binding_schema: &lunco_hash::content::Cid,
         values: &[(String, f64)],
-    ) -> Option<super::CompiledModelArtifact> {
+    ) -> Option<(u64, super::CompiledModelArtifact)> {
         let key = self.entries.ordered_entries().find_map(|(key, artifact)| {
             (artifact.binding_schema == *binding_schema
                 && artifact.structural_overrides.iter().all(|(name, value)| {
@@ -48,6 +48,19 @@ impl CompiledArtifactCache {
                     })
                 }))
             .then_some(*key)
+        })?;
+        self.entries
+            .get(&key)
+            .cloned()
+            .map(|artifact| (key, artifact))
+    }
+
+    pub(super) fn checked_request(
+        &mut self,
+        identity: &lunco_hash::content::Cid,
+    ) -> Option<super::CompiledModelArtifact> {
+        let key = self.entries.ordered_entries().find_map(|(key, artifact)| {
+            (artifact.checked_request.as_ref() == Some(identity)).then_some(*key)
         })?;
         self.entries.get(&key).cloned()
     }
@@ -83,7 +96,7 @@ struct CompiledArtifactDiskRecord<C> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl CompiledArtifactCache {
-    const DISK_VERSION: u32 = 3;
+    const DISK_VERSION: u32 = 4;
 
     pub(super) fn enable_disk(&mut self, limits: ModelicaArtifactDiskLimits) {
         self.disk_limits = Some(limits);
@@ -140,7 +153,7 @@ impl CompiledArtifactCache {
         let first = lunco_hash::fnv1a64(&bytes);
         let second = lunco_hash::fnv1a64(key.input.to_string().as_bytes());
         modelica_dir()
-            .join("compiled-dae-v3")
+            .join(format!("compiled-dae-v{}", Self::DISK_VERSION))
             .join(format!("{first:016x}-{second:016x}.bin.zst"))
     }
 
@@ -228,6 +241,7 @@ impl CompiledArtifactCache {
                 .collect(),
             authored_bindings: Default::default(),
             edit_interface: None,
+            checked_request: None,
             source_content,
             binding_schema,
         }))

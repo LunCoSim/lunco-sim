@@ -1342,7 +1342,10 @@ For warm startup, distinguish a checked DAE hit from a prepared-solve or native
 code hit. Verify checked DAE reuse across fresh Twin mounts with the same source
 bytes and compiler context. The Modelica compiler receives canonical source
 URIs. The USD program owner retains exact mount leases for reads and result
-admission, including retirement during preparation.
+admission, including retirement during preparation. Measure checked interface
+reuse on exact live requests separately from DAE lookup. Test an unrelated
+edit inside a participating source set and an edit to a participating model.
+Only the latter changes the prepared solver's source identity.
 For immutable assignment ownership, measure native `producer_index_diagnostic`
 construction together with prefix queries and preserve overlap, sparse-register
 and full-range checks. For USD parent sharing, pair native

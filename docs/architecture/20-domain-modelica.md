@@ -988,15 +988,22 @@ Worker replacement or configuration-post failure also terminates the pipeline
 and reports a worker-wide error; queued work cannot remain behind a dead slot.
 
 The native compiler actor persists source-closed strict compilation artifacts
-in `modelica/compiled-dae-v3` before the prepared-FMI stage. Its conservative
+in `modelica/compiled-dae-v4` before the prepared-FMI stage. Its conservative
 input CID includes all admitted source bytes, source-set identities and order,
 diagnostic URIs, the primary/extras unit, every supplied parameter name and value
 bit pattern, clean Rumoca revision, OS/architecture and format version. The record
 also carries the bound-name schema and checked structural guards. In-memory
 variant lookup permits changed tunable values under those guards; persistent
 lookup uses the exact recorded parameter transaction. Failed latest source
-admission cannot authorize a hit. The participating-source CID retained with
-the result still owns prepared-FMI reuse. Native DAE deserialization validates
+admission cannot authorize a hit. The compiler attaches one checked interface and admitted binding projection to
+the bounded in-memory artifact. An exact request can reuse it across interface
+discovery and live construction. The identity covers the source context,
+parameter and authored value bits, and external port ownership. The in-memory
+artifact shares the existing capacity and follows artifact-cache policy.
+The prepared-FMI key uses bytes of the documents in Rumoca's resolved target
+closure and the exact realized external table values, including their layout
+and interpolation metadata. A sibling edit outside the resolved closure keeps
+the prepared-FMI entry eligible for checked replay. Native DAE deserialization validates
 the schema and reconstructs its branded graph; it does not admit unchecked IR.
 Loaded external table data is ineligible until its resource bytes have captured
 identities. Each artifact family uses the existing bounded compression, storage

@@ -1739,15 +1739,11 @@ fn commit_ready_compiler_completions(
                     Err("Modelica source library changed during interface preparation".into())
                 } else {
                     artifact.outcome.and_then(|compiled| {
-                        let parameters = merge_instance_values(
-                            &artifact.unit.parameter_overrides,
-                            &compiled.authored_bindings.parameter_overrides,
-                        );
-                        let interface = ModelicaCompiler::interface_from_checked_dae(
-                            &pending.model_name,
-                            &compiled.compiled.dae,
-                            &parameters,
-                        )?;
+                        let interface = compiled
+                            .edit_interface
+                            .as_deref()
+                            .ok_or("interface preparation produced no checked declarations")?
+                            .clone();
                         Ok(ModelicaPreparationOutcome::Interface(
                             ModelicaInterfaceOutcome {
                                 entity: pending.entity,
@@ -2043,11 +2039,13 @@ struct CompiledModelArtifact {
     prepared_source_key: u64,
     /// Exact numeric intent already incorporated by Rumoca instantiation.
     structural_overrides: Vec<(String, f64)>,
-    /// Per-request values classified after the shared artifact lookup. Never
-    /// stored in the shared compiled-artifact cache.
+    /// Values admitted against the checked instance for this exact request.
     authored_bindings: lunco_modelica_compiler::AdmittedModelicaBindings,
-    /// Per-request source authority, rebuilt after every shared/disk lookup.
+    /// Source authority and bounds for the admitted instance.
     edit_interface: Option<Arc<lunco_modelica_ast::resolved_interface::ResolvedModelicaInterface>>,
+    /// Identity of the last completed request for this structural variant.
+    /// Checked disk records carry the DAE and reconstruct this live projection.
+    checked_request: Option<lunco_hash::content::Cid>,
     #[cfg(not(target_arch = "wasm32"))]
     source_content: lunco_hash::content::Cid,
     /// Exact source/root context and explicitly bound parameter name set.
@@ -2130,6 +2128,30 @@ fn shared_compile_hash(
     h.finish()
 }
 
+fn checked_compile_request_identity(
+    source: &lunco_hash::content::Cid,
+    unit: &CompileUnit,
+) -> lunco_hash::content::Cid {
+    let mut hash = lunco_hash::content::ContentHasher::default();
+    let mut field = |value: &[u8]| {
+        hash.update(&(value.len() as u64).to_le_bytes());
+        hash.update(value);
+    };
+    field(b"LunCoCheckedCompileRequest");
+    field(&source.to_bytes());
+    for values in [&unit.parameter_overrides, &unit.authored_bindings.values] {
+        field(&(values.len() as u64).to_le_bytes());
+        for (name, value) in values {
+            field(name.as_bytes());
+            field(&value.to_bits().to_le_bytes());
+        }
+    }
+    for name in &unit.authored_bindings.external_inputs {
+        field(name.as_bytes());
+    }
+    hash.finish()
+}
+
 /// Bind explicit parameters once before strict compilation. Checked DAE
 /// structural guards and the bound-name schema authorize immutable reuse;
 /// every tunable value remains a per-instance lowering input.
@@ -2148,6 +2170,24 @@ fn compile_shared(
     {
         return Err("Modelica source library changed after interface preparation".into());
     }
+    let source_identity =
+        compiler.source_unit_identity(model_name, &unit.source, doc_uri, &unit.extras)?;
+    let checked_request = checked_compile_request_identity(&source_identity, unit);
+    let mut force_rebuild = false;
+    if let Some(artifact) = artifacts.checked_request(&checked_request) {
+        let parameters = merge_instance_values(
+            &unit.parameter_overrides,
+            &artifact.authored_bindings.parameter_overrides,
+        );
+        let key = shared_compile_hash(model_name, unit, doc_uri, library_gen, &parameters);
+        if compiled_cache_allows_reuse(doc_uri, key)? {
+            log::debug!(
+                "[modelica-runtime] reused checked bindings and interface for `{model_name}`"
+            );
+            return Ok(artifact);
+        }
+        force_rebuild = true;
+    }
     let authored_bindings = compiler.admit_authored_bindings_after_source_root_admission(
         model_name,
         &unit.source,
@@ -2161,32 +2201,24 @@ fn compile_shared(
         &authored_bindings.parameter_overrides,
     ));
     let mut identity = lunco_hash::content::ContentHasher::default();
-    identity.update(
-        &compiler
-            .source_unit_identity(model_name, &unit.source, doc_uri, &unit.extras)?
-            .to_bytes(),
-    );
+    identity.update(&source_identity.to_bytes());
     for name in ModelicaCompiler::parameter_binding_names(&parameters)? {
         identity.update(&(name.len() as u64).to_le_bytes());
         identity.update(name.as_bytes());
     }
     let binding_schema = identity.finish();
     let shared_key = shared_compile_hash(model_name, unit, doc_uri, library_gen, &parameters);
-    let mut artifact = if let Some(artifact) =
+    let compatible = if force_rebuild {
+        None
+    } else {
         artifacts.compatible_variant(&binding_schema, &parameters)
-    {
-        let decision = lunco_assets_core::cache_policy::artifact_cache_decision(
-            "modelica_compiled",
-            modelica_cache_scope(doc_uri),
-            doc_uri,
-            &format!("{shared_key:016x}"),
-            true,
-            false,
-        )?;
-        if decision == lunco_assets_core::cache_policy::ArtifactCacheDecision::Reuse {
-            artifact
-        } else {
-            compile_bound_variant(
+    };
+    let use_compatible = compatible.is_some() && compiled_cache_allows_reuse(doc_uri, shared_key)?;
+    let (key, mut artifact) = match compatible {
+        Some((key, artifact)) if use_compatible => (key, artifact),
+        candidate => {
+            let rebuild = force_rebuild || candidate.is_some();
+            let artifact = compile_bound_variant(
                 artifacts,
                 compiler,
                 model_name,
@@ -2195,21 +2227,10 @@ fn compile_shared(
                 library_gen,
                 &parameters,
                 binding_schema,
-                true,
-            )?
+                rebuild,
+            )?;
+            (shared_key, artifact)
         }
-    } else {
-        compile_bound_variant(
-            artifacts,
-            compiler,
-            model_name,
-            unit,
-            doc_uri,
-            library_gen,
-            &parameters,
-            binding_schema,
-            false,
-        )?
     };
     ModelicaCompiler::validate_parameter_bindings(&artifact.compiled.dae, &parameters)?;
     artifact.authored_bindings = ModelicaCompiler::admit_authored_bindings_from_checked_dae(
@@ -2225,7 +2246,22 @@ fn compile_shared(
         &artifact.compiled.dae,
         &parameters,
     )?));
+    if artifact.compiled.dae.external_tables().is_empty() {
+        artifact.checked_request = Some(checked_request);
+        artifacts.insert(key, artifact.clone());
+    }
     Ok(artifact)
+}
+
+fn compiled_cache_allows_reuse(doc_uri: &str, key: u64) -> Result<bool, String> {
+    Ok(lunco_assets_core::cache_policy::artifact_cache_decision(
+        "modelica_compiled",
+        modelica_cache_scope(doc_uri),
+        doc_uri,
+        &format!("{key:016x}"),
+        true,
+        false,
+    )? == lunco_assets_core::cache_policy::ArtifactCacheDecision::Reuse)
 }
 
 fn modelica_cache_scope(doc_uri: &str) -> &'static str {
@@ -2297,7 +2333,6 @@ fn compile_bound_variant(
                             "[modelica-runtime] strict compiled artifact for `{model_name}`: cache=disk-hit lookup={:?}",
                             started.elapsed()
                         );
-                        artifacts.insert(key, artifact.clone());
                         return Ok(artifact);
                     }
                 }
@@ -2363,6 +2398,7 @@ fn compile_bound_variant(
         structural_overrides,
         authored_bindings: Default::default(),
         edit_interface: None,
+        checked_request: None,
         #[cfg(not(target_arch = "wasm32"))]
         source_content,
         binding_schema,
@@ -2376,7 +2412,6 @@ fn compile_bound_variant(
             );
         }
     }
-    artifacts.insert(key, artifact.clone());
     Ok(artifact)
 }
 
@@ -3670,7 +3705,6 @@ pub fn modelica_worker(
                             request_id,
                             entity,
                             session_id,
-                            model_name: model_name.clone(),
                             doc_uri: doc_uri.clone(),
                             library_gen,
                         };
@@ -4490,15 +4524,11 @@ pub fn process_worker_command<F: FnMut(ModelicaWorkerResponse)>(
                 state.library_gen,
             )
             .and_then(|compiled| {
-                let parameters = merge_instance_values(
-                    &unit.parameter_overrides,
-                    &compiled.authored_bindings.parameter_overrides,
-                );
-                let interface = ModelicaCompiler::interface_from_checked_dae(
-                    &model_name,
-                    &compiled.compiled.dae,
-                    &parameters,
-                )?;
+                let interface = compiled
+                    .edit_interface
+                    .as_deref()
+                    .ok_or("interface preparation produced no checked declarations")?
+                    .clone();
                 Ok(ModelicaPreparationOutcome::Interface(
                     ModelicaInterfaceOutcome {
                         entity,
@@ -6236,6 +6266,11 @@ end CoupledArrays;
             &first.compiled.dae,
             &reused.compiled.dae
         ));
+        assert!(Arc::ptr_eq(
+            first.edit_interface.as_ref().unwrap(),
+            reused.edit_interface.as_ref().unwrap()
+        ));
+        assert_eq!(artifacts.len(), 1);
         for artifact in [&first, &reused] {
             let interface = artifact
                 .edit_interface
@@ -6274,7 +6309,13 @@ end CoupledArrays;
                 .load_source_root_in_memory(
                     "parts",
                     "parts",
-                    vec![("Parts.mo".into(), parts.into())]
+                    vec![
+                        ("Parts.mo".into(), parts.into()),
+                        (
+                            "Unused.mo".into(),
+                            "model Unused Real y=1; end Unused;".into()
+                        ),
+                    ]
                 )
                 .diagnostics
                 .is_empty()
@@ -6307,13 +6348,15 @@ end CoupledArrays;
         assert!(
             compiler
                 .load_source_root_in_memory(
-                    "unused",
-                    "unused",
-                    vec![(
-                        "Unused.mo".into(),
-                        "package Unused model Other Real y; equation y=1; end Other; end Unused;"
-                            .into()
-                    )]
+                    "parts",
+                    "parts",
+                    vec![
+                        ("Parts.mo".into(), parts.into()),
+                        (
+                            "Unused.mo".into(),
+                            "model Unused Real y=2; end Unused;".into()
+                        ),
+                    ]
                 )
                 .diagnostics
                 .is_empty()
@@ -6331,7 +6374,7 @@ end CoupledArrays;
         );
         assert_eq!(
             first_key, unrelated_key,
-            "unrelated admitted roots do not change a prepared solve's participating input closure"
+            "an unrelated document in a participating root does not change a prepared solve key"
         );
         assert!(
             compiler
