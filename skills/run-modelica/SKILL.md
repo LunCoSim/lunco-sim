@@ -491,7 +491,9 @@ and contributing library bytes determine that identity. Unrelated sibling edits 
 document IDs do not invalidate prepared FMI components. The captured key remains with
 the immutable DAE through shared reuse and resets; the precompile DAE cache uses
 the full submitted input set until the strict closure is known. It does not scan
-the complete Modelica tree during the first live stepper build.
+the complete Modelica tree during the first live stepper build. USD participants
+submit canonical source URIs for checked compilation. Asset reads and worker
+result admission retain the exact mount lease.
 
 For preparation evidence, use actual owner INFO logs: `cache=memory-hit` at
 in-memory admission, `cache=disk-hit` after persistent lookup, and `cache=miss`

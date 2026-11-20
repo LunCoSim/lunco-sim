@@ -1338,6 +1338,11 @@ For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
 Rumoca's checked FMI reconstruction, artifact derivation and model validation;
 separate native CPU samples from JSON/Zstd work before attributing it to I/O or
 changing codecs. A disk hit does not bypass construction checks.
+For warm startup, distinguish a checked DAE hit from a prepared-solve or native
+code hit. Verify checked DAE reuse across fresh Twin mounts with the same source
+bytes and compiler context. The Modelica compiler receives canonical source
+URIs. The USD program owner retains exact mount leases for reads and result
+admission, including retirement during preparation.
 For immutable assignment ownership, measure native `producer_index_diagnostic`
 construction together with prefix queries and preserve overlap, sparse-register
 and full-range checks. For USD parent sharing, pair native

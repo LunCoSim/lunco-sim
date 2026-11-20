@@ -11,7 +11,8 @@ use lunco_modelica_runtime::{
 struct SourceLease {
     generation: u64,
     handle: Option<Handle<ModelicaSource>>,
-    uri: String,
+    source_address: String,
+    doc_uri: String,
     source: String,
     class: String,
     session: u64,
@@ -62,8 +63,10 @@ pub(super) struct ResolvedUsdModelicaInterface {
 }
 
 impl ResolvedUsdModelicaInterface {
-    pub(super) fn matches(&self, session: u64, uri: &str, source: &str) -> bool {
-        self.lease.session == session && self.lease.uri == uri && self.lease.source == source
+    pub(super) fn matches(&self, session: u64, source_address: &str, source: &str) -> bool {
+        self.lease.session == session
+            && self.lease.source_address == source_address
+            && self.lease.source == source
     }
 
     pub(super) fn matches_authored(&self, defaults: Option<&UsdInputDefaults>) -> bool {
@@ -123,10 +126,18 @@ fn source_lease(world: &World, entity: Entity) -> Result<Option<SourceLease>, St
                 )
             }
         };
+        // Keep the exact mount address for the lease. Compiler diagnostics and
+        // content-addressed artifacts use the Twin's stable source identity.
+        let doc_uri = lunco_assets_core::asset_path::source_uri_for_address(
+            &pending.asset_path,
+            world.get_resource::<lunco_assets_core::TwinRoots>(),
+        )
+        .map_err(|error| format!("Modelica source `{}`: {error}", pending.asset_path))?;
         return Ok(Some(SourceLease {
             generation,
             handle: Some(pending.handle.clone()),
-            uri: pending.asset_path.clone(),
+            source_address: pending.asset_path.clone(),
+            doc_uri,
             source: source.text.clone(),
             class,
             session: pending.session_id,
@@ -164,10 +175,12 @@ fn source_lease(world: &World, entity: Entity) -> Result<Option<SourceLease>, St
     if document.source() != source.source {
         return Ok(None);
     }
+    let doc_uri = document.origin().session_uri();
     Ok(Some(SourceLease {
         generation,
         handle: None,
-        uri: document.origin().session_uri(),
+        source_address: doc_uri.clone(),
+        doc_uri,
         source: source.source.clone(),
         class: model.model_name.clone(),
         session: model.session_id,
@@ -213,7 +226,7 @@ fn resolved_surface(
 ) -> Result<ResolvedUsdModelicaInterface, String> {
     if outcome.entity != entity
         || outcome.session_id != lease.session
-        || outcome.doc_uri != lease.uri
+        || outcome.doc_uri != lease.doc_uri
         || outcome.interface.model_name != lease.class
     {
         return Err("Modelica interface preparation returned a different source lease".into());
@@ -598,7 +611,7 @@ pub(super) fn submit_interfaces(
             session_id: lease.session,
             model_name: lease.class.clone(),
             source: lease.source.clone(),
-            doc_uri: lease.uri.clone(),
+            doc_uri: lease.doc_uri.clone(),
             extra_sources: Vec::new(),
             parameter_overrides: Vec::new(),
             authored_bindings: lease.authored_bindings(),

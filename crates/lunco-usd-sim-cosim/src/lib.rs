@@ -1932,10 +1932,7 @@ fn dispatch_admitted_modelica_sources(
                         session_id: pending.session_id,
                         model_name: model_name.clone(),
                         source: src.text.clone(),
-                        // Stable per-asset session URI (its asset path) — keeps this
-                        // model's overlay distinct in the worker session and consistent
-                        // across recompiles. See `ModelicaCommand::Compile::doc_uri`.
-                        doc_uri: pending.asset_path.to_string(),
+                        doc_uri: resolved.outcome.doc_uri.clone(),
                         extra_sources: Vec::new(),
                         expected_library_revision: Some(resolved.outcome.library_revision),
                         parameter_overrides: Vec::new(),

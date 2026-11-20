@@ -27,7 +27,8 @@ struct Member {
     entity: Entity,
     path: String,
     session: u64,
-    uri: String,
+    source_address: String,
+    doc_uri: String,
     source: String,
     class: String,
     interface_revision: u64,
@@ -42,7 +43,7 @@ struct Member {
 impl Member {
     fn matches_pending_source(&self, pending: &PendingModelicaSource) -> bool {
         self.handle.as_ref() == Some(&pending.handle)
-            && self.uri == pending.asset_path
+            && self.source_address == pending.asset_path
             && self.session == pending.session_id
     }
 }
@@ -568,7 +569,7 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
         if lunco_cosim_core::initialization::initialization_inputs(world, entity)?.is_some() {
             continue;
         }
-        let (handle, resume, uri, source, class, session) =
+        let (handle, resume, source_address, source, class, session) =
             if let Some(pending) = world.get::<PendingModelicaSource>(entity) {
                 let Some(source) = world
                     .resource::<Assets<ModelicaSource>>()
@@ -661,7 +662,8 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
             entity,
             path,
             session,
-            uri,
+            source_address,
+            doc_uri: resolved.outcome.doc_uri.clone(),
             source,
             class,
             interface_revision: resolved.outcome.library_revision,
@@ -1200,11 +1202,22 @@ pub(super) fn dispatch(world: &mut World) {
             return;
         }
     };
-    let sources: BTreeMap<_, _> = plan
-        .members
-        .iter()
-        .map(|member| (member.uri.clone(), member.source.clone()))
-        .collect();
+    let mut sources = BTreeMap::new();
+    for member in &plan.members {
+        if let Some(previous) = sources.insert(member.doc_uri.as_str(), member.source.as_str())
+            && previous != member.source.as_str()
+        {
+            fail(
+                world,
+                &plan,
+                format!(
+                    "Modelica source `{}` has conflicting contents",
+                    member.doc_uri
+                ),
+            );
+            return;
+        }
+    }
     let Some(first) = plan.members.first() else {
         fail(world, &plan, "initialization plan has no members".into());
         return;
@@ -1241,7 +1254,10 @@ pub(super) fn dispatch(world: &mut World) {
             model_name: "LunCoCoupledInitialization".into(),
             source,
             doc_uri: "generated://coupled-initialization.mo".into(),
-            extra_sources: sources.into_iter().collect(),
+            extra_sources: sources
+                .into_iter()
+                .map(|(uri, source)| (uri.to_owned(), source.to_owned()))
+                .collect(),
             authored_bindings: Default::default(),
             parameter_overrides: plan
                 .members
@@ -1440,7 +1456,8 @@ mod tests {
                 entity,
                 path: String::new(),
                 session: 1,
-                uri: String::new(),
+                source_address: String::new(),
+                doc_uri: String::new(),
                 source: String::new(),
                 class: String::new(),
                 interface_revision: 0,

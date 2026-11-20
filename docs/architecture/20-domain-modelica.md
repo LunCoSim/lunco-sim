@@ -929,8 +929,12 @@ tests cover periodic progress, resource release, and normal/error/unwind exit.
 
 The worker reuses immutable compiled DAE artifacts for the same exact target,
 document URI, assembled source bytes, and source-root revision. Generated
-wrappers use the same cache contract as authored source. Parameter bindings,
-solver instances, live state, and telemetry remain per entity.
+wrappers use the same cache contract as authored source. USD-authored programs
+send the canonical source URI to interface preparation, participant
+compilation, and the coupled initializer. The exact mount address and asset
+handle stay with the USD source lease for asset reads and result admission.
+Parameter bindings, solver instances, live state, and telemetry remain per
+entity.
 
 `ModelicaLiveSolverSnapshot` is immutable per admitted solver plan. The worker
 cache, typed receipts and admitted `ModelicaModel` share it through `Arc` within
