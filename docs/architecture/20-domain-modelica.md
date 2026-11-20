@@ -835,11 +835,12 @@ Rust emitter branch.
 Generated documents are ephemeral runtime views. Their registry origin is
 `Bundled { filename: "generated/<model>.mo" }`, which is the canonical
 generated classifier used by the API and UI. The document is linked to the
-network entity while that projection exists; when the source component is
-removed, the network stops being owned by the synthesizer, or the entity is
-despawned, the generated document and browser metadata are retired. Authored
-Modelica documents keep the ordinary entity-removal behavior and are never
-deleted by this path.
+network entity while that projection exists. Replacing the generated source
+for the same network and runtime owner updates the linked document in place
+and increments its source generation. The solver session still has its own
+identity. Removing or rejecting a projection retires its linked generated
+document and browser metadata. Authored Modelica documents retain their
+ordinary lifecycle.
 
 The synthesizer sends its strictly validated AST with the generated source.
 The document admits the AST for the exact source generation. The document
