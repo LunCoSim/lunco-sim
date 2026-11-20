@@ -7,6 +7,8 @@ scene-property port surfaces are projected by
 `lunco-usd-bevy-runtime-core` after this visual boundary. Time-sampled animation is a separate production adapter in
 `lunco-usd-bevy-animation`; physics and simulation live in
 `lunco-usd-avian` and `lunco-usd-sim` and run after visual projection.
+Composed-fact consumers such as co-simulation source discovery can use
+`UsdPrimProjectionSet` to request source assets as soon as prims are admitted.
 
 Read alongside `crates/lunco-usd-bevy/src/lib.rs` (the visual sync systems),
 `crates/lunco-usd-bevy-stage/src/read.rs` (the `UsdRead` seam),

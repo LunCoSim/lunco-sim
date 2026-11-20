@@ -394,6 +394,12 @@ queues, `UsdVisualProjectionSettings`, generation checks and scene replacement
 fences continue to own admission; physics consumes `UsdSceneProjected` at the
 existing boundary.
 
+`UsdPrimProjectionSet` exposes the structural commit to composed-fact
+consumers. Co-simulation discovery requests Modelica source assets there so
+source I/O can overlap mesh and physics projection. Domain projection and
+connection binding still wait for native simulation projection, including
+the body, joint and wheel port surfaces.
+
 ## Scope
 
 A USD **stage** is the 3D scene. This doc is the canonical reference for how a

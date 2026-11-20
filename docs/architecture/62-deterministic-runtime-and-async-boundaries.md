@@ -278,6 +278,9 @@ while preparation holds the clock. The shared fixed runner services it once
 before checking a held pending cycle, so receipts completed during native integration can release
 the next cycle in the same update. Neither path waits on unfinished work or
 reruns the application update.
+The window pacer keeps its realtime update cadence during pending workspace
+opens and live simulation preparation. The normal idle wait resumes when the
+owners close those operations and there is no other cadence demand.
 The completion systems retain one state and their existing session, source,
 step, and communication-endpoint fences. Readiness does not consume or apply
 results, advance clocks, or choose commit order. Only a fully

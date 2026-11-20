@@ -551,8 +551,15 @@ does not resize the pools or alter solver clocks.
 
 Shared immutable RAM caches use the captured
 `lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and
-prepared entry capacities, each defaulting to 64 per worker, plus native compiler
-artifact limits of 32,768 entries and 64 MiB. All limits must be positive. Follow the
+prepared entry capacities, each defaulting to 64 per worker. Set the shared
+native compiler artifact byte budget under **Settings
+→ General → Modelica native cache** (96 MiB by default). Set or reset
+`modelica.native_code_cache_mib` from **Twin settings** to override or
+inherit the application value. Native construction receipts report
+`capacity_bytes`; compare it with `retained_bytes` after changing the setting
+or replacing the Twin. Run `scripts/api/test_modelica_native_cache_settings.py`
+against the production binary to check loading, editing, rejecting, resetting
+and replacing a Twin override. Follow the
 [Modelica cache contract](../../docs/architecture/20-domain-modelica.md) for
 configuration timing, least-recently-used retention, and browser startup/respawn
 admission. Entry

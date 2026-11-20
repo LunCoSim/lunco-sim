@@ -2,7 +2,6 @@
 //! Assets resolves identity; Workspace retains scanning, supersession and commit.
 
 use bevy::prelude::*;
-use bevy::tasks::AsyncComputeTaskPool;
 use lunco_assets_core::SchemeRegistry;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{Command, on_command, register_commands};
@@ -31,7 +30,7 @@ fn on_open_twin_asset(
     let label = std::path::PathBuf::from(&source);
     let failure_path = label.clone();
     let resolver = resolver.clone();
-    let task = AsyncComputeTaskPool::get().spawn(async move {
+    let scan = move || {
         let resolve = || -> Result<TwinMode, String> {
             let manifest = resolver
                 .local_path(&source)
@@ -56,9 +55,9 @@ fn on_open_twin_asset(
             path: failure_path,
             source: std::io::Error::other(message),
         })
-    });
+    };
     enqueue_twin_scan(
-        task,
+        scan,
         label,
         &mut pending,
         "OpenTwinAsset",

@@ -1,20 +1,28 @@
 //! Application-lived, bounded native compiler artifacts; no executable or FMI state.
 
 use super::cache::{
-    BoundedReuseCache, ModelicaArtifactDiskLimits, ModelicaCacheWriteError, encode_payload,
-    read_payload,
+    ModelicaArtifactDiskLimits, ModelicaCacheWriteError, encode_payload, read_payload,
 };
 use super::thread_pool::Lane;
-use lunco_modelica_runtime::{ModelicaCacheCapacities, ModelicaNativeCodeCacheProfile};
+use linked_hash_map::LinkedHashMap;
+use lunco_modelica_runtime::ModelicaNativeCodeCacheProfile;
 use lunco_storage::{FileStorage, Storage, StorageHandle};
 use rumoca_sim::native_code_cache::{CacheKvStore, with_native_code_cache};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 type Key = [u8; 32];
 const NATIVE_CODE_CACHE_VERSION: u32 = 3;
+
+fn codec_limits() -> ModelicaArtifactDiskLimits {
+    ModelicaArtifactDiskLimits {
+        compressed_bytes: ModelicaArtifactDiskLimits::CODEC_MAX_DECODED_BYTES,
+        ..Default::default()
+    }
+}
 
 #[derive(bincode::Encode, bincode::Decode)]
 struct Record {
@@ -85,9 +93,9 @@ struct CachedCode {
 }
 
 struct Data {
-    entries: BoundedReuseCache<Key, CachedCode>,
+    entries: LinkedHashMap<Key, CachedCode>,
     bytes: usize,
-    max_bytes: usize,
+    capacity: NonZeroUsize,
     /// Local access order; publication never uses wall time.
     revision: u64,
     /// Last insertion requiring persistence, distinct from read-only touches.
@@ -100,11 +108,11 @@ struct Data {
 }
 
 impl Data {
-    fn new(capacities: ModelicaCacheCapacities) -> Self {
+    fn new(capacity: NonZeroUsize) -> Self {
         Self {
-            entries: BoundedReuseCache::new(capacities.native_code_entries),
+            entries: LinkedHashMap::new(),
             bytes: 0,
-            max_bytes: capacities.native_code_bytes.get(),
+            capacity,
             revision: 0,
             modified: 0,
             published: 0,
@@ -115,7 +123,7 @@ impl Data {
     }
 
     fn get(&mut self, key: &Key) -> Option<Arc<[u8]>> {
-        let entry = self.entries.get(key)?;
+        let entry = self.entries.get_refresh(key)?;
         self.revision += 1;
         entry.used_at.set(self.revision);
         Some(Arc::clone(&entry.code))
@@ -123,36 +131,36 @@ impl Data {
 
     fn admit(&mut self, key: Key, code: Arc<[u8]>, used_at: u64) -> Option<u64> {
         let weight = key.len() + code.len();
-        if code.is_empty() || weight > self.max_bytes {
+        let available = self.capacity.get().checked_sub(weight)?;
+        if code.is_empty() {
             return None;
         }
-        let mut evictions = 0;
-        loop {
-            let replaced = self
-                .entries
-                .get(&key)
-                .map_or(0, |old| key.len() + old.code.len());
-            if self.bytes - replaced + weight <= self.max_bytes {
-                break;
-            }
-            if let Some(old) = self.entries.pop_oldest() {
-                self.bytes -= key.len() + old.code.len();
-                evictions += 1;
-            }
+        if let Some(old) = self.entries.remove(&key) {
+            self.bytes -= key.len() + old.code.len();
         }
-        let replacing = self.entries.contains_key(&key);
-        if let Some(old) = self.entries.insert(
+        let evictions = self.evict_to(available);
+        self.entries.insert(
             key,
             CachedCode {
                 code,
                 used_at: Cell::new(used_at),
             },
-        ) {
-            self.bytes -= key.len() + old.code.len();
-            evictions += u64::from(!replacing);
-        }
+        );
         self.bytes += weight;
         Some(evictions)
+    }
+
+    fn evict_to(&mut self, bytes: usize) -> u64 {
+        let mut evictions = 0;
+        while self.bytes > bytes {
+            let (key, old) = self
+                .entries
+                .pop_front()
+                .expect("cache bytes count retained entries");
+            self.bytes -= key.len() + old.code.len();
+            evictions += 1;
+        }
+        evictions
     }
 
     fn insert(&mut self, key: Key, code: Arc<[u8]>) -> u64 {
@@ -177,18 +185,18 @@ impl Data {
 
     fn snapshot(&self, after: Option<u64>) -> Vec<(Key, Arc<[u8]>)> {
         self.entries
-            .ordered_entries()
+            .iter()
             .filter(|(_, entry)| after.is_none_or(|revision| entry.used_at.get() > revision))
             .map(|(key, entry)| (*key, Arc::clone(&entry.code)))
             .collect()
     }
 
-    fn import_older(&mut self, record: Record, capacities: ModelicaCacheCapacities) {
-        let mut merged = Self::new(capacities);
+    fn import_older(&mut self, record: Record) {
+        let mut merged = Self::new(self.capacity);
         for entry in record.entries {
             let _ = merged.admit(entry.key, entry.code, 0);
         }
-        for (key, entry) in self.entries.ordered_entries() {
+        for (key, entry) in self.entries.iter() {
             let _ = merged.admit(*key, Arc::clone(&entry.code), entry.used_at.get());
         }
         // A late load keeps current values, order and unpublished access stamps.
@@ -201,22 +209,14 @@ impl Data {
 pub(super) struct SharedNativeCodeCache {
     data: Arc<Mutex<Data>>,
     io: Lane<()>,
-    limits: ModelicaArtifactDiskLimits,
-    capacities: ModelicaCacheCapacities,
     path: StorageHandle,
 }
 
 impl SharedNativeCodeCache {
-    pub(super) fn new(
-        capacities: ModelicaCacheCapacities,
-        limits: ModelicaArtifactDiskLimits,
-        io: Lane<()>,
-    ) -> Result<Self, String> {
+    pub(super) fn new(capacity: NonZeroUsize, io: Lane<()>) -> Result<Self, String> {
         let cache = Self {
-            data: Arc::new(Mutex::new(Data::new(capacities))),
+            data: Arc::new(Mutex::new(Data::new(capacity))),
             io,
-            limits,
-            capacities,
             path: StorageHandle::File(
                 lunco_assets_core::modelica_dir()
                     .join(format!("native-code-v{NATIVE_CODE_CACHE_VERSION}"))
@@ -225,8 +225,7 @@ impl SharedNativeCodeCache {
         };
         bevy::log::debug!(
             path = ?cache.path,
-            capacity_entries = capacities.native_code_entries.get(),
-            capacity_bytes = capacities.native_code_bytes.get(),
+            capacity_bytes = capacity.get(),
             "native code cache admission"
         );
         let loading = cache.clone();
@@ -244,16 +243,44 @@ impl SharedNativeCodeCache {
             .map_err(|_| "native code cache owner is poisoned".to_owned())
     }
 
+    pub(super) fn set_budget(&self, bytes: NonZeroUsize) -> Result<(), String> {
+        let previous = {
+            let mut data = self.lock()?;
+            let previous = data.capacity.get();
+            if previous == bytes.get() {
+                return Ok(());
+            }
+            data.capacity = bytes;
+            data.evict_to(bytes.get());
+            previous
+        };
+        bevy::log::info!(
+            capacity_bytes = bytes.get(),
+            "[modelica-runtime] native code cache budget changed"
+        );
+        if bytes.get() > previous {
+            let cache = self.clone();
+            self.io.submit(move |_| {
+                if let Err(error) = cache.load() {
+                    bevy::log::warn!(
+                        "[modelica-runtime] native code cache reload rejected: {error}"
+                    );
+                }
+            })?;
+        }
+        Ok(())
+    }
+
     fn load(&self) -> Result<(), String> {
         let _span = bevy::log::info_span!("modelica_native_cache_load").entered();
-        let Some(record) = read_record(&FileStorage::new(), &self.path, self.limits)? else {
+        let Some(record) = read_record(&FileStorage::new(), &self.path, codec_limits())? else {
             bevy::log::info!("[modelica-runtime] native code artifact cache is cold");
             return Ok(());
         };
         record.validate()?;
         let loaded_entries = record.entries.len();
         let mut data = self.lock()?;
-        data.import_older(record, self.capacities);
+        data.import_older(record);
         bevy::log::info!(
             loaded_entries,
             retained_entries = data.entries.len(),
@@ -342,10 +369,11 @@ impl SharedNativeCodeCache {
             .map_err(|error| error.to_string())?;
         // The storage guard covers the complete read/merge/atomic-replace operation.
         let path = StorageHandle::File(transaction.directory().join(name));
-        let mut merged = Data::new(self.capacities);
-        if let Some(record) = read_record(&storage, &path, self.limits)? {
+        let mut merged = Data::new(self.lock()?.capacity);
+        let limits = codec_limits();
+        if let Some(record) = read_record(&storage, &path, limits)? {
             record.validate()?;
-            merged.import_older(record, self.capacities);
+            merged.import_older(record);
         }
         for (key, code) in entries {
             let _ = merged.admit(key, code, 0);
@@ -358,7 +386,7 @@ impl SharedNativeCodeCache {
                 .map(|(key, code)| Entry { key, code })
                 .collect(),
         };
-        let bytes = encode_record(&record, self.limits).map_err(|error| error.to_string())?;
+        let bytes = encode_record(&record, limits).map_err(|error| error.to_string())?;
         storage
             .write_sync(&path, &bytes)
             .map_err(|error| error.to_string())
@@ -389,11 +417,15 @@ impl SharedNativeCodeCache {
                 "[modelica-runtime] native code cache publication unavailable: {error}"
             );
         }
-        let (retained_entries, retained_bytes) = {
+        let (retained_entries, retained_bytes, capacity_bytes) = {
             let data = self
                 .lock()
                 .map_err(rumoca_sim::SimulationDiagnosticError::Solver)?;
-            (data.entries.len() as u64, data.bytes as u64)
+            (
+                data.entries.len() as u64,
+                data.bytes as u64,
+                data.capacity.get() as u64,
+            )
         };
         Ok((
             result,
@@ -405,6 +437,7 @@ impl SharedNativeCodeCache {
                 evictions: store.borrow().evictions.get(),
                 retained_entries,
                 retained_bytes,
+                capacity_bytes,
             },
         ))
     }
@@ -471,23 +504,11 @@ impl CacheKvStore for Adapter {
 mod tests {
     use super::*;
 
-    fn capacities(entries: usize, bytes: usize) -> ModelicaCacheCapacities {
-        lunco_modelica_runtime::ModelicaCacheLimits {
-            native_code_entries: entries,
-            native_code_bytes: bytes,
-            ..Default::default()
-        }
-        .validate()
-        .unwrap()
-    }
-
     fn cache_at(path: &StorageHandle, io: Lane<()>) -> SharedNativeCodeCache {
-        let capacities = capacities(3, 1000);
+        let capacity = NonZeroUsize::new(3 * 33).unwrap();
         SharedNativeCodeCache {
-            data: Arc::new(Mutex::new(Data::new(capacities))),
+            data: Arc::new(Mutex::new(Data::new(capacity))),
             io,
-            limits: ModelicaArtifactDiskLimits::default(),
-            capacities,
             path: path.clone(),
         }
     }
@@ -648,29 +669,26 @@ mod tests {
 
     #[test]
     fn native_code_cache_load_keeps_newer_values_and_pending_recency() {
-        let capacities = capacities(2, 100);
-        let mut data = Data::new(capacities);
+        let capacity = NonZeroUsize::new(2 * 33).unwrap();
+        let mut data = Data::new(capacity);
         data.insert([1; 32], vec![9].into());
         data.insert([3; 32], vec![3].into());
         data.get(&[1; 32]).unwrap();
         let revision = data.revision;
         let modified = data.modified;
-        data.import_older(
-            Record {
-                version: NATIVE_CODE_CACHE_VERSION,
-                entries: vec![
-                    Entry {
-                        key: [1; 32],
-                        code: vec![1].into(),
-                    },
-                    Entry {
-                        key: [2; 32],
-                        code: vec![2].into(),
-                    },
-                ],
-            },
-            capacities,
-        );
+        data.import_older(Record {
+            version: NATIVE_CODE_CACHE_VERSION,
+            entries: vec![
+                Entry {
+                    key: [1; 32],
+                    code: vec![1].into(),
+                },
+                Entry {
+                    key: [2; 32],
+                    code: vec![2].into(),
+                },
+            ],
+        });
         let delta = data.snapshot(Some(data.published));
         assert_eq!(
             delta.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
@@ -733,8 +751,8 @@ mod tests {
     }
 
     #[test]
-    fn native_code_cache_enforces_both_budgets_and_rejects_invalid_records() {
-        let mut data = Data::new(capacities(2, 100));
+    fn native_code_cache_enforces_byte_capacity_and_rejects_invalid_records() {
+        let mut data = Data::new(NonZeroUsize::new(100).unwrap());
         data.insert([1; 32], vec![1; 8].into());
         data.insert([2; 32], vec![2; 8].into());
         // Replacement refreshes recency and accounts for the previous bytes.
@@ -749,13 +767,13 @@ mod tests {
         assert_eq!(data.bytes, 100);
         data.insert([5; 32], vec![6; 69].into());
         assert_eq!(data.entries.len(), 1);
-        // The entry budget is independently authoritative.
-        data.max_bytes = 1000;
+        data.capacity = NonZeroUsize::new(80).unwrap();
+        assert_eq!(data.evict_to(data.capacity.get()), 1);
+        assert_eq!(data.bytes, 0);
         data.insert([6; 32], vec![7; 1].into());
-        assert_eq!(data.insert([7; 32], vec![8; 1].into()), 1);
+        assert_eq!(data.insert([7; 32], vec![8; 1].into()), 0);
         assert_eq!(data.entries.len(), 2);
         assert_eq!(data.bytes, 66);
-        assert!(!data.entries.contains_key(&[4; 32]));
 
         let record = Record {
             version: NATIVE_CODE_CACHE_VERSION,

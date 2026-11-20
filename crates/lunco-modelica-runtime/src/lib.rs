@@ -66,16 +66,12 @@ pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.
 /// Omitted communication periods exchange on every master physics tick.
 pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = lunco_core_runtime::SECS_PER_TICK;
 
-/// Immutable shared-cache entry limits captured before each worker starts.
-/// Graph budgets bound retained graph count. Native artifacts are bounded by
-/// both count and bytes. Live participant state is separate. Insert before
-/// `ModelicaExecutionPlugin` to configure these budgets.
+/// Shared graph-cache entry limits captured before each worker starts.
+/// Insert before `ModelicaExecutionPlugin` to configure these counts.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelicaCacheLimits {
     pub compiled_artifact_entries: usize,
     pub prepared_solve_entries: usize,
-    pub native_code_entries: usize,
-    pub native_code_bytes: usize,
 }
 
 /// Positive cache capacities admitted before starting Modelica workers.
@@ -83,8 +79,6 @@ pub struct ModelicaCacheLimits {
 pub struct ModelicaCacheCapacities {
     pub compiled_artifacts: std::num::NonZeroUsize,
     pub prepared_solves: std::num::NonZeroUsize,
-    pub native_code_entries: std::num::NonZeroUsize,
-    pub native_code_bytes: std::num::NonZeroUsize,
 }
 
 impl Default for ModelicaCacheLimits {
@@ -92,8 +86,6 @@ impl Default for ModelicaCacheLimits {
         Self {
             compiled_artifact_entries: 64,
             prepared_solve_entries: 64,
-            native_code_entries: 32_768,
-            native_code_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -107,15 +99,9 @@ impl ModelicaCacheLimits {
             })?;
         let prepared = std::num::NonZeroUsize::new(self.prepared_solve_entries)
             .ok_or_else(|| "Modelica prepared-solve cache capacity must be positive".to_owned())?;
-        let native_code_entries = std::num::NonZeroUsize::new(self.native_code_entries)
-            .ok_or_else(|| "Modelica native-code cache capacity must be positive".to_owned())?;
-        let native_code_bytes = std::num::NonZeroUsize::new(self.native_code_bytes)
-            .ok_or_else(|| "Modelica native-code cache byte budget must be positive".to_owned())?;
         Ok(ModelicaCacheCapacities {
             compiled_artifacts: compiled,
             prepared_solves: prepared,
-            native_code_entries,
-            native_code_bytes,
         })
     }
 }
@@ -439,6 +425,11 @@ pub enum ModelicaCommand {
         /// Monotonic registry operation identity that fences older loads.
         operation_id: u64,
     },
+    /// Apply the new active application or Twin budget at the native cache owner.
+    #[cfg(not(target_arch = "wasm32"))]
+    SetNativeCodeCacheBudget {
+        bytes: std::num::NonZeroUsize,
+    },
     /// Native batch preparation shares the admitted source roots and cache.
     /// This typed in-process request never crosses the serialized worker wire.
     #[cfg(not(target_arch = "wasm32"))]
@@ -659,6 +650,8 @@ pub struct ModelicaNativeCodeCacheProfile {
     /// Shared cache residency observed when this construction completes.
     pub retained_entries: u64,
     pub retained_bytes: u64,
+    /// Effective active cache budget when this construction completes.
+    pub capacity_bytes: u64,
 }
 
 /// The registered solver capabilities selected for one live Modelica model.

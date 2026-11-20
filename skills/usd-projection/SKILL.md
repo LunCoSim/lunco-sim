@@ -30,7 +30,9 @@ do not redirect them to an actuator child. Verify initial mass/inertia with
 Keep projection completion owner-specific: `UsdSourcedCosim` belongs to source
 discovery; only the native projector sets or clears `UsdSimProcessed`. A source
 facet, source error, or source reset must not suppress native mobility/physics
-work on the same prim. Check the real consumer with
+work on the same prim. Co-simulation source I/O starts at
+`UsdPrimProjectionSet`. Wiring waits for native body, joint and wheel port
+surfaces. Check the real consumer with
 `test_native_vehicle_projection.py --twin <path> --subject-path <prim> --minimum-support-contacts <count>`:
 ready source-backed raycast vehicles must expose their wheel-support footprint
 and current support samples through `QueryPhysicsState`.

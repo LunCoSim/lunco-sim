@@ -43,6 +43,13 @@ pub(super) struct PendingInterface {
     lease: SourceLease,
 }
 
+type UnsubmittedInterface = (
+    With<SimComponent>,
+    With<lunco_port_core::PortSurfacePending>,
+    Without<PendingInterface>,
+    Or<(With<PendingModelicaSource>, With<GeneratedModelicaSource>)>,
+);
+
 #[derive(Component, Clone)]
 pub(super) struct ResolvedUsdModelicaInterface {
     lease: SourceLease,
@@ -457,27 +464,46 @@ fn admit_interface_roots(world: &mut World, entities: &[(Entity, String)]) -> Re
     )
 }
 
-fn receive_interfaces(world: &mut World, entities: &[(Entity, String)]) {
-    for (entity, _) in entities {
-        let Some(pending) = world.get::<PendingInterface>(*entity) else {
+pub(super) fn interface_completion_needed(
+    pending: Query<&PendingInterface>,
+    preparations: Res<ModelicaPreparations>,
+) -> bool {
+    pending
+        .iter()
+        .any(|pending| preparations.ready(pending.request))
+}
+
+pub(super) fn receive_interfaces(
+    world: &mut World,
+    mut pending: Local<QueryState<(Entity, &'static UsdPrimPath, &'static PendingInterface)>>,
+) {
+    if source_discovery_pending(world) {
+        return;
+    }
+    let preparations = world.resource::<ModelicaPreparations>();
+    let mut ready: Vec<_> = pending
+        .iter(world)
+        .filter(|(_, _, pending)| preparations.ready(pending.request))
+        .map(|(entity, path, _)| (entity, path.path.clone()))
+        .collect();
+    ready.sort_by(|a, b| a.1.cmp(&b.1));
+    for (entity, _) in ready {
+        let Some(pending) = world.get::<PendingInterface>(entity) else {
             continue;
         };
         let request = pending.request;
-        if !world.resource::<ModelicaPreparations>().ready(request) {
-            continue;
-        }
         let lease = pending.lease.clone();
         let Some(result) = world.resource_mut::<ModelicaPreparations>().take(request) else {
             continue;
         };
-        match source_lease(world, *entity) {
+        match source_lease(world, entity) {
             Ok(Some(current)) if current == lease => {}
             Ok(_) => {
-                retire_interface_preparation(world, *entity);
+                retire_interface_preparation(world, entity);
                 continue;
             }
             Err(error) => {
-                reject(world, *entity, error);
+                reject(world, entity, error);
                 continue;
             }
         }
@@ -488,38 +514,30 @@ fn receive_interfaces(world: &mut World, entities: &[(Entity, String)]) {
                         "Modelica interface request returned an initialization result".into(),
                     );
                 };
-                resolved_surface(world, *entity, lease, outcome)
+                resolved_surface(world, entity, lease, outcome)
             })
-            .and_then(|surface| publish(world, *entity, surface));
+            .and_then(|surface| publish(world, entity, surface));
         if let Err(error) = result {
-            reject(world, *entity, error);
+            reject(world, entity, error);
         }
     }
 }
 
-pub(super) fn publish_loaded_modelica_interfaces(world: &mut World) {
+pub(super) fn submit_interfaces(
+    world: &mut World,
+    mut pending: Local<QueryState<(Entity, &'static UsdPrimPath), UnsubmittedInterface>>,
+) {
     if source_discovery_pending(world) {
         return;
     }
-    let mut query = world.query_filtered::<(Entity, &UsdPrimPath), (
-        With<SimComponent>,
-        With<lunco_port_core::PortSurfacePending>,
-        Or<(With<PendingModelicaSource>, With<GeneratedModelicaSource>)>,
-    )>();
-    let mut entities: Vec<_> = query
+    let mut entities: Vec<_> = pending
         .iter(world)
         .map(|(entity, path)| (entity, path.path.clone()))
         .collect();
     entities.sort_by(|a, b| a.1.cmp(&b.1));
-    receive_interfaces(world, &entities);
     let mut waiting_for_sources = false;
     for (entity, _) in &entities {
-        if world.get::<PendingInterface>(*entity).is_some()
-            || world.get::<QueuedInterface>(*entity).is_some()
-            || world
-                .get::<lunco_port_core::PortSurfacePending>(*entity)
-                .is_none()
-        {
+        if world.get::<QueuedInterface>(*entity).is_some() {
             continue;
         }
         match source_lease(world, *entity) {
@@ -605,6 +623,10 @@ pub(super) fn publish_loaded_modelica_interfaces(world: &mut World) {
             .entity_mut(entity)
             .insert(PendingInterface { request, lease });
     }
+}
+
+pub(super) fn interface_submission_needed(pending: Query<(), UnsubmittedInterface>) -> bool {
+    !pending.is_empty()
 }
 
 pub(super) fn cancel_removed_interface(

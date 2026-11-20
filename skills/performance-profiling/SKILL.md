@@ -55,6 +55,10 @@ to improve a timing.
   verdict plus the inconsistent-initial-equation negative gate. The time owner
   contract is in `docs/architecture/19-unified-time-and-clock.md`; do not weaken
   clock assertions to qualify an allocation optimization.
+- For native startup parity, run `scripts/perf/twin_startup.py --startup-only`
+  and repeat with `--headless` using the same binary, Twin scene and cache
+  conditions. Interleave the hosts and compare co-simulation construction
+  profiles as well as first physics admission. See `scripts/perf/README.md`.
 - The existing `scripts/perf/twin_startup.py` accepts
   `--window-size 2560x1440 --min-fps 150` for an owned Linux X11/XWayland run
   (`python3-xlib` required). Add `--pointer-passthrough` on an interactive
@@ -996,12 +1000,14 @@ Native profiles include `native_code_cache` attempts, hits, compilations and
 rejected entries. Attempts equal hits plus compilations; rejected entries are
 included in compilations. Record these per constructor when comparing cold,
 warm and new-process loading. The worker's application-lived cache retains only
-relocatable compiler artifacts, under `ModelicaCacheLimits` entry/byte budgets;
+relocatable compiler artifacts, under one effective native byte budget;
 it does not retain live FMI state. Cache I/O is asynchronous, so report observed
 hits rather than assuming that a disk snapshot was ready before construction.
 Pure-call helpers use full-width symbolic references to fresh module-owned result
-cells. The native two-live-table regression requires artifact hits with separate
-mutable primal/directional state. Compare complete constructor attempt/hit/compile
+cells. Fault and observation source addresses are relocated to the current module's
+data, and scratch callbacks are read from the current invocation. The native cache
+regressions require hits with separate mutable state, original fault spans and
+the current assertion source binding. Compare complete constructor attempt/hit/compile
 counts across unchanged warm sources; code reuse alone does not establish total
 loading or tick improvements. Preserve the non-Sync/lifetime contract and every
 input-bit/numerical check when profiling this boundary.
@@ -1028,26 +1034,34 @@ same cache lock, with compiler keys, hit flags, code sizes and post-insert
 eviction/retention counters. Replay that order to distinguish keys absent from
 the loaded snapshot from keys evicted before reuse. These events are disabled
 by the normal info filter; use a separate run for timing acceptance.
+When measuring a cache size change, read the admitted `capacity_bytes` in both
+the initializer and participant profiles. Use **Settings → General → Modelica
+native cache** or the active Twin's `modelica.native_code_cache_mib` override
+for the comparison. A new process uses the saved application value until a Twin
+override is admitted.
 Fingerprint the actual file before and after each process. Concurrent LunCoSim
 sessions merge accessed/compiled deltas in the same versioned cache under the
 storage transaction. Confirm that each writer uses that protocol; record its
 initial fill and warm reuse separately. Matching sources alone do not establish
 matching cache starting state or prove that another process caused a miss.
 The `native_code_cache_preserves_other_writers_and_recent_reads` regression
-rejects stale-owner replacement while preserving both retention budgets.
+rejects stale-owner replacement while preserving the shared byte budget.
 Check `evictions`, `retained_entries` and `retained_bytes` alongside the admitted
-byte/entry limits. A repeated load whose working set exceeds retention can evict
+`capacity_bytes`. A repeated load whose working set exceeds retention can evict
 the next functions before they are reused; a cache file alone proves no benefit.
 `CosimStatus.last_coupled_initialization` retains the successful one-shot actor's
 worker receipt after retirement. Compare its solver identity and
-construction timings with ordinary participants' construction profiles.
+construction timings with ordinary participants' construction profiles. Both native
+hosts use the same initializer and report its cache counters. Compare fresh-process
+warm runs before attributing differences to compilation or cache eviction.
 Run `test_modelica_initialization_receipt.py` for retained construction facts and
 scene replacement; both full and fleet-only status must clear the old receipt.
 The `modelica_source_target` production gate checks the profile through rejection,
 replacement and recovery. Record window focus and the effective host pacing
-policy: idle unfocused windows can use a one-second low-power wait. Use the
-explicit `--no-throttle` production run for throughput attribution and report
-ordinary background loading separately. `[pacing] host frame policy changed`
+policy: pending Twin opens and active simulation preparation request the
+realtime cadence even while unfocused. Use ordinary background loading to
+check the preparation-to-idle handoff. Use `--no-throttle` for separate
+continuous-update attribution. `[pacing] host frame policy changed`
 logs primary-window focus and both effective update modes on transitions.
 The command owner reserves domain-worker lanes and publication slots before
 preparation. Attribute prepared-IR dispatch separately from live publication;

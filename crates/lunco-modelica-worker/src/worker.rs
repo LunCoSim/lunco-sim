@@ -629,7 +629,7 @@ impl ModelicaWorkerPools {
     fn new(
         disk_limits: ModelicaArtifactDiskLimits,
         limits: ModelicaWorkerLimits,
-        capacities: lunco_modelica_runtime::ModelicaCacheCapacities,
+        native_code_capacity: std::num::NonZeroUsize,
     ) -> Result<Self, String> {
         disk_limits.validate()?;
         let available = std::thread::available_parallelism()
@@ -677,8 +677,7 @@ impl ModelicaWorkerPools {
             |error| bevy::log::warn!("[modelica-runtime] native code cache I/O failed: {error}"),
         )?;
         let native_cache = native_code_cache::SharedNativeCodeCache::new(
-            capacities,
-            disk_limits,
+            native_code_capacity,
             native_cache_io.next_lane(),
         )?;
         bevy::log::info!(
@@ -2277,6 +2276,7 @@ fn compile_bound_variant(
     };
     #[cfg(not(target_arch = "wasm32"))]
     let mut policy_evaluated = false;
+    #[cfg(not(target_arch = "wasm32"))]
     if !force_rebuild {
         if let Some(disk_key) = &disk_key {
             let started = web_time::Instant::now();
@@ -3089,7 +3089,8 @@ pub fn failed_result_for_command(
             result.source_root_operation_id = Some(*operation_id);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        ModelicaCommand::CompileBatch { .. } => {}
+        ModelicaCommand::CompileBatch { .. } | ModelicaCommand::SetNativeCodeCacheBudget { .. } => {
+        }
         ModelicaCommand::Despawn { .. } => {}
     }
     result.into()
@@ -3153,6 +3154,10 @@ fn assemble_compile_unit(source: &str, extra_sources: Vec<(String, String)>) -> 
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+const TEST_NATIVE_CODE_CAPACITY: std::num::NonZeroUsize =
+    std::num::NonZeroUsize::new(1 << 20).unwrap();
+
 /// The native command/result owner, with per-entity source metadata and the
 /// two-lane scheduler. Persistent solver workers own thread-affine sessions;
 /// a separate compiler actor owns the mutable Rumoca session and DAE cache.
@@ -3168,6 +3173,7 @@ pub fn modelica_worker(
     tx: ModelicaResponseSender,
     disk_limits: ModelicaArtifactDiskLimits,
     cache_limits: ModelicaCacheLimits,
+    native_code_capacity: std::num::NonZeroUsize,
     worker_limits: ModelicaWorkerLimits,
 ) {
     let capacities = match cache_limits.validate() {
@@ -3196,7 +3202,7 @@ pub fn modelica_worker(
     // Source/FMI preparation and live sessions have independent bounded workers.
     // The mutable Rumoca compiler has its own single-thread actor.
     let mut solve_preparation_pool =
-        match ModelicaWorkerPools::new(disk_limits, worker_limits, capacities) {
+        match ModelicaWorkerPools::new(disk_limits, worker_limits, native_code_capacity) {
             Ok(pool) => pool,
             Err(error) => {
                 let _ = tx.send(ModelicaResult::worker_failure(error));
@@ -3613,7 +3619,8 @@ pub fn modelica_worker(
                 | ModelicaCommand::CompileBatch { .. }
                 | ModelicaCommand::PrepareInterface { .. }
                 | ModelicaCommand::Initialize { .. }
-                | ModelicaCommand::CancelPreparation { .. } => None,
+                | ModelicaCommand::CancelPreparation { .. }
+                | ModelicaCommand::SetNativeCodeCacheBudget { .. } => None,
             };
             let batch_failure_reply = match &cmd {
                 ModelicaCommand::CompileBatch { reply, .. } => Some(reply.clone()),
@@ -3638,6 +3645,13 @@ pub fn modelica_worker(
             log::debug!("[worker] begin: {}", cmd_label);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 match cmd {
+                    ModelicaCommand::SetNativeCodeCacheBudget { bytes } => {
+                        if let Err(error) = solve_preparation_pool.native_cache.set_budget(bytes) {
+                            log::warn!(
+                                "[modelica-runtime] native cache budget update failed: {error}"
+                            );
+                        }
+                    }
                     ModelicaCommand::PrepareInterface {
                         request_id,
                         entity,
@@ -4264,6 +4278,9 @@ fn command_label(cmd: &ModelicaCommand) -> String {
             format!("UpdateParameters model={model_name} entity={entity:?}")
         }
         ModelicaCommand::Reset { entity, .. } => format!("Reset entity={entity:?}"),
+        ModelicaCommand::SetNativeCodeCacheBudget { bytes } => {
+            format!("SetNativeCodeCacheBudget bytes={bytes}")
+        }
         ModelicaCommand::Despawn { entity } => format!("Despawn entity={entity:?}"),
         ModelicaCommand::LoadSourceRoot { id, .. } => format!("LoadSourceRoot id={id}"),
         ModelicaCommand::UnloadSourceRoot { id, .. } => format!("UnloadSourceRoot id={id}"),
@@ -4286,7 +4303,8 @@ fn cmd_entity(cmd: &ModelicaCommand) -> Option<Entity> {
         | ModelicaCommand::CompileBatch { .. }
         | ModelicaCommand::PrepareInterface { .. }
         | ModelicaCommand::Initialize { .. }
-        | ModelicaCommand::CancelPreparation { .. } => None,
+        | ModelicaCommand::CancelPreparation { .. }
+        | ModelicaCommand::SetNativeCodeCacheBudget { .. } => None,
     }
 }
 
@@ -4303,7 +4321,8 @@ fn cmd_session(cmd: &ModelicaCommand) -> Option<u64> {
         | ModelicaCommand::CompileBatch { .. }
         | ModelicaCommand::PrepareInterface { .. }
         | ModelicaCommand::Initialize { .. }
-        | ModelicaCommand::CancelPreparation { .. } => None,
+        | ModelicaCommand::CancelPreparation { .. }
+        | ModelicaCommand::SetNativeCodeCacheBudget { .. } => None,
     }
 }
 
@@ -5204,6 +5223,7 @@ mod worker_budget_tests {
                 ModelicaResponseSender::new(result_tx, crossbeam_channel::unbounded().0),
                 ModelicaArtifactDiskLimits::default(),
                 ModelicaCacheLimits::default(),
+                TEST_NATIVE_CODE_CAPACITY,
                 ModelicaWorkerLimits {
                     preparation: one,
                     live_execution: one,
@@ -5253,6 +5273,7 @@ mod worker_budget_tests {
                 ModelicaResponseSender::new(result_tx, crossbeam_channel::unbounded().0),
                 ModelicaArtifactDiskLimits::default(),
                 ModelicaCacheLimits::default(),
+                TEST_NATIVE_CODE_CAPACITY,
                 ModelicaWorkerLimits {
                     preparation: one,
                     live_execution: one,
@@ -5361,9 +5382,7 @@ mod worker_budget_tests {
         let pool = ModelicaWorkerPools::new(
             ModelicaArtifactDiskLimits::default(),
             custom,
-            lunco_modelica_runtime::ModelicaCacheLimits::default()
-                .validate()
-                .unwrap(),
+            TEST_NATIVE_CODE_CAPACITY,
         )
         .unwrap();
         let count = pool.pool.worker_count();
@@ -5388,6 +5407,7 @@ mod worker_budget_tests {
                 ModelicaResponseSender::new(result_tx, crossbeam_channel::unbounded().0),
                 ModelicaArtifactDiskLimits::default(),
                 ModelicaCacheLimits::default(),
+                TEST_NATIVE_CODE_CAPACITY,
                 limits,
             );
             let result = result_rx.try_recv().unwrap();

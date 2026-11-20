@@ -94,7 +94,6 @@ impl Plugin for UsdSceneRuntimePlugin {
                 native_references::advance.run_if(twin_projection::native_reference_inputs_ready),
                 live_consume::project_stage_changes,
                 scene_runtime::drain_pending_scene_restart,
-                scene_runtime::drain_pending_scene_restart,
             )
                 .chain()
                 .in_set(lunco_core::RuntimeCycleSet::Lifecycle)

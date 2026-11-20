@@ -177,6 +177,29 @@ warm cohorts; bounded artifacts can be evicted by tests or other Twins.
 
 ## Remaining attribution and evidence
 
+Two Griffin runs using Rumoca `c7322ec` each requested 10,291 distinct native
+initializer keys with zero overlap. The second launch began with all 10,283
+first-run insertions still on disk. Rumoca `4aa860b94` binds fault and
+observation source addresses in the current JIT module and reads scratch
+callback addresses from the invocation arena. Cranelift can reuse the stencil
+while each module retains its own source bindings. Rumoca backend regressions
+verify full reuse with independent source allocations, exact fault spans and
+assertion messages. Two fresh Griffin processes requested the same 10,151
+initializer keys on the new pin. Their full native startup working set was
+19,716 keys and 86.78 MiB including key storage. With the 64 MiB byte limit,
+the initializer recompiled 10,102 stencils even though 8,760 and 9,329 of its
+keys were present in the respective starting snapshots. The 96 MiB byte budget
+fits that measured working set. Diagnostic logs and cache snapshots are under
+`target/perf/twin-startup-parity/`.
+
+On the single-capacity production build, fresh warm Griffin processes used all
+11,300 initializer artifacts from cache with zero recompilations or rejections
+in either host. The initializer took 2.694 s headless and 3.972 s windowed.
+First physics readiness was 10.715 s headless and 14.171 s windowed. Both runs
+used the 96 MiB budget, preserved the authored source hashes, and reported zero
+runtime errors and warnings. The receipts are `settings-single-96-headless`
+and `settings-single-96-windowed`.
+
 A fresh Tracy 0.14.1 warm capture passes native CSV export and framing checks:
 314,549,232 compressed payload bytes, 19,486 blocks and 77,950 framing bytes in a
 314,627,182-byte file. It attributes 858.6 ms to USD facts, 845.9 ms to initializer

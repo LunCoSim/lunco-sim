@@ -151,6 +151,10 @@ typed failure.
 
 ## Twin-owned scripts and resources
 
+A pending Twin open owns one workspace worker task for source resolution,
+inventory scanning and project settings reads. The workspace commits the result
+only if its replacement generation and settings revision still match.
+
 `SceneTeardown` retires programs projected from the outgoing scene. `TwinClosed`
 retires longer-lived resources admitted by that Twin: asset-backed tutorial
 scenarios, their source handles and documents, queued one-shot requests,

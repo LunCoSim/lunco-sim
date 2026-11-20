@@ -11,14 +11,22 @@ non-on-demand Tracy client needs a fresh process for each capture.
 Wait for the exact scene and projected target, not just `/api/ready`; the API
 can be ready before scene preparation finishes.
 
-`twin_startup.py` owns a windowed production session and measures
+`twin_startup.py` owns a production session and measures
 `OpenTwin` to physics readiness separately from the settled mission window.
 First readiness uses one read-only Rhai evaluation of readiness, Twin identity,
 projected root and physics state in the same World snapshot. The driver records
 the response time and polls at 50 ms; HTTP and frame scheduling remain a positive
 measurement delay. Receipts identify this method as `atomic-world-v1`; earlier
 sequential-query timings include additional frames and are not directly comparable.
-The latter requires settled terrain, an optional authored handoff signal, five
+Use `--startup-only` for ordinary window pacing and a receipt that ends at first
+physics admission. Repeat with `--startup-only --headless` on a free port and with
+a separate output directory. Use the same binary, source, scene and cache
+conditions, and interleave the hosts to see run-to-run variation. The receipt
+retains the co-simulation construction profiles and first-ready workload
+snapshot in both modes. The windowed run also captures the first-ready image.
+
+Without `--startup-only`, the driver also qualifies a settled mission window.
+This requires settled terrain, an optional authored handoff signal, five
 seconds of readiness, then ten seconds and at least 240 fresh simulation ticks.
 It rejects source changes, retired body identity, runtime faults, coupled-object
 pauses and render/script failures. Record camera differences and other workloads

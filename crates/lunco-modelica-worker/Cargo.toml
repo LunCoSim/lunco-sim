@@ -8,6 +8,7 @@ description = "Modelica worker engine, live co-simulation bridge, and worker-loc
 [dependencies]
 lunco-hash = { path = "../lunco-hash" }
 lunco-core-session = { path = "../lunco-core-session" }
+lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-assets-runtime = { path = "../lunco-assets-runtime" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 bevy.workspace = true
@@ -45,7 +46,6 @@ bincode.workspace = true
 rumoca-eval-solve.workspace = true
 rumoca-tool-build-info.workspace = true
 serde_json.workspace = true
-lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-storage = { path = "../lunco-storage" }
 zstd.workspace = true
 

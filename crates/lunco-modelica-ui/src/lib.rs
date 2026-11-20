@@ -71,9 +71,9 @@ impl Plugin for ModelicaPlugin {
         app.init_resource::<FrameTimeProbe>();
         app.add_systems(First, frame_time_probe_start);
         app.add_systems(PreUpdate, frame_time_probe_pre_update_end);
-        app.add_systems(Update, (sim_focus_pace, frame_time_probe_update_end));
+        app.add_systems(Update, frame_time_probe_update_end);
         app.add_systems(PostUpdate, frame_time_probe_post_update_end);
-        app.add_systems(Last, frame_time_probe_end);
+        app.add_systems(Last, (sim_focus_pace, frame_time_probe_end).chain());
     }
 }
 
@@ -118,6 +118,9 @@ fn sim_focus_pace(
     models: Query<&lunco_modelica_runtime::ModelicaModel>,
     execution_mode: Option<Res<lunco_core_runtime::SimulationExecutionMode>>,
     pacing_demand: Option<Res<lunco_core_runtime::FramePacingDemand>>,
+    twin_opens: Option<Res<lunco_workspace::open::PendingTwinOpens>>,
+    progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
+    faults: Option<Res<lunco_core::RuntimeFaults>>,
     windows: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
     mut idle: Local<Option<bevy::winit::UpdateMode>>,
     mut reported: Local<
@@ -139,13 +142,16 @@ fn sim_focus_pace(
     let (realtime_demand, continuous_demand) = pacing_demand.map_or((false, false), |demand| {
         (demand.realtime_wanted(), demand.continuous_wanted())
     });
+    let preparation_active = twin_opens.is_some_and(|opens| opens.is_pending())
+        || !faults.is_some_and(|faults| faults.active())
+            && progress.is_some_and(|progress| progress.is_held());
     let idle_mode = idle.expect("snapshot set above");
     let desired = if max_speed || continuous_demand {
         bevy::winit::UpdateMode::Continuous
-    } else if (sim_active || realtime_demand)
+    } else if (sim_active || realtime_demand || preparation_active)
         && !matches!(idle_mode, bevy::winit::UpdateMode::Continuous)
     {
-        // Unfocused simulation and visible animation need a wall-clock cadence,
+        // Unfocused simulation, preparation and animation need a host cadence,
         // but `Continuous` turns them into an unbounded max-speed loop as soon
         // as the compositor stops pacing the window. Keep them at the fixed
         // realtime cadence so one Twin cannot starve the desktop or other

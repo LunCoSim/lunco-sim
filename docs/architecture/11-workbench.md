@@ -492,12 +492,11 @@ exercises retain their own authoritative state checks. See [classroom
 onboarding](../tutorials/06-classroom-onboarding.md) for the report/save
 lifecycle and production acceptance.
 
-`lunco-luncosim-services` owns asset-aware Twin opening. It resolves the
-manifest through `SchemeRegistry` on a worker and submits the scan to
-`lunco-workspace::open::enqueue_twin_scan`. Native and asset requests share
-supersession and workspace commit. The template manifest and Rhai guide choose
-the scene and exercises; the adapter supplies no curriculum policy. Failures
-use Workspace's `TWIN_OPEN_FAILED` boundary. `ReadActiveTwinContract` exposes
+`lunco-luncosim-services` owns asset-aware Twin opening. It supplies manifest
+resolution through `SchemeRegistry` to `lunco-workspace::open::enqueue_twin_scan`.
+Native and asset requests share workspace preparation, supersession and
+commit. The template manifest and Rhai guide choose the scene and exercises.
+Workspace reports failures through `TWIN_OPEN_FAILED`. `ReadActiveTwinContract` exposes
 `twin_id` and `manifest_present`, so authored save checks can validate the
 document's exact owner without reading manifest bytes or guessing from the
 file index.
@@ -1290,6 +1289,10 @@ and renders the stored scalar type directly: booleans, integers, numbers, and
 text. Edits dispatch the generic `SetTwinSetting` command;
 `ResetTwinSetting` removes a key so the owning authored surface's declared
 default applies.
+
+**Settings → General → Modelica native cache** edits the saved application
+size. **Twin settings → Modelica native cache** edits or removes the active
+Twin's override. See the [Twin settings guide](13-twin-and-workflow.md#modelica-native-cache).
 
 **Settings → General** holds the global scene-loading default. **Settings →
 Project** edits the active project's local override and reports a

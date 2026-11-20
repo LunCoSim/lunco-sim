@@ -48,6 +48,7 @@ fn construction_profile_to_api_value(
             "evictions": cache.evictions,
             "retained_entries": cache.retained_entries,
             "retained_bytes": cache.retained_bytes,
+            "capacity_bytes": cache.capacity_bytes,
         })),
     })
 }

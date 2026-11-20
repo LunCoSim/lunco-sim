@@ -943,9 +943,30 @@ snapshot value through Serde's standard shared-reference support.
 `lunco-modelica-runtime::ModelicaCacheLimits` owns shared in-memory entry
 capacities, captured before worker admission. All capacities must be positive;
 defaults retain at most 64 compiled artifacts and 64 prepared FMI components per
-worker. Insert the resource before `ModelicaExecutionPlugin` to change its
-immutable snapshot. Native compiler retention additionally defaults to 32,768
-entries and 64 MiB, counting each key and artifact's bytes.
+worker. Insert the resource before `ModelicaExecutionPlugin` to change graph
+entry counts. Native compiler retention uses one byte budget across the native
+hosts. It counts keys and artifact bytes, defaults to 96 MiB, and accepts whole
+MiB from 1 to 192.
+
+#### Modelica native cache settings
+
+Set **Settings → General → Modelica native cache** or put
+`{"modelica":{"native_code_cache_mib":96}}` in the application settings file.
+An explicit `"modelica.native_code_cache_mib" = 128` in a Twin's
+`[settings]` takes precedence while that Twin is active. The **Twin settings**
+panel can set or remove the override. Reset, Twin close, and replacement by a
+Twin without an override restore the application value. A malformed Twin
+value rejects the open or settings edit. The native windowed and headless hosts
+share this contract.
+
+The application sends effective byte budget changes to the native worker. The
+cache owner uses that budget for the coupled initializer, live participants,
+document sessions and disk admission. It trims least-recently-used entries on
+shrink and schedules a disk reload on growth. Publication merges under the
+effective budget when it starts. The native snapshot's 256 MiB codec envelope
+bounds serialization and decoding above the largest supported retention
+budget. Settings changes leave admitted solvers running. Each native
+construction reports `capacity_bytes` and `retained_bytes` in its cache profile.
 `worker/cache.rs` owns one bounded least-recently-used mechanism over
 `linked-hash-map` for these caches. Successful lookups and same-key replacements
 refresh recency in constant time; distinct insertions evict the least recently
@@ -958,8 +979,7 @@ preparation pool. Browser transport posts `ConfigureCacheLimits` before any
 work to every initial or respawned worker; the worker has no runtime state until
 that configuration is admitted. Missing, invalid, or repeated worker-side
 configuration is a terminal worker-wide failure. Panic reset preserves admitted
-capacities. Changing a running host's snapshot rejects instead of changing cache
-lifetimes underneath active work.
+capacities. Browser entry limits remain fixed for the lifetime of the worker.
 Worker replacement or configuration-post failure also terminates the pipeline
 and reports a worker-wide error; queued work cannot remain behind a dead slot.
 
@@ -992,9 +1012,11 @@ compile check.
 compiler artifacts. Rumoca's scoped native adapter consumes them synchronously
 through Cranelift's maintained incremental-cache API. Cranelift keys include
 the complete function stencil, compiler version, ISA and compiler flags. Current
-module function/data relocations and host addresses are rebound on every
-construction. Native pure-call result cells belong to each current JIT module's
-writable data arena, and its table retains the non-Sync mutation boundary. No
+module function/data relocations are rebound on every construction. Source
+identities for fault spans and assertion observations live in module data.
+Scratch callbacks come from the current invocation's arena. Native pure-call
+result cells belong to each current JIT module's writable data arena, and its
+table retains the non-Sync mutation boundary. No
 executable arena, FMI state, scene entity or numeric workspace is retained in
 the artifact store.
 Twin close retires its live owners while this immutable compiler cache survives.
@@ -1003,7 +1025,7 @@ publication deltas in `modelica/native-code-v3/stencils.bin.zst`. Each delta
 contains only entries accessed or compiled since the last successful publication.
 The I/O owner merges it with the current record under the storage-owned
 cross-process directory transaction, then publishes through atomic file replace.
-The common LRU and both admitted limits bound the merged record. A stale process
+The native owner's effective byte limit bounds the merged record. A stale process
 cannot refresh untouched entries or displace other retained work by republishing
 those entries. Global eviction follows the merged recency and budgets.
 Neither physics nor UI waits for storage. A late load retains current compilation
@@ -1027,7 +1049,7 @@ artifacts warn, increment the profile's rejection count and compile fresh code.
 Cache key protocol or poisoned-owner failures reject the construction visibly.
 The I/O owner drains after the live owners shut down. Native artifact completion
 order affects only reuse, never authoritative simulation state or commit order.
-The low-level cache tests cover byte/count eviction, replacement accounting,
+The low-level native cache tests cover byte eviction, resizing, replacement accounting,
 stale-owner deltas, load overlap, failed-publication recovery and corrupt records;
 `modelica_source_target` consumes the
 accounting through production, including rejection/replacement lifecycle checks.
@@ -1667,15 +1689,17 @@ composite as a request-owned job. Its identity contains the scene generation
 and a sequence within that generation. The worker returns checked finite
 observations, solver settings and preparation timings under that request identity, without
 installing a live session, attaching an integration plugin or publishing a
-scene model. The transient composite evaluates through Rumoca's reference
-execution policy. The participating live sessions prepare their own
+scene model. Both native hosts use the same Rumoca native execution policy
+and the worker's relocatable code cache for the transient composite. The browser
+uses the interpreter. The participating live sessions prepare their own
 execution programs. Both jobs share checked artifacts and bounded worker lanes.
 Native and browser transports keep initialization replies
 separate from participant lifecycle results.
-The `Update` lifecycle captures the initial plan after USD wiring and interface
-publication. `SimulationCompletions` drains the preparation mailbox, accepts a
-ready solve, and certifies the participants after their construction results
-arrive. Both hosts use this reader while the simulation clock is held. Admission
+The `Update` lifecycle submits interface preparation and captures the initial
+plan against settled USD wiring. `SimulationCompletions` drains the preparation
+mailbox, publishes checked interfaces, accepts a ready solve, and certifies the
+participants after their construction results arrive. Both hosts use this
+reader while the simulation clock is held. Admission
 resamples the current providers and compares the complete plan once an outcome
 is available. A pending worker result leaves the existing hold in place.
 Scene retirement cancels the exact request; late replies cannot authorize a

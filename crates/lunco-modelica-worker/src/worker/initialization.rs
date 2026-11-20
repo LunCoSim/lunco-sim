@@ -41,7 +41,7 @@ pub(super) fn execute_wasm(
         &compiled.authored_bindings.parameter_overrides,
     );
     let inputs = merge_instance_values(&compiled.authored_bindings.initial_inputs, &initial_inputs);
-    let plan = live_build_plan(
+    let mut plan = live_build_plan(
         solver::RuntimeProfile {
             live: true,
             predicted: false,
@@ -53,6 +53,7 @@ pub(super) fn execute_wasm(
         Some(library_revision),
     )
     .map_err(|error| error.to_string())?;
+    plan.options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
     if !state.prepared_solve_cache.contains_key(&plan.key) {
         let component = rumoca_sim::prepare_fmi_component(&compiled.compiled.dae, &plan.options)
             .map_err(|error| error.to_string())?;
@@ -74,17 +75,14 @@ fn observe_initialization(
     probes: &[String],
     state_names: &[String],
 ) -> Result<ModelicaInitializationOutcome, rumoca_sim::SimulationDiagnosticError> {
+    let _span = bevy::log::info_span!("modelica_coupled_initialization_observe").entered();
     let started = web_time::Instant::now();
     let requested = probes
         .iter()
         .chain(state_names)
         .cloned()
         .collect::<Vec<_>>();
-    // The composite is consumed by this observation. Compile persistent
-    // execution programs when constructing each live participant.
-    let mut options = plan.options;
-    options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
-    let mut values = rumoca_sim::initialize_fmi_component(component, &options, &requested)?;
+    let mut values = rumoca_sim::initialize_fmi_component(component, &plan.options, &requested)?;
     let state_values = state_names
         .iter()
         .cloned()
@@ -348,19 +346,22 @@ pub(super) fn dispatch(
     let probes = work.probes.clone();
     let state_names = source_state_names(&work.comp_res);
     let tx = pool.tx.clone();
+    let native_cache = pool.native_cache.clone();
     let queued = web_time::Instant::now();
     lane.submit(move |_| {
         let queue_wait_ns = queued.elapsed().as_nanos() as u64;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            observe_initialization(&component, plan, &probes, &state_names)
+            native_cache
+                .construct(|| observe_initialization(&component, plan, &probes, &state_names))
         }))
         .unwrap_or_else(|_| {
             Err(rumoca_sim::SimulationDiagnosticError::Solver(
                 "initialization observation panicked".into(),
             ))
         })
-        .map(|mut outcome| {
+        .map(|(mut outcome, native_profile)| {
             outcome.construction_profile.queue_wait_ns = Some(queue_wait_ns);
+            outcome.construction_profile.native_code_cache = Some(native_profile);
             outcome
         });
         let _ = tx.send(WorkerPreparationResult::Initialization { id, result });

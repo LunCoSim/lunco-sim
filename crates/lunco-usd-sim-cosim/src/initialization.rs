@@ -522,55 +522,27 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
     let mut query = world.query_filtered::<(
         Entity,
         &UsdPrimPath,
-        &SimComponent,
-        Option<&PendingModelicaSource>,
-        Option<&GeneratedModelicaSource>,
+        Has<PendingModelicaSource>,
+        Has<GeneratedModelicaSource>,
         Option<&ModelicaModel>,
-    ), With<UsdSourcedCosim>>();
-    let candidates: Vec<_> = query
+    ), (With<UsdSourcedCosim>, With<SimComponent>)>();
+    let mut candidates: Vec<_> = query
         .iter(world)
-        .filter(|(_, _, _, pending, generated, model)| {
-            pending.is_some()
-                || generated.is_some()
+        .filter(|(_, _, pending, generated, model)| {
+            *pending
+                || *generated
                     && model.is_some_and(|model| !model.is_compiled && model.last_error.is_none())
         })
-        .map(|(entity, path, component, pending, generated, model)| {
-            (
-                entity,
-                path.path.clone(),
-                component
-                    .inputs
-                    .keys()
-                    .map(str::to_owned)
-                    .collect::<BTreeSet<_>>(),
-                pending.map(|pending| {
-                    (
-                        pending.handle.clone(),
-                        pending.asset_path.clone(),
-                        pending.session_id,
-                        pending.resume_after_compile,
-                    )
-                }),
-                generated.cloned(),
-                model.map(|model| {
-                    (
-                        model.model_name.clone(),
-                        model.session_id,
-                        model.resume_after_compile || !model.paused,
-                    )
-                }),
-            )
-        })
+        .map(|(entity, path, ..)| (entity, path.path.clone()))
         .collect();
     if candidates.is_empty() {
         return Ok(None);
     }
-    let mut candidates = candidates;
     candidates.sort_by(|a, b| a.1.cmp(&b.1));
     let mut members = Vec::new();
     let mut scalar_bindings = Vec::new();
     let mut input_names = BTreeMap::new();
-    for (entity, path, _, pending, generated, model) in candidates {
+    for (entity, path) in candidates {
         let resolved = world
             .get::<ResolvedUsdModelicaInterface>(entity)
             .ok_or_else(|| format!("{path} has no admitted resolved Modelica interface"))?
@@ -596,46 +568,55 @@ fn capture(world: &mut World) -> Result<Option<Plan>, String> {
         if lunco_cosim_core::initialization::initialization_inputs(world, entity)?.is_some() {
             continue;
         }
-        let (handle, resume) = if let Some((handle, _, _, resume)) = &pending {
-            (Some(handle.clone()), *resume)
-        } else {
-            (None, model.as_ref().is_some_and(|(_, _, resume)| *resume))
-        };
-        let (uri, source, class, session) = if let Some((handle, uri, session, _)) = pending {
-            let Some(source) = world.resource::<Assets<ModelicaSource>>().get(&handle) else {
+        let (handle, resume, uri, source, class, session) =
+            if let Some(pending) = world.get::<PendingModelicaSource>(entity) {
+                let Some(source) = world
+                    .resource::<Assets<ModelicaSource>>()
+                    .get(&pending.handle)
+                else {
+                    return Ok(None);
+                };
+                if !resolved.matches(pending.session_id, &pending.asset_path, &source.text) {
+                    return Err(format!(
+                        "{path} source changed after resolved interface admission"
+                    ));
+                }
+                (
+                    Some(pending.handle.clone()),
+                    pending.resume_after_compile,
+                    pending.asset_path.clone(),
+                    source.text.clone(),
+                    resolved.outcome.interface.model_name.clone(),
+                    pending.session_id,
+                )
+            } else if let (Some(generated), Some(model)) = (
+                world.get::<GeneratedModelicaSource>(entity),
+                world.get::<ModelicaModel>(entity),
+            ) {
+                if let Some(error) = &generated.projection_error {
+                    return Err(error.clone());
+                }
+                if !resolved.matches(
+                    model.session_id,
+                    &resolved.outcome.doc_uri,
+                    &generated.source,
+                ) || resolved.outcome.interface.model_name != model.model_name
+                {
+                    return Err(format!(
+                        "{path} generated source changed after resolved interface admission"
+                    ));
+                }
+                (
+                    None,
+                    model.resume_after_compile || !model.paused,
+                    resolved.outcome.doc_uri.clone(),
+                    generated.source.clone(),
+                    model.model_name.clone(),
+                    model.session_id,
+                )
+            } else {
                 return Ok(None);
             };
-            if !resolved.matches(session, &uri, &source.text) {
-                return Err(format!(
-                    "{path} source changed after resolved interface admission"
-                ));
-            }
-            (
-                uri,
-                source.text.clone(),
-                resolved.outcome.interface.model_name.clone(),
-                session,
-            )
-        } else if let (Some(generated), Some((class, session, _))) = (generated, model.as_ref()) {
-            if let Some(error) = generated.projection_error {
-                return Err(error);
-            }
-            if !resolved.matches(*session, &resolved.outcome.doc_uri, &generated.source)
-                || resolved.outcome.interface.model_name != *class
-            {
-                return Err(format!(
-                    "{path} generated source changed after resolved interface admission"
-                ));
-            }
-            (
-                resolved.outcome.doc_uri.clone(),
-                generated.source,
-                class.clone(),
-                *session,
-            )
-        } else {
-            return Ok(None);
-        };
         let outputs = resolved.outputs.clone();
         let parameters = &resolved.parameters;
         let mut bindings = BTreeMap::new();
@@ -1295,15 +1276,23 @@ pub(super) fn dispatch(world: &mut World) {
 }
 
 pub(super) fn dispatch_needed(
-    pending: Query<(), With<PendingModelicaSource>>,
+    pending: Query<
+        (),
+        (
+            With<PendingModelicaSource>,
+            With<ResolvedUsdModelicaInterface>,
+        ),
+    >,
+    unresolved: Query<(), With<lunco_port_core::PortSurfacePending>>,
     models: Query<&ModelicaModel, (With<UsdSourcedCosim>, With<GeneratedModelicaSource>)>,
     owner: Option<Res<CoupledInitialization>>,
 ) -> bool {
     !owner.is_some_and(|owner| owner.failed || owner.job.is_some() || owner.certificate.is_some())
         && (!pending.is_empty()
-            || models
-                .iter()
-                .any(|model| !model.is_compiled && model.last_error.is_none()))
+            || unresolved.is_empty()
+                && models
+                    .iter()
+                    .any(|model| !model.is_compiled && model.last_error.is_none()))
 }
 
 pub(super) fn completion_needed(

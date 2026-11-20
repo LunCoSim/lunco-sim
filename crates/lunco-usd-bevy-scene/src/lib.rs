@@ -217,6 +217,11 @@ pub struct UsdSceneChangeBatch {
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UsdSceneSyncSet;
 
+/// Admitted USD prim identities, hierarchy and authored transforms. Consumers
+/// that only need composed facts can start source I/O here.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsdPrimProjectionSet;
+
 /// Boundary after bounded USD scene and geometry projection has committed.
 ///
 /// Simulation, shader intent, and presentation readiness consume this shared

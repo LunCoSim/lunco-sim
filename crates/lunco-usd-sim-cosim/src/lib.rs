@@ -63,7 +63,7 @@ mod initialization;
 mod interfaces;
 mod preparations;
 pub use initialization::{CoupledInitializationReceipt, last_coupled_initialization};
-use interfaces::{ResolvedUsdModelicaInterface, publish_loaded_modelica_interfaces};
+use interfaces::ResolvedUsdModelicaInterface;
 pub mod readiness;
 pub mod sync;
 mod wiring;
@@ -2598,18 +2598,16 @@ impl Plugin for UsdSimCosimPlugin {
         app.configure_sets(
             Update,
             (
-                // Physics projection publishes the generic body/joint/wheel
-                // surfaces (including synthesized wheel ports) in deferred ECS
-                // commands.  Co-sim scene discovery must observe that completed
-                // projection before it derives and binds USD connections; otherwise
-                // the first binding epoch targets the source prim instead of its
-                // authored OutputPorts/PortSurface contract.
-                CosimUpdateSet::Scene.after(UsdSimSet::Projection),
-                CosimUpdateSet::Projection,
-                CosimUpdateSet::Wiring,
-            )
-                .chain()
-                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet),
+                // Start off-thread source reads as soon as the prims exist.
+                CosimUpdateSet::Scene
+                    .after(lunco_usd_bevy_scene::UsdPrimProjectionSet)
+                    .before(lunco_usd_bevy_scene::UsdVisualProjectionSet),
+                CosimUpdateSet::Projection
+                    .after(CosimUpdateSet::Scene)
+                    .after(UsdSimSet::Projection),
+                // Bind only after the native body/joint/wheel surfaces exist.
+                CosimUpdateSet::Wiring.after(CosimUpdateSet::Projection),
+            ),
         );
 
         app.add_systems(
@@ -2716,6 +2714,9 @@ impl Plugin for UsdSimCosimPlugin {
                     preparations::pump.run_if(preparations::pump_needed),
                     validate_usd_modelica_port_contracts,
                     sync::sync_modelica_outputs,
+                    interfaces::receive_interfaces
+                        .run_if(interfaces::interface_completion_needed)
+                        .run_if(not(wiring_due)),
                     initialization::complete
                         .run_if(initialization::completion_needed)
                         .run_if(not(resource_exists::<SceneLoadInFlight>))
@@ -2763,8 +2764,7 @@ impl Plugin for UsdSimCosimPlugin {
                 seed_usd_input_defaults,
                 interfaces::invalidate_changed_source_assets
                     .run_if(bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<ModelicaSource>>),
-                publish_loaded_modelica_interfaces
-                    .run_if(any_with_component::<lunco_port_core::PortSurfacePending>),
+                interfaces::submit_interfaces.run_if(interfaces::interface_submission_needed),
                 initialization::dispatch
                     .run_if(initialization::dispatch_needed)
                     .run_if(not(resource_exists::<SceneLoadInFlight>)),

@@ -1110,9 +1110,9 @@ reuses Bevy's system-local query state across updates and scene replacements.
 Loaded source declarations are published before causal input admission. The same
 owner captures stalled Modelica feedback after wiring settles and synthesizes its
 initial composite through a required typed Rhai hook. The shared clock-free
-`SimulationCompletions` schedule admits its worker result and certifies live
-connected observations at t=0 before releasing participant readiness. See the
-[coupled admission contract](architecture/20-domain-modelica.md#coupled-initial-admission).
+`SimulationCompletions` schedule admits checked interface and initializer
+results and certifies live observations at t=0 before releasing readiness. See
+the [coupled admission contract](architecture/20-domain-modelica.md#coupled-initial-admission).
 Standalone Modelica programs consume `UsdSceneProjectionReset` before
 rediscovery, delegating worker and observation retirement to Modelica component
 teardown. Source admission rejects an absent runnable target at this owner.
@@ -1512,6 +1512,8 @@ launch, and the wasm `lunica_worker` transport. It composes the generic
 `lunco-worker-transport::WorkerPool` and installs the worker callbacks consumed
 by `lunco-modelica-runner`; source-library readiness and per-run routing remain
 Modelica-specific here. Compiler-only consumers do not inherit this host.
+It resolves the application Modelica native cache setting and the active Twin
+override, then passes the effective byte budget to the native worker.
 It registers the lifecycle-notice queue with scene teardown so unread notices
 cannot repopulate cleared presentation state. It also owns the scene-registered
 Modelica performance window, publishing total measured worker service per physics
@@ -1525,6 +1527,9 @@ artifacts, and the Bevy response/clock bridge. Keeping this package separate
 from the host transport lets worker changes and browser transport changes
 rebuild as independent production packages while both native and wasm paths
 use the same dispatch implementation.
+Native initialization, live and document construction share one bounded native
+artifact cache. The cache owner applies the same byte budget to memory and
+disk admission.
 Initialization-only jobs share its compiler, checked DAE/prepared-artifact caches
 and bounded preparation lanes. Their request-scoped replies bypass participant
 installation and telemetry. Accepted free-state constraints derive a checked

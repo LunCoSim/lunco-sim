@@ -28,6 +28,51 @@ pub use lunco_modelica_worker::worker::{
     PendingCompileAdmissions, set_modelica_document_run_intent,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_native_code_cache_budget(
+    settings: Res<lunco_settings::ModelicaCacheSettings>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    channels: Res<ModelicaChannels>,
+    mut last: Local<Option<std::num::NonZeroUsize>>,
+) {
+    if !settings.is_changed()
+        && !workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.is_changed())
+    {
+        return;
+    }
+    let manifest = workspace.as_deref().and_then(|workspace| {
+        workspace
+            .active_twin
+            .and_then(|id| workspace.twin(id))
+            .and_then(|twin| twin.manifest.as_ref())
+    });
+    let mib = match lunco_workspace::open::twin_modelica_cache_mib(manifest) {
+        Ok(override_mib) => override_mib.unwrap_or(settings.native_code_cache_mib),
+        Err(error) => {
+            warn!("Active Twin rejected native cache budget: {error}");
+            return;
+        }
+    };
+    let Ok(bytes) = lunco_settings::ModelicaCacheSettings::capacity_bytes(mib)
+        .inspect_err(|error| warn!("Rejected native cache budget: {error}"))
+    else {
+        return;
+    };
+    if *last != Some(bytes) {
+        if channels
+            .tx
+            .send(lunco_modelica_runtime::ModelicaCommand::SetNativeCodeCacheBudget { bytes })
+            .is_ok()
+        {
+            *last = Some(bytes);
+        } else {
+            warn!("Modelica worker is unavailable for a native cache budget change");
+        }
+    }
+}
+
 /// Make the built-in solver descriptors available to query and UI surfaces.
 ///
 /// Registration is owned by the execution package because these descriptors
@@ -70,6 +115,21 @@ impl Plugin for ModelicaExecutionPlugin {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            use lunco_settings::{AppSettingsExt, ModelicaCacheSettings};
+
+            app.register_settings_section::<ModelicaCacheSettings>();
+            let native_code_capacity = ModelicaCacheSettings::capacity_bytes(
+                app.world()
+                    .resource::<ModelicaCacheSettings>()
+                    .native_code_cache_mib,
+            )
+            .expect("registered Modelica settings have a validated capacity");
+            app.add_systems(
+                Update,
+                sync_native_code_cache_budget
+                    .after(lunco_workspace::open::drain_pending_twin_opens)
+                    .before(ModelicaSet::AdmitCompileRequests),
+            );
             app.init_resource::<lunco_modelica_worker::worker::ModelicaArtifactDiskLimits>();
             let disk_limits = *app
                 .world()
@@ -92,6 +152,7 @@ impl Plugin for ModelicaExecutionPlugin {
                                 tx_res,
                                 disk_limits,
                                 cache_limits,
+                                native_code_capacity,
                                 worker_limits,
                             )
                         }))

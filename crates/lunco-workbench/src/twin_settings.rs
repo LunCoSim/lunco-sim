@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use bevy_egui::egui;
+use lunco_settings::ModelicaCacheSettings;
 use lunco_twin::TwinSettingValue;
 use lunco_workbench_core::commands::ResetTwinViewLayout;
 use lunco_workbench_widgets::{UiIcon, icon_button, text_editor};
@@ -44,6 +45,7 @@ pub(crate) fn refresh_view(workspace: Res<WorkspaceResource>, mut view: ResMut<T
                 .filter(|(key, _)| {
                     key.as_str() != lunco_workspace::scene_settings::SCENE_LOAD_DEFAULT_KEY
                         && key.as_str() != lunco_workspace::FINITE_WORLD_ESCAPE_GUARD_KEY
+                        && key.as_str() != ModelicaCacheSettings::TWIN_KEY
                 })
                 .map(|(key, value)| TwinSettingRow {
                     key: key.clone(),
@@ -118,6 +120,7 @@ impl Panel for TwinSettingsPanel {
             }
             render_shared_scene_setting(ui, ctx, active_twin);
             render_shared_physics_escape_setting(ui, ctx, active_twin);
+            render_twin_native_cache_setting(ui, ctx, active_twin);
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Find").strong());
@@ -176,6 +179,21 @@ pub(crate) fn register_workspace_settings_menu(world: &mut World) {
 }
 
 fn render_global_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+    if let Some(mut settings) = ctx.resource::<ModelicaCacheSettings>().copied() {
+        ui.horizontal(|ui| {
+            ui.label("Modelica native cache");
+            if ui
+                .add(
+                    egui::DragValue::new(&mut settings.native_code_cache_mib)
+                        .range(ModelicaCacheSettings::MIB_RANGE)
+                        .suffix(" MiB"),
+                )
+                .changed()
+            {
+                ctx.set_resource(settings);
+            }
+        });
+    }
     if let Some(mut exposure) = ctx
         .resource::<lunco_render::camera::ViewportExposureSettings>()
         .copied()
@@ -581,6 +599,69 @@ fn render_shared_physics_escape_setting(ui: &mut egui::Ui, ctx: &mut PanelCtx, i
     ui.label(
         "Off by default. When enabled, dynamic objects that leave finite static-world bounds are paused; non-finite physics state is always contained.",
     );
+}
+
+fn render_twin_native_cache_setting(ui: &mut egui::Ui, ctx: &mut PanelCtx, id: TwinId) {
+    let Some(system) = ctx.resource::<ModelicaCacheSettings>() else {
+        return;
+    };
+    let inherited = system.native_code_cache_mib;
+    let manifest = ctx
+        .resource::<WorkspaceResource>()
+        .and_then(|workspace| workspace.twin(id))
+        .and_then(|twin| twin.manifest.as_ref());
+    let current = match lunco_workspace::open::twin_modelica_cache_mib(manifest) {
+        Ok(value) => value,
+        Err(error) => {
+            ui.label(error);
+            return;
+        }
+    };
+    ui.horizontal(|ui| {
+        ui.label("Modelica native cache");
+        let mut mib = current.unwrap_or(inherited);
+        if let Some(current_mib) = current {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut mib)
+                        .range(ModelicaCacheSettings::MIB_RANGE)
+                        .suffix(" MiB"),
+                )
+                .changed()
+                && mib != current_mib
+            {
+                ctx.trigger_command(
+                    SetTwinSetting {
+                        key: ModelicaCacheSettings::TWIN_KEY.into(),
+                        value: TwinSettingInput::Integer(i64::from(mib)),
+                    },
+                    local_user(),
+                );
+            }
+            if ui
+                .small_button(format!("Use application setting ({inherited} MiB)"))
+                .clicked()
+            {
+                ctx.trigger_command(
+                    ResetTwinSetting {
+                        key: ModelicaCacheSettings::TWIN_KEY.into(),
+                    },
+                    local_user(),
+                );
+            }
+        } else {
+            ui.label(format!("{inherited} MiB inherited"));
+            if ui.small_button("Set Twin limit").clicked() {
+                ctx.trigger_command(
+                    SetTwinSetting {
+                        key: ModelicaCacheSettings::TWIN_KEY.into(),
+                        value: TwinSettingInput::Integer(i64::from(mib)),
+                    },
+                    local_user(),
+                );
+            }
+        }
+    });
 }
 
 fn matches_query(key: &str, query: &str) -> bool {

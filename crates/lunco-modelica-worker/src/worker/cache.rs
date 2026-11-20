@@ -526,6 +526,7 @@ impl std::fmt::Display for ModelicaCacheReadError {
 /// share pure solve IR within one session too.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(super) struct PreparedSolveKey {
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) compiler_identity: Option<&'static str>,
     pub(super) source_key: u64,
     pub(super) solver_id: String,
@@ -595,6 +596,7 @@ impl PreparedSolveCache {
         initial_inputs: &[(String, f64)],
     ) -> PreparedSolveKey {
         PreparedSolveKey {
+            #[cfg(not(target_arch = "wasm32"))]
             compiler_identity: rumoca_tool_build_info::build_identity()
                 .filter(|identity| !identity.ends_with("-dirty")),
             source_key,
@@ -1442,6 +1444,7 @@ mod tests {
             ),
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
+            super::super::TEST_NATIVE_CODE_CAPACITY,
             super::super::ModelicaWorkerLimits::default(),
         );
         assert!(
@@ -1690,6 +1693,7 @@ mod tests {
             ),
             invalid,
             lunco_modelica_runtime::ModelicaCacheLimits::default(),
+            super::super::TEST_NATIVE_CODE_CAPACITY,
             super::super::ModelicaWorkerLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();
@@ -1777,6 +1781,7 @@ mod reuse_tests {
     fn immutable_reuse_cache_keeps_exact_solve_key_and_shared_model_identity() {
         let mut cache = PreparedSolveCache::new(NonZeroUsize::new(2).unwrap());
         let key = PreparedSolveKey {
+            #[cfg(not(target_arch = "wasm32"))]
             compiler_identity: Some("test-compiler"),
             source_key: 1,
             solver_id: "generic-solver".into(),
@@ -1817,22 +1822,12 @@ mod reuse_tests {
                 prepared_solve_entries: 0,
                 ..Default::default()
             },
-            ModelicaCacheLimits {
-                native_code_entries: 0,
-                ..Default::default()
-            },
-            ModelicaCacheLimits {
-                native_code_bytes: 0,
-                ..Default::default()
-            },
         ] {
             assert!(limits.validate().is_err());
         }
         let capacities = ModelicaCacheLimits::default().validate().unwrap();
         assert_eq!(capacities.compiled_artifacts.get(), 64);
         assert_eq!(capacities.prepared_solves.get(), 64);
-        assert_eq!(capacities.native_code_entries.get(), 32_768);
-        assert_eq!(capacities.native_code_bytes.get(), 64 * 1024 * 1024);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1851,6 +1846,7 @@ mod reuse_tests {
                 compiled_artifact_entries: 0,
                 ..Default::default()
             },
+            super::super::TEST_NATIVE_CODE_CAPACITY,
             super::super::ModelicaWorkerLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();

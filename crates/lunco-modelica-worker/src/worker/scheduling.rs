@@ -157,7 +157,7 @@ pub(super) fn take_runnable_compile_command(
         ModelicaCommand::Reset { entity, .. } => {
             preparation_capacity_available && !pending_entities.contains(entity)
         }
-        ModelicaCommand::Despawn { .. } => true,
+        ModelicaCommand::Despawn { .. } | ModelicaCommand::SetNativeCodeCacheBudget { .. } => true,
         ModelicaCommand::LoadSourceRoot { .. } => {
             !preparation_pending && preparation_capacity_available
         }

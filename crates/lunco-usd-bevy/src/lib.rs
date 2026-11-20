@@ -106,7 +106,12 @@ impl Plugin for UsdVisualPlugin {
         .init_resource::<UsdPendingChildAdmissions>()
         .configure_sets(
             Update,
-            lunco_usd_bevy_camera::UsdCameraProjectionSet.after(UsdVisualProjectionSet),
+            (
+                lunco_usd_bevy_scene::UsdPrimProjectionSet,
+                UsdVisualProjectionSet,
+                lunco_usd_bevy_camera::UsdCameraProjectionSet,
+            )
+                .chain(),
         );
 
         // Core glTF/USD scene component types. The workspace runs bevy with
@@ -263,7 +268,7 @@ impl Plugin for UsdVisualPlugin {
                                 .or_else(has_reset_xform_stack_work),
                         )
                         .after(sync_usd_visuals)
-                        .in_set(UsdVisualProjectionSet),
+                        .in_set(lunco_usd_bevy_scene::UsdPrimProjectionSet),
                     poll_pending_usd_meshes
                         .run_if(any_pending_usd_meshes)
                         .after(drain_usd_projection)

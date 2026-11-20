@@ -92,6 +92,25 @@ fn into_twin_setting(value: TwinSettingInput) -> TwinSettingValue {
     }
 }
 
+/// Read an optional native compiler cache limit from the authored Twin.
+pub fn twin_modelica_cache_mib(manifest: Option<&TwinManifest>) -> Result<Option<u16>, String> {
+    use lunco_settings::ModelicaCacheSettings;
+
+    manifest
+        .and_then(|manifest| manifest.setting(ModelicaCacheSettings::TWIN_KEY))
+        .map(validate_twin_modelica_cache_mib)
+        .transpose()
+}
+
+fn validate_twin_modelica_cache_mib(value: &TwinSettingValue) -> Result<u16, String> {
+    use lunco_settings::ModelicaCacheSettings;
+
+    match value {
+        TwinSettingValue::Integer(mib) => ModelicaCacheSettings::validate_mib(*mib),
+        _ => Err(ModelicaCacheSettings::invalid_mib()),
+    }
+}
+
 #[on_command(SetTwinSetting)]
 fn on_set_twin_setting(
     trigger: On<SetTwinSetting>,
@@ -117,6 +136,15 @@ fn on_set_twin_setting(
             lunco_command_contracts::Reject::InvalidOp(error),
         ));
     }
+    let value = into_twin_setting(event.value.clone());
+    if event.key == lunco_settings::ModelicaCacheSettings::TWIN_KEY
+        && let Err(error) = validate_twin_modelica_cache_mib(&value)
+    {
+        warn!("SetTwinSetting rejected: {error}");
+        return Ok(lunco_core::CommandOutcome::Rejected(
+            lunco_command_contracts::Reject::InvalidOp(error),
+        ));
+    }
     let twin_id = workspace.active_twin;
     let Some(twin_id) = twin_id else {
         warn!("SetTwinSetting requires an active Twin");
@@ -126,7 +154,6 @@ fn on_set_twin_setting(
         .twin(twin_id)
         .and_then(|twin| twin.manifest.as_ref())
         .and_then(|manifest| manifest.setting(&event.key).cloned());
-    let value = into_twin_setting(event.value.clone());
     let changed = match workspace.twin_mut(twin_id) {
         Some(twin) => match twin.manifest.as_mut() {
             Some(manifest) => match manifest.set_setting(event.key.clone(), value) {
@@ -611,6 +638,11 @@ pub struct PendingTwinOpens {
 }
 
 impl PendingTwinOpens {
+    /// Whether the workspace still owes an open request a terminal outcome.
+    pub fn is_pending(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
     /// Cancel scans superseded by a newer replacement request. Dropping the
     /// task handles prevents their results from being observed; the candidate
     /// that completes owns the next workspace commit.
@@ -695,6 +727,10 @@ fn prepare_twin_settings(twin: &TwinMode) -> Result<PreparedTwinSettings, TwinEr
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
         }
     })?;
+    twin_modelica_cache_mib(twin.manifest.as_ref()).map_err(|error| TwinError::Io {
+        path: root.join(lunco_twin::MANIFEST_FILENAME),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+    })?;
     Ok(PreparedTwinSettings {
         project_scene: project,
         twin_load_default,
@@ -727,15 +763,21 @@ pub fn spawn_twin_scan(
     mode: TwinOpenMode,
 ) {
     let scan_path = folder.to_path_buf();
-    let task = AsyncComputeTaskPool::get().spawn(async move { TwinMode::open(&scan_path) });
-    enqueue_twin_scan(task, folder.to_path_buf(), pending, log_tag, scene, mode);
+    enqueue_twin_scan(
+        move || TwinMode::open(&scan_path),
+        folder.to_path_buf(),
+        pending,
+        log_tag,
+        scene,
+        mode,
+    );
 }
 
 /// Admit a caller-prepared root scan through the workspace's single ordered
 /// replacement boundary. Asset-aware adapters may resolve a source on their
 /// worker before opening it; native and asset requests supersede each other.
 pub fn enqueue_twin_scan(
-    task: Task<Result<TwinMode, TwinError>>,
+    scan: impl FnOnce() -> Result<TwinMode, TwinError> + Send + 'static,
     path: std::path::PathBuf,
     pending: &mut PendingTwinOpens,
     log_tag: &str,
@@ -763,10 +805,8 @@ pub fn enqueue_twin_scan(
     let revision = pending
         .settings_revision
         .load(std::sync::atomic::Ordering::Acquire);
-    let task = AsyncComputeTaskPool::get().spawn(async move {
-        let twin = task.await;
-        (revision, twin.map(prepare_twin_open))
-    });
+    let task =
+        AsyncComputeTaskPool::get().spawn(async move { (revision, scan().map(prepare_twin_open)) });
     pending.tasks.push(TwinOpenTask {
         task,
         path,
@@ -1002,12 +1042,11 @@ mod tests {
             .resource_mut::<WorkspaceResource>()
             .add_twin(twin);
         let (send, receive) = std::sync::mpsc::channel();
-        let task = AsyncComputeTaskPool::get().spawn(async move {
-            receive.recv().unwrap();
-            Ok(stale)
-        });
         enqueue_twin_scan(
-            task,
+            move || {
+                receive.recv().unwrap();
+                Ok(stale)
+            },
             root.path().to_path_buf(),
             &mut app.world_mut().resource_mut::<PendingTwinOpens>(),
             "test",
@@ -1164,9 +1203,8 @@ mod tests {
                     dirty: false,
                 });
         }
-        let task = AsyncComputeTaskPool::get().spawn(async move { Ok(TwinMode::Twin(new_twin)) });
         enqueue_twin_scan(
-            task,
+            move || Ok(TwinMode::Twin(new_twin)),
             new.path().to_path_buf(),
             &mut app.world_mut().resource_mut::<PendingTwinOpens>(),
             "test",

@@ -43,6 +43,15 @@ def command(session, name, params=None):
     return reply["data"]
 
 
+def check_load_budget(receipt, limit):
+    if limit is None:
+        return
+    seconds = receipt["first_scene_ready_s"]
+    receipt["load_budget_passed"] = seconds < limit
+    if not receipt["load_budget_passed"]:
+        raise RuntimeError(f"Twin load took {seconds:.3f}s; required less than {limit:.3f}s")
+
+
 def workloads():
     return subprocess.check_output(["ps", "-eo", "pid,pcpu,args", "--sort=-pcpu"], text=True).splitlines()[:12]
 
@@ -134,6 +143,10 @@ def main():
     parser.add_argument("--body", required=True)
     parser.add_argument("--handoff-property")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--startup-only", action="store_true",
+                        help="measure through first physics admission with default window pacing")
+    parser.add_argument("--headless", action="store_true",
+                        help="run the startup measurement without presentation")
     parser.add_argument("--symbols", action="store_true")
     parser.add_argument("--tracy-port", type=int)
     parser.add_argument("--timeout", type=float, default=180)
@@ -149,6 +162,13 @@ def main():
     parser.add_argument("--max-frame-ms", type=float,
                         help="reject the window if any measured frame exceeds this duration")
     args = parser.parse_args()
+    if args.headless and not args.startup_only:
+        parser.error("--headless requires --startup-only")
+    if args.startup_only and any(
+            value is not None for value in (args.handoff_property, args.min_fps, args.max_frame_ms)):
+        parser.error("mission and frame budgets require the settled measurement window")
+    if args.headless and (args.window_size or args.pointer_passthrough):
+        parser.error("window sizing and pointer isolation require presentation")
     if not math.isfinite(args.measurement_seconds) or args.measurement_seconds <= 0:
         parser.error("--measurement-seconds must be finite and greater than zero")
     if args.max_frame_ms is not None and (not math.isfinite(args.max_frame_ms) or args.max_frame_ms <= 0):
@@ -217,13 +237,16 @@ def main():
         "measurement_seconds": args.measurement_seconds,
         "max_frame_ms": args.max_frame_ms,
         "perspective": args.perspective,
+        "startup_only": args.startup_only, "headless": args.headless,
     }
     frames = {}
     started = time.monotonic()
     try:
         bootstrap = ROOT / "assets/scenes/tests/twin_session_retirement/replacement/replacement.usda"
-        extra_args = ["--scene", str(bootstrap), "--no-throttle", "--no-vsync", "--render-quality", "high"]
-        with ProductionSession(args.port, windowed=True, extra_args=extra_args,
+        extra_args = ["--scene", str(bootstrap)]
+        if not args.startup_only:
+            extra_args += ["--no-throttle", "--no-vsync", "--render-quality", "high"]
+        with ProductionSession(args.port, windowed=not args.headless, extra_args=extra_args,
                                log_path=output / "runtime.log") as session:
             pid = session.process.pid
             receipt["pid"] = pid
@@ -302,16 +325,21 @@ def main():
                     if not status.startswith("ready "):
                         raise RuntimeError(f"invalid readiness probe result: {status!r}")
                     receipt["first_scene_ready_s"] = time.monotonic() - opened
-                    receipt["first_ready_body"] = int(status.split()[1])
-                    command(session, "ActivatePerspective", {"id": args.perspective})
-                    receipt["workbench"] = command(session, "InspectWorkbench")
-                    assert receipt["workbench"]["active_perspective"] == args.perspective, \
-                        "requested benchmark perspective did not activate"
+                    body = int(status.split()[1])
+                    receipt["first_ready_body"] = body
                     print("SCENE_READY", receipt["first_scene_ready_s"], flush=True)
                     receipt["first_ready_workloads"] = workloads()
                     receipt["first_ready_engine"] = command(session, "EnginePerformance")
-                    session.capture_screenshot(output / "first-ready.png")
-                    receipt["first_ready_capture_s"] = time.monotonic() - opened
+                    if not args.headless:
+                        if not args.startup_only:
+                            command(session, "ActivatePerspective", {"id": args.perspective})
+                            receipt["workbench"] = command(session, "InspectWorkbench")
+                            assert receipt["workbench"]["active_perspective"] == args.perspective, \
+                                "requested benchmark perspective did not activate"
+                        session.capture_screenshot(output / "first-ready.png")
+                        receipt["first_ready_capture_s"] = time.monotonic() - opened
+                    if args.startup_only:
+                        break
                 now = time.monotonic() - opened
                 ready = command(session, "GetReadiness")
                 qualification = {"readiness": ready}
@@ -395,15 +423,18 @@ def main():
                             break
                 time.sleep(0.25 if measurement is None else 0.5)
             else:
-                raise RuntimeError("no sustained source-preserved measurement window before timeout")
+                detail = "first physics admission" if args.startup_only else "sustained measurement window"
+                raise RuntimeError(f"no {detail} before timeout")
             if args.symbols:
                 receipt["symbol_snapshots"]["final"] = capture_symbol_state(pid, output, "final")
             receipt["final_cosim"] = command(session, "CosimStatus", {"include_values": False})
             receipt["final_diagnostics"] = command(session, "RuntimeDiagnostics")
             receipt["final_body_state"] = command(session, "QueryPhysicsState", {"id": body})
             assert not receipt["final_diagnostics"]["errors"], receipt["final_diagnostics"]
-            session.capture_screenshot(output / "final.png")
-            assert_render_log_clean(output / "runtime.log")
+            if not args.startup_only:
+                session.capture_screenshot(output / "final.png")
+            if not args.headless:
+                assert_render_log_clean(output / "runtime.log")
         receipt["app_closed"] = True
         receipt["source_after"] = source_snapshot(source_root)
         assert receipt["source_before"] == receipt["source_after"], "source changed during run"
@@ -411,6 +442,10 @@ def main():
         if args.pointer_passthrough:
             assert "name=scene.pointer," not in log, "pointer input entered the isolated measurement"
         assert not any(marker in log for marker in ("[rhai] on_tick() failed", "[rhai] on_start() failed", "[rhai] task leaf failed")), "authored script failed"
+        if args.startup_only:
+            check_load_budget(receipt, args.max_load_seconds)
+            print("COMPLETE", receipt["first_scene_ready_s"], "physics admission", flush=True)
+            return
         values = sorted(frames.values())
         assert frames and len(frames) == max(frames) - initial_frame, "canonical frame history overran"
         if args.tracy_port is None:
@@ -427,12 +462,7 @@ def main():
                                              and receipt["frame_summary"]["p95_ms"] <= budget)
             if not receipt["fps_budget_passed"]:
                 raise RuntimeError(f"FPS budget failed: {receipt['frame_summary']}; required {args.min_fps} FPS")
-        if args.max_load_seconds is not None:
-            receipt["load_budget_passed"] = receipt["first_scene_ready_s"] < args.max_load_seconds
-            if not receipt["load_budget_passed"]:
-                raise RuntimeError(
-                    f"Twin load took {receipt['first_scene_ready_s']:.3f}s; "
-                    f"required less than {args.max_load_seconds:.3f}s")
+        check_load_budget(receipt, args.max_load_seconds)
         if args.max_frame_ms is not None:
             receipt["frame_stability_passed"] = receipt["frame_summary"]["max_ms"] <= args.max_frame_ms
             if not receipt["frame_stability_passed"]:
