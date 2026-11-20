@@ -7,7 +7,10 @@
 
 use avian3d::dynamics::integrator::VelocityIntegrationData;
 use avian3d::dynamics::rigid_body::{RigidBodyQueryReadOnly, forces::AccumulatedLocalAcceleration};
-use avian3d::prelude::{Collider, Forces, RigidBody, SimpleCollider, WriteRigidBodyForces};
+use avian3d::prelude::{
+    Collider, Forces, Physics, PhysicsSchedule, PhysicsSystems, PhysicsTime, RigidBody,
+    SimpleCollider, SolverSystems, Substeps, WriteRigidBodyForces,
+};
 use bevy::ecs::{
     query::{QueryData, QueryFilter},
     system::lifetimeless::Read,
@@ -15,6 +18,8 @@ use bevy::ecs::{
 use bevy::math::{DQuat, DVec3, Quat, Vec3};
 use bevy::prelude::*;
 use lunco_spatial::coords::GridPos;
+use lunco_time::{FixedCycleVerificationSet, SimulationStepControl};
+use std::time::Duration;
 
 /// Read native body motion and its dynamic force state without mutation.
 /// Static supports have no solver accumulator; dynamic admission requires one.
@@ -73,10 +78,31 @@ pub fn native_force_receiver_can_integrate(mode: RigidBody, disabled: bool) -> b
     mode.is_dynamic() && !disabled
 }
 
+#[derive(Resource, Default)]
+enum NativeStep {
+    #[default]
+    Idle,
+    Pending(Time<Physics>, Time<Substeps>),
+    Integrated,
+}
+
 /// Validate the native producer schedule before any solver result is committed.
 pub(crate) fn install(app: &mut App) {
     use avian3d::dynamics::integrator::IntegrationSystems;
-    use avian3d::prelude::{PhysicsSchedule, SolverSystems};
+    app.init_resource::<NativeStep>()
+        .add_systems(
+            FixedPostUpdate,
+            begin_native_step.before(PhysicsSystems::StepSimulation),
+        )
+        .add_systems(
+            PhysicsSchedule,
+            record_native_integration.in_set(SolverSystems::StoreContactImpulses),
+        )
+        .add_systems(
+            FixedLast,
+            settle_native_step.in_set(FixedCycleVerificationSet),
+        );
+
     app.add_systems(
         PhysicsSchedule,
         validate_native_velocity_increments
@@ -97,17 +123,80 @@ pub(crate) fn install(app: &mut App) {
     );
 }
 
+fn begin_native_step(
+    control: Option<Res<SimulationStepControl>>,
+    physics: Res<Time<Physics>>,
+    substeps: Res<Time<Substeps>>,
+    mut step: ResMut<NativeStep>,
+) {
+    if control.is_some_and(|control| control.is_cycle_active()) {
+        *step = NativeStep::Pending(*physics, *substeps);
+    }
+}
+
+fn record_native_integration(mut step: ResMut<NativeStep>) {
+    if matches!(*step, NativeStep::Pending(..)) {
+        *step = NativeStep::Integrated;
+    }
+}
+
+fn settle_native_step(
+    control: Option<ResMut<SimulationStepControl>>,
+    fixed: Res<Time<Fixed>>,
+    mut physics: ResMut<Time<Physics>>,
+    mut substeps: ResMut<Time<Substeps>>,
+    mut step: ResMut<NativeStep>,
+    mut faults: ResMut<lunco_core::RuntimeFaults>,
+) {
+    let Some(mut control) = control.filter(|control| control.is_cycle_active()) else {
+        return;
+    };
+    let result = std::mem::take(&mut *step);
+    if matches!(result, NativeStep::Integrated) {
+        if let Err(error) = crate::validate_physics_clock(&physics, &fixed, false) {
+            control.reject_cycle();
+            error!("[physics] {error}");
+            faults.raise(
+                "simulation-physics-clock-diverged",
+                None,
+                "shared physics clock",
+                error,
+            );
+        }
+        return;
+    }
+
+    control.reject_cycle();
+    // Avian opens both clocks before its solver runs. Restore that opening if
+    // admission stopped the solver, while keeping native integration held.
+    if let NativeStep::Pending(physics_start, substep_start) = result {
+        *physics = physics_start;
+        *substeps = substep_start;
+        physics.pause();
+        physics.advance_by(Duration::ZERO);
+    }
+    if !faults.active() {
+        let detail = "the admitted fixed cycle did not complete native integration";
+        error!("[physics] {detail}");
+        faults.raise(
+            "simulation-physics-step-uncompleted",
+            None,
+            "shared physics step",
+            detail,
+        );
+    }
+}
+
 /// Native constant forces, gravity and timestep scaling have all run here.
 /// Reject their final increments before the substep loop consumes them.
 fn validate_native_velocity_increments(
     bodies: Query<(Entity, AvianForceState, Option<&crate::PhysicsOrderKey>), crate::Integrable>,
-    time: Res<Time<avian3d::prelude::Substeps>>,
-    mut physics_time: ResMut<Time<avian3d::prelude::Physics>>,
+    time: Res<Time<Substeps>>,
+    mut physics_time: ResMut<Time<Physics>>,
     mut holds: ResMut<crate::PhysicsHolds>,
     mut faults: ResMut<lunco_core::RuntimeFaults>,
     mut commands: Commands,
 ) {
-    use avian3d::schedule::PhysicsTime;
     let delta = time.delta_secs();
     let invalid = bodies.iter().filter_map(|(entity, state, key)| {
         if !state.body.is_dynamic() {
@@ -143,7 +232,7 @@ fn validate_native_velocity_increments(
     );
     holds.set(crate::PhysicsHolds::SAFETY_FAILURE, true);
     physics_time.pause();
-    physics_time.advance_by(std::time::Duration::ZERO);
+    physics_time.advance_by(Duration::ZERO);
     if faults.raise(
         "physics-native-integration-range",
         Some(entity),

@@ -21,7 +21,6 @@ use lunco_cosim_core::schedule::{
 use lunco_environment::EnvironmentPlugin;
 use lunco_hardware::LunCoHardwarePlugin;
 use lunco_mobility::LunCoMobilityPlugin;
-use lunco_modelica_runtime::ModelicaSet;
 use lunco_obstacle_field::ObstacleFieldPlugin;
 use lunco_terrain_globe::TerrainPlugin;
 use lunco_terrain_surface::TerrainSurfacePlugin;
@@ -473,15 +472,12 @@ impl Plugin for LunCoSimSimulationPlugin {
             // semantic-control clients and headless production regressions.
             .add_plugins(lunco_avatar_camera::AvatarCelestialCameraPlugin)
             .add_systems(Startup, setup_luncosim)
-            // Cosim pipeline ordering: worker responses commit before clock
-            // admission. The fixed loop then propagates, applies, and dispatches the next
-            // Modelica communication point.
+            // Apply this interval's input snapshot before native integration.
             .configure_sets(
                 FixedUpdate,
                 (
                     PropagateCosimSet::Propagate,
                     ApplyForcesCosimSet::ApplyForces,
-                    ModelicaSet::SpawnRequests,
                 )
                     .chain(),
             );
@@ -499,6 +495,10 @@ impl Plugin for LunCoSimSimulationPlugin {
         app.configure_sets(
             lunco_core_runtime::SimulationCompletions,
             lunco_fmi::FmiCompletionSet.after(lunco_modelica_runtime::ModelicaSet::HandleResponses),
+        )
+        .configure_sets(
+            FixedLast,
+            lunco_fmi::FmiDispatchSet.after(lunco_modelica_runtime::ModelicaSet::SpawnRequests),
         );
         // Dynamic USD bodies are first promoted in `ActivateDynamicBodies`.
         // The terrain support projection must observe that promotion before it

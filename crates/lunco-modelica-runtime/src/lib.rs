@@ -1059,6 +1059,7 @@ pub enum ModelicaSet {
     HandleResponses,
     /// Admit compile intent independently of the fixed simulation clock.
     AdmitCompileRequests,
+    /// Dispatch the next communication point after native verification in `FixedLast`.
     SpawnRequests,
 }
 

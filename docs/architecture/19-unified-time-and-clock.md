@@ -488,22 +488,24 @@ scenario's `FixedUpdate` callback runs before that tick's Avian
 `(sim_tick - 1) * fixed_dt_s` there. A hold or coupling barrier can clear
 `physics_dt_s` when it pauses the clock; that sampled delta is not a
 physics-cycle counter. Use elapsed-time conservation to validate completed
-physics cycles. The native physics owner validates exact `Duration` agreement
-at `FixedLast` and raises `simulation-physics-clock-diverged` on failure. The
+physics cycles. The native physics owner records completion at the end of
+Avian's solver and validates exact `Duration` agreement in `FixedLast`. A
+completed solver with a mismatched clock raises
+`simulation-physics-clock-diverged`. The
 snapshot delegates to that same validator; an active cycle permits the native
 clock to expose the preceding completed interval before integration. It also
 reports `manual_simulation_hold`, `queued_simulation_steps` and
 `simulation_cycle_active`. During `FixedMain`, controllers and exchange use the
-prospective tick and fixed endpoint. At `FixedLast` the native physics owner
-reports a terminal attempt that stayed at the previous endpoint. The shared
-runner restores the completed tick, fixed clock and any manual pacing advance
-before publishing world and mission time. Automatic fixed debt remains queued.
-A fault after native integration retains the integrated tick. A faulted scene
-stays terminal because controls and scripts may already have acted during the
+prospective tick and fixed endpoint. Avian opens its physics and substep clocks
+before the solver. If admission stops the solve, the physics owner restores
+both clocks and rejects the interval in `FixedLast`. The shared runner restores
+the completed tick, fixed clock and any manual pacing advance before publishing
+world and mission time. Automatic fixed debt remains queued. Modelica and FMI
+dispatch and both numerical recorders require an accepted interval. A fault
+after native integration retains the integrated tick. A faulted scene stays
+terminal because controls and scripts may already have acted during the
 attempt. Scene replacement initializes the new native clock at the committed
-fixed epoch with zero delta. Both parameter and native physics recorders sample
-in `FixedLast` after native endpoint verification. A clock outside both endpoints
-keeps the native diagnostic and cannot publish a completed numerical sample.
+fixed epoch with zero delta.
 Discrete fault events retain the time of the attempted operation. The playable
 Crater Cup gate `scenarios/tests/crater_cup_clocks.rhai` checks all eight local
 Modelica communication endpoints through a manual hold and further steps. The production

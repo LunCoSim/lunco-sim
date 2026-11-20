@@ -96,6 +96,10 @@ batch preserved its prior target values and native physics was stopped before
 integration. Read the actual rejected value and reason from the wiring
 report, even if that input accepted earlier samples. Scene retirement clears
 the terminal runtime fault; presentation remains available for inspection.
+For `physics-native-integration-range`, read the rejected body's diagnostic
+and compare `clock_snapshot()`, Modelica endpoints in `CosimStatus`, and
+`QueryTelemetryHistory` against the last completed interval. The rejected
+interval leaves those observations at the committed endpoint.
 
 For native external FMUs admitted by `LoadFmu`, inspect named scalar ports
 through the same port registry. Reflected `FmuParticipant.time_s` retains the

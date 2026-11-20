@@ -14,7 +14,7 @@ from test_simulation_core_fifth_pass import operation, attribute
 
 CASES = {
     "numeric-finite": ("numeric", "finite", 5, False),
-    "numeric-overflow": ("numeric", "overflow", 8, True),
+    "numeric-overflow": ("numeric", "overflow", 12, True),
     "numeric-inertia": ("numeric", "inertia", 7, False),
     "numeric-inertia-small": ("numeric", "inertia", 7, False),
     "material-static": ("material", "static", 7, True),
@@ -45,8 +45,19 @@ def numeric_fixture(mode: str, small: bool = False) -> tuple[list[dict], dict]:
                 attribute(path, "physxRigidBody:linearDamping", "float", "0"),
                 attribute(path, "physxRigidBody:angularDamping", "float", "0"),
                 operation("SetTranslate", path=path, value=[0.0, 30.0, 0.0])]
+    model_path = "/World/NumericClock"
+    if mode == "overflow":
+        ops += [operation("AddPrim", parent_path="/World", name="NumericClock", type_name="Scope"),
+                operation("SetApiSchemas", path=model_path, schemas=["LunCoProgramAPI"]),
+                attribute(model_path, "info:implementationSource", "token", '"sourceAsset"'),
+                attribute(model_path, "info:sourceAsset", "asset",
+                          "@lunco://models/tests/ConnectionWriteTransaction.mo@"),
+                attribute(model_path, "lunco:program:realtimeSafe", "bool", "true"),
+                attribute(model_path, "outputs:mass", "double", "0"),
+                attribute(model_path, "outputs:comX", "double", "0"),
+                attribute(model_path, "outputs:sampleTime", "double", "0")]
     return ops, {"mode": mode, "body_path": "/World/SixthNumeric", "control_path": "/World/SixthIsotropic",
-                 "torque": scale}
+                 "model_path": model_path, "torque": scale}
 
 
 def main() -> None:
@@ -102,7 +113,7 @@ def main() -> None:
                  and admitted(), "source fixture admission")
             doc = next(d["doc_id"] for d in execute("ListOpenDocuments")["open_documents"]
                        if d.get("origin", {}).get("path") == str(scene))
-            twin = int(execute("RunRhai", code='query("ReadActiveTwinContract").twin_id')["stdout"])
+            scope_id = execute("ReadActiveWorkspace")["scope_id"]
             params = {"doc_id": doc, "mode": mode}
             if scenario in ("numeric", "pause", "prescribed"):
                 if scenario == "numeric":
@@ -119,7 +130,7 @@ def main() -> None:
                 (evidence / (case + "-operations.json")).write_text(json.dumps(ops, indent=2) + "\n")
             execute("SetTimeTransport", playing=True)
             run_authored_scenario(session, f"lunco://scenarios/tests/simulation_core_sixth_{scenario}.rhai",
-                                  title=title, check_count=count, params=params, owner_twin_id=twin,
+                                  title=title, check_count=count, params=params, owner_twin_id=scope_id,
                                   allow_runtime_fault=negative, timeout_s=150)
             result = {"case": case, "verdict": "PASS", "checks": count, "pid": pid, "port": args.port,
                       "readiness": execute("GetReadiness"), "diagnostics": execute("RuntimeDiagnostics"),

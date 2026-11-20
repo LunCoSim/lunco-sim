@@ -1034,11 +1034,10 @@ First-compile intent is admitted by `request_modelica_compiles` in
 `ModelicaExecutionPlugin` consumes the typed `CompileRequested` intent and the
 worker owner validates the pinned document runtime lifetime, resolves the current
 document snapshot and same-owner sibling overlays, then dispatches the compiler
-command without UI resources; the UI command only resolves the
-selected class and publishes intent. Solver stepping remains in
-`spawn_modelica_requests` inside `FixedUpdate`. Because this request is emitted
-only for an unpaused model, it carries resume intent through compilation so a
-successful first compile does not leave the model paused. The compile request
+command without UI resources. The UI command resolves the selected class and
+publishes intent. `spawn_modelica_requests` dispatches due steps for unpaused
+models after native verification in `FixedLast`. Compile intent carries the
+requested resume state through compilation. The compile request
 can therefore be dispatched while `Time<Virtual>` is held. Compile-result
 commit validates worker session, pinned runtime lifetime, and captured document
 generation. Session epochs persist on the entity across participant retirement,

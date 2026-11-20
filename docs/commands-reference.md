@@ -964,10 +964,8 @@ actually call, with the fields the deserializer actually accepts. See the
  Run-control events — fire against `doc_id=0` to target the active
  document, or a specific `DocumentId.raw()` for automation.
 
- Simulation already ticks automatically once a model is compiled
- (see `spawn_modelica_requests` — steps every `FixedUpdate` unless
- `ModelicaModel.paused`). These commands are the user-facing
- handles on that loop:
+ A compiled, unpaused model advances automatically at its communication
+ points on the shared fixed clock. These commands control that loop:
 
   * [`PauseActiveModel`]  — freeze stepping without tearing down
     worker state. `paused = true`.

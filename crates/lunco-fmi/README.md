@@ -64,7 +64,10 @@ retiring the instance.
 
 Inputs are sampled at the start of each communication interval and held over
 that interval, using the existing `SimComponent` port backend and propagation
-path. This is explicit Co-Simulation. In FMI Step Mode, setting inputs and
+path. The master observes the tick and dispatches due work in `FixedLast`
+after native integration is verified. Rejected native steps leave the
+communication interval and pending inputs at their last accepted boundary.
+This is explicit Co-Simulation. In FMI Step Mode, setting inputs and
 reading outputs does not implement a same-time algebraic solve. The adapter
 retains ModelStructure output dependencies, including the distinction between
 omitted and empty dependency lists. `fmu_can_restore_state` reports the FMU's

@@ -691,12 +691,7 @@ fn run_pending_fixed_main_schedule(
         let outcome =
             world.try_schedule_scope(bevy::app::FixedMain, |world, schedule| schedule.run(world));
         let cycle = std::mem::take(&mut world.resource_mut::<SimulationStepControl>().cycle);
-        if outcome.is_err()
-            || matches!(
-                cycle,
-                stepping::FixedCycle::Unintegrated | stepping::FixedCycle::InvalidEndpoint
-            )
-        {
+        if outcome.is_err() || cycle == stepping::FixedCycle::Rejected {
             *world.resource_mut::<Time<Fixed>>() = completed_fixed;
             *world.resource_mut::<SimTick>() = completed_tick;
             if let Some(before_step) = manual_virtual {
@@ -1035,8 +1030,8 @@ pub struct ClockProjectionSet;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimulationAdmissionSet;
 
-/// Native owners settle their integration outcome here before completed-interval
-/// observers sample the candidate time in `FixedLast`.
+/// Native owners settle their integration outcome here before participant
+/// dispatch and completed-interval sampling in `FixedLast`.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FixedCycleVerificationSet;
 

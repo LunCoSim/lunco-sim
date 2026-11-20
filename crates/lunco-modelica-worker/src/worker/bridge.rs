@@ -524,7 +524,7 @@ fn scalar_sample_fingerprint<'a>(values: impl ExactSizeIterator<Item = (&'a str,
 /// Sends `Step` commands for each active model — **the co-simulation master's
 /// macro-step dispatch**.
 ///
-/// Runs in [`FixedUpdate`]. Each live model's clock is driven toward
+/// Runs in [`FixedLast`] after native verification. Each live model's clock is driven toward
 /// `target_time`, projected from admitted integer physics ticks. Model time is
 /// therefore a pure function of the master clock: it does
 /// not depend on the render frame rate, on GPU load, or on window focus.

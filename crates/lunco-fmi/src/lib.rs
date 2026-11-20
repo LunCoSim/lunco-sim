@@ -9,7 +9,9 @@ mod session;
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime;
 #[cfg(not(target_arch = "wasm32"))]
-pub use runtime::{FmiCompletionSet, FmiPlugin, FmuLimits, FmuParticipant, LoadFmu, SetFmuPaused};
+pub use runtime::{
+    FmiCompletionSet, FmiDispatchSet, FmiPlugin, FmuLimits, FmuParticipant, LoadFmu, SetFmuPaused,
+};
 
 /// Native FMU binaries cannot be dynamically loaded by a browser host.
 #[cfg(target_arch = "wasm32")]

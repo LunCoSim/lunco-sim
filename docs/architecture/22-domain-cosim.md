@@ -700,20 +700,22 @@ SimulationCompletions (before clock projection, between pending fixed cycles,
 First:
   ClockProjectionSet               — project remaining holds before sampling virtual time
 FixedUpdate:
+  SimTickSet                       — assign the prospective tick for the simulation systems
   1. script/native output sampling — committed physical observations on the shared boundary
   2. CosimSet::Propagate            — propagate_connections: source outputs → target inputs
                                        (force_* → PendingForces; joint angle/displacement → motor)
   3. CosimApplySet::ApplyForces     — apply_pending_forces: drain PendingForces into Avian Forces
   4. sync_inputs_to_modelica        — SimComponent.inputs → ModelicaModel.inputs
-  5. ModelicaSet::SpawnRequests     — send next step command with fixed dt
-  SimTickSet                        — closes the causal tick; ScriptingSet follows it
-
 FixedPostUpdate:
-  6. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
-  7. raw Avian ray observations     — query after writeback; consumed by the next FixedUpdate
+  5. Avian PhysicsSchedule          — integrate_positions, constraint solve, writeback
+  6. raw Avian ray observations     — query after writeback; consumed by the next FixedUpdate
                                        (Avian outputs — Position / LinearVelocity — read on demand
                                         via PortRegistry; no separate read_avian_outputs snapshot system)
 
+FixedLast:
+  7. FixedCycleVerificationSet      — settle the native solver outcome and verify exact elapsed time
+  8. Modelica and FMI dispatch      — submit due work for the accepted interval
+     numerical telemetry            — sample only accepted intervals
 ```
 
 The master loop reads outputs, propagates through connections, writes inputs,
@@ -767,7 +769,9 @@ the shared world crosses the communication point, so no stale value crosses a
 causal boundary.
 
 **3. Every active participant synchronizes at its communication points.**
-The master dispatches the complete due set in stable participant order. Workers
+After native verification, the master dispatches the complete due set in stable
+participant order. A rejected native interval leaves all worker requests at
+their last accepted endpoint. Workers
 may solve that set concurrently, but the next complete fixed cycle waits until
 every due result is validated and committed. This includes telemetry,
 electrical, and supervisory models: the absence of a native force consumer does
@@ -908,8 +912,8 @@ Run, one participant — same master loop.
 
 ## Control plane vs data plane
 
-The master loop is the **data plane**: it runs *directly* as `FixedUpdate`
-systems every tick (`propagate_connections`, `sync_*`, the stepper, etc.).
+The master loop is the **data plane**. Its fixed schedules run propagation,
+input synchronization, native integration, and participant dispatch directly.
 It must **never** be driven through the typed-command pipeline. A command
 per tick — minting a request id, dispatching a Reflect event, recording a
 `CommandResults` outcome — would put a `HashMap` insert and an envelope in
@@ -923,7 +927,7 @@ The **control plane** is typed commands (see AGENTS.md § 4.2 and
 | Plane | Examples | Mechanism |
 |---|---|---|
 | **Control** — discrete, occasional | `LoadScene`, `CompileModel`, `RunExperiment`, Pause/Resume/Reset, time-warp | typed `#[Command]` / `TwinCommand`. May return an `Ack` ("launched"); a long-running run then reports **completion/progress via domain state** (`Run.status`, `CompileStatus`, `RunStatus`), not a per-tick result endpoint. |
-| **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | plain `FixedUpdate` systems. No command, no id, no result store. |
+| **Data** — continuous, per-tick | the FMI master loop, the solver step, `run_scripted_models` | Fixed-schedule systems with typed simulation state. |
 | **Live inputs** — high-frequency, latest-wins | joystick/throttle (`SetPorts`) | Named writes use the shared `PortRegistry`. External API, identified direct typed, local port-inspector, and non-Simulation Rhai `SetPorts`, `ReleasePort`, and `ReleaseControl` commands enter the bounded session queue and commit at the next fixed tick. Twin-owned Lifecycle Rhai writes also enter that queue and retain authored-program ownership; Simulation-clock Rhai and fixed-step controller writes stay in their owning pass. Network ControlStream frames keep their per-vessel input path. The receiver latches each named vehicle command until replacement or explicit `ReleasePort`/`ReleaseControl`; release returns it to authored wiring without synthesizing values. |
 | **Modelica input injection** — discrete | `SetModelInput` | live API clients select a Modelica participant by `target_gid` from `ListEntities`; workbench clients select an editor document by `doc_id`. Live `SetModelInput` commands and local Modelica canvas writes are admitted to the shared next-fixed-tick queue, captured as typed Modelica changes, and applied through the shared layered input transaction. Twin-owned Lifecycle and Simulation Rhai use the program layer; controller/external input uses the controller layer. Editor-only models keep immediate document-owned writes; Simulation-clock Rhai writes remain derived behavior. |
 

@@ -1084,7 +1084,7 @@ mod tests {
             .insert_resource(lunco_core_runtime::SimTick(3))
             .add_systems(First, super::super::handle_modelica_responses)
             .add_systems(Update, dispatch_modelica_compile_requests)
-            .add_systems(FixedUpdate, super::super::spawn_modelica_requests);
+            .add_systems(FixedLast, super::super::spawn_modelica_requests);
         let (commands, received_commands) = crossbeam_channel::unbounded();
         let (results, received_results) = crossbeam_channel::unbounded();
         app.insert_resource(ModelicaChannels {
@@ -1208,7 +1208,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<lunco_core_runtime::SimTick>()
             .0 = 4;
-        app.world_mut().run_schedule(FixedUpdate);
+        app.world_mut().run_schedule(FixedLast);
         assert!(
             received_commands.is_empty(),
             "Resume cannot admit another old-session Step"

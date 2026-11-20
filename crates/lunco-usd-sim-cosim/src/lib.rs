@@ -2421,7 +2421,7 @@ fn tag_cosim_opaque(
 /// Per-tick ordering inside `FixedUpdate` then follows the cosim master:
 ///   script/native output sampling →
 ///    PropagateCosimSet::Propagate → ApplyForcesCosimSet::ApplyForces →
-///    sync_*_inputs → ModelicaSet::SpawnRequests`.
+///    sync_*_inputs. Modelica dispatch follows native verification in `FixedLast`.
 impl Plugin for UsdSimCosimPlugin {
     fn build(&self, app: &mut App) {
         use lunco_core::AppSceneExt;
@@ -2441,16 +2441,6 @@ impl Plugin for UsdSimCosimPlugin {
         use lunco_cosim_core::schedule::{
             CosimApplySet as ApplyForcesCosimSet, CosimSet as PropagateCosimSet,
         };
-        use lunco_modelica_runtime::ModelicaSet;
-
-        // Script execution is part of the fixed co-simulation transaction. Its
-        // input snapshot is taken after propagation/actuation, its output becomes
-        // visible on the next tick, and the transaction completes before the
-        // Modelica master dispatches the next communication point.
-        app.configure_sets(
-            FixedUpdate,
-            lunco_scripting::ScriptingSet.before(ModelicaSet::SpawnRequests),
-        );
 
         // Ensure the source asset types this module's systems read/allocate are
         // registered. Idempotent — production registers these via the Modelica /
@@ -2823,8 +2813,7 @@ impl Plugin for UsdSimCosimPlugin {
                 sync::sync_script_inputs
                     .after(PropagateCosimSet::Propagate)
                     .after(ApplyForcesCosimSet::ApplyForces)
-                    .before(lunco_scripting::ScriptingSet)
-                    .before(ModelicaSet::SpawnRequests),
+                    .before(lunco_scripting::ScriptingSet),
                 sync::sync_script_outputs
                     .before(lunco_scripting::ScriptingSet)
                     .before(PropagateCosimSet::Propagate),
@@ -2833,8 +2822,7 @@ impl Plugin for UsdSimCosimPlugin {
                     // Rhai's admitted SetPorts commands belong to this input
                     // snapshot. Copy them after script execution and before
                     // dispatch; an unordered copy can delay them one solver step.
-                    .after(lunco_scripting::ScriptingSet)
-                    .before(ModelicaSet::SpawnRequests),
+                    .after(lunco_scripting::ScriptingSet),
                 // Modelica `when` bridge: edge-detect on fresh outputs, after they sync.
                 sync::fire_connected_events
                     .after(lunco_core_runtime::SimTickSet)

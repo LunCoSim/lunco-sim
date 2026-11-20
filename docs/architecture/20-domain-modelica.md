@@ -1144,8 +1144,8 @@ diagnostics; when no successful sample exists, the message says so explicitly.
 
 ## 4. Execution pipeline
 
-Co-simulation exchange and stepping use `FixedUpdate` at a shared fixed
-timestep (60 Hz by default). Worker completion admission precedes clock
+Co-simulation exchange and stepping use a shared fixed timestep (60 Hz by
+default). Worker completion admission precedes clock
 projection and can release pending work between complete fixed cycles.
 Ordering uses these system sets:
 
@@ -1153,15 +1153,17 @@ Ordering uses these system sets:
 SimulationCompletions:
   ModelicaSet::HandleResponses    — validate worker results and release completed causal holds
   USD coupled initialization     — admit solved inputs and certify constructed participants
+  sync_modelica_outputs          — ModelicaVariables.values → SimComponent.outputs
 First:
   ClockProjectionSet             — project remaining holds before TimeSystems samples time
 
 FixedUpdate:
-  (sync_modelica_outputs)         — ModelicaVariables.values → SimComponent.outputs
   CosimSet::Propagate             — propagate_connections
   CosimApplySet::ApplyForces       — apply_sim_forces
   (sync_inputs_to_modelica)       — SimComponent.inputs → ModelicaModel.inputs
-  ModelicaSet::SpawnRequests      — send next Step command with fixed dt
+FixedLast:
+  FixedCycleVerificationSet       — settle the native step and verify its endpoint
+  ModelicaSet::SpawnRequests      — dispatch due Step commands for the accepted interval
 ```
 
 The worker command stream is submitted in stable `GlobalEntityId` order, with

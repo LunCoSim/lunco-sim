@@ -1071,31 +1071,6 @@ pub fn validate_physics_clock(
     Ok(())
 }
 
-fn verify_completed_physics_clock(
-    physics_time: Res<Time<Physics>>,
-    fixed_time: Res<Time<Fixed>>,
-    control: Option<ResMut<lunco_time::SimulationStepControl>>,
-    mut faults: ResMut<lunco_core::RuntimeFaults>,
-) {
-    let Some(mut control) = control else { return };
-    if !faults.active()
-        && let Err(error) = validate_physics_clock(&physics_time, &fixed_time, false)
-    {
-        error!("[physics] {error}");
-        faults.raise(
-            "simulation-physics-clock-diverged",
-            None,
-            "shared physics clock",
-            error,
-        );
-    }
-    // A terminal fault can occur on either side of native integration.
-    // The runner owns settlement of the prospective tick and its observations.
-    if faults.active() {
-        control.observe_faulted_native_endpoint(&fixed_time, physics_time.elapsed());
-    }
-}
-
 /// Clear all scene-owned physics admission state before the outgoing entities
 /// are reclaimed. The replacement scene rebuilds its readiness/hold decisions
 /// from its own authored and runtime state. The time owner separately retires
@@ -1277,7 +1252,6 @@ impl Plugin for PhysicsGatePlugin {
                 apply_physics_holds.in_set(lunco_time::SimulationAdmissionSet),
             )
             .add_systems(lunco_core::SceneTeardown, reset_scene_physics_state)
-            .add_systems(FixedLast, verify_completed_physics_clock.in_set(lunco_time::FixedCycleVerificationSet))
             // Refresh native admission at the shared fixed-cycle boundary.
             .add_systems(bevy::prelude::FixedPreUpdate, apply_physics_holds)
             .add_plugins(escape::EscapeDiagnosticPlugin)
@@ -1607,32 +1581,49 @@ mod tests {
 
     #[test]
     fn terminal_cycle_accounts_for_native_integration_and_fixed_debt() {
+        use avian3d::dynamics::integrator::IntegrationSystems;
+        use avian3d::dynamics::solver::schedule::SolverSchedulePlugin;
+        use avian3d::prelude::{PhysicsSchedule, SolverSystems};
+        use avian3d::schedule::PhysicsSchedulePlugin;
         use lunco_core_runtime::SimTick;
+
+        fn inject_terminal_fault(mut faults: ResMut<lunco_core::RuntimeFaults>) {
+            faults.raise(
+                "test-terminal-fault",
+                None,
+                "native integration",
+                "injected",
+            );
+        }
+
         for integrated in [false, true] {
             let mut app = App::new();
-            app.add_plugins((bevy::time::TimePlugin, lunco_time::TimePlugin))
-                .init_resource::<Time<Physics>>()
-                .add_systems(FixedUpdate, |mut tick: ResMut<SimTick>| tick.0 += 1)
-                .add_systems(
-                    FixedPostUpdate,
-                    move |fixed: Res<Time<Fixed>>,
-                          mut native: ResMut<Time<Physics>>,
-                          mut faults: ResMut<lunco_core::RuntimeFaults>| {
-                        if integrated {
-                            native.advance_by(fixed.timestep());
-                        }
-                        faults.raise(
-                            "test-terminal-fault",
-                            None,
-                            "native integration",
-                            "injected",
-                        );
-                    },
-                )
-                .add_systems(
-                    FixedLast,
-                    verify_completed_physics_clock.in_set(lunco_time::FixedCycleVerificationSet),
+            app.add_plugins((
+                MinimalPlugins,
+                lunco_time::TimePlugin,
+                PhysicsSchedulePlugin::default(),
+                SolverSchedulePlugin,
+            ))
+            .init_scene_resource::<PhysicsHolds>()
+            .configure_sets(
+                PhysicsSchedule,
+                IntegrationSystems::UpdateVelocityIncrements.in_set(SolverSystems::PreSubstep),
+            )
+            .add_systems(FixedUpdate, |mut tick: ResMut<SimTick>| tick.0 += 1);
+            avian_backend::install(&mut app);
+            if integrated {
+                app.add_systems(
+                    PhysicsSchedule,
+                    inject_terminal_fault.after(SolverSystems::StoreContactImpulses),
                 );
+            } else {
+                app.add_systems(
+                    PhysicsSchedule,
+                    inject_terminal_fault.in_set(IntegrationSystems::UpdateVelocityIncrements),
+                );
+            }
+            app.finish();
+            app.cleanup();
             app.update();
             let world = app.world_mut();
             let step = Duration::from_secs_f64(lunco_core_runtime::SECS_PER_TICK);
@@ -1648,6 +1639,10 @@ mod tests {
             );
             assert_eq!(fixed.elapsed(), step * completed);
             assert_eq!(fixed.overstep(), step * (2 - completed));
+            assert_eq!(
+                world.resource::<Time<Substeps>>().elapsed().is_zero(),
+                !integrated,
+            );
             assert!(world.resource::<lunco_core::RuntimeFaults>().active());
         }
     }

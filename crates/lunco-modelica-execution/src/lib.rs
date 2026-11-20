@@ -261,7 +261,6 @@ impl Plugin for ModelicaExecutionPlugin {
                 lunco_modelica_worker::worker::reconcile_modelica_preparation_progress
                     .in_set(lunco_core::RuntimeCycleSet::Lifecycle),
             );
-        app.configure_sets(FixedUpdate, ModelicaSet::SpawnRequests);
         app.add_plugins(lunco_modelica_telemetry::ModelicaTelemetryPlugin);
         app.init_resource::<lunco_modelica_worker::worker::CosimLag>();
         app.register_type::<ModelicaModel>()
@@ -289,9 +288,11 @@ impl Plugin for ModelicaExecutionPlugin {
                     .in_set(ModelicaSet::AdmitCompileRequests),
             )
             .add_systems(
-                FixedUpdate,
+                FixedLast,
                 lunco_modelica_worker::worker::spawn_modelica_requests
                     .in_set(ModelicaSet::SpawnRequests)
+                    .after(lunco_time::FixedCycleVerificationSet)
+                    .run_if(lunco_time::fixed_cycle_integrated)
                     .run_if(lunco_time::simulation_is_running),
             );
 

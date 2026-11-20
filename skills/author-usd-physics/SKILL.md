@@ -1086,3 +1086,7 @@ input can stop an admitted fixed cycle before native integration. Exercise
 `scripts/api/test_connection_transaction.py --port <free-port>` to check
 that the stopped world retains the last completed master, fixed and native time,
 and the replacement world admits valid steps before its own first fault.
+Use `scripts/api/test_simulation_core_sixth_pass.py --case numeric-overflow --port <free-port>`
+to check the later rejection boundary inside Avian. The gate applies separately
+finite forces and gravity whose combined native increment overflows, then checks
+the last accepted clocks, Modelica endpoint, and both numerical recorders.

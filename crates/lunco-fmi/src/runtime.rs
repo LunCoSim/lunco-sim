@@ -611,6 +611,11 @@ pub struct FmiPlugin;
 /// Application composition orders backend receipt commits through this set.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FmiCompletionSet;
+
+/// Application composition orders dispatch after the accepted native step.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FmiDispatchSet;
+
 impl Plugin for FmiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FmuLimits>();
@@ -646,9 +651,12 @@ impl Plugin for FmiPlugin {
         );
         app.add_systems(SimulationCompletions, receive.in_set(FmiCompletionSet));
         app.add_systems(
-            FixedUpdate,
+            FixedLast,
             dispatch
-                .after(lunco_cosim_core::schedule::CosimSet::Propagate)
+                .in_set(FmiDispatchSet)
+                .in_set(lunco_core_runtime::SimulationProgressAdmissionSet)
+                .after(lunco_time::FixedCycleVerificationSet)
+                .run_if(lunco_time::fixed_cycle_integrated)
                 .run_if(lunco_time::simulation_is_running),
         );
     }
