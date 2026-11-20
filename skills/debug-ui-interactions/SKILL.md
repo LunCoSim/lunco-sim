@@ -330,13 +330,19 @@ their exact provider, Twin or scene target retires.
 
 ## Display and workspace handling
 
-When several agents run graphical sessions, use the same `DISPLAY` and
-Wayland/X11 environment as the agent shell. On X11, inspect
-`xprop -root _NET_CURRENT_DESKTOP` when diagnosing workspace placement. If the
-compositor does not expose that EWMH atom, there is no reliable workspace id
-the application can target; starting on the current display is the only
-portable best effort. Do not add application state or a fake workspace
-selector to compensate for a compositor capability that is not exposed.
+Use the compositor’s window-placement mechanism to start LunCoSim in the
+current agent’s desktop workspace when the target is known and placement can
+happen before the window appears. Keep the user’s active workspace and
+keyboard focus undisturbed. The current `DISPLAY`, `WAYLAND_DISPLAY`, or X11
+`_NET_CURRENT_DESKTOP` value alone does not identify an agent workspace or
+guarantee placement.
+
+When placement cannot be guaranteed, use a private graphical display for the
+windowed test. On Linux, start `xvfb-run -a` with inherited `DISPLAY`,
+`WAYLAND_DISPLAY`, and `WAYLAND_SOCKET` cleared so the test uses the private
+X11 server. Verify the window rendered there. Use the headless runner for
+checks that do not require a window. If graphical isolation is unavailable,
+report the limitation before attempting a shared-desktop launch.
 
 ## Stop cleanly
 
