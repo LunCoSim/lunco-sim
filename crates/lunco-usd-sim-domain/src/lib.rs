@@ -2059,6 +2059,13 @@ pub fn sync_generated_network_documents(
 ) {
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    // Wait before claiming work so each generated document resolves against
+    // the same published Twin namespaces as its runtime interface.
+    if source_roots.as_deref().is_some_and(
+        lunco_modelica_source_roots::SourceRootRegistry::twin_namespace_inventory_pending,
+    ) {
+        return;
+    }
     let mut entities = pending.0.take_queued();
     if pending.0.take_initial_discovery() {
         entities.extend(source_entities.iter());

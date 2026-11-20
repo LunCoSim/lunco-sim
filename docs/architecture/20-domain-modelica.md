@@ -591,9 +591,12 @@ discovery.
 The worker's successful load acknowledgement carries the authored top-level
 namespaces parsed by that exact source-set operation. The registry retains those
 names on the scoped owner entry, and compile admission resolves each qualified
-namespace to its unique source-set ID. Missing or ambiguous namespace ownership
-is a terminal diagnostic. Failed or stale acknowledgements cannot publish Ready
-or recreate a retired namespace; Twin close removes the entry and its names.
+namespace to its unique source-set ID. Scene interface submission and generated
+document admission retain their queued work while the registry has Twin directory
+loads awaiting namespace publication. Any of those directories can declare the
+requested name. Once the inventory settles, missing or ambiguous ownership is a
+terminal diagnostic. Failed or stale acknowledgements cannot publish Ready or
+recreate a retired namespace. Twin close removes the entry and its names.
 The same accepted acknowledgement carries the exact source-file snapshot to
 the authoring engine. Its background declaration projection installs a named
 source set, so diagrams can resolve sibling Twin classes without opening every

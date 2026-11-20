@@ -462,6 +462,9 @@ fn admit_interface_roots(world: &mut World, entities: &[(Entity, String)]) -> Re
     }
     world.resource_scope(
         |world, mut registry: Mut<lunco_modelica_source_roots::SourceRootRegistry>| {
+            if registry.twin_namespace_inventory_pending() {
+                return Ok(false);
+            }
             lunco_modelica_source_roots::admit_compile_roots(
                 &mut registry,
                 roots,
