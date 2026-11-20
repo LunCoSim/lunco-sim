@@ -509,9 +509,10 @@ saved document's exact path against the active Twin index as well as its owner.
 
 Panel landmarks use the registered panel id as their canonical anchor:
 `panel.<id>`. The workbench publishes the exact painted dock rect.
-Generic slot anchors (`panel.center`, `panel.side_browser`,
-`panel.right_inspector`, and `panel.bottom`) identify the viewport or whole
-slot; tutorial copy that names a panel must use the exact panel key.
+The `panel.center` anchor measures the work area between the menu and status
+bars in every perspective, including scene-only View. Dock slot anchors
+(`panel.side_browser`, `panel.right_inspector`, and `panel.bottom`) measure
+their laid-out groups. A tutorial that names a panel uses the exact panel key.
 
 The shell reuses its title-bar anchor buffer across UI passes. Stable menu,
 window, toolbar, slot, and model-view keys are borrowed static strings, and

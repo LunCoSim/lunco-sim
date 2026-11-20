@@ -961,6 +961,13 @@ pub(super) fn render_layout(
     let has_dock_tabs =
         !viewport::layout_is_empty(layout) && layout.dock.iter_all_tabs().next().is_some();
     let presentation_bounds = viewport_ui.available_rect_before_wrap();
+    // The scene-only perspective also hosts viewport overlays between the menu and status bars.
+    if presentation_bounds.is_finite()
+        && presentation_bounds.is_positive()
+        && let Some(mut anchors) = world.get_resource_mut::<HelpAnchors>()
+    {
+        anchors.set_static("panel.center", presentation_bounds);
+    }
     let translucent_tab_content = world
         .resource::<WorkbenchAppearanceSettings>()
         .translucent_tab_content;
@@ -1131,7 +1138,6 @@ pub(super) fn render_layout(
             // Publish generic slot anchors from the laid-out dock tree so
             // guided flows share the exact regions painted by every perspective.
             if let Some(mut a) = world.get_resource_mut::<HelpAnchors>() {
-                a.set_static("panel.center", screen);
                 let (side_rect, right_rect, bottom_rect) =
                     dock_group_rects(dock, side_browser, right_inspector, bottom);
                 if let Some(rect) = side_rect {

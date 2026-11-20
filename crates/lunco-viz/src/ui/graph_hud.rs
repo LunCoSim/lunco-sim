@@ -435,6 +435,11 @@ pub(crate) fn on_graph_hud_measured(trigger: On<GraphHudMeasured>, mut huds: Res
     if !trigger.rect.is_finite() {
         return;
     }
+    // Consume the placement request even when the window lands exactly as requested.
+    if hud.apply_size || hud.apply_position {
+        hud.apply_size = false;
+        hud.apply_position = false;
+    }
     let size = trigger.rect.size();
     let position = Some(trigger.rect.min);
     if hud.size == size && hud.position == position {
@@ -442,8 +447,6 @@ pub(crate) fn on_graph_hud_measured(trigger: On<GraphHudMeasured>, mut huds: Res
     }
     hud.size = size;
     hud.position = position;
-    hud.apply_size = false;
-    hud.apply_position = false;
     huds.revision = huds.revision.wrapping_add(1);
 }
 
