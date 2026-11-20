@@ -6,7 +6,10 @@
 //! The separate compiler/worker host owns checked compilation and simulation.
 
 use lunco_doc::DocumentId;
-use rumoca_compile::Session;
+use rumoca_compile::{
+    Session,
+    parsing::ast::{AstIndexMap, ClassDef, StoredDefinition},
+};
 use std::collections::{HashMap, HashSet};
 
 /// Inherited member info with variability + causality.
@@ -89,6 +92,23 @@ pub struct ModelicaEngine {
     /// authoring session. Kept by source-set identity so namespace aliases
     /// resolve through the source-root registry before reporting the failure.
     failed_source_sets: HashMap<String, String>,
+}
+
+/// Remove declarations shadowed by the selected document, keeping other
+/// classes from the same source available as cross-document dependencies.
+fn retain_diagram_dependencies(
+    classes: &mut AstIndexMap<String, ClassDef>,
+    within: &str,
+    owned: &HashSet<String>,
+) {
+    classes.retain(|name, class| {
+        let qualified = lunco_modelica_ast::ast_extract::qualify(within, name);
+        if owned.contains(&qualified) {
+            return false;
+        }
+        retain_diagram_dependencies(&mut class.classes, &qualified, owned);
+        true
+    });
 }
 
 impl Default for ModelicaEngine {
@@ -466,6 +486,64 @@ impl ModelicaEngine {
         Ok(snapshot)
     }
 
+    /// Prepare an isolated diagram view when the selected syntax needs to
+    /// replace the shared session's version or shadow competing declarations.
+    /// Callers use the same view for the graph, icons, and nested previews.
+    pub fn isolated_for_document_diagram(
+        &self,
+        doc_id: DocumentId,
+        ast: &StoredDefinition,
+    ) -> Option<Self> {
+        let uri = self.uri_for(doc_id);
+        let installed = self
+            .session
+            .get_document(&uri)
+            .and_then(|document| document.parsed());
+        let owned: HashSet<_> = ast.declared_class_names().into_iter().collect();
+        let competing: Vec<_> = self
+            .session
+            .document_uris()
+            .into_iter()
+            .filter(|candidate| *candidate != uri)
+            .filter_map(|candidate| {
+                let definition = self.session.get_document(candidate)?.parsed()?;
+                owned
+                    .iter()
+                    .any(|name| definition.qualified_class_name(name).as_ref() == Some(name))
+                    .then_some((candidate, definition))
+            })
+            .collect();
+        if installed == Some(ast) && competing.is_empty() {
+            return None;
+        }
+        let mut scoped = Self {
+            session: self.session.clone_for_isolated_work(),
+            ..Self::new()
+        };
+        let mut retained = Vec::new();
+        for (candidate, definition) in competing {
+            let mut definition = definition.clone();
+            let within = definition
+                .within
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            retain_diagram_dependencies(&mut definition.classes, &within, &owned);
+            if definition.classes.is_empty() {
+                scoped.session.remove_document(candidate);
+            } else {
+                retained.push((candidate.to_owned(), definition));
+            }
+        }
+        if installed != Some(ast) {
+            retained.push((uri, ast.clone()));
+        }
+        if !retained.is_empty() {
+            scoped.session.add_parsed_batch(retained);
+        }
+        Some(scoped)
+    }
+
     /// Read-only access to the underlying session for advanced queries
     /// not yet wrapped here. Use sparingly — prefer growing this
     /// crate's API over leaking the session through panels.
@@ -499,6 +577,75 @@ mod tests {
     fn upsert_test(engine: &mut ModelicaEngine, id: DocumentId, src: &str) {
         let ast = rumoca_phase_parse::parse_to_ast(src, "test.mo").expect("test source must parse");
         engine.upsert_document_with_ast(id, ast);
+    }
+
+    #[test]
+    fn document_diagrams_resolve_reused_class_names_independently() {
+        use crate::diagram::DiagramScope::ComponentGraph;
+
+        let mut engine = ModelicaEngine::new();
+        let installed = DocumentId::new(1);
+        let variant = DocumentId::new(2);
+        let parse = |source: &str| rumoca_phase_parse::parse_to_ast(source, "fixture.mo").unwrap();
+        let original = parse("model Plant Feeder installedFeed; end Plant;");
+        let alternate =
+            parse("model Plant Feeder alternateFeed; end Plant; model Feeder end Feeder;");
+        engine.upsert_document_with_ast(installed, original.clone());
+        engine.upsert_document_with_ast(variant, alternate.clone());
+        let edited = parse("model Plant Feeder draftFeed; end Plant;");
+        for (id, ast, expected) in [
+            (installed, &original, "installedFeed"),
+            (variant, &alternate, "alternateFeed"),
+            (installed, &edited, "draftFeed"),
+            (installed, &original, "installedFeed"),
+        ] {
+            let mut scoped = engine.isolated_for_document_diagram(id, ast).unwrap();
+            let snapshot = scoped.diagram_snapshot("Plant", ComponentGraph).unwrap();
+            assert_eq!(snapshot.members.len(), 1);
+            assert_eq!(snapshot.members[0].component.name, expected);
+            assert!(snapshot.class("Feeder").is_some());
+        }
+        assert!(
+            engine
+                .isolated_for_document_diagram(DocumentId::new(3), &original)
+                .is_some(),
+            "an unpublished syntax revision has its own view"
+        );
+    }
+
+    #[test]
+    fn diagram_conflicts_respect_exact_qualified_classes() {
+        use crate::diagram::DiagramScope::ComponentGraph;
+
+        let mut engine = ModelicaEngine::new();
+        let selected = DocumentId::new(1);
+        let source = "within Parts; model Feed Real selectedValue; end Feed;";
+        let ast = rumoca_phase_parse::parse_to_ast(source, "workspace.mo").unwrap();
+        engine.upsert_document_with_ast(selected, ast.clone());
+        upsert_test(
+            &mut engine,
+            DocumentId::new(2),
+            "within Other; model Feed Real unrelated; end Feed;",
+        );
+        assert!(
+            engine
+                .isolated_for_document_diagram(selected, &ast)
+                .is_none()
+        );
+        upsert_test(
+            &mut engine,
+            DocumentId::new(3),
+            "package Parts model Feed Real previous; end Feed; model Chute end Chute; end Parts;",
+        );
+        let mut scoped = engine
+            .isolated_for_document_diagram(selected, &ast)
+            .unwrap();
+        let snapshot = scoped
+            .diagram_snapshot("Parts.Feed", ComponentGraph)
+            .unwrap();
+        assert_eq!(snapshot.members[0].component.name, "selectedValue");
+        assert!(scoped.has_class("Parts.Chute"));
+        assert!(scoped.has_class("Other.Feed"));
     }
 
     #[test]

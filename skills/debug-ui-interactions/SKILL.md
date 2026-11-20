@@ -336,6 +336,14 @@ UI tool queue independently of simulation readiness. Verify menus and document
 controls while a scene is waiting for required data, and reject callbacks after
 their exact provider, Twin or scene target retires.
 
+## Modelica diagram source identity
+
+When verifying diagrams that reuse a qualified class name, keep both documents
+open. Select the canvas tab by document ID and verify that a component unique
+to one revision appears only there. For semantic zoom, inspect the nested
+instance path and source there as well. The graph, icons and nested previews
+resolve through the selected document's current syntax.
+
 ## Display and workspace handling
 
 Use the compositor’s window-placement mechanism to start LunCoSim in the

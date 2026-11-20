@@ -2040,7 +2040,11 @@ Each frame:
    The UI thread only takes short cache/read locks; a root or inheritance
    miss stays in an explicit loading state and is retried from the generic
    source-root completion event. No Modelica parse or inheritance walk is
-   allowed to block canvas painting.
+   allowed to block canvas painting. The graph, merged icons, traced unit and
+   semantic zoom previews use the selected document's exact syntax revision.
+   When a workspace declaration competes with it, projection uses an isolated
+   Rumoca view that gives the selected declarations priority and retains
+   unrelated dependency classes.
    Source-root authoring mirrors use shared `AsyncWorkAdmission`; when its
    bounded queue is full, the worker response and exact source snapshot remain
    ordered for retry after capacity or source-operation revision changes.

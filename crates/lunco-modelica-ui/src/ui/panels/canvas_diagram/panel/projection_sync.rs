@@ -662,11 +662,27 @@ fn spawn_projection_task(
                 })?;
                 let handle = crate::engine_resource::global_engine_handle()
                     .ok_or_else(|| "the shared Modelica engine is unavailable".to_owned())?;
-                let snapshot_result = {
-                    let mut engine = handle.lock();
-                    engine.diagram_snapshot(&target, crate::diagram::DiagramScope::ComponentGraph)
+                let (mut isolated, snapshot_result) = {
+                    let mut shared = handle.lock();
+                    let mut isolated = shared.isolated_for_document_diagram(doc_id, &ast_arc);
+                    let engine = isolated.as_mut().unwrap_or(&mut shared);
+                    let result = engine
+                        .diagram_snapshot(&target, crate::diagram::DiagramScope::ComponentGraph)
+                        .map(|snapshot| {
+                            let unit_instance = root_model_name
+                                .as_deref()
+                                .filter(|root| *root != target)
+                                .and_then(|root| {
+                                    engine
+                                        .session_mut()
+                                        .class_component_declarations_query(root)
+                                })
+                                .and_then(|members| target_unit_instance(&members, &target));
+                            (snapshot, unit_instance)
+                        });
+                    (isolated, result)
                 };
-                let snapshot = match snapshot_result {
+                let (snapshot, unit_instance) = match snapshot_result {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
                         let roots = rumoca_compile::compile::source_root_dependencies(&ast_arc)
@@ -685,19 +701,6 @@ fn spawn_projection_task(
                         return Err(error);
                     }
                 };
-                let (snapshot, unit_instance) = {
-                    let mut engine = handle.lock();
-                    let unit_instance = root_model_name
-                        .as_deref()
-                        .filter(|root| *root != target)
-                        .and_then(|root| {
-                            engine
-                                .session_mut()
-                                .class_component_declarations_query(root)
-                        })
-                        .and_then(|members| target_unit_instance(&members, &target));
-                    (snapshot, unit_instance)
-                };
                 let diagram =
                     crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                         ast_arc,
@@ -708,10 +711,17 @@ fn spawn_projection_task(
                 bevy::tasks::futures_lite::future::yield_now().await;
                 let (mut scene, _) = project_scene(&diagram);
                 if semantic_zoom {
-                    let mut engine = handle.lock();
+                    let mut shared;
+                    let engine = match isolated.as_mut() {
+                        Some(engine) => engine,
+                        None => {
+                            shared = handle.lock();
+                            &mut *shared
+                        }
+                    };
                     super::super::semantic::prepare(
                         &mut scene,
-                        &mut engine,
+                        engine,
                         max_nodes,
                         &layout,
                         &cancel_for_task,
