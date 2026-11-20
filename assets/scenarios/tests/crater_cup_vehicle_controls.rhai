@@ -38,6 +38,16 @@ fn start_on_pad_camera(me) {
     require(set_camera("/World/PadCam"));
 }
 
+fn vehicle_view_ready(name) {
+    let cards = cmd_data("InspectGuidedHud", #{}).cards;
+    cards.len() > 0 && cards[0].hint.starts_with(name)
+        && current_camera_name() != "NO ACTIVE CAMERA"
+}
+
+fn control_interval_elapsed(start, seconds) {
+    clock_snapshot().world_sim_s - start > seconds
+}
+
 fn drive_comet(me) {
     this.checks.push(t_true(current_camera_name() == "/World/PadCam", "The pad view is active before possession"));
     require(cmd("AcquireControl", #{target:this.comet, bind_camera:true}));
@@ -49,6 +59,7 @@ fn check_comet_view(me) {
     this.checks.push(t_true(is_controlled(this.comet) && view == AVATAR && rig != () && rig.attitude == "Heading",
         "Comet uses the avatar's heading-follow rig from the pad view, active camera " + view));
     send(this.comet, ["forward", "left"], true);
+    this.input_time = clock_snapshot().world_sim_s;
 }
 
 fn check_comet_inputs(me) {
@@ -59,6 +70,7 @@ fn check_comet_inputs(me) {
         "Comet's wheels steer and move the chassis"));
     send(this.comet, ["forward", "left"], false);
     send(this.comet, ["brake"], true);
+    this.input_time = clock_snapshot().world_sim_s;
 }
 
 fn check_comet_brake(me) {
@@ -75,6 +87,7 @@ fn check_lander_view(me) {
         && current_camera_name() == AVATAR && rig != () && rig.attitude == "WorldLocked",
         "Kestrel uses the avatar's stabilized follow rig and releases Comet"));
     send(this.lander, ["forward", "left", "yaw_left", "thrust"], true);
+    this.input_time = clock_snapshot().world_sim_s;
 }
 
 fn check_lander_inputs(me) {
@@ -84,6 +97,7 @@ fn check_lander_inputs(me) {
         "The standard lander bindings drive body attitude and thrust: " + values));
     send(this.lander, ["forward", "left", "yaw_left", "thrust"], false);
     require(cmd("ReleaseControlSource", #{source:this.avatar}));
+    this.input_time = clock_snapshot().world_sim_s;
 }
 
 fn finish(me) {
@@ -98,10 +112,16 @@ fn finish(me) {
 }
 
 fn task(me, ctx) {
-    seq([wait_until(|m| query("GetReadiness").ready && current_camera_name() == AVATAR),
-        once(Fn("start_on_pad_camera")), wait(0.35), once(Fn("drive_comet")),
-        wait(0.45), once(Fn("check_comet_view")), wait(0.8), once(Fn("check_comet_inputs")),
-        wait(0.5), once(Fn("check_comet_brake")),
-        wait(0.45), once(Fn("check_lander_view")), wait(0.65), once(Fn("check_lander_inputs")),
-        wait(0.45), once(Fn("finish"))])
+    seq([wait_until(|m| query("GetReadiness").ready && current_camera_name() == AVATAR
+            && cmd_data("InspectGuidedHud", #{}).cards.len() > 0),
+        once(Fn("start_on_pad_camera")), wait_until(|m| current_camera_name() == "/World/PadCam"),
+        once(Fn("drive_comet")),
+        wait_until(|m| vehicle_view_ready("Comet") && current_camera_name() != "/World/PadCam"),
+        once(Fn("check_comet_view")),
+        wait_until(|m| control_interval_elapsed(this.input_time, 0.45)), once(Fn("check_comet_inputs")),
+        wait_until(|m| control_interval_elapsed(this.input_time, 0.15)), once(Fn("check_comet_brake")),
+        wait_until(|m| vehicle_view_ready("Kestrel")), once(Fn("check_lander_view")),
+        wait_until(|m| control_interval_elapsed(this.input_time, 0.2)), once(Fn("check_lander_inputs")),
+        wait_until(|m| control_interval_elapsed(this.input_time, 0.2)
+            && current_camera_name() == AVATAR), once(Fn("finish"))])
 }
