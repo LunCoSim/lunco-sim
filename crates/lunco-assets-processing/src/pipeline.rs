@@ -1,6 +1,7 @@
 //! Artifact recipe execution on the existing processing worker and transaction.
 
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use lunco_assets_datasets::{
 };
 use lunco_hooks::{HookInvocation, HookValue, ScriptHook};
 
-use crate::process::{ProcessControl, ProcessorRegistry};
+use crate::process::{ProcessControl, ProcessorRegistry, create_directory, file_error};
 
 fn invalid(message: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into())
@@ -88,11 +89,21 @@ pub(crate) fn process(
         .as_ref()
         .ok_or_else(|| invalid("kind=\"pipeline\" requires [process.pipeline]"))?;
     let paths = pipeline::input_paths(declared, source, owner)?;
-    let output_identity =
-        lunco_storage::FilePathIdentity::prepare(output).map_err(|e| invalid(e.to_string()))?;
+    let identify = |path: &Path| {
+        lunco_storage::FilePathIdentity::prepare(path).map_err(|error| {
+            let error = match error {
+                lunco_storage::StorageError::Io(error) => error,
+                error => invalid(error.to_string()),
+            };
+            file_error(
+                error,
+                format_args!("Resolve pipeline path '{}'", path.display()),
+            )
+        })
+    };
+    let output_identity = identify(output)?;
     for path in paths.values() {
-        let identity =
-            lunco_storage::FilePathIdentity::prepare(path).map_err(|e| invalid(e.to_string()))?;
+        let identity = identify(path)?;
         if output_identity
             .overlaps(&identity)
             .map_err(|e| invalid(e.to_string()))?
@@ -134,11 +145,15 @@ pub(crate) fn process(
         ),
     ]);
     if let Some(planner) = &declared.planner {
-        let code = std::fs::read_to_string(
-            paths
-                .get(&planner.source)
-                .ok_or_else(|| invalid("missing planner source"))?,
-        )?;
+        let path = paths
+            .get(&planner.source)
+            .ok_or_else(|| invalid("missing planner source"))?;
+        let code = std::fs::read_to_string(path).map_err(|error| {
+            file_error(
+                error,
+                format_args!("Read pipeline planner '{}'", path.display()),
+            )
+        })?;
         let cancellation = control.clone();
         let hook = lunco_hooks_rhai::RhaiHook::compile_with(&code, &planner.entry, move |engine| {
             engine.on_progress(move |_| {
@@ -189,12 +204,11 @@ pub(crate) fn process(
         "processed_asset",
         cache_scope,
         &format!("{}/{}", config.output_root, config.output),
-        |stage| {
-            std::fs::create_dir_all(stage)?;
-            let work = stage.join(".work");
-            std::fs::create_dir(&work)?;
+        |stage, work| {
+            create_directory(stage)?;
             let snapshot = work.join("inputs");
-            std::fs::create_dir(&snapshot)?;
+            create_directory(&snapshot)?;
+            control.report_step("capturing source files");
             let raw_parents: std::collections::BTreeSet<_> = paths
                 .iter()
                 .filter(|(id, _)| !declared.files.contains_key(*id))
@@ -228,9 +242,9 @@ pub(crate) fn process(
                     )
                 };
                 if let Some(directory) = copy.parent() {
-                    std::fs::create_dir_all(directory)?;
+                    create_directory(directory)?;
                 }
-                std::fs::copy(path, &copy)?;
+                copy_contents(path, &copy)?;
                 values.insert(id.clone(), copy);
             }
             if pipeline::input_digests(&values)? != input_hashes {
@@ -247,14 +261,14 @@ pub(crate) fn process(
                     .ok_or_else(|| invalid(format!("missing step input '{}'", step.input)))?;
                 let target = work.join(&step.output);
                 if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_directory(parent)?;
                 }
                 let cfg = effective.step_config(config, step)?;
                 println!("  pipeline step {} ({})", step.id, step.kind);
                 control.report_step(&format!("{} ({})", step.id, step.kind));
                 let run = || -> std::io::Result<()> {
                     if step.kind == "external" {
-                        external(input, &target, &cfg, &values, &work, control)?;
+                        external(input, &target, &cfg, &values, work, control)?;
                     } else if step.kind == "shader" {
                         #[cfg(feature = "shader-processing")]
                         crate::shader::process(input, &target, &cfg, &values, control)?;
@@ -278,9 +292,15 @@ pub(crate) fn process(
                     Ok(())
                 };
                 run().map_err(|e| {
-                    std::io::Error::new(
-                        e.kind(),
-                        format!("pipeline step '{}' ({}): {e}", step.id, step.kind),
+                    file_error(
+                        e,
+                        format_args!(
+                            "Run pipeline step '{}' ({}) from '{}' to '{}'",
+                            step.id,
+                            step.kind,
+                            input.display(),
+                            target.display(),
+                        ),
                     )
                 })?;
                 if !target.exists() {
@@ -293,6 +313,7 @@ pub(crate) fn process(
                     config: cfg,
                 });
             }
+            control.report_step("validating prepared artifacts");
             let mut artifacts = Vec::new();
             for artifact in &effective.artifacts {
                 control.check()?;
@@ -302,23 +323,35 @@ pub(crate) fn process(
                 let file = match &artifact.source {
                     Some(relative) => confined_file(base, Path::new(relative))?,
                     None => confined_file(
-                        &work,
-                        base.strip_prefix(&work)
+                        work,
+                        base.strip_prefix(work)
                             .map_err(|_| invalid("artifact output escaped scratch ownership"))?,
                     )?,
                 };
-                validate_artifact(&file, artifact)?;
+                validate_artifact(&file, artifact).map_err(|error| {
+                    file_error(
+                        error,
+                        format_args!("Validate artifact '{}'", file.display()),
+                    )
+                })?;
                 let destination = stage.join(&artifact.path);
                 if let Some(parent) = destination.parent() {
-                    std::fs::create_dir_all(parent)?;
+                    create_directory(parent)?;
                 }
-                std::fs::copy(&file, &destination)?;
+                copy_contents(&file, &destination)?;
+                let bytes = std::fs::read(&destination).map_err(|error| {
+                    file_error(
+                        error,
+                        format_args!("Read prepared artifact '{}'", destination.display()),
+                    )
+                })?;
                 artifacts.push(ArtifactDigest {
                     path: artifact.path.clone(),
-                    sha256: pipeline::digest(&std::fs::read(destination)?),
+                    sha256: pipeline::digest(&bytes),
                 });
             }
             // Sources may be edited by another operation while this worker is running.
+            control.report_step("checking source integrity");
             if pipeline::input_digests(&paths)? != input_hashes
                 || pipeline::input_digests(&snapshots)? != input_hashes
             {
@@ -326,20 +359,50 @@ pub(crate) fn process(
                     "pipeline inputs changed during processing; result was not published",
                 ));
             }
-            std::fs::remove_dir_all(&work)?;
             let receipt = PipelineReceipt {
                 declaration,
                 inputs: input_hashes,
                 steps: executed_steps,
                 artifacts,
             };
+            let path = stage.join(pipeline::RECEIPT);
             std::fs::write(
-                stage.join(pipeline::RECEIPT),
+                &path,
                 toml::to_string(&receipt).map_err(|e| invalid(e.to_string()))?,
-            )?;
+            )
+            .map_err(|error| {
+                file_error(
+                    error,
+                    format_args!("Write artifact receipt '{}'", path.display()),
+                )
+            })?;
             Ok(())
         },
     )
+}
+
+// Scratch files and published artifacts inherit permissions from their new
+// directory. Source attributes such as Windows Read-only must stay on the source.
+fn copy_contents(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let mut input = File::open(source).map_err(|error| {
+        file_error(
+            error,
+            format_args!("Open '{}' for copying", source.display()),
+        )
+    })?;
+    let mut output = File::create(destination).map_err(|error| {
+        file_error(
+            error,
+            format_args!("Create copy '{}'", destination.display()),
+        )
+    })?;
+    std::io::copy(&mut input, &mut output).map_err(|error| {
+        file_error(
+            error,
+            format_args!("Copy '{}' to '{}'", source.display(), destination.display()),
+        )
+    })?;
+    Ok(())
 }
 
 fn confined_file(root: &Path, relative: &Path) -> std::io::Result<PathBuf> {

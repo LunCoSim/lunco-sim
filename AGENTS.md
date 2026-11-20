@@ -356,6 +356,12 @@ package checks after changing skill metadata or packaging.
   for the task. Verify `/proc/<pid>/cwd`, the binary path, PID, and port match
   your checkout before controlling or replacing your own session; never use
   `pkill`.
+- Open LunCoSim windows in the current agent’s desktop workspace when the
+  compositor can reliably place the window there before it appears. Keep the
+  user’s active workspace and keyboard focus undisturbed. When the agent has no
+  targetable desktop workspace, use a private graphical display for windowed
+  testing. Use headless mode when the task does not require a window. See the
+  [desktop UI runbook](skills/debug-ui-interactions/SKILL.md#display-and-workspace-handling).
 - Reuse your session for asset, shader, and Rhai reloads through its API. Before
   replacing your own session, send API `Exit`, verify its process and port are
   gone, then launch the replacement. Use `/api/commands` for reloads, telemetry,

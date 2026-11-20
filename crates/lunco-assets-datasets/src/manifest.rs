@@ -341,7 +341,7 @@ fn entry_relative_path(entry: &AssetEntry) -> std::io::Result<PathBuf> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn hash_file_into(path: &Path, hasher: &mut sha2::Sha256) -> std::io::Result<()> {
+pub(crate) fn hash_file_into(path: &Path, hasher: &mut sha2::Sha256) -> std::io::Result<()> {
     use sha2::Digest;
     use std::io::Read;
 

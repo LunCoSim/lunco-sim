@@ -117,6 +117,15 @@ and integrity receipt under `.cache/terrain/nobile03`. No custom Python adapter
 or manual terrain copy is part of provisioning. `lunco-assets verify --twin
 <TWIN> -a nobile03_dem` checks a prepared/extracted bundle.
 
+If all three inputs are downloaded and preparation fails, copy the diagnostic
+from the preparation panel or the `DATASET_FAILED` event. It names the operation
+and local paths. On Windows, check write/delete access at the named location
+and Windows Security Protection History for a matching block. For a sharing
+or lock violation, close the application using the path and choose Retry
+preparation. Retry uses the verified source files already on disk. If the
+diagnostic names a recovery directory, keep it until the previous bundle has
+been recovered.
+
 The native processor preserves unresolved source coverage as NaN, performs
 bounded minimum-curvature interpolation with measured samples fixed, and
 rejects failed convergence or excessive missing coverage. Filled regions are

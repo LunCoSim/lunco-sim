@@ -96,6 +96,7 @@ fn dataset_preparation_row(dataset,scope) {
     if state=="cancelling" {row.status="Stopping…";row.action="dismiss";row.action_label="Hide";}
     if state=="failed" {
         row.status=provision_choice(can_prepare,"Preparation failed","Download failed");
+        if can_prepare {row.preparation_status="2  Prepare artifacts · failed";}
         row.detail=preparation_error_detail(dataset.state.detail);
         row.action_label=provision_choice(can_prepare,"Retry preparation","Retry download");
     }

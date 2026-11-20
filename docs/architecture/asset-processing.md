@@ -269,11 +269,15 @@ artifact admission boundary, not an operating-system sandbox.
 
 ## Publication and readiness
 
-All steps run inside the existing bounded host worker mechanism. The complete
-bundle is staged outside its destination. Output/source overlap, escaping
-links, missing/non-finite DEMs, bad dimensions and incomplete images fail at the
-owner. Input bytes are checked again before publication. The existing shared
-commit barrier prevents a closed Twin's job from publishing late.
+All steps run inside the existing bounded host worker mechanism. The
+delivery, scratch files, and rollback backups have separate directories in
+private staging on the destination volume. Snapshots and artifacts copy file
+contents into preparation-owned files with inherited directory permissions.
+Scratch cleanup happens after the publication attempt and logs any failure
+with the staging path. Output/source overlap, escaping links, missing/non-finite
+DEMs, bad dimensions and incomplete images fail at the owner. Input bytes are
+checked again before publication. The existing shared commit barrier prevents
+a closed Twin's job from publishing late.
 
 The bundle contains `.bakekey` and `.pipeline.toml`. The latter records the
 declaration hash, hashes of all source/code inputs, resolved executed step
@@ -294,8 +298,15 @@ retry substitutes for the asset server's load state.
 `RequestDataset`, `ProcessDataset`, `CancelDataset` and `ListDatasets` remain the
 public workflow. `ProcessDataset { id, force: true }` and CLI `process --force`
 rerun stages even when the receipt is current; normal preparation reuses valid
-work. Both preserve the last valid bundle on failure. Processing state names the active step. The query's `recipe`
-field reports declared steps and logical artifact URIs. `lunco-assets verify
+work. On Windows, publication retries renames that return access denied, a
+sharing violation, or a lock violation. It makes up to three retries after a
+complete rollback, with bounded delays outside the commit barrier. If rollback
+itself fails, the error identifies the operation and the directory holding
+recovery files. A separate completion stamp is retired before replacement and
+restored only after its payload. Preparation reports the active phase and
+includes the failed file operation and paths in its error.
+The query's `recipe` field reports declared steps and logical artifact URIs.
+`lunco-assets verify
 --twin <root> [-a <key>]` uses the same registry checks; without a key it checks
 recommended datasets. Packaging must include the cache, receipt and declared
 inputs, then verify the extracted Twin. Missing source for an explicitly
