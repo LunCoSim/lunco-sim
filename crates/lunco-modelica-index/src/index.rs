@@ -397,38 +397,62 @@ impl ModelicaIndex {
         key
     }
 
-    /// Optimistic component-add. Called by the Modelica document source-edit
-    /// path in response to a structural component addition.
-    /// Returns the assigned key.
-    ///
-    /// `class` is fully qualified (e.g. `"Rocket.Engine"`). The Index
-    /// stores a placeholder entry with no source range / placement —
-    /// those fill in on the next AST reconcile.
+    /// Index an added declaration from the accepted AST mutation. Its token
+    /// locations came from a parsed fragment, so it has no document range yet.
     pub fn patch_component_added(
         &mut self,
         class: &str,
-        name: &str,
-        type_name: &str,
+        component: &ast::Component,
     ) -> ComponentKey {
         self.generation = self.generation.saturating_add(1);
+        self.insert_component(class, component, None)
+    }
+
+    fn insert_component(
+        &mut self,
+        class: &str,
+        component: &ast::Component,
+        source_range: Option<TextRange>,
+    ) -> ComponentKey {
+        use lunco_modelica_ast::ast_extract::{ComponentInfo, string_literal_value};
+
+        let ComponentInfo {
+            name,
+            type_name,
+            description,
+            modifications,
+        } = ComponentInfo::from(component);
         let key = self.alloc_component_key();
         let entry = ComponentEntry {
             key,
-            node_id: NodeId::new(format!("{}|component|{}", class, name)),
+            node_id: NodeId::new(format!("{class}|component|{name}")),
             class: class.to_string(),
-            name: name.to_string(),
-            type_name: type_name.to_string(),
-            description: String::new(),
-            unit: None,
-            modifications: HashMap::new(),
-            source_range: None,
-            placement: None,
-            causality: Causality::None,
-            variability: Variability::Continuous,
-            binding: None,
+            name: name.clone(),
+            type_name,
+            description,
+            unit: component
+                .modifications
+                .get("unit")
+                .and_then(string_literal_value),
+            modifications,
+            source_range,
+            placement: lunco_modelica_ast::annotations::extract_placement(&component.annotation)
+                .map(annotation_placement_to_pretty),
+            causality: map_causality(&component.causality),
+            variability: map_variability(&component.variability),
+            // Rumoca uses a separate field for an explicit start modifier.
+            binding: component
+                .binding
+                .as_ref()
+                .map(ToString::to_string)
+                .or_else(|| {
+                    component
+                        .start_is_modification
+                        .then(|| component.start.to_string())
+                }),
         };
         self.component_by_qualified
-            .insert((class.to_string(), name.to_string()), key);
+            .insert((class.to_string(), name), key);
         self.components_by_class
             .entry(class.to_string())
             .or_default()
@@ -847,66 +871,11 @@ fn insert_class_recursive(idx: &mut ModelicaIndex, qualified: String, class_def:
     };
     idx.classes.insert(qualified.clone(), entry);
 
-    // Components — keyed by (class, name) so multiple classes can hold
-    // colliding instance names without aliasing. Per-class iteration
-    // preserves declaration order via `components_by_class`.
-    //
-    // Description + modifications come from `lunco_modelica_ast::ast_extract::extract_components_for_class`
-    // so the index and inspector share Rumoca expression rendering and decoded descriptions.
-    let infos = lunco_modelica_ast::ast_extract::extract_components_for_class(class_def);
-    let info_by_name: HashMap<String, lunco_modelica_ast::ast_extract::ComponentInfo> =
-        infos.into_iter().map(|i| (i.name.clone(), i)).collect();
-    for (name, comp) in class_def.components.iter() {
-        let key = idx.alloc_component_key();
-        let info = info_by_name.get(name).cloned();
-        let (description, modifications) = info
-            .map(|i| (i.description, i.modifications))
-            .unwrap_or_default();
-        // Placement extraction reuses the metamodel
-        // [`lunco_modelica_ast::annotations::extract_placement`] and converts the
-        // annotation-shaped `Placement(transformation(...))` to the
-        // simpler `pretty::Placement` (centre+size) that the wire
-        // format uses.
-        let placement = lunco_modelica_ast::annotations::extract_placement(&comp.annotation)
-            .map(annotation_placement_to_pretty);
-        let entry = ComponentEntry {
-            key,
-            node_id: NodeId::new(format!("{}|component|{}", qualified, name)),
-            class: qualified.clone(),
-            name: name.to_string(),
-            type_name: format!("{}", comp.type_name),
-            description,
-            unit: comp
-                .modifications
-                .get("unit")
-                .and_then(lunco_modelica_ast::ast_extract::string_literal_value),
-            modifications,
-            source_range: Some(TextRange::new(
-                comp.name_token.location.start as usize,
-                comp.name_token.location.end as usize,
-            )),
-            placement,
-            causality: map_causality(&comp.causality),
-            variability: map_variability(&comp.variability),
-            // Source `parameter Real g = 9.81;` — rumoca main puts the
-            // `= 9.81` in `comp.binding`; `comp.start` holds the type's
-            // default (0.0) unless a `start=` modifier set it. Prefer the
-            // binding, fall back to a start *modification* only.
-            binding: comp.binding.as_ref().map(|e| format!("{e}")).or_else(|| {
-                if comp.start_is_modification {
-                    Some(format!("{}", comp.start))
-                } else {
-                    None
-                }
-            }),
-        };
-        idx.component_by_qualified
-            .insert((qualified.clone(), name.to_string()), key);
-        idx.components_by_class
-            .entry(qualified.clone())
-            .or_default()
-            .push(key);
-        idx.components.push(entry);
+    // Preserve declaration order in the per-class component list.
+    for component in class_def.components.values() {
+        let location = &component.name_token.location;
+        let source_range = TextRange::new(location.start as usize, location.end as usize);
+        idx.insert_component(&qualified, component, Some(source_range));
     }
 
     // Connect equations — `connect(a.p, b.q)` becomes a
@@ -1076,10 +1045,21 @@ end Labels;"#;
         assert_eq!(names, vec!["R", "x", "resistor"]);
     }
 
+    fn add_test_component(
+        index: &mut ModelicaIndex,
+        class: &str,
+        name: &str,
+        type_name: &str,
+    ) -> ComponentKey {
+        let source = format!("model Fixture {type_name} {name}; end Fixture;");
+        let ast = rumoca_phase_parse::parse_to_ast(&source, "fixture.mo").unwrap();
+        index.patch_component_added(class, &ast.classes["Fixture"].components[name])
+    }
+
     #[test]
     fn patch_component_added_then_removed() {
         let mut idx = ModelicaIndex::new();
-        let key = idx.patch_component_added("RC", "extra", "Real");
+        let key = add_test_component(&mut idx, "RC", "extra", "Real");
         assert!(idx.find_component("RC", "extra").is_some());
         assert_eq!(idx.find_component("RC", "extra").unwrap().key, key);
 
@@ -1099,10 +1079,10 @@ end Labels;"#;
         // not `components.len()`. Add A,B; remove A; add C; mutate C —
         // B must be untouched and C must carry the edit.
         let mut idx = ModelicaIndex::new();
-        idx.patch_component_added("RC", "a", "Real");
-        let key_b = idx.patch_component_added("RC", "b", "Real");
+        add_test_component(&mut idx, "RC", "a", "Real");
+        let key_b = add_test_component(&mut idx, "RC", "b", "Real");
         idx.patch_component_removed("RC", "a");
-        let key_c = idx.patch_component_added("RC", "c", "Real");
+        let key_c = add_test_component(&mut idx, "RC", "c", "Real");
 
         // The newly minted key must not collide with the still-live B.
         assert_ne!(
@@ -1147,7 +1127,7 @@ end Labels;"#;
     #[test]
     fn patch_placement_changed_updates_existing() {
         let mut idx = ModelicaIndex::new();
-        idx.patch_component_added("RC", "r1", "Resistor");
+        add_test_component(&mut idx, "RC", "r1", "Resistor");
         let new_placement = Placement::at(10.0, 20.0);
         idx.patch_placement_changed("RC", "r1", new_placement);
         let entry = idx.find_component("RC", "r1").expect("r1 present");
@@ -1184,8 +1164,8 @@ end Labels;"#;
     #[test]
     fn patch_connection_added_then_removed() {
         let mut idx = ModelicaIndex::new();
-        idx.patch_component_added("RC", "r1", "Resistor");
-        idx.patch_component_added("RC", "c1", "Capacitor");
+        add_test_component(&mut idx, "RC", "r1", "Resistor");
+        add_test_component(&mut idx, "RC", "c1", "Capacitor");
 
         let key = idx.patch_connection_added("RC", "r1", Some("p"), "c1", Some("n"));
         let conns: Vec<_> = idx.connections_in_class("RC").collect();
@@ -1201,8 +1181,8 @@ end Labels;"#;
     #[test]
     fn patch_connection_remove_nonmatching_is_noop() {
         let mut idx = ModelicaIndex::new();
-        idx.patch_component_added("RC", "r1", "R");
-        idx.patch_component_added("RC", "c1", "C");
+        add_test_component(&mut idx, "RC", "r1", "R");
+        add_test_component(&mut idx, "RC", "c1", "C");
         idx.patch_connection_added("RC", "r1", Some("p"), "c1", Some("n"));
 
         // Mismatched ports — should not remove the existing one.
@@ -1213,7 +1193,7 @@ end Labels;"#;
     #[test]
     fn patch_parameter_changed_writes_modification() {
         let mut idx = ModelicaIndex::new();
-        idx.patch_component_added("RC", "r1", "Resistor");
+        add_test_component(&mut idx, "RC", "r1", "Resistor");
 
         idx.patch_parameter_changed("RC", "r1", "R", "1000");
         let entry = idx.find_component("RC", "r1").unwrap();
@@ -1257,8 +1237,8 @@ end Labels;"#;
         let mut idx = ModelicaIndex::new();
         idx.patch_class_added("Pkg", ClassKind::Package);
         idx.patch_class_added("Pkg.Inner", ClassKind::Model);
-        idx.patch_component_added("Pkg.Inner", "x", "Real");
-        idx.patch_component_added("Pkg.Inner", "y", "Real");
+        add_test_component(&mut idx, "Pkg.Inner", "x", "Real");
+        add_test_component(&mut idx, "Pkg.Inner", "y", "Real");
         assert_eq!(idx.components_in_class("Pkg.Inner").count(), 2);
         assert_eq!(idx.classes["Pkg"].children.len(), 1);
 

@@ -229,6 +229,14 @@ comments and short definitions are covered by the parser's source-span checks.
 Read-only library document loading selects the exact qualified class through
 Rumoca's stored-definition lookup; a missing sibling cannot resolve another class with
 the same leaf name.
+
+After a typed component or variable addition, the document indexes the new
+declaration from the accepted AST. The inspector immediately shows its type
+and modifications. The source parser supplies the document byte range on the
+next parse. A modification draft is scoped to its document, class, component,
+parameter, and authored value. It commits through the document command when
+the field loses focus.
+
 Deferred edit parsing wakes at its recorded debounce deadline even when the
 document-registry and worker-capacity revisions are unchanged. The source
 generation remains the admission fence; completed runs retain their compiled

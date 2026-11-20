@@ -725,7 +725,7 @@ impl Plugin for ModelicaUiPlugin {
             // projections steal cycles the active tab's projection
             // needs. See `cancel_inactive_projections` rustdoc.
             .add_systems(Update, panels::canvas_diagram::cancel_inactive_projections)
-            .register_panel(panels::inspector::InspectorPanel)
+            .register_panel(panels::inspector::InspectorPanel::default())
             .register_panel(panels::palette::ComponentPalettePanel)
             // Multi-instance: one tab per open document. Instances are
             // opened at runtime by the Package Browser.

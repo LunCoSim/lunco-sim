@@ -90,7 +90,16 @@ pub(crate) fn on_diagram_text_requested(trigger: On<DiagramTextRequested>, mut c
     });
 }
 
-pub struct InspectorPanel;
+#[derive(Default)]
+pub struct InspectorPanel {
+    modification_draft: Option<ModificationDraft>,
+}
+
+struct ModificationDraft {
+    field: egui::Id,
+    authored: String,
+    value: String,
+}
 
 impl Panel for InspectorPanel {
     fn id(&self) -> PanelId {
@@ -110,6 +119,7 @@ impl Panel for InspectorPanel {
     }
 
     fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let draft = self.modification_draft.take();
         let (warning, muted) = ctx
             .resource::<lunco_theme::Theme>()
             .map(|t| (t.tokens.warning, t.tokens.text_subdued))
@@ -314,19 +324,30 @@ impl Panel for InspectorPanel {
                         if let Some(d) = param_desc.get(k) {
                             name_resp.on_hover_text(d);
                         }
-                        let mut buf = v.clone();
-                        // `add_enabled` disables the input on read-only
-                        // tabs — egui dims it and ignores keystrokes,
-                        // so the user clearly sees they can't edit.
+                        let field =
+                            ui.make_persistent_id((doc_id.raw(), &class, &instance_name, k));
+                        let mut buf = draft
+                            .as_ref()
+                            .filter(|draft| draft.field == field && draft.authored == *v)
+                            .map(|draft| draft.value.clone())
+                            .unwrap_or_else(|| v.clone());
                         let resp = ui.add_enabled(
                             !read_only,
-                            lunco_workbench_widgets::text_editor::singleline(&mut buf),
+                            lunco_workbench_widgets::text_editor::singleline(&mut buf).id(field),
                         );
                         if let Some(d) = param_desc.get(k) {
                             resp.clone().on_hover_text(d);
                         }
-                        if !read_only && resp.lost_focus() && buf != *v {
-                            edits.push((k.clone(), buf));
+                        if !read_only && buf != *v {
+                            if resp.lost_focus() {
+                                edits.push((k.clone(), buf));
+                            } else if resp.has_focus() {
+                                self.modification_draft = Some(ModificationDraft {
+                                    field,
+                                    authored: v.clone(),
+                                    value: buf,
+                                });
+                            }
                         }
                         ui.end_row();
                     }
