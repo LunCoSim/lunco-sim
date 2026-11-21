@@ -623,6 +623,71 @@ are removed when the owner Twin closes or another Twin takes ownership. This
 keeps application code, Rhai policy, and HTML templates on the same generic
 collection path without giving scripts direct resource access.
 
+### Twin-authored tabbed workspaces
+
+Use a manifest `workspace` on one runtime surface when several page templates
+belong to the same working area. The surface `id` is the single geometry,
+drag/resize, and persisted-layout owner. Its shell template authors the tab
+controls and declares the page host node with the configured `id`; each page
+keeps its own HTML template, stylesheet, exposure `namespace`, bindings,
+collections, and dropdowns. The runtime replaces the host's page child when the
+selected Twin setting changes, without replacing or repositioning the shell.
+
+The workspace lists a `default_page` and two or more pages. Each page has a
+stable `id` and may name a Twin boolean `setting`. Rhai remains responsible for
+route policy and changes those settings; the runtime only resolves the
+selected page and mounts its authored assets. A shell tab control may set
+`tag:ui_tab_id` to a page id; the runtime adds the CSS class `is-active` to the
+selected control. The button's `on_press`, `tag:action`, and other parameters
+remain Twin-authored. This keeps layout identity and composition in the generic
+runtime while page copy, content, styles, data, and process rules stay in the
+Twin.
+
+```json
+{
+  "id": "factory-workspace",
+  "template": "ui/factory_workspace.html",
+  "stylesheet": "ui/factory_workspace.css",
+  "namespace": "factory-workspace",
+  "workspace": {
+    "host": "workspace-page",
+    "default_page": "recipes",
+    "pages": [
+      {
+        "id": "recipes",
+        "label": "Recipes",
+        "template": "ui/recipes.html",
+        "stylesheet": "ui/recipes.css",
+        "namespace": "factory-recipes",
+        "setting": "ui.factory_recipes",
+        "setting_default": true
+      },
+      {
+        "id": "materials",
+        "label": "Materials",
+        "template": "ui/materials.html",
+        "stylesheet": "ui/materials.css",
+        "namespace": "factory-materials",
+        "setting": "ui.factory_materials"
+      }
+    ]
+  },
+  "placement": {
+    "mode": "window",
+    "anchor": "top_left",
+    "offset": [254, 58],
+    "width": 900,
+    "height": 820
+  }
+}
+```
+
+Page IDs and namespaces must be unique. The selected page's exposure must be
+visible for the shell to mount. Runtime UI forms remain Twin-scoped, so a page
+switch recreates its HUI controls and reapplies retained form values. Keep
+secondary pickers and modal workflows as separate surfaces when they need to
+overlay the working page.
+
 ### 3. Style the contents
 
 Flair is CSS-like and maps properties to Bevy UI components. The practical

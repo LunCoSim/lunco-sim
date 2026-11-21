@@ -674,7 +674,8 @@ fn on_inspect_runtime_ui_form(
     trigger: On<InspectRuntimeUiForm>,
     workspace: Option<Res<WorkspaceResource>>,
     forms: Res<RuntimeUiForms>,
-    surfaces: Query<&RuntimeUiSurface>,
+    surfaces: Query<(Entity, &RuntimeUiSurface)>,
+    workspace_pages: Query<&RuntimeUiWorkspacePageRoot>,
     rows: Query<&RuntimeUiCollectionRow>,
 ) -> Result<Ack, String> {
     let owner = workspace
@@ -689,6 +690,13 @@ fn on_inspect_runtime_ui_form(
         .forms
         .get(&trigger.event().form_id)
         .ok_or_else(|| "the requested runtime HTML form is not initialized".to_owned())?;
+    let mounted_workspace_pages = surfaces.iter().filter_map(|(entity, surface)| {
+        let active = surface.active_workspace_page.as_ref()?;
+        workspace_pages
+            .iter()
+            .any(|page| page.owner == entity && page.page_id == *active)
+            .then(|| (surface.layout_id.clone(), HookValue::str(active.clone())))
+    });
     Ok(Ack::with_data(
         OpId::new(),
         lunco_hooks::HookValue::map([
@@ -709,11 +717,13 @@ fn on_inspect_runtime_ui_form(
             ),
             (
                 "surfaces",
-                HookValue::map(
-                    surfaces.iter().map(|surface| {
-                        (surface.layout_id.clone(), HookValue::Bool(surface.mounted))
-                    }),
-                ),
+                HookValue::map(surfaces.iter().map(|(_, surface)| {
+                    (surface.layout_id.clone(), HookValue::Bool(surface.mounted))
+                })),
+            ),
+            (
+                "mounted_workspace_pages",
+                HookValue::map(mounted_workspace_pages),
             ),
             (
                 "rendered_row_count",
@@ -1185,6 +1195,12 @@ pub struct RuntimeUiSurfaceDefinition {
     /// action dispatch. The runtime does not know what the options represent.
     #[serde(default)]
     pub dropdowns: Vec<RuntimeUiDropdownDefinition>,
+    /// Compose one authored page at a time inside this stable surface root.
+    /// The shell template owns the tab controls and must include a node with
+    /// `id` equal to `workspace.host`; each page remains a separate Twin HTML
+    /// template with its own namespace and stylesheet.
+    #[serde(default)]
+    pub workspace: Option<RuntimeUiWorkspaceDefinition>,
     #[serde(default)]
     pub visible_in_perspective: Option<RuntimeUiPerspectiveFilter>,
     #[serde(default)]
@@ -1234,6 +1250,39 @@ pub struct RuntimeUiBindingDefinition {
     pub css: bool,
     #[serde(default)]
     pub map: HashMap<String, String>,
+}
+
+/// Twin-authored pages composed inside one persistent runtime UI surface.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeUiWorkspaceDefinition {
+    /// HUI `id` of the authored node that receives the selected page template.
+    pub host: String,
+    /// The page selected when no page setting is enabled.
+    pub default_page: String,
+    pub pages: Vec<RuntimeUiWorkspacePageDefinition>,
+}
+
+/// One Twin-authored page in a composed runtime workspace.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeUiWorkspacePageDefinition {
+    pub id: String,
+    pub label: String,
+    pub template: String,
+    pub stylesheet: String,
+    pub namespace: String,
+    /// Twin setting selecting this page. Rhai remains the route policy owner.
+    #[serde(default)]
+    pub setting: Option<String>,
+    #[serde(default)]
+    pub setting_default: bool,
+    #[serde(default)]
+    pub bindings: HashMap<String, RuntimeUiBindingDefinition>,
+    #[serde(default)]
+    pub collections: Vec<RuntimeUiCollectionDefinition>,
+    #[serde(default)]
+    pub dropdowns: Vec<RuntimeUiDropdownDefinition>,
 }
 
 /// Authored callback-to-command mapping. HUI knows only the callback name;
@@ -1358,6 +1407,22 @@ impl RuntimeUiManifest {
                     .iter()
                     .find(|dropdown| dropdown.trigger_action == action)
                     .map(|dropdown| runtime_ui_dropdown_key(&surface.id, &dropdown.id))
+                    .or_else(|| {
+                        surface.workspace.as_ref().and_then(|workspace| {
+                            workspace.pages.iter().find_map(|page| {
+                                page.dropdowns
+                                    .iter()
+                                    .find(|dropdown| dropdown.trigger_action == action)
+                                    .map(|dropdown| {
+                                        runtime_ui_workspace_dropdown_key(
+                                            &surface.id,
+                                            &page.id,
+                                            &dropdown.id,
+                                        )
+                                    })
+                            })
+                        })
+                    })
             })
     }
 
@@ -1366,10 +1431,27 @@ impl RuntimeUiManifest {
         key: &str,
     ) -> Option<(&RuntimeUiSurfaceDefinition, &RuntimeUiDropdownDefinition)> {
         self.surfaces.iter().find_map(|surface| {
-            surface.dropdowns.iter().find_map(|dropdown| {
-                (runtime_ui_dropdown_key(&surface.id, &dropdown.id) == key)
-                    .then_some((surface, dropdown))
-            })
+            surface
+                .dropdowns
+                .iter()
+                .find_map(|dropdown| {
+                    (runtime_ui_dropdown_key(&surface.id, &dropdown.id) == key)
+                        .then_some((surface, dropdown))
+                })
+                .or_else(|| {
+                    surface.workspace.as_ref().and_then(|workspace| {
+                        workspace.pages.iter().find_map(|page| {
+                            page.dropdowns.iter().find_map(|dropdown| {
+                                (runtime_ui_workspace_dropdown_key(
+                                    &surface.id,
+                                    &page.id,
+                                    &dropdown.id,
+                                ) == key)
+                                    .then_some((surface, dropdown))
+                            })
+                        })
+                    })
+                })
         })
     }
 
@@ -1395,6 +1477,161 @@ impl RuntimeUiManifest {
                     "duplicate runtime UI namespace `{}`",
                     surface.namespace
                 ));
+            }
+            if let Some(workspace) = &surface.workspace {
+                if !surface.bindings.is_empty()
+                    || !surface.collections.is_empty()
+                    || !surface.dropdowns.is_empty()
+                {
+                    return Err(format!(
+                        "workspace `{}` must declare bindings, collections, and dropdowns on its pages",
+                        surface.id
+                    ));
+                }
+                require_non_empty("workspace page host", &workspace.host)?;
+                require_non_empty("workspace default page", &workspace.default_page)?;
+                if workspace.pages.len() < 2 || workspace.pages.len() > 64 {
+                    return Err(format!(
+                        "runtime UI workspace `{}` must declare 2–64 pages",
+                        surface.id
+                    ));
+                }
+                let mut page_ids = HashSet::new();
+                let mut page_namespaces = HashSet::new();
+                let mut page_settings = HashSet::new();
+                let mut default_found = false;
+                let mut default_setting_count = 0usize;
+                for page in &workspace.pages {
+                    require_non_empty("workspace page id", &page.id)?;
+                    require_non_empty("workspace page label", &page.label)?;
+                    require_asset_path("workspace page template", &page.template)?;
+                    require_asset_path("workspace page stylesheet", &page.stylesheet)?;
+                    require_non_empty("workspace page namespace", &page.namespace)?;
+                    if !page_ids.insert(page.id.as_str()) {
+                        return Err(format!(
+                            "duplicate workspace page id `{}` on `{}`",
+                            page.id, surface.id
+                        ));
+                    }
+                    if !page_namespaces.insert(page.namespace.as_str())
+                        || !namespaces.insert(page.namespace.as_str())
+                    {
+                        return Err(format!(
+                            "duplicate runtime UI namespace `{}`",
+                            page.namespace
+                        ));
+                    }
+                    if page.id == workspace.default_page {
+                        default_found = true;
+                    }
+                    if let Some(setting) = &page.setting {
+                        if surface.owner == RuntimeUiSurfaceOwner::Application {
+                            return Err(format!(
+                                "application workspace `{}` cannot bind Twin page settings",
+                                surface.id
+                            ));
+                        }
+                        lunco_twin::TwinManifest::validate_setting_key(setting)?;
+                        if !page_settings.insert(setting.as_str()) {
+                            return Err(format!(
+                                "workspace `{}` repeats page setting `{setting}`",
+                                surface.id
+                            ));
+                        }
+                    }
+                    if page.setting_default {
+                        default_setting_count += 1;
+                    }
+                    for (target, binding) in &page.bindings {
+                        require_non_empty("workspace page binding target", target)?;
+                        require_non_empty("workspace page binding source", &binding.source)?;
+                        for (source_value, rendered_value) in &binding.map {
+                            require_non_empty("workspace page binding map key", source_value)?;
+                            require_non_empty("workspace page binding map value", rendered_value)?;
+                        }
+                    }
+                    let mut sources = HashSet::new();
+                    let mut hosts = HashSet::new();
+                    for collection in &page.collections {
+                        require_non_empty("workspace collection source", &collection.source)?;
+                        require_non_empty("workspace collection container", &collection.container)?;
+                        require_asset_path("workspace collection template", &collection.template)?;
+                        require_non_empty("workspace collection key", &collection.key)?;
+                        if let Some(scrollbar) = &collection.scrollbar {
+                            require_non_empty("workspace collection scrollbar", scrollbar)?;
+                        }
+                        if !sources.insert(collection.source.as_str()) {
+                            return Err(format!(
+                                "duplicate workspace collection source `{}` on page `{}`",
+                                collection.source, page.id
+                            ));
+                        }
+                        if !hosts.insert(collection.container.as_str()) {
+                            return Err(format!(
+                                "duplicate workspace collection host `{}` on page `{}`",
+                                collection.container, page.id
+                            ));
+                        }
+                    }
+                    let mut dropdown_ids = HashSet::new();
+                    let mut dropdown_sources = HashSet::new();
+                    for dropdown in &page.dropdowns {
+                        for (label, value) in [
+                            ("workspace dropdown id", &dropdown.id),
+                            (
+                                "workspace dropdown trigger action",
+                                &dropdown.trigger_action,
+                            ),
+                            ("workspace dropdown source", &dropdown.source),
+                            ("workspace dropdown key", &dropdown.key),
+                            ("workspace dropdown label", &dropdown.label),
+                            ("workspace dropdown action", &dropdown.action),
+                            ("workspace dropdown width source", &dropdown.width_source),
+                            (
+                                "workspace dropdown max height source",
+                                &dropdown.max_height_source,
+                            ),
+                        ] {
+                            require_non_empty(label, value)?;
+                        }
+                        if !dropdown_ids.insert(dropdown.id.as_str()) {
+                            return Err(format!(
+                                "duplicate workspace dropdown id `{}` on page `{}`",
+                                dropdown.id, page.id
+                            ));
+                        }
+                        if !dropdown_triggers.insert(dropdown.trigger_action.as_str()) {
+                            return Err(format!(
+                                "duplicate runtime UI dropdown trigger `{}`",
+                                dropdown.trigger_action
+                            ));
+                        }
+                        if !dropdown_sources.insert(dropdown.source.as_str()) {
+                            return Err(format!(
+                                "duplicate workspace dropdown source `{}` on page `{}`",
+                                dropdown.source, page.id
+                            ));
+                        }
+                        if let Some(selected_source) = &dropdown.selected_source {
+                            require_non_empty(
+                                "workspace dropdown selected source",
+                                selected_source,
+                            )?;
+                        }
+                    }
+                }
+                if !default_found {
+                    return Err(format!(
+                        "workspace `{}` default page `{}` is not declared",
+                        surface.id, workspace.default_page
+                    ));
+                }
+                if default_setting_count > 1 {
+                    return Err(format!(
+                        "workspace `{}` may have at most one page setting that defaults on",
+                        surface.id
+                    ));
+                }
             }
             if let Some(perspective) = &surface.visible_in_perspective {
                 perspective.validates()?;
@@ -1570,6 +1807,10 @@ fn runtime_ui_dropdown_key(surface_id: &str, dropdown_id: &str) -> String {
     format!("{surface_id}::{dropdown_id}")
 }
 
+fn runtime_ui_workspace_dropdown_key(surface_id: &str, page_id: &str, dropdown_id: &str) -> String {
+    format!("{surface_id}::{page_id}::{dropdown_id}")
+}
+
 fn require_non_empty(label: &str, value: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         Err(format!("{label} must not be empty"))
@@ -1737,6 +1978,7 @@ impl Plugin for RuntimeUiPlugin {
                         .before(bevy_hui::HuiSystems::Style),
                     sync_runtime_ui_html_classes
                         .after(bevy_hui::HuiSystems::Build)
+                        .after(sync_runtime_ui_workspace_tab_states)
                         .before(bevy_hui::HuiSystems::Style),
                 ),
             )
@@ -1748,16 +1990,30 @@ impl Plugin for RuntimeUiPlugin {
                 Update,
                 (
                     sync_runtime_ui_manifest,
+                    sync_runtime_ui_workspace_selection.after(sync_runtime_ui_manifest),
                     mount_runtime_ui_surfaces
-                        .after(sync_runtime_ui_manifest)
+                        .after(sync_runtime_ui_workspace_selection)
                         .before(bevy_hui::HuiSystems::Build),
                     bind_runtime_ui_to_camera.after(apply_runtime_ui_exposures),
                     apply_runtime_ui_exposures
                         .after(sync_runtime_ui_manifest)
+                        .after(sync_runtime_ui_workspace_selection)
                         .after(bevy_hui::HuiSystems::Build)
                         .before(bevy_hui::HuiSystems::Style),
                     apply_runtime_ui_surface_interactions
                         .after(apply_runtime_ui_exposures)
+                        .before(bevy_hui::HuiSystems::Style),
+                    mount_runtime_ui_workspace_page
+                        .after(apply_runtime_ui_exposures)
+                        .after(bevy_hui::HuiSystems::Build)
+                        .before(bevy_hui::HuiSystems::Style),
+                    apply_runtime_ui_workspace_page_exposures
+                        .after(mount_runtime_ui_workspace_page)
+                        .after(bevy_hui::HuiSystems::Build)
+                        .before(bevy_hui::HuiSystems::Style),
+                    sync_runtime_ui_workspace_tab_states
+                        .after(mount_runtime_ui_workspace_page)
+                        .after(bevy_hui::HuiSystems::Build)
                         .before(bevy_hui::HuiSystems::Style),
                     reconcile_runtime_ui_collections
                         .after(apply_runtime_ui_exposures)
@@ -1866,20 +2122,31 @@ impl RuntimeUiManifestState {
         source: &str,
     ) -> Result<Option<Option<String>>, String> {
         let resolve = |manifest: &RuntimeUiManifest| {
-            manifest
-                .surfaces
-                .iter()
-                .find(|surface| {
-                    surface.namespace == namespace
-                        && surface.owner == RuntimeUiSurfaceOwner::Workspace
-                })
-                .and_then(|surface| {
-                    surface
+            manifest.surfaces.iter().find_map(|surface| {
+                if surface.owner != RuntimeUiSurfaceOwner::Workspace {
+                    return None;
+                }
+                if surface.namespace == namespace {
+                    if let Some(collection) = surface
                         .collections
                         .iter()
                         .find(|collection| collection.source == source)
+                    {
+                        return Some(collection.key.clone());
+                    }
+                }
+                surface.workspace.as_ref().and_then(|workspace| {
+                    workspace.pages.iter().find_map(|page| {
+                        if page.namespace != namespace {
+                            return None;
+                        }
+                        page.collections
+                            .iter()
+                            .find(|collection| collection.source == source)
+                            .map(|collection| collection.key.clone())
+                    })
                 })
-                .map(|collection| collection.key.clone())
+            })
         };
         if self.selected == selected
             && let Some(manifest) = &self.manifest
@@ -2055,11 +2322,17 @@ struct ResolvedRuntimeUiPlacement {
 pub struct RuntimeUiSurface {
     layout_id: String,
     namespace: String,
+    /// The manifest namespace is replaced by the selected page namespace while
+    /// a composed workspace is mounted. `layout_id` remains the one stable
+    /// geometry and persistence identity across every page change.
+    workspace: Option<RuntimeUiWorkspace>,
+    active_workspace_page: Option<String>,
     owner: RuntimeUiSurfaceOwner,
     overlay: bool,
     template: Handle<HtmlTemplate>,
     stylesheet: Handle<StyleSheet>,
     bindings: HashMap<String, RuntimeUiBindingDefinition>,
+    base_collections: Vec<RuntimeUiCollection>,
     collections: Vec<RuntimeUiCollection>,
     visible_in_perspective: Option<RuntimeUiPerspectiveFilter>,
     gate: Option<String>,
@@ -2127,22 +2400,15 @@ impl RuntimeUiSurface {
         stylesheet: Handle<StyleSheet>,
         server: Option<&AssetServer>,
     ) -> Result<Self, String> {
-        Ok(Self {
-            layout_id: definition.id.clone(),
-            namespace: definition.namespace.clone(),
-            owner: definition.owner,
-            overlay: definition.overlay,
-            template,
-            stylesheet,
-            bindings: definition.bindings.clone(),
-            collections: definition
-                .collections
+        let mut workspace_runtime = if let Some(workspace) = &definition.workspace {
+            let pages = workspace
+                .pages
                 .iter()
-                .map(|collection| {
+                .map(|page| {
                     let template = match server {
                         Some(server) => server.load(
                             lunco_assets_core::asset_path::load_asset_path(
-                                &collection.template,
+                                &page.template,
                                 None,
                                 None,
                                 None,
@@ -2151,16 +2417,63 @@ impl RuntimeUiSurface {
                         ),
                         None => Handle::default(),
                     };
-                    Ok(RuntimeUiCollection {
-                        source: collection.source.clone(),
-                        container: collection.container.clone(),
+                    let stylesheet = match server {
+                        Some(server) => server.load(
+                            lunco_assets_core::asset_path::load_asset_path(
+                                &page.stylesheet,
+                                None,
+                                None,
+                                None,
+                            )
+                            .map_err(|error| error.to_string())?,
+                        ),
+                        None => Handle::default(),
+                    };
+                    Ok(RuntimeUiWorkspacePage {
+                        id: page.id.clone(),
+                        namespace: page.namespace.clone(),
+                        setting: page.setting.clone(),
+                        setting_default: page.setting_default,
+                        bindings: page.bindings.clone(),
                         template,
-                        key: collection.key.clone(),
-                        css: collection.css.clone(),
-                        scrollbar: collection.scrollbar.clone(),
+                        stylesheet,
+                        collections: load_runtime_ui_collections(&page.collections, server)?,
                     })
                 })
-                .collect::<Result<_, String>>()?,
+                .collect::<Result<Vec<_>, String>>()?;
+            Some(RuntimeUiWorkspace {
+                host: workspace.host.clone(),
+                default_page: workspace.default_page.clone(),
+                pages,
+            })
+        } else {
+            None
+        };
+        let initial_page = workspace_runtime.as_ref().and_then(|workspace| {
+            workspace
+                .pages
+                .iter()
+                .find(|page| page.id == workspace.default_page)
+        });
+        let initial_namespace = initial_page.map(|page| page.namespace.clone());
+        let initial_page_id = initial_page.map(|page| page.id.clone());
+        let initial_bindings = initial_page.map(|page| page.bindings.clone());
+        let initial_collections = initial_page.map(|page| page.collections.clone());
+        let base_collections = load_runtime_ui_collections(&definition.collections, server)?;
+        let mut collections = initial_collections.unwrap_or_default();
+        collections.extend(base_collections.iter().cloned());
+        Ok(Self {
+            layout_id: definition.id.clone(),
+            namespace: initial_namespace.unwrap_or_else(|| definition.namespace.clone()),
+            active_workspace_page: initial_page_id,
+            workspace: workspace_runtime.take(),
+            owner: definition.owner,
+            overlay: definition.overlay,
+            template,
+            stylesheet,
+            bindings: initial_bindings.unwrap_or_else(|| definition.bindings.clone()),
+            base_collections,
+            collections,
             visible_in_perspective: definition.visible_in_perspective.clone(),
             gate: definition.gate.clone(),
             setting: definition.setting.clone(),
@@ -2190,6 +2503,11 @@ impl RuntimeUiSurface {
         &self.namespace
     }
 
+    /// Stable authored identity and persisted geometry key.
+    pub fn id(&self) -> &str {
+        &self.layout_id
+    }
+
     /// Return whether HUI has mounted the retained surface tree.
     pub fn is_mounted(&self) -> bool {
         self.mounted
@@ -2202,6 +2520,65 @@ impl RuntimeUiSurface {
 }
 
 #[derive(Debug)]
+struct RuntimeUiWorkspace {
+    host: String,
+    default_page: String,
+    pages: Vec<RuntimeUiWorkspacePage>,
+}
+
+#[derive(Debug)]
+struct RuntimeUiWorkspacePage {
+    id: String,
+    namespace: String,
+    setting: Option<String>,
+    setting_default: bool,
+    bindings: HashMap<String, RuntimeUiBindingDefinition>,
+    template: Handle<HtmlTemplate>,
+    stylesheet: Handle<StyleSheet>,
+    collections: Vec<RuntimeUiCollection>,
+}
+
+#[derive(Component, Debug)]
+struct RuntimeUiWorkspacePageRoot {
+    owner: Entity,
+    page_id: String,
+    namespace: String,
+    bindings: HashMap<String, RuntimeUiBindingDefinition>,
+    applied_revision: Option<u64>,
+}
+
+fn load_runtime_ui_collections(
+    definitions: &[RuntimeUiCollectionDefinition],
+    server: Option<&AssetServer>,
+) -> Result<Vec<RuntimeUiCollection>, String> {
+    definitions
+        .iter()
+        .map(|collection| {
+            let template = match server {
+                Some(server) => server.load(
+                    lunco_assets_core::asset_path::load_asset_path(
+                        &collection.template,
+                        None,
+                        None,
+                        None,
+                    )
+                    .map_err(|error| error.to_string())?,
+                ),
+                None => Handle::default(),
+            };
+            Ok(RuntimeUiCollection {
+                source: collection.source.clone(),
+                container: collection.container.clone(),
+                template,
+                key: collection.key.clone(),
+                css: collection.css.clone(),
+                scrollbar: collection.scrollbar.clone(),
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
 struct RuntimeUiCollection {
     source: String,
     container: String,
@@ -2424,9 +2801,16 @@ fn update_runtime_ui_recording_contract(
             contract.required_namespaces.clear();
             return;
         }
-        contract
-            .required_namespaces
-            .insert(surface.namespace.clone());
+        contract.required_namespaces.insert(
+            surface
+                .workspace
+                .as_ref()
+                .and_then(|workspace_definition| {
+                    selected_workspace_page_definition(workspace_definition, workspace.as_deref())
+                })
+                .map(|page| page.namespace.clone())
+                .unwrap_or_else(|| surface.namespace.clone()),
+        );
     }
 }
 
@@ -2822,6 +3206,21 @@ fn admit_runtime_ui_manifest(
                             format!("{}{}", scope.asset_root_uri, collection.template);
                     }
                 }
+                if let Some(workspace) = &mut surface.workspace {
+                    for page in &mut workspace.pages {
+                        for path in [&mut page.template, &mut page.stylesheet] {
+                            if !path.contains("://") {
+                                *path = format!("{}{path}", scope.asset_root_uri);
+                            }
+                        }
+                        for collection in &mut page.collections {
+                            if !collection.template.contains("://") {
+                                collection.template =
+                                    format!("{}{}", scope.asset_root_uri, collection.template);
+                            }
+                        }
+                    }
+                }
             }
             selected = Some(manifest);
         }
@@ -2995,16 +3394,26 @@ pub fn mount_runtime_ui_surfaces(
     let Some(manifest) = manifest_state.manifest() else {
         return;
     };
-    let existing_namespaces: HashSet<String> = roots
+    let existing_ids: HashSet<String> = roots
         .iter()
-        .map(|(_, surface, _)| surface.namespace.clone())
+        .map(|(_, surface, _)| surface.layout_id.clone())
         .collect();
     for definition in &manifest.surfaces {
-        if existing_namespaces.contains(&definition.namespace)
-            || !exposures
-                .surfaces
-                .get(&definition.namespace)
-                .is_some_and(|exposure| exposure.visible)
+        if existing_ids.contains(&definition.id) {
+            continue;
+        }
+        let namespace = definition
+            .workspace
+            .as_ref()
+            .and_then(|workspace_definition| {
+                selected_workspace_page_definition(workspace_definition, workspace.as_deref())
+            })
+            .map(|page| page.namespace.as_str())
+            .unwrap_or(definition.namespace.as_str());
+        if !exposures
+            .surfaces
+            .get(namespace)
+            .is_some_and(|exposure| exposure.visible)
         {
             continue;
         }
@@ -3091,9 +3500,17 @@ fn capture_surface_is_visible(
     gates: Option<&RuntimeUiGates>,
     workspace: Option<&lunco_workspace::WorkspaceResource>,
 ) -> bool {
+    let namespace = surface
+        .workspace
+        .as_ref()
+        .and_then(|workspace_definition| {
+            selected_workspace_page_definition(workspace_definition, workspace)
+        })
+        .map(|page| page.namespace.as_str())
+        .unwrap_or(surface.namespace.as_str());
     exposures
         .surfaces
-        .get(&surface.namespace)
+        .get(namespace)
         .is_some_and(|exposure| exposure.visible)
         && runtime_ui_visibility_allows(
             surface.visible_in_perspective.as_ref(),
@@ -3125,6 +3542,220 @@ fn active_twin_setting_is_true(
         Some(lunco_twin::TwinSettingValue::Bool(value)) => *value,
         Some(_) => false,
         None => default,
+    }
+}
+
+fn active_twin_setting_value(
+    workspace: Option<&lunco_workspace::WorkspaceResource>,
+    key: &str,
+) -> Option<bool> {
+    let workspace = workspace?;
+    let twin_id = workspace.active_twin?;
+    match workspace
+        .twin(twin_id)
+        .and_then(|twin| twin.manifest.as_ref())
+        .and_then(|manifest| manifest.setting(key))
+    {
+        Some(lunco_twin::TwinSettingValue::Bool(value)) => Some(*value),
+        _ => None,
+    }
+}
+
+fn selected_workspace_page<'a>(
+    workspace: &'a RuntimeUiWorkspace,
+    twin: Option<&WorkspaceResource>,
+) -> Option<&'a RuntimeUiWorkspacePage> {
+    workspace
+        .pages
+        .iter()
+        .find(|page| {
+            page.setting
+                .as_deref()
+                .is_some_and(|setting| active_twin_setting_value(twin, setting) == Some(true))
+        })
+        .or_else(|| {
+            workspace.pages.iter().find(|page| {
+                page.setting.as_deref().is_some_and(|setting| {
+                    active_twin_setting_value(twin, setting).is_none() && page.setting_default
+                })
+            })
+        })
+        .or_else(|| {
+            workspace
+                .pages
+                .iter()
+                .find(|page| page.id == workspace.default_page)
+        })
+}
+
+fn selected_workspace_page_definition<'a>(
+    workspace: &'a RuntimeUiWorkspaceDefinition,
+    twin: Option<&WorkspaceResource>,
+) -> Option<&'a RuntimeUiWorkspacePageDefinition> {
+    workspace
+        .pages
+        .iter()
+        .find(|page| {
+            page.setting
+                .as_deref()
+                .is_some_and(|setting| active_twin_setting_value(twin, setting) == Some(true))
+        })
+        .or_else(|| {
+            workspace.pages.iter().find(|page| {
+                page.setting.as_deref().is_some_and(|setting| {
+                    active_twin_setting_value(twin, setting).is_none() && page.setting_default
+                })
+            })
+        })
+        .or_else(|| {
+            workspace
+                .pages
+                .iter()
+                .find(|page| page.id == workspace.default_page)
+        })
+}
+
+/// Resolve the Twin's authored route setting to one page before the retained
+/// surface projects its current exposure. Rhai owns the meaning and exclusivity
+/// of settings; this generic adapter only mounts the matching template.
+fn sync_runtime_ui_workspace_selection(
+    workspace: Option<Res<WorkspaceResource>>,
+    mut roots: Query<&mut RuntimeUiSurface>,
+) {
+    for mut surface in &mut roots {
+        let selected = surface.workspace.as_ref().and_then(|workspace_definition| {
+            selected_workspace_page(workspace_definition, workspace.as_deref()).map(|page| {
+                (
+                    page.id.clone(),
+                    page.namespace.clone(),
+                    page.bindings.clone(),
+                    page.collections.clone(),
+                )
+            })
+        });
+        let Some((page_id, namespace, bindings, collections)) = selected else {
+            continue;
+        };
+        if surface.active_workspace_page.as_deref() == Some(page_id.as_str()) {
+            continue;
+        }
+        surface.active_workspace_page = Some(page_id);
+        surface.namespace = namespace;
+        surface.bindings = bindings;
+        surface.collections = collections;
+        let base_collections = surface.base_collections.clone();
+        surface.collections.extend(base_collections);
+        surface.has_projected_exposure = false;
+        surface.applied_revision = 0;
+        surface.presentation_ready = false;
+    }
+}
+
+/// Replace the selected page beneath the authored shell's stable HUI host.
+/// The page entity owns the ordinary HUI template lifecycle; the draggable,
+/// resizable root and its persisted layout identity remain unchanged.
+fn mount_runtime_ui_workspace_page(
+    mut commands: Commands,
+    roots: Query<(Entity, &RuntimeUiSurface, &Visibility)>,
+    ids: Query<(Entity, &UiId)>,
+    parents: Query<&ChildOf>,
+    page_roots: Query<(Entity, &RuntimeUiWorkspacePageRoot)>,
+) {
+    for (root, surface, visibility) in &roots {
+        let Some(workspace) = surface.workspace.as_ref() else {
+            continue;
+        };
+        let Some(page) = surface
+            .active_workspace_page
+            .as_deref()
+            .and_then(|active| workspace.pages.iter().find(|page| page.id == active))
+        else {
+            continue;
+        };
+        let existing = page_roots
+            .iter()
+            .find(|(_, page_root)| page_root.owner == root);
+        if existing
+            .as_ref()
+            .is_some_and(|(_, page_root)| page_root.page_id == page.id)
+        {
+            continue;
+        }
+        if let Some((entity, _)) = existing {
+            commands
+                .entity(entity)
+                .despawn_related::<Children>()
+                .try_despawn();
+        }
+        if !surface.mounted || !matches!(*visibility, Visibility::Visible) {
+            continue;
+        }
+        let Some(host) = ids.iter().find_map(|(entity, id)| {
+            (id.id() == &workspace.host
+                && is_descendant_of_runtime_surface(entity, &HashSet::from([root]), &parents))
+            .then_some(entity)
+        }) else {
+            continue;
+        };
+        commands.spawn((
+            Node::default(),
+            HtmlNode(page.template.clone()),
+            Styled::new(page.stylesheet.clone()),
+            InlineStyle::default(),
+            TemplateProperties::default(),
+            RuntimeUiWorkspacePageRoot {
+                owner: root,
+                page_id: page.id.clone(),
+                namespace: page.namespace.clone(),
+                bindings: page.bindings.clone(),
+                applied_revision: None,
+            },
+            ChildOf(host),
+        ));
+    }
+}
+
+/// Keep the selected tab indicator in Twin CSS while its action and navigation
+/// policy remain authored in the page's HTML and Rhai.
+fn sync_runtime_ui_workspace_tab_states(
+    roots: Query<(Entity, &RuntimeUiSurface)>,
+    mut nodes: Query<(Entity, &mut Tags), With<Node>>,
+    parents: Query<&ChildOf>,
+) {
+    for (root, surface) in &roots {
+        if surface.workspace.is_none() {
+            continue;
+        }
+        let Some(active_page) = surface.active_workspace_page.as_deref() else {
+            continue;
+        };
+        for (entity, mut tags) in &mut nodes {
+            let belongs_to_workspace =
+                runtime_ui_surface_ancestor(entity, &roots, &parents) == Some(root);
+            if !belongs_to_workspace {
+                continue;
+            }
+            let Some(tab_id) = tags.get("ui_tab_id").cloned() else {
+                continue;
+            };
+            let current = tags.get("class").cloned().unwrap_or_default();
+            let mut classes = current
+                .split_whitespace()
+                .filter(|class| *class != "is-active")
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if tab_id == active_page {
+                classes.push("is-active".to_owned());
+            }
+            let next = classes.join(" ");
+            if next != current {
+                if next.is_empty() {
+                    tags.remove("class");
+                } else {
+                    tags.insert("class".to_owned(), next);
+                }
+            }
+        }
     }
 }
 
@@ -3412,7 +4043,7 @@ fn apply_runtime_ui_exposures(
         };
 
         let mut properties_changed = false;
-        let mut style = existing_style.cloned().unwrap_or_default();
+        let mut style = existing_style.as_deref().cloned().unwrap_or_default();
         let mut style_changed = false;
         let default_theme;
         let theme = if let Some(theme) = theme.as_deref() {
@@ -3883,6 +4514,92 @@ fn apply_runtime_ui_property(
     } else if style.get(&css_name) != Some(rendered.as_str()) {
         style.set(css_name, rendered);
         *style_changed = true;
+    }
+}
+
+/// Project the active Twin page's typed exposure into its own HUI template
+/// scope. The shell surface keeps geometry and input ownership; each composed
+/// page still declares its own properties and bindings in Twin assets.
+fn apply_runtime_ui_workspace_page_exposures(
+    mut commands: Commands,
+    exposures: Res<EngineExposures>,
+    theme: Option<Res<lunco_theme::Theme>>,
+    mut pages: Query<(
+        Entity,
+        &mut RuntimeUiWorkspacePageRoot,
+        Option<&mut TemplateProperties>,
+        Option<&mut InlineStyle>,
+    )>,
+) {
+    for (entity, mut page, properties, existing_style) in &mut pages {
+        if page.applied_revision == Some(exposures.revision) {
+            continue;
+        }
+        let Some(exposure) = exposures.surfaces.get(&page.namespace) else {
+            continue;
+        };
+        let Some(mut properties) = properties else {
+            continue;
+        };
+        let mut style = existing_style.as_deref().cloned().unwrap_or_default();
+        let mut properties_changed = false;
+        let mut style_changed = false;
+        let default_theme;
+        let theme = if let Some(theme) = theme.as_deref() {
+            theme
+        } else {
+            default_theme = lunco_theme::Theme::dark();
+            &default_theme
+        };
+        apply_runtime_theme(theme, &mut style, &mut style_changed);
+        if page.bindings.is_empty() {
+            for (name, value) in &exposure.properties {
+                if let Some(rendered) = value.scalar_render() {
+                    apply_runtime_ui_property(
+                        name,
+                        rendered,
+                        false,
+                        &mut properties,
+                        &mut style,
+                        &mut properties_changed,
+                        &mut style_changed,
+                    );
+                }
+            }
+        } else {
+            for (target, binding) in &page.bindings {
+                let Some(value) = exposure.properties.get(&binding.source) else {
+                    continue;
+                };
+                let Some(source_value) = value.scalar_render() else {
+                    continue;
+                };
+                let rendered = if binding.map.is_empty() {
+                    source_value
+                } else {
+                    let Some(mapped) = binding.map.get(&source_value) else {
+                        continue;
+                    };
+                    mapped.clone()
+                };
+                apply_runtime_ui_property(
+                    target,
+                    rendered,
+                    binding.css,
+                    &mut properties,
+                    &mut style,
+                    &mut properties_changed,
+                    &mut style_changed,
+                );
+            }
+        }
+        if style_changed {
+            commands.entity(entity).try_insert(style);
+        }
+        if properties_changed {
+            commands.queue(move |world: &mut World| compile_runtime_ui_context(world, entity));
+        }
+        page.applied_revision = Some(exposures.revision);
     }
 }
 
@@ -5476,7 +6193,7 @@ mod tests {
 
     #[test]
     fn workspace_layer_preserves_reserved_application_surfaces() {
-        let parse = |text| {
+        let parse = |text: &str| -> super::RuntimeUiManifest {
             super::parse_runtime_ui_manifest("test manifest", text)
                 .unwrap()
                 .unwrap()
@@ -5503,12 +6220,13 @@ mod tests {
             ("other", "workspace", "global-state"),
             ("other", "application", "other"),
         ] {
-            let layer = parse(&format!(
+            let source = format!(
                 r#"{{
                 "kind":"lunco.runtime-ui-manifest.v1","surfaces":[
                   {{"id":"{id}","owner":"{owner}","namespace":"{namespace}","template":"twin.html","stylesheet":"a.css","placement":{{"mode":"viewport"}}}}
                 ]}}"#
-            ));
+            );
+            let layer = parse(&source);
             assert!(application.clone().apply_workspace_layer(&layer).is_err());
         }
     }
@@ -6059,9 +6777,12 @@ mod tests {
                     overlay: false,
                     layout_id: "view-switcher".to_owned(),
                     namespace: "view-switcher".to_owned(),
+                    workspace: None,
+                    active_workspace_page: None,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    base_collections: Vec::new(),
                     collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
@@ -6163,9 +6884,12 @@ mod tests {
                     overlay: false,
                     layout_id: "resizable-window".to_owned(),
                     namespace: "resizable-window".to_owned(),
+                    workspace: None,
+                    active_workspace_page: None,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    base_collections: Vec::new(),
                     collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
@@ -6370,9 +7094,12 @@ mod tests {
                     overlay: false,
                     layout_id: "hud".to_owned(),
                     namespace: "hud".to_owned(),
+                    workspace: None,
+                    active_workspace_page: None,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    base_collections: Vec::new(),
                     collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
@@ -6482,9 +7209,12 @@ mod tests {
                     overlay: false,
                     layout_id: "control-hud".to_owned(),
                     namespace: "control-hud".to_owned(),
+                    workspace: None,
+                    active_workspace_page: None,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    base_collections: Vec::new(),
                     collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
@@ -6538,9 +7268,12 @@ mod tests {
             overlay: false,
             layout_id: "recorded".to_owned(),
             namespace: "recorded".to_owned(),
+            workspace: None,
+            active_workspace_page: None,
             template: Handle::default(),
             stylesheet: Handle::default(),
             bindings: HashMap::new(),
+            base_collections: Vec::new(),
             collections: Vec::new(),
             visible_in_perspective: None,
             gate: None,
@@ -6609,9 +7342,12 @@ mod tests {
                     overlay: false,
                     layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
+                    workspace: None,
+                    active_workspace_page: None,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    base_collections: Vec::new(),
                     collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
@@ -6680,9 +7416,12 @@ mod tests {
                     overlay: false,
                     layout_id: "terrain-progress".to_owned(),
                     namespace: "terrain-progress".to_owned(),
+                    workspace: None,
+                    active_workspace_page: None,
                     template: Handle::default(),
                     stylesheet: Handle::default(),
                     bindings: HashMap::new(),
+                    base_collections: Vec::new(),
                     collections: Vec::new(),
                     visible_in_perspective: None,
                     gate: None,
@@ -6898,6 +7637,73 @@ mod tests {
         authored_action
             .validate()
             .expect("Twin-authored semantic actions must be accepted");
+    }
+
+    #[test]
+    fn authored_workspace_has_one_layout_owner_and_twin_scoped_pages() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces": [{
+                    "id": "factory-workspace",
+                    "template": "ui/workspace.html",
+                    "stylesheet": "ui/workspace.css",
+                    "namespace": "factory-workspace",
+                    "workspace": {
+                        "host": "workspace-page",
+                        "default_page": "recipes",
+                        "pages": [
+                            {
+                                "id": "recipes",
+                                "label": "Recipes",
+                                "template": "ui/recipes.html",
+                                "stylesheet": "ui/recipes.css",
+                                "namespace": "factory-recipes",
+                                "setting": "ui.factory_recipes"
+                            },
+                            {
+                                "id": "materials",
+                                "label": "Materials",
+                                "template": "ui/materials.html",
+                                "stylesheet": "ui/materials.css",
+                                "namespace": "factory-materials",
+                                "setting": "ui.factory_materials"
+                            }
+                        ]
+                    },
+                    "placement": {
+                        "mode": "window",
+                        "anchor": "top_left",
+                        "offset": [254, 58],
+                        "width": 900,
+                        "height": 820
+                    }
+                }]
+            }"#,
+        )
+        .expect("workspace manifest should parse");
+        manifest.validate().expect("workspace contract is valid");
+        let definition = &manifest.surfaces[0];
+        let surface = RuntimeUiSurface::from_definition(
+            definition,
+            Handle::default(),
+            Handle::default(),
+            None,
+        )
+        .expect("page assets can be admitted without a server in this unit test");
+        assert_eq!(surface.id(), "factory-workspace");
+        assert_eq!(surface.namespace(), "factory-recipes");
+        assert_eq!(surface.active_workspace_page.as_deref(), Some("recipes"));
+        assert_eq!(surface.layout_id, "factory-workspace");
+
+        let error = {
+            let mut invalid = manifest;
+            invalid.surfaces[0].workspace.as_mut().unwrap().pages[1].namespace =
+                "factory-recipes".to_owned();
+            invalid
+                .validate()
+                .expect_err("page namespaces must be unique")
+        };
+        assert!(error.contains("duplicate runtime UI namespace"));
     }
 
     #[test]

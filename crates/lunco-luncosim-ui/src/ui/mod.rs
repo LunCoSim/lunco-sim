@@ -1317,17 +1317,23 @@ fn draw_runtime_ui_dropdowns(
         dropdowns.close();
         return;
     };
-    let Some(exposure) = exposures.surfaces.get(&surface_definition.namespace) else {
-        dropdowns.close();
+    let Some((source, anchor, namespace)) =
+        roots.iter().find_map(|(entity, surface, visibility)| {
+            (surface.id() == surface_definition.id
+                && matches!(*visibility, Visibility::Visible)
+                && surface.is_mounted())
+            .then(|| {
+                surface
+                    .applied_rect()
+                    .map(|rect| (entity, rect, surface.namespace().to_owned()))
+            })
+            .flatten()
+        })
+    else {
         return;
     };
-    let Some((source, anchor)) = roots.iter().find_map(|(entity, surface, visibility)| {
-        (surface.namespace() == surface_definition.namespace
-            && matches!(*visibility, Visibility::Visible)
-            && surface.is_mounted())
-        .then(|| surface.applied_rect().map(|rect| (entity, rect)))
-        .flatten()
-    }) else {
+    let Some(exposure) = exposures.surfaces.get(&namespace) else {
+        dropdowns.close();
         return;
     };
     let Ok(ctx) = egui_ctx.ctx_mut() else {

@@ -42,6 +42,14 @@ Put buttons and text elements beneath that root: HUI reuses its scope entity
 while rebuilding the tree, and a root leaf element can reapply its Flair type
 name to retained selector metadata.
 
+For tabs that are pages of one working area, add a manifest `workspace` to one
+surface. Its HTML shell provides `workspace.host`, authored tab controls, and
+`tag:ui_tab_id` values matching page IDs. The selected control receives the
+`is-active` CSS class. Each page keeps its own Twin HTML, stylesheet, exposure
+namespace, bindings, collections, and dropdowns; Rhai selects it through the
+page's boolean setting. The containing surface owns one stable position and
+size for every page.
+
 HUI and Flair support additional features, but a feature outside this contract
 needs a real surface test before it becomes a shared interface convention.
 LunCoSim supplies a narrow native form contract for text and number inputs,
