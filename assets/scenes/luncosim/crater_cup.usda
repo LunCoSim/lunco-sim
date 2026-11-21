@@ -1076,6 +1076,34 @@ def Xform "World" (
                 custom double lunco:factor = -1.0
             }
         }
+        over "Suspension_FL"
+        {
+            over "Wheel_FL"
+            {
+                float lunco:tire:minValidatedSpeed = 2.4000000953674316
+            }
+        }
+        over "Suspension_FR"
+        {
+            over "Wheel_FR"
+            {
+                float lunco:tire:minValidatedSpeed = 2.4000000953674316
+            }
+        }
+        over "Suspension_RL"
+        {
+            over "Wheel_RL"
+            {
+                float lunco:tire:minValidatedSpeed = 2.4000000953674316
+            }
+        }
+        over "Suspension_RR"
+        {
+            over "Wheel_RR"
+            {
+                float lunco:tire:minValidatedSpeed = 2.4000000953674316
+            }
+        }
     }
     def Xform "Comet" (
         prepend references = @lunco://vessels/rovers/ackermann_rover.usda@</AckermannRover>
@@ -1870,6 +1898,20 @@ def Xform "World" (
             string lunco:billboard:text = "Comet · sprint car"
             float lunco:billboard:offsetY = 0.1599999964237213
             float lunco:billboard:fadeEnd = 180.0
+        }
+        over "Drivetrain"
+        {
+            custom double inputs:max_heading = 0.72
+        }
+        over "Steering_FL_Hinge"
+        {
+            float physics:lowerLimit = -43.0
+            float physics:upperLimit = 43.0
+        }
+        over "Steering_FR_Hinge"
+        {
+            float physics:lowerLimit = -43.0
+            float physics:upperLimit = 43.0
         }
     }
     def Xform "Sample1" (

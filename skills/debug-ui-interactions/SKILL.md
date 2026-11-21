@@ -104,6 +104,13 @@ Check that the old spring arm stays detached and that the restored position,
 forward and up vectors match after the transition would have finished. On the open
 Crater Cup demo, run `lunco://scenarios/tests/crater_cup_camera.rhai` with
 `RunScenarioAsset` owned by the active Twin. Its windowed verdict is `CRATER CAMERA`.
+Run `lunco://scenarios/tests/crater_cup_vehicle_controls.rhai` with the same
+Twin owner to check PadCam handoffs after an upward avatar look, physical
+steering, and return to the saved avatar pose. Its windowed verdict is
+`CRATER CUP VEHICLE CONTROLS`.
+For a transient pink flash, record continuous desktop frames through quick
+camera turns, translation and camera switches. The Crater Cup haul lanes
+make the color change visible when their tire marks enter the frame.
 
 For a modifier gesture, use separate event phases and allow a frame between
 them when the result matters:

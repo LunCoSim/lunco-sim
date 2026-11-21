@@ -4,13 +4,20 @@ fn simulation_dependencies(me, ctx) {
     let comet = find_path("/World/Comet");
     let line = find_path("/World/Works/PackingLine");
     #{modelica_entities: [scout, comet, line, find_path("/World/RelayPlant")], entity_reads: [scout,comet,line,find_path("/World/Judge/DropBall"),find_path("/World/Works/Shuttle"),find_path("/World/Works/Array"),find_path("/World/RelayPlant"),find_path("/World/Scout/Turret/Head/MastCam"),find_path("/World/Scout/TiltJoint"),find_path("/World/Scout/PanJoint")],
-      entity_writes: [scout, comet, line], query_reads: [], required_inputs: []}
+      entity_writes: [scout, comet, line], query_reads: ["QueryUsdPrims"], required_inputs: []}
 }
 
 fn on_start(me, ctx) {
     this.scout = find_path("/World/Scout");
     this.comet = find_path("/World/Comet");
     this.line = find_path("/World/Works/PackingLine");
+    let steering = query("QueryUsdPrims", #{
+        paths: ["/World/Comet/Drivetrain", "/World/Comet/Steering_FL_Hinge", "/World/Comet/Steering_FR_Hinge"],
+        attrs: ["inputs:max_heading", "physics:upperLimit", "physics:lowerLimit"],
+    });
+    this.max_heading = steering.records[0].attrs["inputs:max_heading"];
+    this.left_stop = steering.records[1].attrs["physics:upperLimit"] * PI() / 180.0;
+    this.right_stop = steering.records[2].attrs["physics:lowerLimit"] * PI() / 180.0;
     let idle=cmd("SetPorts",#{target:this.line,writes:[["line_enabled",0.0]]});
     if !idle.ok {throw idle.error;}
     this.stage = 0;
@@ -107,8 +114,9 @@ fn on_tick(me, ctx) {
         t_true((this.camera1[0]-this.camera0[0]).abs()>0.15 && (this.camera1[1]-this.camera0[1]).abs()>0.1,
             "Scout steers its optical axis in azimuth and elevation "+this.camera0+" to "+this.camera1),
         t_true(this.left_fl>this.left_fr && this.right_fr<this.right_fl &&
-            (this.left_fl-0.5).abs()<0.001 && (this.right_fr+0.5).abs()<0.001,
-            "Comet accepts both full-lock commands and its inner knuckle stays within the joint stops"),
+            (this.left_fl-this.max_heading).abs()<0.001 && (this.right_fr+this.max_heading).abs()<0.001 &&
+            this.left_fl < this.left_stop && this.right_fr > this.right_stop,
+            "Comet reaches its authored full-lock heading inside the mechanical stops in both directions"),
         t_true(this.flat > 3480 && this.flat < 3700 && this.max_w > 4250 && this.max_w <= 4320.1 && this.tilted < 0.72,
             "aiming the physical array raises terminal output from " + this.flat + " to " + this.max_w + " W, up.y=" + this.tilted),
         t_true(this.initial_mass == 0.0 && this.production > 1.8 && this.tote_motion > 0.25,

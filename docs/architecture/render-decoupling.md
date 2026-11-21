@@ -241,6 +241,11 @@ preparation and camera-culling eligibility from the actual native builder and
 device support. The [source-matched comparison](../reviews/native-instance-builder-2026-10-25.md)
 records the measured scene tradeoffs and visual gates.
 
+Material extraction runs before mesh extraction on the native render schedule.
+The CPU instance builder reads the current visible entity's material
+association to pack its bindless slot. A mesh entering the view can otherwise
+sample slot zero and briefly show Bevy's pink default material.
+
 GPU-only output buffers allocate the shader array stride through
 `<[T; 1]>::SHADER_SIZE`, including alignment padding. Rust's native type layout
 does not determine the storage-buffer layout. This matters with scalar math,

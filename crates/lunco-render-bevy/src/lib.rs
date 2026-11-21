@@ -45,9 +45,12 @@ pub use shader_material::*;
 pub use bevy::pbr::PbrPlugin;
 
 use bevy::light::NotShadowCaster;
-use bevy::pbr::{MeshMaterial3d, StandardMaterial, wireframe::Wireframe};
+use bevy::pbr::{
+    MaterialExtractionSystems, MeshExtractionSystems, MeshMaterial3d, StandardMaterial,
+    wireframe::Wireframe,
+};
 use bevy::prelude::*;
-use bevy::render::RenderApp;
+use bevy::render::{ExtractSchedule, RenderApp};
 use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 use lunco_usd_bevy_scene::UsdPrimDisplayMode;
 
@@ -167,7 +170,13 @@ impl Plugin for LuncoRenderPlugin {
         // pulling `bevy_pbr` into the render-free USD scene and viewport crates.
         // Minimal render-free unit compositions still use this plugin for the
         // material binder, so only install the GPU pass when RenderApp exists.
-        if app.get_sub_app(RenderApp).is_some() {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            // CPU mesh extraction packs the material slot into each instance.
+            // A newly visible mesh needs this frame's material association.
+            render_app.configure_sets(
+                ExtractSchedule,
+                MeshExtractionSystems.after(MaterialExtractionSystems),
+            );
             app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
                 // Run after scene projection, animation, and authored visibility
                 // updates have settled for the frame.

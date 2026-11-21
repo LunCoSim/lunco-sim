@@ -146,7 +146,7 @@ fn apply_subject_camera(
     )
     .ok_or_else(|| "target is not spatially reachable from its Grid".to_string())?;
 
-    let (distance, vertical_offset, pitch) = match follow {
+    let (distance, vertical_offset, entry_pitch) = match follow {
         CameraFollow::Orbit => (50.0, 0.0, -0.25),
         CameraFollow::Chase => (25.0, 3.0, -0.25),
         CameraFollow::Heading => (15.0, 2.0, -0.25),
@@ -164,10 +164,12 @@ fn apply_subject_camera(
         )
     });
     let (current_yaw, current_pitch, _) = camera_transform.rotation.to_euler(EulerRot::YXZ);
-    let (yaw, pitch) = if matches!(follow, CameraFollow::Heading) {
-        (0.0, pitch)
-    } else {
-        (current_yaw, current_pitch)
+    let (yaw, pitch) = match follow {
+        CameraFollow::Heading => (0.0, entry_pitch),
+        // A free camera can look up while standing above the surface. Reusing
+        // that pitch on a long boom places its eye below a grounded subject.
+        CameraFollow::Orbit => (current_yaw, entry_pitch),
+        CameraFollow::Chase => (current_yaw, current_pitch),
     };
     let rotation = if matches!(follow, CameraFollow::Heading) {
         surface_frame
