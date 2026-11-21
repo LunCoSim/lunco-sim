@@ -673,6 +673,8 @@ Use the smallest existing typed intent that expresses the change:
   shared USD parser, and submit one grouped edit for a multi-field change. The
   same resolver is used by `SetObjectProperty`; never guess a geometry
   `primvars:` destination from a parameter name.
+- Preview a continuous material adjustment through its live component
+  intent. Commit the accepted value once through the typed document edit.
 - `add_prim`, `remove_prim`, `move_prim`, `payload`, and `active` expose the
   existing typed structural USD operations. They require an explicit target,
   exact paths, and the inspected generation; they never replace a layer's raw

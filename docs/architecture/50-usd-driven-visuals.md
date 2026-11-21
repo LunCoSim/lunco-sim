@@ -21,6 +21,57 @@ Three rules, in order of how often they are broken:
    hardcoded colors or paths.
 3. **The live value never round-trips through the document.** It is ECS state.
 
+## Live values and saved settings
+
+Use the current value's owner to choose the update path:
+
+| Value | Runtime path | Saved setting |
+|---|---|---|
+| Control or co-simulation input | `SetPorts` / `SetPortsBatch` through the named port owner at the fixed tick | Author the default or connection in USD |
+| Scene presentation property | `SetSceneView` through the registered property owner, or a direct typed ECS write inside that owner | Author the presentation configuration in USD |
+| Object appearance during interactive tuning | `SetObjectProperty` with `intent: "Interactive"` | Commit with `intent: "Persistent"` when the user accepts the setting |
+| Topology, composition or authoring metadata | Commit typed USD operations and reconcile the affected projection | The same document transaction |
+
+`SetSceneView` takes a bounded batch of typed writes. The dispatcher resolves
+live ECS entities, validates the complete batch against the active mount and
+registered owners, and publishes the last submitted value for each property and
+entity. Owners apply changes to their own components. This command does not
+advance document generation or publish a USD stage change. Use the ordinary
+document path if the new value needs to participate in USD composition.
+
+```rhai
+cmd("SetSceneView", #{batches: [
+    #{target: label, writes: [
+        #{property: "billboard.text", value: #{Text: #{value: "{label} · Ready"}}}
+    ]}
+]});
+```
+
+`billboard.text` writes the runtime template on an enabled USD billboard. USD
+continues to supply the template used when the runtime property is cleared,
+as well as the anchor, offset, and fade range. The screen-space renderer
+resolves both templates with the same live facts. The billboard retires its
+runtime text when disabled or removed. Scene teardown also clears it.
+Crater Cup's Rhai scenario formats inventory ports and submits changed text
+as one batch. The text retains the source script identity and retires with
+that script instance.
+
+Inspector material sliders preview the changed intent fields during a drag
+and submit one USD transaction on release. Render binders consume the intent
+through Bevy change detection. Authored value changes can fan out to multiple
+geometry targets through shared material bindings.
+
+The command registers named owner callbacks, not reflected component paths.
+Each owner defines validation, equality, and lifecycle. The simulation and
+render systems can continue to consume values through their existing ECS
+queries and Bevy change detection.
+
+Engine systems that own continuously changing values write through their
+typed ECS queries or resolved port slots at the owner's cadence. Use commands
+for requests that cross the scripting or external API boundary. In-process
+Inspector previews use typed Bevy events and update only the fields that
+changed, so pointer motion stays out of the reflected command dispatcher.
+
 ## Why not gizmos
 
 A gizmo line has no depth, a fixed screen-space width, and bypasses tonemapping. It draws

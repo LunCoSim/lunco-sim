@@ -1,5 +1,5 @@
 // @timing presentation
-// The plant owns the inventories. This program only decorates view-layer labels.
+// The plant owns the inventories. This program formats live billboard text.
 const PLANT = "/World/RelayPlant";
 const PRESS = "/World/Works/PackingLine";
 
@@ -20,50 +20,70 @@ fn fill_targets() {
 
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: ["GetReadiness", "QueryUsdPrim"], required_inputs: []}
+      query_reads: ["GetReadiness"], required_inputs: []}
+}
+
+fn on_start(me, ctx) {
+    this.bindings_dirty = true;
+    subscribe("usd.document.projected");
+}
+
+fn on_event(me, evt, ctx) {
+    if evt.name == "usd.document.projected" {
+        this.bindings_dirty = true;
+    }
+}
+
+fn label_batch(target, value) {
+    #{target:target, writes:[#{property:"billboard.text", value:value}]}
 }
 
 fn bind_labels(me) {
-    this.doc = query("QueryUsdPrim", #{path:"/World"}).doc_id;
-    this.targets = [];
-    let plant = find_path(PLANT);
-    let press = find_path(PRESS);
+    let plant = find_path_in_stage(me, PLANT);
+    let press = find_path_in_stage(me, PRESS);
+    let targets = [];
     for entry in fill_targets() {
-        let path = entry[0] + "/Callsign";
-        let entity = find_path(path);
-        if entity <= 0 { throw "Missing fill label at " + path; }
-        this.targets.push(#{path:path, entity:entity,
-            source:if entry[1] == PLANT {plant} else {press}, port:entry[2], unit:entry[3], scale:entry[4]});
+        let entity = find_path_in_stage(me, entry[0] + "/Callsign");
+        let source = if entry[1] == PLANT {plant} else {press};
+        if entity > 0 && source > 0 {
+            targets.push(#{entity:entity, source:source, port:entry[2], unit:entry[3], scale:entry[4]});
+        }
     }
+    targets
 }
 
 fn update_labels(me) {
-    let ops = [];
+    if this.bindings_dirty {
+        this.targets = bind_labels(me);
+        this.bindings_dirty = false;
+    }
+    let batches = [];
     for target in this.targets {
-        let label = get(target.entity, "UsdBillboard");
-        if label == () { continue; }
-        let value = get(target.source, target.port);
-        let text = "{label}";
+        if get(target.entity, "UsdBillboard.template") == () { continue; }
+        let value = port(target.source, target.port);
+        let live = get(target.entity, "BillboardViewText.template");
         if value != () && value.is_finite() {
-            let rounded = (value * target.scale).round().to_int();
-            let amount = if target.scale == 1.0 { rounded.to_string() }
-                         else { (rounded.to_float() / target.scale).to_string() };
-            text += " · " + amount + target.unit;
-        }
-        if label.template != text {
-            ops.push(#{SetAttribute:#{edit_target:"@view@", path:target.path,
-                name:"lunco:billboard:text", type_name:"string", value:text}});
+            let scale = target.scale;
+            let rounded = (value * scale).round().to_int();
+            let amount = if scale == 1.0 { rounded.to_string() }
+                         else { (rounded.to_float() / scale).to_string() };
+            let text = "{label} · " + amount + target.unit;
+            if live != text {
+                batches.push(label_batch(target.entity, #{Text:#{value:text}}));
+            }
+        } else if live != () {
+            batches.push(label_batch(target.entity, "Clear"));
         }
     }
-    if !ops.is_empty() {
-        let result = cmd("ApplyUsdTransientOps", #{doc_id:this.doc, label:"Crater Cup fill labels", ops:ops});
+    if !batches.is_empty() {
+        let result = cmd("SetSceneView", #{batches:batches});
         if !result.ok { throw result.to_string(); }
     }
 }
 
 fn task(me, ctx) {
     if is_unattended() { return once(|m| true); }
-    seq([wait_until(|m| query("GetReadiness").ready && find_path(PLANT) > 0),
-        once(Fn("bind_labels")), once(Fn("update_labels")),
+    seq([wait_until(|m| query("GetReadiness").ready && find_path_in_stage(m, PLANT) > 0),
+        once(Fn("update_labels")),
         forever(seq([wait(0.65), once(Fn("update_labels"))]))])
 }

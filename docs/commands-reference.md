@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**334 commands** across **62** crates. All documented.
+**335 commands** across **62** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -114,7 +114,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
 - [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
-- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (3 commands)
+- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (4 commands)
 - [`lunco-scene-validation`](#lunco-scene-validation) (1 command)
 - [`lunco-scripting-rhai-runtime`](#lunco-scripting-rhai-runtime) (12 commands)
 - [`lunco-scripting-rhai-world`](#lunco-scripting-rhai-world) (2 commands)
@@ -3157,9 +3157,9 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `SetObjectProperty`
 
- Set a property on a scene object at runtime (live override — not persisted
- to USD). One general command instead of many narrow ones; new properties
- just add a `match` arm. Drive it from curl after a screenshot to iterate:
+ Set a property on a scene object through its component owner. Use
+ `Interactive` for continuous preview and `Persistent` to commit a
+ document-backed setting.
 
  ```jsonc
  {"type":"ExecuteCommand","command":"SetObjectProperty",
@@ -3194,6 +3194,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
 | `property` | `String` |  Property name (see struct docs). |
 | `value` | `String` |  Value; comma-separated `r,g,b` for colors, a single float for params,  an asset path for `shader`, `true`/`false` for `visible`. |
+| `intent` | `EditIntent` |  `Interactive` previews in ECS. `Persistent` commits supported authored  properties to the document. |
 
 #### `SetShaderSource`
 
@@ -3293,6 +3294,19 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame, in f64 precision. |
+
+#### `SetSceneView`
+
+ Apply a batch of runtime presentation values to the mounted scene.
+
+ The entire batch is validated before publication. Repeated writes to one
+ property on one entity use the last value in the batch.
+
+- *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `batches` | `Vec < SceneViewBatch >` |  Batches for distinct live entities, in submission order. |
 
 #### `TransformEntity`
 
@@ -4916,7 +4930,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 334 commands from the runtime schema; scanned 1112 .rs files for docs (0 parse failure(s) skipped).
+<!-- 335 commands from the runtime schema; scanned 1112 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

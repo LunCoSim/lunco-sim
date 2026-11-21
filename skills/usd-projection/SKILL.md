@@ -46,6 +46,13 @@ can originate in a different layer.
 see is a rendering of a prim. Nothing is authoritative because it is in the
 world; it is in the world because it is in the document.
 
+Apply that rule to authored facts. The current simulation and presentation
+values belong to their runtime owners. For example, use `SetSceneView` for a
+billboard's computed text and `SetPortsBatch` for named simulation inputs.
+Use `ApplyUsdTransientOps` when an actual composed `@view@` prim or opinion
+is required. See the
+[live update routes](../../docs/architecture/50-usd-driven-visuals.md#live-values-and-saved-settings).
+
 For live physical mount edits, follow the notice-driven owner in
 [USD Domain](../../docs/architecture/21-domain-usd.md). Check both native mount
 metadata and any generated allocator source; both consume the committed USD

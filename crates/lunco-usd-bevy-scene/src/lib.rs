@@ -39,6 +39,8 @@ impl Plugin for UsdScenePlugin {
         }
         app.register_type::<UsdSceneProjectionFailed>();
         app.register_type::<billboard::UsdBillboard>();
+        app.register_type::<billboard::BillboardViewText>();
+        app.add_observer(retire_billboard_view_text);
         app.init_resource::<UsdStageRevision>()
             .add_systems(PreUpdate, bump_usd_stage_revision)
             .add_systems(
@@ -50,6 +52,15 @@ impl Plugin for UsdScenePlugin {
                 ),
             );
     }
+}
+
+fn retire_billboard_view_text(
+    removed: On<Remove<billboard::UsdBillboard>>,
+    mut commands: Commands,
+) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<billboard::BillboardViewText>();
 }
 
 /// The USD prim represented by a Bevy entity.

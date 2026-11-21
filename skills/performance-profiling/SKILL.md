@@ -1517,6 +1517,9 @@ Ribbon presentation preparation is presentation-only and must not issue another
 scenario event that observes a projected route. Compare the UI hook and fixed
 tick against frame/physics budgets; a fast worker result does not excuse a
 slow synchronous query or document edit in the input path.
+For periodic billboard updates, trace `apply_scene_view` and count
+`usd_apply_transient_ops` calls with the scenario active and paused. Check
+that labels still change and that the USD document generation stays put.
 For surface-annotation flicker, inspect `InspectUsdCurveView`'s
 `displayed_surface_binding_count` and `surface_texture` across pending revisions.
 Route edits and arriving wheel sources retain the displayed texture until the

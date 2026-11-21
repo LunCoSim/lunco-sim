@@ -42,7 +42,8 @@ use lunco_render::SceneCamera;
 use lunco_spatial::coords::{GridPos, GridRot, grid_absolute_pose_to_render, world_vector};
 use lunco_spatial::world::ActivePhysicsFrame;
 use lunco_usd_bevy_scene::billboard::{
-    BillboardFacts, BillboardGeo, BillboardIndex, UsdBillboard, render_billboard,
+    BillboardFacts, BillboardGeo, BillboardIndex, BillboardViewText, UsdBillboard,
+    billboard_view_template, render_billboard,
 };
 use lunco_workbench_core::viewport::{PanelRects, VIEWPORT_PANEL_ID};
 
@@ -94,6 +95,7 @@ pub fn draw_billboard_overlay(
     q_billboards: Query<(
         Entity,
         &UsdBillboard,
+        Option<&BillboardViewText>,
         &Name,
         Option<&BillboardIndex>,
         Option<&ViewVisibility>,
@@ -177,7 +179,9 @@ pub fn draw_billboard_overlay(
     }
     let mut drawn: Vec<Drawn> = Vec::new();
 
-    for (entity, bb, name, billboard_index, vis, callsign, catalog_id, gtf) in &q_billboards {
+    for (entity, bb, live_text, name, billboard_index, vis, callsign, catalog_id, gtf) in
+        &q_billboards
+    {
         // An entity culled or explicitly hidden must not keep a floating label.
         if vis.is_some_and(|v| !v.get()) {
             continue;
@@ -213,7 +217,7 @@ pub fn draw_billboard_overlay(
             height_m: pose.geodetic.height_m,
         });
         let text = render_billboard(
-            &bb.template,
+            billboard_view_template(bb, live_text),
             &BillboardFacts {
                 name: &display_name,
                 label: callsign.map(|c| c.0.as_str()),

@@ -4,8 +4,49 @@
 //! on the scene mutation handlers. `lunco-scene-commands` owns observer
 //! behavior and registers these types with the runtime command API.
 
-use bevy::prelude::{Entity, ReflectDefault, ReflectEvent};
-use lunco_core::{Command, EditIntent};
+use bevy::prelude::{Entity, Reflect, ReflectDefault, ReflectEvent};
+use lunco_core::{Command, EditIntent, serde};
+
+/// A value for a presentation property registered by its runtime owner.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub enum SceneViewValue {
+    /// UTF-8 presentation text.
+    Text { value: String },
+    /// Withdraw the runtime value and use the authored presentation again.
+    Clear,
+}
+
+/// One owner-validated property value.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct SceneViewWrite {
+    /// Public property registered by its presentation owner.
+    pub property: String,
+    /// Typed runtime value.
+    pub value: SceneViewValue,
+}
+
+/// Presentation writes for one live entity.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct SceneViewBatch {
+    /// Live target, resolved through the command's entity authority checks.
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub target: Entity,
+    /// Ordered writes to this entity's registered presentation properties.
+    pub writes: Vec<SceneViewWrite>,
+}
+
+/// Apply a batch of runtime presentation values to the mounted scene.
+///
+/// The entire batch is validated before publication. Repeated writes to one
+/// property on one entity use the last value in the batch.
+#[Command]
+pub struct SetSceneView {
+    /// Batches for distinct live entities, in submission order.
+    pub batches: Vec<SceneViewBatch>,
+}
 
 /// Move a scene entity to a translation in the active physics frame.
 ///

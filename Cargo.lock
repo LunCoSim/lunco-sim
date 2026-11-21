@@ -10434,6 +10434,7 @@ dependencies = [
  "lunco-scene-command-contracts",
  "lunco-scene-queries",
  "lunco-scene-selection",
+ "lunco-scripting-bridge-core",
  "lunco-spatial",
  "lunco-usd-bevy-light",
  "lunco-usd-bevy-scene",

@@ -571,13 +571,12 @@ Live undo/redo copies the authoritative document's transform property and
 order together through the generic layer patch; the native projection does
 not make a separate transform-history decision.
 
-Derived presentation has a separate typed boundary: `ApplyUsdTransientOps`
-updates the runtime view from already-authored facts (for example, the route
-ribbon) without becoming a user `UsdOp`. It still checks the document
-generation and advances the live projection when its values change, but it
-does not enter the document undo/redo stacks, save output, or Twin journal.
-This keeps derived geometry reusable across Twin scenes without turning a
-rendering cache into authored USD history.
+`ApplyUsdTransientOps` creates and edits explicitly composed `@view@` opinions,
+such as establishing a route ribbon prim with its USD material binding. It
+checks the document generation and advances the live projection, while leaving
+undo/redo, save output, and the Twin journal alone. Ongoing presentation
+values use the [live ECS presentation path](50-usd-driven-visuals.md#live-values-and-saved-settings)
+or an existing view owner such as `UpdateUsdCurveView`.
 
 Views observing a `UsdDocument`:
 

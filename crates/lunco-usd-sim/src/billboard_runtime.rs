@@ -1,11 +1,11 @@
 //! Initial and incremental projection of USD billboard facts.
 
 use bevy::prelude::*;
-use lunco_usd_bevy_scene::{UsdPrimPath, billboard::UsdBillboard};
+use lunco_usd_bevy_scene::billboard::UsdBillboard;
+use lunco_usd_bevy_scene::prim_index::UsdPrimIndex;
 use lunco_usd_bevy_stage::read::{UsdReadObject, read_authored_bool_strict};
 use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::{Path as SdfPath, Value};
-use std::collections::HashMap;
 
 pub(crate) fn claims_edit(_reader: &dyn UsdReadObject, _prim: &SdfPath, attribute: &str) -> bool {
     matches!(
@@ -61,45 +61,30 @@ pub(crate) fn read_billboard(
 }
 
 pub(crate) fn refresh_prims(world: &mut World, stage: AssetId<UsdStageAsset>, prims: &[SdfPath]) {
-    let changed = prims
-        .iter()
-        .map(|path| (path.as_str(), path))
-        .collect::<HashMap<_, _>>();
-    let mut rows = {
-        let mut query = world.query::<(Entity, &UsdPrimPath)>();
-        query
-            .iter(world)
-            .filter_map(|(entity, prim)| {
-                if prim.stage_handle.id() != stage {
-                    return None;
-                }
-                changed
-                    .get(prim.path.as_str())
-                    .map(|path| (entity, (**path).clone()))
-            })
-            .collect::<Vec<_>>()
-    };
-    rows.sort_by(|left, right| {
-        left.1
-            .cmp(&right.1)
-            .then(left.0.to_bits().cmp(&right.0.to_bits()))
-    });
     let updates = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
         };
-        let Some(stage) = stages.get(stage) else {
+        let Some(canonical) = stages.get(stage) else {
             return;
         };
-        let view = stage.view();
-        rows.into_iter()
-            .map(|(entity, path)| {
-                let value = read_billboard(&view, &path);
-                (entity, path, value)
+        let Some(index) = world.get_resource::<UsdPrimIndex>() else {
+            return;
+        };
+        let view = canonical.view();
+        prims
+            .iter()
+            .filter_map(|path| {
+                let mut entities = index.in_stage(stage, path.as_str()).to_vec();
+                if entities.is_empty() {
+                    return None;
+                }
+                entities.sort_unstable_by_key(|entity| entity.to_bits());
+                Some((path, entities, read_billboard(&view, path)))
             })
             .collect::<Vec<_>>()
     };
-    for (entity, path, result) in updates {
+    for (path, entities, result) in updates {
         {
             let mut diagnostics = world.resource_mut::<lunco_core::RuntimeDiagnostics>();
             diagnostics.findings.retain(|finding| {
@@ -120,15 +105,17 @@ pub(crate) fn refresh_prims(world: &mut World, stage: AssetId<UsdStageAsset>, pr
                 warn!("USD prim {path} has invalid billboard attributes: {message}");
             }
         }
-        let Ok(mut entity) = world.get_entity_mut(entity) else {
-            continue;
-        };
-        match result {
-            Ok(Some(billboard)) => {
-                entity.insert(billboard);
-            }
-            Ok(None) | Err(_) => {
-                entity.remove::<UsdBillboard>();
+        for entity in entities {
+            let Ok(mut entity) = world.get_entity_mut(entity) else {
+                continue;
+            };
+            match &result {
+                Ok(Some(billboard)) => {
+                    entity.insert(billboard.clone());
+                }
+                Ok(None) | Err(_) => {
+                    entity.remove::<UsdBillboard>();
+                }
             }
         }
     }

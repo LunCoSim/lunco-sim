@@ -80,9 +80,12 @@ admission. Keep `on_visualization(me, ctx)` for presentation preparation that
 does not depend on a document attachment that may still be settling. This
 one-shot callback runs in `PreUpdate`, after the time spine and before the first
 fixed tick, top-level initialization, or `on_start`; use the host id, parameters,
-and read-only queries. Rhai blocks world writes and events there;
-`ApplyUsdTransientOps` is the only available command and always edits the
-disposable view layer. Keeping the ribbon under that scope
+and read-only queries. Rhai blocks direct world writes and events there.
+`ApplyUsdTransientOps` creates a disposable composed view prim, and
+`UpdateUsdCurveView` updates its live presentation. During a regular
+Presentation task, use `SetSceneView` for owner-registered values such as
+billboard text. Group writes by target and submit changed values only.
+Keeping the ribbon under that scope
 preserves the route points' USD parent frame. The subject and route owner remain live:
 route edits do not rebuild
 or reset their physics, Modelica state, pose, possession, or Rhai `this` state.

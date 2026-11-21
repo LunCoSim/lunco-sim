@@ -6,7 +6,7 @@
 //! authoring remain separate production packages.
 
 use bevy::prelude::*;
-use lunco_core::{Command, on_command};
+use lunco_core::{Command, EditIntent, on_command};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
@@ -100,6 +100,9 @@ pub fn persist_wheel_to_runtime_layer(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+    if !cmd.intent.is_persistent() {
+        return;
+    }
 
     // Route the property to a USD attribute the loader reads back.
     let authored: Option<(String, &str, String)> = if let Some(param) = wheel_param(&cmd.property) {
@@ -170,9 +173,9 @@ pub fn persist_wheel_to_runtime_layer(
     });
 }
 
-/// Set a property on a scene object at runtime (live override — not persisted
-/// to USD). One general command instead of many narrow ones; new properties
-/// just add a `match` arm. Drive it from curl after a screenshot to iterate:
+/// Set a property on a scene object through its component owner. Use
+/// `Interactive` for continuous preview and `Persistent` to commit a
+/// document-backed setting.
 ///
 /// ```jsonc
 /// {"type":"ExecuteCommand","command":"SetObjectProperty",
@@ -209,6 +212,11 @@ pub struct SetObjectProperty {
     /// Value; comma-separated `r,g,b` for colors, a single float for params,
     /// an asset path for `shader`, `true`/`false` for `visible`.
     pub value: String,
+    /// `Interactive` previews in ECS. `Persistent` commits supported authored
+    /// properties to the document.
+    #[serde(default)]
+    #[reflect(default)]
+    pub intent: EditIntent,
 }
 
 /// The `SetObjectProperty` PBR keys [`PbrLook`] can express.
@@ -346,13 +354,12 @@ fn author_look_to_usd(
             set(attr, ty, v);
         }
     }
-    for op in ops {
-        world.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: op.clone(),
-        });
-    }
+    world.trigger(ApplyUsdOps {
+        doc_id: doc,
+        parent_gen: None,
+        label: "Update material appearance".into(),
+        ops,
+    });
     Ok(())
 }
 
@@ -686,6 +693,7 @@ pub fn on_set_object_property(
         key if PBR_LOOK_KEYS.contains(&key) => {
             let key = key.to_string();
             let value = cmd.value.clone();
+            let intent = cmd.intent;
             let command_id = active_command.get();
             commands.queue(move |world: &mut World| {
                 let result = (|| {
@@ -702,8 +710,12 @@ pub fn on_set_object_property(
                     if !apply_pbr_look(&mut look, &key, &value) {
                         return Err(format!("bad value '{value}' for pbr '{key}'"));
                     }
-                    author_look_to_usd(world, target, &key, &look)?;
-                    world.entity_mut(target).insert(look);
+                    if intent.is_persistent() {
+                        author_look_to_usd(world, target, &key, &look)?;
+                    }
+                    if world.get::<PbrLook>(target) != Some(&look) {
+                        world.entity_mut(target).insert(look);
+                    }
                     Ok(lunco_command_contracts::Ack::default())
                 })();
                 if let Err(message) = &result {
@@ -735,7 +747,9 @@ pub fn on_set_object_property(
                 Some(v) => {
                     look.set_value(&name, v);
                     drop(look);
-                    author_shader_parameter_to_usd(&mut commands, target, name.into_owned(), v);
+                    if cmd.intent.is_persistent() {
+                        author_shader_parameter_to_usd(&mut commands, target, name.into_owned(), v);
+                    }
                 }
                 None => warn!("SET_PROPERTY: unknown property '{}'", key),
             }

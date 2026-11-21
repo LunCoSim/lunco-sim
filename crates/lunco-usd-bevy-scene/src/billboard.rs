@@ -39,6 +39,7 @@
 //! its coordinates at the cell boundary and quietly under-report by kilometres.
 
 use bevy::prelude::*;
+use lunco_core::ReflectReadOnly;
 
 /// A prim that asked to carry a screen-facing text label.
 ///
@@ -46,7 +47,7 @@ use bevy::prelude::*;
 /// drawing needs the camera and an egui painter, and this crate must stay
 /// usable headless.
 #[derive(Component, Reflect, Clone, Debug)]
-#[reflect(Component)]
+#[reflect(Component, ReadOnly)]
 pub struct UsdBillboard {
     /// Template with `{...}` placeholders; see the module docs.
     pub template: String,
@@ -56,6 +57,25 @@ pub struct UsdBillboard {
     /// Distance (m) past which the label is not drawn. Labels are cheap but not
     /// free, and a hundred of them at 5 km is unreadable clutter, not context.
     pub fade_end: f32,
+}
+
+/// Runtime template supplied by a live presentation producer.
+#[derive(Component, Reflect, Clone, Debug, PartialEq, Eq)]
+#[reflect(Component, ReadOnly)]
+pub struct BillboardViewText {
+    /// Template resolved with the same live facts as the authored template.
+    pub template: String,
+    /// Scenario that owns this value, when it was published by a scenario.
+    #[reflect(ignore)]
+    pub script: Option<lunco_core::GlobalEntityId>,
+}
+
+/// Select the template shared by runtime inspection and the viewport.
+pub fn billboard_view_template<'a>(
+    authored: &'a UsdBillboard,
+    live: Option<&'a BillboardViewText>,
+) -> &'a str {
+    live.map_or(authored.template.as_str(), |live| live.template.as_str())
 }
 
 /// Optional authoritative index for a generic billboard.

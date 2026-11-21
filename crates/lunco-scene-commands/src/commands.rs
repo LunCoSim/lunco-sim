@@ -2477,6 +2477,7 @@ pub struct SpawnCommandPlugin;
 // they are additional observers on the same verbs (the journaling/runtime-layer
 // leg), not the command handlers, so they stay plain `add_observer`s.
 register_commands!(
+    crate::scene_view::on_set_scene_view,
     on_delete_entity,
     on_detach_joint,
     on_move_entity_command,
@@ -2506,6 +2507,7 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
+        crate::scene_view::install(app);
         app.add_observer(commit_runtime_spawn);
         app.add_systems(Update, reconcile_stable_scene_selection);
         // The read-only scene surface is a separate production package, so query

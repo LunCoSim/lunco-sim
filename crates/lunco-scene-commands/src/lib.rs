@@ -40,3 +40,4 @@
 //! source path.
 
 pub mod commands;
+pub mod scene_view;

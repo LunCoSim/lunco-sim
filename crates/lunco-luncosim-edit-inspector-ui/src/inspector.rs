@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use egui;
 use lunco_command_contracts::OpId;
 use lunco_control_core::{EguiFocus, IntentState, UserIntent};
+use lunco_core::EditIntent;
 use lunco_doc::Document;
 use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
 use lunco_modelica_runtime::SetModelicaParameter;
@@ -188,6 +189,7 @@ pub(crate) struct ShaderParametersRequested {
     entity: Entity,
     edits: Vec<(String, ParamValue)>,
     usd_prim_exists: bool,
+    intent: EditIntent,
 }
 
 #[derive(Event, Clone, Debug)]
@@ -206,6 +208,9 @@ pub(crate) struct PbrMaterialRequested {
     metallic_changed: bool,
     roughness_changed: bool,
     ior_changed: bool,
+    alpha_changed: bool,
+    double_sided_changed: bool,
+    intent: EditIntent,
 }
 
 pub(crate) fn on_inspector_component_edit(
@@ -589,6 +594,10 @@ pub(crate) fn on_shader_parameters_requested(
 ) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
+        if !request.intent.is_persistent() {
+            apply_shader_parameter_edits(world, request.entity, &request.edits);
+            return;
+        }
         let Some((doc, edit_target, generation)) = authoring_context(world, request.entity) else {
             if request.usd_prim_exists {
                 report_inspector_error(world, "Selected shader target is not document-backed");
@@ -637,9 +646,56 @@ pub(crate) fn on_shader_parameters_requested(
     });
 }
 
+fn apply_pbr_material_preview(world: &mut World, request: &PbrMaterialRequested) {
+    for &entity in &request.parts {
+        let Some(mut look) = world.get_mut::<PbrLook>(entity) else {
+            continue;
+        };
+        let mut next = look.clone();
+        if request.base_changed {
+            next.base_color.red = request.base[0];
+            next.base_color.green = request.base[1];
+            next.base_color.blue = request.base[2];
+        }
+        if request.alpha_changed {
+            next.base_color.alpha = request.alpha;
+            next.alpha = if request.alpha >= 1.0 {
+                lunco_render::SurfaceAlpha::Opaque
+            } else {
+                lunco_render::SurfaceAlpha::Blend
+            };
+        }
+        if request.emissive_changed {
+            next.emissive = LinearRgba::new(
+                request.emissive[0],
+                request.emissive[1],
+                request.emissive[2],
+                1.0,
+            );
+        }
+        if request.metallic_changed {
+            next.metallic = request.metallic;
+        }
+        if request.roughness_changed {
+            next.perceptual_roughness = request.roughness;
+        }
+        if request.ior_changed {
+            next.ior = request.ior;
+        }
+        if request.double_sided_changed {
+            next.double_sided = request.double_sided;
+        }
+        look.set_if_neq(next);
+    }
+}
+
 pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
+        if !request.intent.is_persistent() {
+            apply_pbr_material_preview(world, &request);
+            return;
+        }
         let Some(prim) = world.get::<UsdPrimPath>(request.part).cloned() else {
             return;
         };
@@ -668,32 +724,7 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
                 (ops, shader)
             }
         };
-        for entity in &request.parts {
-            let Some(mut look) = world.get_mut::<PbrLook>(*entity) else {
-                continue;
-            };
-            look.base_color = LinearRgba::new(
-                request.base[0],
-                request.base[1],
-                request.base[2],
-                request.alpha,
-            );
-            look.emissive = LinearRgba::new(
-                request.emissive[0],
-                request.emissive[1],
-                request.emissive[2],
-                1.0,
-            );
-            look.metallic = request.metallic;
-            look.perceptual_roughness = request.roughness;
-            look.ior = request.ior;
-            look.double_sided = request.double_sided;
-            look.alpha = if request.alpha >= 1.0 {
-                lunco_render::SurfaceAlpha::Opaque
-            } else {
-                lunco_render::SurfaceAlpha::Blend
-            };
-        }
+        apply_pbr_material_preview(world, &request);
 
         let fresh = shader_path.is_none();
         let root = edit_target;
@@ -742,6 +773,18 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
         }
         if request.ior_changed || fresh {
             set("inputs:ior", "float", format!("{:.3}", request.ior));
+        }
+        if request.alpha_changed || fresh {
+            set("inputs:opacity", "float", request.alpha.to_string());
+        }
+        if request.double_sided_changed {
+            ops.push(UsdOp::SetAttribute {
+                edit_target: root,
+                path: prim.path,
+                name: "doubleSided".into(),
+                type_name: "bool".into(),
+                value: request.double_sided.to_string(),
+            });
         }
         world.trigger(lunco_usd_core::commands::ApplyUsdOps {
             doc_id: doc,
@@ -3296,6 +3339,16 @@ fn import_and_apply(world: &mut World, part: Entity, source: &str) {
     );
 }
 
+fn material_edit_intent(response: &egui::Response) -> Option<EditIntent> {
+    if usd_edit_released(response) {
+        Some(EditIntent::Persistent)
+    } else if response.changed() {
+        Some(EditIntent::Interactive)
+    } else {
+        None
+    }
+}
+
 /// Editable PBR controls for the selected object's surfaces.
 ///
 /// Edits the [`PbrLook`] **intent** component, not the material asset: the render
@@ -3334,54 +3387,50 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
     let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut ior, mut double_sided) =
         snap;
 
-    let mut changed = false;
-    let mut base_changed = false;
-    let mut emissive_changed = false;
-
-    ui.horizontal(|ui| {
-        let r = ui.color_edit_button_rgb(&mut base);
-        changed |= r.changed();
-        base_changed |= r.changed();
-        ui.label("Base color");
-    });
-    let alpha_changed = ui
-        .add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha"))
-        .changed();
-    changed |= alpha_changed;
-    base_changed |= alpha_changed;
-    ui.horizontal(|ui| {
-        let r = ui.color_edit_button_rgb(&mut emissive);
-        changed |= r.changed();
-        emissive_changed |= r.changed();
-        ui.label("Emissive");
-    });
-    let metallic_changed = ui
-        .add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic"))
-        .changed();
-    changed |= metallic_changed;
-    let roughness_changed = ui
-        .add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness"))
-        .changed();
-    changed |= roughness_changed;
-    // Index of refraction — `UsdPreviewSurface`'s `inputs:ior`, and the ONLY specular
-    // knob. This slider used to say "Reflectance" and author a private
-    // `inputs:reflectance` that no other DCC reads; IOR is the standard spelling of the
-    // same physical quantity. 1.0 = vacuum (no Fresnel), 1.5 = glass and most
-    // silicates, 2.33 = where Bevy's derived reflectance saturates.
-    //
-    // Unlit is a geometry-level `LunCoSurfaceAPI` intent, not a
-    // `UsdPreviewSurface` input. It is deliberately exposed through the generic
-    // property command rather than duplicated as a material checkbox here.
-    let ior_changed = ui
-        .add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR"))
-        .changed();
-    changed |= ior_changed;
-    changed |= ui.checkbox(&mut double_sided, "Double-sided").changed();
+    let base_edit = ui
+        .horizontal(|ui| {
+            let response = ui.color_edit_button_rgb(&mut base);
+            ui.label("Base color");
+            material_edit_intent(&response)
+        })
+        .inner;
+    let alpha_edit =
+        material_edit_intent(&ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha")));
+    let emissive_edit = ui
+        .horizontal(|ui| {
+            let response = ui.color_edit_button_rgb(&mut emissive);
+            ui.label("Emissive");
+            material_edit_intent(&response)
+        })
+        .inner;
+    let metallic_edit =
+        material_edit_intent(&ui.add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic")));
+    let roughness_edit = material_edit_intent(
+        &ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")),
+    );
+    let ior_edit =
+        material_edit_intent(&ui.add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR")));
+    let sided_edit = material_edit_intent(&ui.checkbox(&mut double_sided, "Double-sided"));
     if parts.len() > 1 {
         ui.label(egui::RichText::new(format!("applies to {} parts", parts.len())).weak());
     }
 
-    if changed {
+    for intent in [EditIntent::Interactive, EditIntent::Persistent] {
+        let edited = |field| field == Some(intent);
+        if ![
+            base_edit,
+            alpha_edit,
+            emissive_edit,
+            metallic_edit,
+            roughness_edit,
+            ior_edit,
+            sided_edit,
+        ]
+        .into_iter()
+        .any(edited)
+        {
+            continue;
+        }
         ctx.trigger(PbrMaterialRequested {
             part,
             parts: parts.to_vec(),
@@ -3392,11 +3441,14 @@ fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, par
             roughness,
             ior,
             double_sided,
-            base_changed,
-            emissive_changed,
-            metallic_changed,
-            roughness_changed,
-            ior_changed,
+            base_changed: edited(base_edit),
+            emissive_changed: edited(emissive_edit),
+            metallic_changed: edited(metallic_edit),
+            roughness_changed: edited(roughness_edit),
+            ior_changed: edited(ior_edit),
+            alpha_changed: edited(alpha_edit),
+            double_sided_changed: edited(sided_edit),
+            intent,
         });
     }
 }
@@ -3610,7 +3662,13 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         return;
     }
 
-    let mut edits: Vec<(String, ParamValue)> = Vec::new();
+    let mut preview = Vec::new();
+    let mut commit = Vec::new();
+    let mut edit = |response: &egui::Response, name, value| match material_edit_intent(response) {
+        Some(EditIntent::Interactive) => preview.push((name, value)),
+        Some(EditIntent::Persistent) => commit.push((name, value)),
+        None => {}
+    };
     for mut row in rows {
         // An engine-owned parameter is SHOWN but not editable. Showing it is the
         // point — watching `load_frac` climb as the strut compresses is what makes
@@ -3620,47 +3678,35 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         let locked = row.locked;
         ui.add_enabled_ui(!locked, |ui| match row.ui {
             UiKind::Slider { min, max } => {
-                if ui
-                    .add(egui::Slider::new(&mut row.scalar, min..=max).text(&row.label))
-                    .changed()
-                {
-                    edits.push((row.name, ParamValue::F32(row.scalar)));
-                }
+                let response =
+                    ui.add(egui::Slider::new(&mut row.scalar, min..=max).text(&row.label));
+                edit(&response, row.name, ParamValue::F32(row.scalar));
             }
             UiKind::Int { min, max } => {
-                if ui
-                    .add(egui::Slider::new(&mut row.int, min..=max).text(&row.label))
-                    .changed()
-                {
-                    let v = match row.ty {
-                        ParamType::U32 => ParamValue::U32(row.int.max(0) as u32),
-                        ParamType::F32 => ParamValue::F32(row.int as f32),
-                        _ => ParamValue::I32(row.int),
-                    };
-                    edits.push((row.name, v));
-                }
+                let response = ui.add(egui::Slider::new(&mut row.int, min..=max).text(&row.label));
+                let value = match row.ty {
+                    ParamType::U32 => ParamValue::U32(row.int.max(0) as u32),
+                    ParamType::F32 => ParamValue::F32(row.int as f32),
+                    _ => ParamValue::I32(row.int),
+                };
+                edit(&response, row.name, value);
             }
             UiKind::Color => {
                 ui.horizontal(|ui| {
-                    if ui.color_edit_button_rgb(&mut row.color).changed() {
-                        let v = if row.ty == ParamType::Vec3 {
-                            ParamValue::Vec3(row.color)
-                        } else {
-                            ParamValue::Vec4([row.color[0], row.color[1], row.color[2], 1.0])
-                        };
-                        edits.push((row.name, v));
-                    }
+                    let response = ui.color_edit_button_rgb(&mut row.color);
+                    let value = if row.ty == ParamType::Vec3 {
+                        ParamValue::Vec3(row.color)
+                    } else {
+                        ParamValue::Vec4([row.color[0], row.color[1], row.color[2], 1.0])
+                    };
+                    edit(&response, row.name, value);
                     ui.label(&row.label);
                 });
             }
             UiKind::Free | UiKind::Engine => {
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(egui::DragValue::new(&mut row.scalar).speed(0.01))
-                        .changed()
-                    {
-                        edits.push((row.name, ParamValue::F32(row.scalar)));
-                    }
+                    let response = ui.add(egui::DragValue::new(&mut row.scalar).speed(0.01));
+                    edit(&response, row.name, ParamValue::F32(row.scalar));
                     ui.label(&row.label);
                 });
             }
@@ -3672,12 +3718,19 @@ fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Enti
         );
     }
 
-    if !edits.is_empty() {
+    for (intent, edits) in [
+        (EditIntent::Interactive, preview),
+        (EditIntent::Persistent, commit),
+    ] {
+        if edits.is_empty() {
+            continue;
+        }
         let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
         ctx.trigger(ShaderParametersRequested {
             entity,
             edits,
             usd_prim_exists,
+            intent,
         });
     }
 }
