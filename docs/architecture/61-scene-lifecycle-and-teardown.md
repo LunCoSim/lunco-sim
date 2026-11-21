@@ -131,12 +131,17 @@ scene generation or arm runtime work. Cycle owners use this shared generation
 for Twin-scoped execution context instead of maintaining subsystem-local
 counters.
 
-A replacement Twin scan is pending in `GetReadiness`, including when the
-request names a Twin folder and its default scene has not been resolved yet.
-Additive workspace scans leave the active simulation ready. Once the Twin
-loading policy submits `OpenTwinScene`, the USD owner holds
+A workspace replacement remains pending in `GetReadiness` from scan admission
+through the deferred workspace commit and Twin asset mount, until the active
+Twin loading policy successfully submits `OpenTwinScene` or `ClearScene`. This
+keeps readiness closed across the handoff from workspace ownership to scene
+admission, including when the scan task has completed but its deferred commit
+has not run. Additive workspace scans leave the active simulation ready. Once
+the Twin loading policy submits `OpenTwinScene`, the USD owner holds
 `SimulationProgress` from the source request through document preparation and
-stage-input publication. A failed preparation or Twin close retires that hold.
+stage-input publication. A failed replacement scan or asset mount ends the
+workspace hold and reports its terminal error; a failed scene preparation or
+Twin close retires the scene hold.
 The readiness query also reports admitted scene transitions while they await
 execution at the lifecycle boundary. `SimulationProgress` holds the causal
 clock from the start edge through the asset and structural-projection terminal

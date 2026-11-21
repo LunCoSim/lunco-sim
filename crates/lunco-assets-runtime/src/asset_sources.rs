@@ -51,6 +51,7 @@ impl Plugin for TwinRootsPlugin {
 fn register_twin_root(
     trigger: On<lunco_workspace::TwinAdded>,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
     roots: Res<TwinRoots>,
     mut commands: Commands,
 ) {
@@ -64,6 +65,9 @@ fn register_twin_root(
     let assigned = match roots.register_twin(twin) {
         Ok(assigned) => assigned,
         Err(error) => {
+            if let Some(pending_opens) = pending_opens.as_mut() {
+                pending_opens.finish_replacement_for_twin(twin_id);
+            }
             lunco_core::trigger_runtime_error(
                 &mut commands,
                 TWIN_ASSET_MOUNT_FAILED,
@@ -89,9 +93,13 @@ fn register_twin_root(
 
 fn unregister_twin_root(
     trigger: On<lunco_workspace::TwinClosed>,
+    mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
     roots: Res<TwinRoots>,
     mut commands: Commands,
 ) {
+    if let Some(pending_opens) = pending_opens.as_mut() {
+        pending_opens.finish_replacement_for_twin(trigger.event().twin);
+    }
     if let Err(error) = roots.unregister_root(&trigger.event().root) {
         lunco_core::trigger_runtime_error(
             &mut commands,

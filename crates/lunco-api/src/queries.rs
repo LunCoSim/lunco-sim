@@ -612,6 +612,8 @@ impl ApiQueryProvider for ReadinessProvider {
         {
             preparation.push(ApiValue::str(if opens.is_scene_pending() {
                 "Opening Twin for requested scene"
+            } else if opens.is_replacement_committed() {
+                "Preparing Twin startup"
             } else {
                 "Opening Twin workspace"
             }));

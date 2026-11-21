@@ -256,6 +256,7 @@ fn on_open_twin_scene(
     usd_sources: Option<Res<Assets<UsdSourceBytes>>>,
     mut pending_twin: ResMut<crate::twin_projection::PendingTwinDocs>,
     mut progress: ResMut<lunco_core_runtime::SimulationProgress>,
+    mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
 ) -> Result<Ack, String> {
     let request = trigger.event();
     let twin_id = lunco_workspace::TwinId::new(request.twin_id);
@@ -331,6 +332,9 @@ fn on_open_twin_scene(
         twin.root.clone(),
     );
     pending_twin.sync_scene_progress(&mut progress);
+    if let Some(pending_opens) = pending_opens.as_mut() {
+        pending_opens.finish_replacement_for_twin(twin_id);
+    }
     if source_failed {
         pending_twin.mark_failed(
             source_id,
