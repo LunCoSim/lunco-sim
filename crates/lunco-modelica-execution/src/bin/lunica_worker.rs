@@ -238,7 +238,11 @@ mod wasm {
             }
             ArtifactOperation::List { directory, cap } => {
                 let listing = storage
-                    .read_directory_bounded(&lunco_storage::StorageHandle::File(directory), cap)
+                    .read_directory_newest_matching_bounded(
+                        &lunco_storage::StorageHandle::File(directory),
+                        Some("json"),
+                        cap,
+                    )
                     .await
                     .map_err(|error| error.to_string())?;
                 Ok(ArtifactOutcome::Listed {

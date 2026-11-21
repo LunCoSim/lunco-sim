@@ -192,22 +192,19 @@ fn load_ready_scenario(
         owns_mount,
     });
     #[cfg(feature = "experiments")]
-    if let Some(owner) = replica.0.as_ref() {
-        let mut paths = m
-            .assets
-            .iter()
-            .filter_map(|asset| {
-                let relative = lunco_networking_sync::scenario_sync::safe_rel_path(&asset.path)?;
-                (relative.parent() == Some(std::path::Path::new("results"))
-                    && relative
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        == Some("json"))
-                .then(|| owner.root.join(relative))
-            })
-            .take(lunco_experiments::REGISTRY_CAP_PER_TWIN)
-            .collect::<Vec<_>>();
-        paths.sort();
+    if let Some(owner) = replica.0.as_ref()
+        && m.assets.iter().any(|asset| {
+            lunco_networking_sync::scenario_sync::safe_rel_path(&asset.path).is_some_and(
+                |relative| {
+                    relative.parent() == Some(std::path::Path::new("results"))
+                        && relative
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            == Some("json")
+                },
+            )
+        })
+    {
         commands.trigger(experiment_artifacts::MaterializedArtifacts {
             runtime: lunco_workspace::DocumentRuntimeOwner::Replicated(
                 lunco_workspace::ReplicationOwner::Twin {
@@ -215,7 +212,6 @@ fn load_ready_scenario(
                 },
             ),
             root: owner.root.clone(),
-            paths,
         });
     }
     info!("[net] scenario fully cached; loading entry scene (read-only): {scene}");
