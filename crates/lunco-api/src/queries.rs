@@ -607,11 +607,14 @@ impl ApiQueryProvider for ReadinessProvider {
                     .collect()
             })
             .unwrap_or_default();
-        if world
-            .get_resource::<lunco_workspace::open::PendingTwinOpens>()
-            .is_some_and(lunco_workspace::open::PendingTwinOpens::is_scene_pending)
+        if let Some(opens) = world.get_resource::<lunco_workspace::open::PendingTwinOpens>()
+            && opens.is_replacement_pending()
         {
-            preparation.push(ApiValue::str("Opening Twin for requested scene"));
+            preparation.push(ApiValue::str(if opens.is_scene_pending() {
+                "Opening Twin for requested scene"
+            } else {
+                "Opening Twin workspace"
+            }));
         }
         if world
             .get_resource::<lunco_core::SceneTransitionCoordinator>()

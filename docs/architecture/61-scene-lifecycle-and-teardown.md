@@ -131,16 +131,18 @@ scene generation or arm runtime work. Cycle owners use this shared generation
 for Twin-scoped execution context instead of maintaining subsystem-local
 counters.
 
-A requested scene is pending in `GetReadiness` while the workspace scans for
-its Twin. Once the Twin loading policy submits `OpenTwinScene`, the USD owner
-holds `SimulationProgress` from the source request through document preparation
-and stage-input publication. A failed preparation or Twin close retires that
-hold. The readiness query also reports admitted scene transitions while they
-await execution at the lifecycle boundary. `SimulationProgress` holds the
-causal clock from the start edge through the asset and structural-projection
-terminal edge. CPU mesh builds and other presentation streaming continue
-independently. `SCENE_VISUAL_SOURCE` reports geometry still pending after
-structural projection.
+A replacement Twin scan is pending in `GetReadiness`, including when the
+request names a Twin folder and its default scene has not been resolved yet.
+Additive workspace scans leave the active simulation ready. Once the Twin
+loading policy submits `OpenTwinScene`, the USD owner holds
+`SimulationProgress` from the source request through document preparation and
+stage-input publication. A failed preparation or Twin close retires that hold.
+The readiness query also reports admitted scene transitions while they await
+execution at the lifecycle boundary. `SimulationProgress` holds the causal
+clock from the start edge through the asset and structural-projection terminal
+edge. CPU mesh builds and other presentation streaming continue independently.
+`SCENE_VISUAL_SOURCE` reports geometry still pending after structural
+projection.
 Visual-readiness consumers keep reading that source after scene admission, while
 the workbench treats terrain and scene-visual progress as a loading notice only
 for an admitted or active scene transition. `TimeTransport` keeps the user's

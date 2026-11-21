@@ -648,6 +648,16 @@ impl PendingTwinOpens {
         self.tasks.iter().any(|entry| entry.scene.is_some())
     }
 
+    /// Whether a scan is replacing the active workspace.
+    ///
+    /// Additive scans do not affect the currently running scene, so they do
+    /// not hold simulation readiness.
+    pub fn is_replacement_pending(&self) -> bool {
+        self.tasks
+            .iter()
+            .any(|entry| entry.mode == TwinOpenMode::Replace)
+    }
+
     /// Cancel scans superseded by a newer replacement request. Dropping the
     /// task handles prevents their results from being observed; the candidate
     /// that completes owns the next workspace commit.
@@ -1026,6 +1036,30 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_scan_is_readiness_blocker_but_additive_scan_is_not() {
+        let root = tempfile::tempdir().unwrap();
+        lunco_storage::write_file_sync(
+            &root.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"gate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::WorkspacePlugin);
+
+        let mut replacement = PendingTwinOpens::default();
+        spawn_twin_from_path(root.path(), &mut replacement, "test", TwinOpenMode::Replace);
+        assert!(replacement.is_pending());
+        assert!(replacement.is_replacement_pending());
+        assert!(!replacement.is_scene_pending());
+
+        let mut additive = PendingTwinOpens::default();
+        spawn_twin_from_path(root.path(), &mut additive, "test", TwinOpenMode::Add);
+        assert!(additive.is_pending());
+        assert!(!additive.is_replacement_pending());
+    }
 
     #[test]
     fn setting_change_during_scan_refreshes_the_scanned_manifest() {
