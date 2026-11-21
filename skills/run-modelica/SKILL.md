@@ -83,6 +83,11 @@ backend is installed. Inspect `CosimStatus.pending_initial_inputs` and
 `initial_input_sources` on each uncompiled participant to distinguish missing
 connections, a pending source declaration and an unavailable sample. Preserve
 the actual initial-sample gate rather than seeding a value to release admission.
+Scene interface and generated-document admission also wait for Twin directory
+loads to publish their Modelica namespaces before resolving dependencies. Check
+the source-root load outcomes when startup is held. A missing or ambiguous
+namespace after publication is a terminal configuration error.
+Exercise both outcomes with `scripts/api/test_twin_modelica_namespace_startup.py`.
 
 Before creating a new Modelica file, inventory the maintained package roots and
 the closest composed USD network in the current checkout. Reuse existing

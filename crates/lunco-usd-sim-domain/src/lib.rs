@@ -100,26 +100,24 @@ fn retire_sim_interface(commands: &mut Commands, entity: Entity) {
 /// whose source must outlive a scene entity. Retire only the generated origin;
 /// this guard keeps ordinary document lifecycle semantics untouched.
 fn retire_generated_document(
-    document: lunco_doc::DocumentId,
+    entity: Entity,
     documents: &mut lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>,
-) {
-    if document.is_unassigned() {
-        return;
+) -> Option<lunco_doc::DocumentId> {
+    let document = documents.document_of(entity)?;
+    let host = documents.host(document)?;
+    if !lunco_modelica_runtime::generated_source::is_generated_origin(host.document().origin()) {
+        return None;
     }
-    let generated = documents.host(document).is_some_and(|host| {
-        lunco_modelica_runtime::generated_source::is_generated_origin(host.document().origin())
-    });
-    if generated {
-        documents.remove_document(document);
-    }
+    documents.remove_document(document);
+    Some(document)
 }
 
-fn queue_retire_generated_document(commands: &mut Commands, document: lunco_doc::DocumentId) {
+fn queue_retire_generated_document(commands: &mut Commands, entity: Entity) {
     commands.queue(move |world: &mut World| {
         if let Some(mut documents) =
             world.get_resource_mut::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
         {
-            retire_generated_document(document, &mut documents);
+            let _ = retire_generated_document(entity, &mut documents);
         }
     });
 }
@@ -1311,6 +1309,7 @@ fn commit_domain_projection(
             "modelica-session-exhausted",
             format!("generated participant {entity} exhausted its session identity"),
         );
+        queue_retire_generated_document(commands, entity);
         if installed_model.is_some() {
             commands.entity(entity).try_remove::<ModelicaModel>();
         }
@@ -1336,9 +1335,7 @@ fn commit_domain_projection(
             });
             error!("[domain-projection] `{}` rejected: {message}", prim.path);
             retire_sim_interface(commands, entity);
-            if let Some(model) = installed_model {
-                queue_retire_generated_document(commands, model.document);
-            }
+            queue_retire_generated_document(commands, entity);
             commands
                 .entity(entity)
                 .remove::<(UsdModelicaPortContract, ModelicaSignalLayout)>();
@@ -1383,9 +1380,7 @@ fn commit_domain_projection(
     let SynthOutcome::Ready(synthesized) = synthesized else {
         if previous.is_some() {
             retire_sim_interface(commands, entity);
-            if let Some(model) = installed_model {
-                queue_retire_generated_document(commands, model.document);
-            }
+            queue_retire_generated_document(commands, entity);
             commands.entity(entity).remove::<(
                 ModelicaModel,
                 ModelicaSignalLayout,
@@ -1466,6 +1461,7 @@ fn commit_domain_projection(
             });
             error!("[domain-projection] {} rejected: {message}", prim.path);
             retire_sim_interface(commands, entity);
+            queue_retire_generated_document(commands, entity);
             commands.entity(entity).remove::<ModelicaSignalLayout>();
             commands
                 .entity(entity)
@@ -2059,6 +2055,13 @@ pub fn sync_generated_network_documents(
 ) {
     let replication =
         lunco_core_session::current_replication_owner(connection.as_deref(), replica.as_deref());
+    // Wait before claiming work so each generated document resolves against
+    // the same published Twin namespaces as its runtime interface.
+    if source_roots.as_deref().is_some_and(
+        lunco_modelica_source_roots::SourceRootRegistry::twin_namespace_inventory_pending,
+    ) {
+        return;
+    }
     let mut entities = pending.0.take_queued();
     if pending.0.take_initial_discovery() {
         entities.extend(source_entities.iter());
@@ -2117,56 +2120,15 @@ pub fn sync_generated_network_documents(
                 );
             }
         }
-        let document = if !model.document.is_unassigned()
-            && documents.host(model.document).is_some()
-        {
-            model.document
-        } else {
-            documents.allocate(
-                source.source.clone(),
-                lunco_doc::PathlessOrigin::bundled(format!("generated/{}.mo", model.model_name)),
-            )
-        };
-        if let Some(workspace) = workspace.as_deref_mut() {
-            if source
+        let current_workspace = workspace.as_deref().map(|workspace| &workspace.0);
+        let has_workspace_owner = current_workspace.is_some()
+            || source.runtime_owner == lunco_workspace::DocumentRuntimeOwner::Application;
+        if !has_workspace_owner
+            || !source
                 .runtime_owner
-                .local_twin()
-                .is_some_and(|twin| workspace.twin(twin).is_none())
-            {
-                lunco_core::trigger_runtime_error(
-                    &mut commands,
-                    "modelica-generated-source-admission-failed",
-                    format!(
-                        "generated source {} belongs to a retired Twin",
-                        source.doc_uri
-                    ),
-                );
-                continue;
-            }
-            if let Some(entry) = workspace.document_mut(document) {
-                entry.runtime_context = source.runtime_owner.clone();
-            } else {
-                workspace.add_document(lunco_workspace::DocumentEntry {
-                    id: document,
-                    kind: lunco_workspace::DocumentKindId::new("modelica"),
-                    origin: lunco_doc::DocumentOrigin::bundled(format!(
-                        "generated/{}.mo",
-                        model.model_name
-                    )),
-                    runtime_context: source.runtime_owner.clone(),
-                    title: model.model_name.clone(),
-                    dirty: false,
-                });
-            }
-        }
-        let pin = lunco_workspace::PinnedDocumentRuntimeOwner {
-            document,
-            runtime: source.runtime_owner.clone(),
-        };
-        if !pin.is_current(
-            workspace.as_deref().map(|workspace| &workspace.0),
-            replication.as_ref(),
-        ) {
+                .is_current(current_workspace, replication.as_ref())
+        {
+            let _ = retire_generated_document(entity, &mut documents);
             lunco_core::trigger_runtime_error(
                 &mut commands,
                 "modelica-generated-source-admission-failed",
@@ -2177,6 +2139,42 @@ pub fn sync_generated_network_documents(
             );
             continue;
         }
+        let filename = format!("generated/{}.mo", model.model_name);
+        let origin = lunco_doc::DocumentOrigin::bundled(filename.clone());
+        // The network owns its document link across Modelica session changes.
+        // A replacement ModelicaModel has not carried out document admission yet.
+        let linked = documents.document_of(entity).filter(|document| {
+            documents
+                .host(*document)
+                .is_some_and(|host| host.document().origin() == &origin)
+                && current_workspace.is_none_or(|workspace| {
+                    workspace.document(*document).is_some_and(|entry| {
+                        workspace.runtime_owner_for(entry) == source.runtime_owner
+                    })
+                })
+        });
+        let document = linked.unwrap_or_else(|| {
+            let _ = retire_generated_document(entity, &mut documents);
+            let document = documents.allocate(
+                source.source.clone(),
+                lunco_doc::PathlessOrigin::bundled(filename),
+            );
+            if let Some(workspace) = workspace.as_deref_mut() {
+                workspace.add_document(lunco_workspace::DocumentEntry {
+                    id: document,
+                    kind: lunco_workspace::DocumentKindId::new("modelica"),
+                    origin,
+                    runtime_context: source.runtime_owner.clone(),
+                    title: model.model_name.clone(),
+                    dirty: false,
+                });
+            }
+            document
+        });
+        let pin = lunco_workspace::PinnedDocumentRuntimeOwner {
+            document,
+            runtime: source.runtime_owner.clone(),
+        };
         if !documents.reload_external_source(document, &source.source)
             || !documents.host_mut(document).is_some_and(|host| {
                 host.document_mut()
@@ -2211,7 +2209,6 @@ pub fn sync_generated_network_documents(
 /// its own narrowly classified observer.
 pub fn on_remove_generated_source(
     trigger: On<Remove<GeneratedModelicaSource>>,
-    source_query: Query<(&GeneratedModelicaSource, Option<&ModelicaModel>)>,
     mut documents: Option<
         ResMut<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>,
     >,
@@ -2219,43 +2216,13 @@ pub fn on_remove_generated_source(
         ResMut<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>,
     >,
 ) {
-    let (network_root, doc_uri, model_document) = source_query
-        .get(trigger.entity)
-        .map(|(source, model)| {
-            (
-                Some(source.network_root.clone()),
-                Some(source.doc_uri.clone()),
-                model.map(|m| m.document),
-            )
-        })
-        .unwrap_or((None, None, None));
-    let document = documents.as_deref_mut().and_then(|registry| {
-        let document = model_document
-            .filter(|document| !document.is_unassigned())
-            .or_else(|| {
-                let model_name = doc_uri
-                    .as_deref()?
-                    .strip_prefix("generated://")?
-                    .strip_suffix(".mo")?;
-                registry.find_bundled(&format!("generated/{model_name}.mo"))
-            })?;
-        let is_generated = registry.host(document).is_some_and(|host| {
-            lunco_modelica_runtime::generated_source::is_generated_origin(host.document().origin())
-        });
-        if is_generated {
-            registry.remove_document(document);
-            Some(document)
-        } else {
-            None
-        }
-    });
+    let document = documents
+        .as_deref_mut()
+        .and_then(|registry| retire_generated_document(trigger.entity, registry));
     if let Some(metadata) = generated.as_deref_mut() {
-        metadata.entries.retain(|entry| {
-            network_root
-                .as_deref()
-                .is_none_or(|root| entry.network_root != root)
-                && document.is_none_or(|doc| entry.document != doc)
-        });
+        if let Some(document) = document {
+            metadata.entries.retain(|entry| entry.document != document);
+        }
         metadata.dirty = true;
     }
 }
@@ -4358,23 +4325,32 @@ def Scope "Rig"
     }
 
     #[test]
-    fn removing_generated_source_retires_only_its_ephemeral_document() {
+    fn generated_document_follows_source_revision_and_retires_with_network() {
+        type Documents =
+            lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>;
+        type Sources = lunco_modelica_runtime::generated_source::GeneratedModelicaSources;
         let mut app = App::new();
-        app.init_resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
-            .init_resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-            .add_observer(on_remove_generated_source);
-        let document = app
-            .world_mut()
-            .resource_mut::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
-            .allocate(
-                "model Generated end Generated;".into(),
-                lunco_doc::PathlessOrigin::bundled("generated/Generated.mo"),
+        app.init_resource::<Documents>()
+            .init_resource::<Sources>()
+            .init_resource::<lunco_workspace::WorkspaceResource>()
+            .init_resource::<PendingGeneratedSourceDocuments>()
+            .add_observer(queue_generated_source_document_sync)
+            .add_observer(forget_generated_source_document_sync)
+            .add_observer(on_remove_generated_source)
+            .add_systems(
+                Update,
+                (sync_generated_network_documents, publish_generated_sources).chain(),
             );
+        let authored = app.world_mut().resource_mut::<Documents>().allocate(
+            "model Authored end Authored;".into(),
+            lunco_doc::PathlessOrigin::untitled("Authored"),
+        );
         let entity = app
             .world_mut()
             .spawn((
                 ModelicaModel {
-                    document,
+                    model_name: "Generated".into(),
+                    session_id: 1,
                     ..default()
                 },
                 GeneratedModelicaSource {
@@ -4382,7 +4358,13 @@ def Scope "Rig"
                     network_root: "/Rig".into(),
                     doc_uri: "generated://Generated.mo".into(),
                     source: "model Generated end Generated;".into(),
-                    syntax: None,
+                    syntax: Some(Arc::new(
+                        rumoca_phase_parse::parse_to_ast(
+                            "model Generated end Generated;",
+                            "generated.mo",
+                        )
+                        .unwrap(),
+                    )),
                     component_paths: Vec::new(),
                     members: Vec::new(),
                     source_roots: Vec::new(),
@@ -4396,47 +4378,63 @@ def Scope "Rig"
                 },
             ))
             .id();
-        app.world_mut()
-            .resource_mut::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
-            .link(entity, document)
-            .expect("generated test document link");
-        app.world_mut()
-            .resource_mut::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-            .entries
-            .push(
-                lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry {
-                    document,
-                    uri: "generated://Generated.mo".into(),
-                    network_root: "/Rig".into(),
-                    model_name: "Generated".into(),
-                    source: "model Generated end Generated;".into(),
-                    component_paths: Vec::new(),
-                    units: Vec::new(),
-                    members: Vec::new(),
-                    source_roots: Vec::new(),
-                    boundary_inputs: Vec::new(),
-                    boundary_outputs: Vec::new(),
-                    member_output_aliases: Vec::new(),
-                    projection_error: None,
-                },
-            );
+        app.update();
+        let document = app
+            .world()
+            .resource::<Documents>()
+            .document_of(entity)
+            .unwrap();
+        let prior_generation = app
+            .world()
+            .resource::<Documents>()
+            .host(document)
+            .unwrap()
+            .generation();
+
+        let mut revised = app
+            .world()
+            .get::<GeneratedModelicaSource>(entity)
+            .unwrap()
+            .clone();
+        revised.source = "model Generated parameter Real rate = 12; end Generated;".into();
+        revised.syntax = Some(Arc::new(
+            rumoca_phase_parse::parse_to_ast(&revised.source, "generated.mo").unwrap(),
+        ));
+        let expected_source = revised.source.clone();
+        app.world_mut().entity_mut(entity).insert((
+            ModelicaModel {
+                model_name: "Generated".into(),
+                session_id: 2,
+                ..default()
+            },
+            revised,
+        ));
+        app.update();
+
+        let documents = app.world().resource::<Documents>();
+        assert_eq!(documents.document_of(entity), Some(document));
+        assert_eq!(documents.iter().count(), 2);
+        let refreshed = documents.host(document).unwrap();
+        assert!(refreshed.generation() > prior_generation);
+        assert_eq!(refreshed.document().source(), expected_source);
+        assert_eq!(
+            app.world().resource::<Sources>().entries[0].document,
+            document
+        );
+        let model = app.world().get::<ModelicaModel>(entity).unwrap();
+        assert_eq!(model.document, document);
+        assert_eq!(model.session_id, 2);
 
         app.world_mut()
             .entity_mut(entity)
             .remove::<GeneratedModelicaSource>();
         app.update();
 
-        assert!(app
-            .world()
-            .resource::<lunco_doc_bevy::DocumentRegistry<lunco_modelica_document::ModelicaDocument>>()
-            .host(document)
-            .is_none());
-        assert!(
-            app.world()
-                .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-                .entries
-                .is_empty()
-        );
+        let documents = app.world().resource::<Documents>();
+        assert!(documents.host(document).is_none());
+        assert!(documents.host(authored).is_some());
+        assert!(documents.document_of(entity).is_none());
+        assert!(app.world().resource::<Sources>().entries.is_empty());
     }
 
     #[test]

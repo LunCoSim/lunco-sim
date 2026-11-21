@@ -49,6 +49,20 @@ fn verify_scene_loading(expected, source, requested, marker) {
     report_verdict(checks, "SCENE LOADING SETTINGS", "SCENE_LOADING_SETTINGS")
 }
 
+fn verify_scene_document_admission(twin_id, path) {
+    let rejected = cmd("OpenTwinScene", #{twin_id: twin_id, relative_path: "missing-scene.usda"});
+    let after_rejection = query("GetReadiness", #{});
+    let accepted = cmd("OpenTwinScene", #{twin_id: twin_id, relative_path: path});
+    let during_preparation = query("GetReadiness", #{});
+    report_verdict([
+        t_true(rejected != () && !rejected.ok && after_rejection.ready,
+            "a rejected scene source leaves the mounted scene ready"),
+        t_true(accepted != () && accepted.ok && !during_preparation.ready &&
+            during_preparation.preparation.contains("Preparing the Twin scene document"),
+            "an accepted scene source holds readiness immediately through document preparation")
+    ], "TWIN SCENE ADMISSION", "TWIN_SCENE_ADMISSION");
+}
+
 fn verify_retained_twin(expected_id) {
     let twin = query("ReadActiveTwinContract", #{});
     let readiness = query("GetReadiness", #{});

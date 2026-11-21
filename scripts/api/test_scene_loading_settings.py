@@ -230,12 +230,25 @@ def main():
     # A process override outranks both project and Twin settings.
     with ProductionSession(args.port, windowed=True, extra_args=("--load-default-scene",), log_path=area / "cli-load.log") as session:
         execute(session, "OpenTwin", path=str(root))
+        readiness = execute(session, "GetReadiness")
+        if readiness.get("ready") and (
+            not execute(session, "ReadActiveTwinContract").get("open")
+            or not prim_present(session, "/World/DefaultMarker")
+        ):
+            raise RuntimeError("readiness was published before the requested Twin and default scene opened")
         wait_selection(session, None, True, "cli", "default")
         verdict(session, "verify_scene_loading", True, "cli", None, "default")
 
     # An explicit scene is loaded even while automatic loading is disabled.
     with ProductionSession(args.port, windowed=True, extra_args=("--no-load-default-scene", "--scene", str(root / "explicit.usda")), log_path=area / "explicit.log") as session:
-        wait_selection(session, None, False, "cli", "explicit")
+        # ProductionSession returns at the first ready response. Verify the requested
+        # scene is already present before the longer selection and tool checks.
+        if not prim_present(session, "/World/ExplicitMarker"):
+            raise RuntimeError("readiness was published before the requested startup scene mounted")
+        current = wait_selection(session, None, False, "cli", "explicit")
+        verdict(session, "verify_scene_loading", False, "cli", "explicit.usda", "explicit")
+        verdict(session, "verify_scene_document_admission", current, "explicit.usda")
+        wait_for_ready(session.port)
         verdict(session, "verify_scene_loading", False, "cli", "explicit.usda", "explicit")
         execute(session, "SetTwinSetting", key="ui.camera_status", value=False)
         manifest = tomllib.loads((root / "twin.toml").read_text())

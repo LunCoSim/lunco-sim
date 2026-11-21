@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use lunco_doc::{DocumentHost, DocumentId, DocumentOrigin};
-use lunco_modelica_ast::pretty::{ComponentDecl, ConnectEquation, PortRef};
+use lunco_modelica_ast::pretty::{ComponentDecl, ConnectEquation, Placement, PortRef};
 use lunco_modelica_document::{ModelicaDocument, ModelicaOp, SyntaxCache};
 use rumoca_phase_parse::parse_to_ast;
 
@@ -53,6 +53,32 @@ fn add_component_through_apply() {
         "x not in components after AddComponent; src:\n{}",
         h.document().source()
     );
+}
+
+#[test]
+fn added_component_properties_are_indexed_immediately() {
+    let mut h = host("within Factory;\nmodel Line\nend Line;\n");
+    let placement = Placement::at(-35.0, 20.0);
+    h.apply(ModelicaOp::AddComponent {
+        class: "Factory.Line".into(),
+        decl: ComponentDecl {
+            type_name: "Equipment.Feeder".into(),
+            name: "feed".into(),
+            modifications: vec![
+                ("assetId".into(), "\"variant-feed\"".into()),
+                ("maxRawBatchKg".into(), "12".into()),
+            ],
+            placement: Some(placement),
+        },
+    })
+    .expect("apply AddComponent");
+
+    let entry = h.document().index().find_component("Line", "feed").unwrap();
+    assert_eq!(entry.type_name, "Equipment.Feeder");
+    assert_eq!(entry.modifications["assetId"], "\"variant-feed\"");
+    assert_eq!(entry.modifications["maxRawBatchKg"], "12");
+    assert_eq!(entry.placement, Some(placement));
+    assert_eq!(entry.source_range, None);
 }
 
 #[test]

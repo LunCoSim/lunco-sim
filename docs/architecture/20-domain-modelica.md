@@ -229,6 +229,14 @@ comments and short definitions are covered by the parser's source-span checks.
 Read-only library document loading selects the exact qualified class through
 Rumoca's stored-definition lookup; a missing sibling cannot resolve another class with
 the same leaf name.
+
+After a typed component or variable addition, the document indexes the new
+declaration from the accepted AST. The inspector immediately shows its type
+and modifications. The source parser supplies the document byte range on the
+next parse. A modification draft is scoped to its document, class, component,
+parameter, and authored value. It commits through the document command when
+the field loses focus.
+
 Deferred edit parsing wakes at its recorded debounce deadline even when the
 document-registry and worker-capacity revisions are unchanged. The source
 generation remains the admission fence; completed runs retain their compiled
@@ -591,9 +599,12 @@ discovery.
 The worker's successful load acknowledgement carries the authored top-level
 namespaces parsed by that exact source-set operation. The registry retains those
 names on the scoped owner entry, and compile admission resolves each qualified
-namespace to its unique source-set ID. Missing or ambiguous namespace ownership
-is a terminal diagnostic. Failed or stale acknowledgements cannot publish Ready
-or recreate a retired namespace; Twin close removes the entry and its names.
+namespace to its unique source-set ID. Scene interface submission and generated
+document admission retain their queued work while the registry has Twin directory
+loads awaiting namespace publication. Any of those directories can declare the
+requested name. Once the inventory settles, missing or ambiguous ownership is a
+terminal diagnostic. Failed or stale acknowledgements cannot publish Ready or
+recreate a retired namespace. Twin close removes the entry and its names.
 The same accepted acknowledgement carries the exact source-file snapshot to
 the authoring engine. Its background declaration projection installs a named
 source set, so diagrams can resolve sibling Twin classes without opening every
@@ -824,11 +835,12 @@ Rust emitter branch.
 Generated documents are ephemeral runtime views. Their registry origin is
 `Bundled { filename: "generated/<model>.mo" }`, which is the canonical
 generated classifier used by the API and UI. The document is linked to the
-network entity while that projection exists; when the source component is
-removed, the network stops being owned by the synthesizer, or the entity is
-despawned, the generated document and browser metadata are retired. Authored
-Modelica documents keep the ordinary entity-removal behavior and are never
-deleted by this path.
+network entity while that projection exists. Replacing the generated source
+for the same network and runtime owner updates the linked document in place
+and increments its source generation. The solver session still has its own
+identity. Removing or rejecting a projection retires its linked generated
+document and browser metadata. Authored Modelica documents retain their
+ordinary lifecycle.
 
 The synthesizer sends its strictly validated AST with the generated source.
 The document admits the AST for the exact source generation. The document
@@ -2037,7 +2049,11 @@ Each frame:
    The UI thread only takes short cache/read locks; a root or inheritance
    miss stays in an explicit loading state and is retried from the generic
    source-root completion event. No Modelica parse or inheritance walk is
-   allowed to block canvas painting.
+   allowed to block canvas painting. The graph, merged icons, traced unit and
+   semantic zoom previews use the selected document's exact syntax revision.
+   When a workspace declaration competes with it, projection uses an isolated
+   Rumoca view that gives the selected declarations priority and retains
+   unrelated dependency classes.
    Source-root authoring mirrors use shared `AsyncWorkAdmission`; when its
    bounded queue is full, the worker response and exact source snapshot remain
    ordered for retry after capacity or source-operation revision changes.

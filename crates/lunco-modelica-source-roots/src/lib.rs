@@ -528,6 +528,17 @@ impl SourceRootRegistry {
         true
     }
 
+    /// A Twin directory can declare arbitrary top-level Modelica namespaces.
+    /// Before its load publishes those names, an apparently missing or
+    /// uniquely owned namespace can still acquire another owner.
+    pub fn twin_namespace_inventory_pending(&self) -> bool {
+        self.roots.values().any(|root| {
+            matches!(root.owner, SourceRootOwner::Twin(_))
+                && matches!(root.kind, SourceRootKind::Disk { .. })
+                && matches!(root.state, LoadState::Loading { .. })
+        })
+    }
+
     /// Resolve a qualified Modelica root to its unique source-set owner.
     /// Registration IDs identify ordinary application roots before first load;
     /// completed parsed namespaces identify Twin-scoped source sets.
@@ -1607,17 +1618,22 @@ mod tests {
         registry
             .roots
             .insert(first.into(), twin_root(first, twin, 1));
+        assert!(registry.twin_namespace_inventory_pending());
         assert!(registry.resolve_source_root("Shared").is_err());
         assert!(!registry.complete_load(first, 0, vec!["Stale".into()], Vec::new(), None));
+        assert!(registry.twin_namespace_inventory_pending());
         assert!(registry.resolve_source_root("Stale").is_err());
         assert!(registry.complete_load(first, 1, vec!["Shared".into()], Vec::new(), None));
         assert_eq!(registry.resolve_source_root("Shared").unwrap(), first);
         assert!(matches!(registry.state(first), Some(LoadState::Ready)));
+        assert!(!registry.twin_namespace_inventory_pending());
 
         registry
             .roots
             .insert(second.into(), twin_root(second, twin, 2));
+        assert!(registry.twin_namespace_inventory_pending());
         assert!(registry.complete_load(second, 2, vec!["Shared".into()], Vec::new(), None));
+        assert!(!registry.twin_namespace_inventory_pending());
         assert!(
             registry
                 .resolve_source_root("Shared")
@@ -1640,6 +1656,7 @@ mod tests {
         assert!(registry.complete_load(id, 1, Vec::new(), Vec::new(), None));
         assert!(matches!(registry.state(id), Some(LoadState::Failed(error))
             if error.contains("namespace identities")));
+        assert!(!registry.twin_namespace_inventory_pending());
     }
 
     #[test]

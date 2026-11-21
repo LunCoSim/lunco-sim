@@ -7,7 +7,9 @@
 //! initialization owns evaluated defaults and live variable values.
 
 use rumoca_core::{Causality, ClassType, Variability};
-use rumoca_ir_ast::{AstIndexMap, ClassDef, Expression, Import, StoredDefinition, TerminalType};
+use rumoca_ir_ast::{
+    AstIndexMap, ClassDef, Component, Expression, Import, StoredDefinition, TerminalType,
+};
 use std::collections::{BTreeSet, HashMap};
 
 /// True when an expression names a `PlotNode` record in a `__LunCo` annotation.
@@ -465,22 +467,24 @@ pub struct ComponentInfo {
     pub modifications: HashMap<String, String>,
 }
 
-/// Extract direct sub-component declarations from a class.
-pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
-    class
-        .components
-        .values()
-        .map(|c| ComponentInfo {
-            name: c.name.clone(),
-            type_name: c.type_name.to_string(),
-            description: description_from_tokens(&c.description).unwrap_or_default(),
-            modifications: c
+impl From<&Component> for ComponentInfo {
+    fn from(component: &Component) -> Self {
+        Self {
+            name: component.name.clone(),
+            type_name: component.type_name.to_string(),
+            description: description_from_tokens(&component.description).unwrap_or_default(),
+            modifications: component
                 .modifications
                 .iter()
-                .map(|(k, v)| (k.clone(), v.to_string()))
+                .map(|(name, value)| (name.clone(), value.to_string()))
                 .collect(),
-        })
-        .collect()
+        }
+    }
+}
+
+/// Extract direct sub-component declarations from a class.
+pub fn extract_components_for_class(class: &ClassDef) -> Vec<ComponentInfo> {
+    class.components.values().map(ComponentInfo::from).collect()
 }
 
 /// Connect-equations of a class. Returns `(from, to)` pairs as

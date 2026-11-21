@@ -592,6 +592,22 @@ impl ModelicaDocument {
                 range.start, range.end
             )));
         }
+        if let ModelicaChange::ComponentAdded { class, name } = &change {
+            let component = match &fresh_ast {
+                FreshAst::Mutated(ast) => ast
+                    .get_class_by_qualified_name(class)
+                    .and_then(|declaration| declaration.components.get(name))
+                    .map(|component| (ast.relative_class_name(class), component)),
+                FreshAst::TextEdit => None,
+            };
+            let (class, component) = component.ok_or_else(|| {
+                DocumentError::ValidationFailed(format!(
+                    "added component `{class}.{name}` is missing from the updated Modelica AST"
+                ))
+            })?;
+            self.index.patch_component_added(class, component);
+        }
+
         let removed: String = self.source[range.clone()].to_string();
         self.source.replace_range(range.clone(), &replacement);
         // Cached Arc<str> view is now stale.
@@ -605,9 +621,6 @@ impl ModelicaDocument {
         }
 
         match &change {
-            ModelicaChange::ComponentAdded { class, name } => {
-                self.index.patch_component_added(class, name, "");
-            }
             ModelicaChange::ComponentRemoved { class, name } => {
                 self.index.patch_component_removed(class, name);
             }

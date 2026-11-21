@@ -598,7 +598,7 @@ impl ApiQueryProvider for ReadinessProvider {
                     .collect()
             })
             .unwrap_or_default();
-        let preparation: Vec<_> = world
+        let mut preparation: Vec<_> = world
             .get_resource::<lunco_core_runtime::SimulationProgress>()
             .map(|progress| {
                 progress
@@ -607,6 +607,23 @@ impl ApiQueryProvider for ReadinessProvider {
                     .collect()
             })
             .unwrap_or_default();
+        if let Some(opens) = world.get_resource::<lunco_workspace::open::PendingTwinOpens>()
+            && opens.is_replacement_pending()
+        {
+            preparation.push(ApiValue::str(if opens.is_scene_pending() {
+                "Opening Twin for requested scene"
+            } else if opens.is_replacement_committed() {
+                "Preparing Twin startup"
+            } else {
+                "Opening Twin workspace"
+            }));
+        }
+        if world
+            .get_resource::<lunco_core::SceneTransitionCoordinator>()
+            .is_some_and(lunco_core::SceneTransitionCoordinator::has_admitted)
+        {
+            preparation.push(ApiValue::str("Applying admitted scene transition"));
+        }
         let ready = registry.is_some()
             && pending.is_empty()
             && !world_hold

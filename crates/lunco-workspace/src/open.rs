@@ -635,12 +635,77 @@ pub struct PendingTwinOpens {
     tasks: Vec<TwinOpenTask>,
     pub(crate) settings_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
     replacement_generation: u64,
+    replacement: Option<PendingWorkspaceReplacement>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingWorkspaceReplacement {
+    generation: u64,
+    scene_pending: bool,
+    twin: Option<crate::TwinId>,
 }
 
 impl PendingTwinOpens {
     /// Whether the workspace still owes an open request a terminal outcome.
     pub fn is_pending(&self) -> bool {
-        !self.tasks.is_empty()
+        !self.tasks.is_empty() || self.replacement.is_some()
+    }
+
+    /// Whether the replacement requested a specific scene path.
+    pub fn is_scene_pending(&self) -> bool {
+        self.replacement
+            .is_some_and(|replacement| replacement.scene_pending)
+    }
+
+    /// Whether a workspace replacement has not yet reached scene admission.
+    ///
+    /// The operation spans its asynchronous scan, deferred workspace commit,
+    /// Twin asset mount, and startup scene-command dispatch. Additive scans do
+    /// not affect the currently running scene, so they do not hold readiness.
+    pub fn is_replacement_pending(&self) -> bool {
+        self.replacement.is_some()
+    }
+
+    /// Whether the replacement Twin has been committed to the workspace.
+    pub fn is_replacement_committed(&self) -> bool {
+        self.replacement
+            .is_some_and(|replacement| replacement.twin.is_some())
+    }
+
+    fn commit_replacement(&mut self, generation: u64, twin: crate::TwinId) {
+        if let Some(replacement) = self
+            .replacement
+            .as_mut()
+            .filter(|replacement| replacement.generation == generation)
+        {
+            replacement.twin = Some(twin);
+        }
+    }
+
+    fn finish_replacement_generation(&mut self, generation: Option<u64>) {
+        let Some(generation) = generation else {
+            return;
+        };
+        if self
+            .replacement
+            .is_some_and(|replacement| replacement.generation == generation)
+        {
+            self.replacement = None;
+        }
+    }
+
+    /// Finish the accepted replacement after its committed Twin reaches a
+    /// terminal workspace or scene-lifecycle edge.
+    pub fn finish_replacement_for_twin(&mut self, twin: crate::TwinId) -> bool {
+        if self
+            .replacement
+            .is_some_and(|replacement| replacement.twin == Some(twin))
+        {
+            self.replacement = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// Cancel scans superseded by a newer replacement request. Dropping the
@@ -791,6 +856,11 @@ pub fn enqueue_twin_scan(
             return;
         };
         pending.replacement_generation = next;
+        pending.replacement = Some(PendingWorkspaceReplacement {
+            generation: next,
+            scene_pending: scene.is_some(),
+            twin: None,
+        });
         Some(next)
     } else {
         None
@@ -830,7 +900,7 @@ pub fn drain_pending_twin_opens(
     }
     let mut still_running = Vec::with_capacity(pending.tasks.len());
     let settings_revision = pending.settings_revision.clone();
-    for mut entry in pending.tasks.drain(..) {
+    for mut entry in std::mem::take(&mut pending.tasks) {
         match future::block_on(future::poll_once(&mut entry.task)) {
             None => still_running.push(entry),
             Some((revision, Ok(prepared)))
@@ -849,6 +919,7 @@ pub fn drain_pending_twin_opens(
                     settings: Err(e), ..
                 }),
             )) => {
+                pending.finish_replacement_generation(entry.replacement_generation);
                 warn!(
                     "[{}] failed to prepare {}: {e}",
                     entry.log_tag,
@@ -892,6 +963,9 @@ pub fn drain_pending_twin_opens(
                         .get_resource::<crate::SceneLoadingSettings>()
                         .map(|value| value.load_default)
                     else {
+                        world
+                            .resource_mut::<PendingTwinOpens>()
+                            .finish_replacement_generation(entry.replacement_generation);
                         let detail =
                             "Cannot open Twin: global scene-loading settings are not installed";
                         warn!("{detail}");
@@ -902,6 +976,9 @@ pub fn drain_pending_twin_opens(
                         .get_resource::<crate::SceneLoadingCli>()
                         .map(|value| value.0)
                     else {
+                        world
+                            .resource_mut::<PendingTwinOpens>()
+                            .finish_replacement_generation(entry.replacement_generation);
                         let detail = "Cannot open Twin: scene-loading CLI state is not installed";
                         warn!("{detail}");
                         world.trigger(twin_open_failed(detail));
@@ -910,6 +987,9 @@ pub fn drain_pending_twin_opens(
                     let twin = match twin_mode {
                         TwinMode::Twin(twin) | TwinMode::Folder(twin) => twin,
                         TwinMode::Orphan(path) => {
+                            world
+                                .resource_mut::<PendingTwinOpens>()
+                                .finish_replacement_generation(entry.replacement_generation);
                             let detail =
                                 format!("Cannot open {}: expected a Twin folder", path.display());
                             warn!("{detail}");
@@ -950,6 +1030,11 @@ pub fn drain_pending_twin_opens(
                         workspace.scene_overrides.insert(twin_id, rel.clone());
                     }
                     drop(workspace);
+                    if let Some(generation) = entry.replacement_generation {
+                        world
+                            .resource_mut::<PendingTwinOpens>()
+                            .commit_replacement(generation, twin_id);
+                    }
                     world.trigger(TwinAdded { twin: twin_id });
                     for warning in manifest_warnings {
                         world.trigger(warning);
@@ -971,6 +1056,7 @@ pub fn drain_pending_twin_opens(
                     settings: Ok(_),
                 }),
             )) => {
+                pending.finish_replacement_generation(entry.replacement_generation);
                 warn!(
                     "[{}] {} resolved to Orphan unexpectedly — ignoring",
                     entry.log_tag,
@@ -983,6 +1069,7 @@ pub fn drain_pending_twin_opens(
                 )));
             }
             Some((_, Err(e))) => {
+                pending.finish_replacement_generation(entry.replacement_generation);
                 warn!(
                     "[{}] failed to index {}: {e}",
                     entry.log_tag,
@@ -1021,6 +1108,41 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_remains_pending_through_deferred_commit_until_scene_admission() {
+        let root = tempfile::tempdir().unwrap();
+        lunco_storage::write_file_sync(
+            &root.path().join(lunco_twin::MANIFEST_FILENAME),
+            b"name = \"gate\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(crate::WorkspacePlugin);
+
+        let mut replacement = PendingTwinOpens::default();
+        spawn_twin_from_path(root.path(), &mut replacement, "test", TwinOpenMode::Replace);
+        assert!(replacement.is_pending());
+        assert!(replacement.is_replacement_pending());
+        assert!(!replacement.is_scene_pending());
+        let generation = replacement.replacement.unwrap().generation;
+        replacement.tasks.clear();
+        assert!(replacement.is_pending());
+        assert!(replacement.is_replacement_pending());
+        let twin = crate::TwinId::new(7);
+        replacement.commit_replacement(generation, twin);
+        assert!(replacement.is_replacement_committed());
+        assert!(!replacement.finish_replacement_for_twin(crate::TwinId::new(8)));
+        assert!(replacement.is_replacement_pending());
+        assert!(replacement.finish_replacement_for_twin(twin));
+        assert!(!replacement.is_replacement_pending());
+
+        let mut additive = PendingTwinOpens::default();
+        spawn_twin_from_path(root.path(), &mut additive, "test", TwinOpenMode::Add);
+        assert!(additive.is_pending());
+        assert!(!additive.is_replacement_pending());
+    }
 
     #[test]
     fn setting_change_during_scan_refreshes_the_scanned_manifest() {

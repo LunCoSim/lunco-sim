@@ -1906,7 +1906,14 @@ pub fn apply_twin_policy_commands(world: &mut World) {
         let result =
             lunco_scripting_bridge_core::cmd_value(&action.command, HookValue::Map(params));
         match result.get("ok").and_then(HookValue::as_bool) {
-            Some(true) => {}
+            Some(true) => {
+                if matches!(action.command.as_str(), "OpenTwinScene" | "ClearScene")
+                    && let Some(mut pending_opens) =
+                        world.get_resource_mut::<lunco_workspace::open::PendingTwinOpens>()
+                {
+                    pending_opens.finish_replacement_for_twin(action.twin);
+                }
+            }
             _ => {
                 let detail = result
                     .get("error")

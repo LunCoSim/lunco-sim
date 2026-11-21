@@ -346,6 +346,24 @@ impl PendingTwinDocs {
         });
     }
 
+    /// Publish the document phase of the scene load through simulation admission.
+    pub(crate) fn sync_scene_progress(&self, progress: &mut SimulationProgress) {
+        let key = SimulationProgressKey {
+            owner: SimulationProgressOwner::DocumentPreparation,
+            operation_id: 0,
+        };
+        if self.items.iter().any(|item| {
+            !matches!(
+                item.stage,
+                TwinDocPreparationStage::Finished | TwinDocPreparationStage::Failed
+            )
+        }) {
+            progress.acquire(key, "Preparing the Twin scene document");
+        } else {
+            progress.release(key);
+        }
+    }
+
     fn mark_ready(&mut self, id: AssetId<UsdSourceBytes>) {
         if self.items.iter().any(|item| item.handle.id() == id) {
             self.ready.insert(id);
@@ -1254,6 +1272,12 @@ pub(crate) fn drain_pending_twin_docs(
     let live_ids: HashSet<_> = pending.items.iter().map(|item| item.handle.id()).collect();
     pending.ready.retain(|id| live_ids.contains(id));
     pending.failed.retain(|id, _| live_ids.contains(id));
+    // Run after the queued LoadScene commands have entered the scene coordinator.
+    commands.queue(|world: &mut World| {
+        world.resource_scope(|world, pending: Mut<PendingTwinDocs>| {
+            pending.sync_scene_progress(&mut world.resource_mut::<SimulationProgress>());
+        });
+    });
 }
 
 impl PendingTwinDoc {
