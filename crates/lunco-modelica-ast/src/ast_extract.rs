@@ -455,7 +455,8 @@ pub fn extract_extends_for_class(class: &ClassDef) -> Vec<String> {
 ///
 /// Each entry carries the component's instance name, declared type,
 /// description string, and the modification map (`R=10`,
-/// `unit="kg"`, …) projected to strings.
+/// `unit="kg"`, `combustor.eta=0.8`, …) projected to strings. Nested
+/// component modifiers use dot-qualified paths relative to this instance.
 #[derive(Debug, Clone)]
 pub struct ComponentInfo {
     /// Instance name as authored in the class.
@@ -464,21 +465,90 @@ pub struct ComponentInfo {
     pub type_name: String,
     /// Description value decoded by Rumoca.
     pub description: String,
-    /// Component modifications rendered by Rumoca, keyed by authored names.
+    /// Component modifications rendered by Rumoca, keyed by direct names or
+    /// dot-qualified nested paths relative to this instance.
     pub modifications: HashMap<String, String>,
+}
+
+fn joined_modifier_path(prefix: &str, target: &str) -> String {
+    if prefix.is_empty() {
+        target.to_string()
+    } else if target.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}.{target}")
+    }
+}
+
+fn collect_nested_modification_paths(
+    modifier: &Expression,
+    prefix: &str,
+    out: &mut HashMap<String, String>,
+) {
+    match modifier {
+        Expression::Modification { target, value, .. } => {
+            let path = joined_modifier_path(prefix, &target.to_string());
+            out.insert(path.clone(), value.to_string());
+            if let Expression::ClassModification {
+                target,
+                modifications,
+                ..
+            } = value.as_ref()
+            {
+                let nested_path = joined_modifier_path(&path, &target.to_string());
+                for nested in modifications {
+                    collect_nested_modification_paths(nested, &nested_path, out);
+                }
+            }
+        }
+        Expression::ClassModification {
+            target,
+            modifications,
+            ..
+        } => {
+            let path = joined_modifier_path(prefix, &target.to_string());
+            for nested in modifications {
+                collect_nested_modification_paths(nested, &path, out);
+            }
+        }
+        Expression::Binary {
+            op: rumoca_core::OpBinary::Assign,
+            lhs,
+            rhs,
+            ..
+        } => {
+            if let Expression::ClassModification {
+                target,
+                modifications,
+                ..
+            } = lhs.as_ref()
+            {
+                let path = joined_modifier_path(prefix, &target.to_string());
+                out.insert(path.clone(), rhs.to_string());
+                for nested in modifications {
+                    collect_nested_modification_paths(nested, &path, out);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 impl From<&Component> for ComponentInfo {
     fn from(component: &Component) -> Self {
+        let mut modifications = component
+            .modifications
+            .iter()
+            .map(|(name, value)| (name.clone(), value.to_string()))
+            .collect::<HashMap<_, _>>();
+        for modifier in &component.source_modifications {
+            collect_nested_modification_paths(modifier, "", &mut modifications);
+        }
         Self {
             name: component.name.clone(),
             type_name: component.type_name.to_string(),
             description: description_from_tokens(&component.description).unwrap_or_default(),
-            modifications: component
-                .modifications
-                .iter()
-                .map(|(name, value)| (name.clone(), value.to_string()))
-                .collect(),
+            modifications,
         }
     }
 }
@@ -982,6 +1052,33 @@ end Battery;
                 description: Some("Charge currently available".to_string()),
                 unit: Some("Ah".to_string()),
             })
+        );
+    }
+
+    #[test]
+    fn component_metadata_flattens_nested_modifier_paths() {
+        let source = r#"
+model Combustor
+  parameter Real eta = 0.5;
+end Combustor;
+model Engine
+  Combustor combustor;
+end Engine;
+model Plant
+  Engine engine(combustor(eta = 0.75));
+end Plant;
+"#;
+        let ast = rumoca_phase_parse::parse_to_ast(source, "nested_modifiers.mo").unwrap();
+        let engine = extract_components_for_class(&ast.classes["Plant"])
+            .into_iter()
+            .find(|component| component.name == "engine")
+            .unwrap();
+        assert_eq!(
+            engine
+                .modifications
+                .get("combustor.eta")
+                .map(String::as_str),
+            Some("0.75")
         );
     }
 

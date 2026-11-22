@@ -80,6 +80,25 @@ pub(crate) fn parse_value_fragment(
         })
 }
 
+/// Parse the contents of a component modifier group in a synthetic
+/// declaration. The returned offset maps expression spans back to the
+/// beginning of modifiers.
+pub(crate) fn parse_modification_list_fragment(
+    modifiers: &str,
+) -> Result<(Vec<rumoca_ir_ast::Expression>, usize), AstMutError> {
+    let prefix = format!("model {FRAGMENT_CLASS_NAME}\n  Real __lunco_value(");
+    let suffix = format!(");\nend {FRAGMENT_CLASS_NAME};\n");
+    let stub = format!("{prefix}{modifiers}{suffix}");
+    let parsed = parse_stub_cached(&stub)
+        .ok_or_else(|| AstMutError::ModifierListParseFailed(modifiers.to_string()))?;
+    let component = parsed
+        .classes
+        .get(FRAGMENT_CLASS_NAME)
+        .and_then(|class| class.components.get("__lunco_value"))
+        .ok_or_else(|| AstMutError::ModifierListParseFailed(modifiers.to_string()))?;
+    Ok((component.source_modifications.clone(), prefix.len()))
+}
+
 /// Parse a `pretty::ComponentDecl` into a rumoca [`Component`] by
 /// wrapping it in a stub class.
 pub(crate) fn parse_component_fragment(

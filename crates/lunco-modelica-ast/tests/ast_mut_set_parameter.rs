@@ -349,3 +349,67 @@ fn set_parameter_accepts_array_literal() {
     });
     assert!(comp.modifications.contains_key("nominal"));
 }
+
+#[test]
+fn set_parameter_inserts_a_qualified_nested_modifier() {
+    let source = r#"model Combustor
+  parameter Real eta = 0.5;
+end Combustor;
+model Engine
+  Combustor combustor;
+end Engine;
+model Plant
+  Engine engine;
+end Plant;
+"#;
+    let parsed = parse_to_ast(source, "nested_parameter.mo").unwrap();
+    let (range, replacement, _) = ast_mut::class_patch(source, &parsed, "Plant", |class, edit| {
+        ast_mut::set_parameter(class, edit, "engine", "combustor.eta", "0.75")
+    })
+    .unwrap();
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    assert!(patched.contains("Engine engine(combustor.eta = 0.75);"));
+
+    let reparsed = parse_to_ast(&patched, "nested_parameter.mo").unwrap();
+    assert_eq!(
+        reparsed.classes["Plant"].components["engine"].modifications["combustor.eta"].to_string(),
+        "0.75"
+    );
+}
+
+#[test]
+fn set_parameter_replaces_nested_modifier_in_place() {
+    let source = r#"model Combustor
+  parameter Real eta = 0.5;
+  parameter Real reserve = 1.0;
+end Combustor;
+model Engine
+  Combustor combustor;
+end Engine;
+model Plant
+  Engine engine(combustor(eta = 0.70, reserve = 1.0));
+end Plant;
+"#;
+    let parsed = parse_to_ast(source, "nested_parameter.mo").unwrap();
+    let (range, replacement, _) = ast_mut::class_patch(source, &parsed, "Plant", |class, edit| {
+        ast_mut::set_parameter(class, edit, "engine", "combustor.eta", "0.91")
+    })
+    .unwrap();
+    let mut patched = source.to_string();
+    patched.replace_range(range, &replacement);
+    assert_eq!(patched, source.replace("eta = 0.70", "eta = 0.91"));
+    parse_to_ast(&patched, "nested_parameter.mo").expect("nested edit remains valid Modelica");
+}
+
+#[test]
+fn set_parameter_rejects_malformed_qualified_path() {
+    let err = set_parameter_err(
+        "model M\n  Real engine;\nend M;\n",
+        "M",
+        "engine",
+        "combustor..eta",
+        "0.8",
+    );
+    assert!(matches!(err, AstMutError::InvalidParameterPath(path) if path == "combustor..eta"));
+}

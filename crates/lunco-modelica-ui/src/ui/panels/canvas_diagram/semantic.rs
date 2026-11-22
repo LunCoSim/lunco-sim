@@ -391,7 +391,6 @@ end Parts;
             .diagram_snapshot("Derived", crate::diagram::DiagramScope::ComponentGraph)
             .unwrap();
         let ast = root.ast.clone();
-        let sources = [parts, root];
         let diagram = crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
             ast,
             root.source.as_ref(),
@@ -402,6 +401,7 @@ end Parts;
         .unwrap();
         let mut scene = super::super::projection::project_scene(&diagram).0;
         let cancel = AtomicBool::new(false);
+        let sources = [parts, root];
         prepare(&mut scene, &mut engine, 100, &layout, &cancel, &sources).unwrap();
         let unit = scene
             .nodes()
