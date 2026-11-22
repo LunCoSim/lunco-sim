@@ -94,7 +94,9 @@ fn catalog_content(
 /// One source identity in a complete asynchronous JSON asset-scope snapshot.
 #[derive(Clone, Debug)]
 pub struct JsonAssetRecord {
-    /// Canonical `lunco://` or `twin://` source address.
+    /// Address used to read this source. Twin addresses retain their exact
+    /// mount authority; canonicalize through `asset_path::source_uri_for_address`
+    /// before exposing or persisting them as source identity.
     pub asset_uri: String,
     pub content: JsonAssetContent,
 }
@@ -115,7 +117,9 @@ pub struct JsonAssetScopeLoading {
     pub twin_id: Option<lunco_workspace::TwinId>,
     /// Assigned Twin asset authority when the scope is Twin-owned.
     pub twin_display_name: Option<String>,
-    /// Canonical URI root used to qualify references owned by this scope.
+    /// Read root used to qualify references owned by this scope. Twin roots
+    /// retain their exact mount authority; canonicalize through
+    /// `asset_path::source_uri_for_address` before exposing them as identity.
     pub asset_root_uri: String,
     /// Number of JSON assets whose asynchronous read must settle.
     pub asset_count: usize,
@@ -128,7 +132,9 @@ pub struct JsonAssetScopeChanged {
     pub twin_id: Option<lunco_workspace::TwinId>,
     /// Assigned Twin asset authority when the scope is Twin-owned.
     pub twin_display_name: Option<String>,
-    /// Canonical URI root used to qualify references owned by this scope.
+    /// Read root used to qualify references owned by this scope. Twin roots
+    /// retain their exact mount authority; canonicalize through
+    /// `asset_path::source_uri_for_address` before exposing them as identity.
     pub asset_root_uri: String,
     /// Every indexed JSON source in this scope and its read result.
     pub assets: Vec<JsonAssetRecord>,

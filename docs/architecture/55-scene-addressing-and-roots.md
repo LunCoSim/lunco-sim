@@ -128,7 +128,9 @@ including live ones; only a stable logical source identity is accepted. Unknown
 sources are rejected before teardown. A logical source identity that collides
 with a current or retired mount authority is rejected at mount admission.
 Background readers retain exact mount leases rather than resolving public
-addresses again after their owner retires.
+addresses again after their owner retires. `source_uri_for_address` also accepts
+the engine root `lunco://` and empty-path Twin roots, because asset-scope events
+carry a root URI before any individual source file is selected.
 
 `TwinRoots` assigns a fresh opaque UUID authority for each mount lifetime and
 keeps source identity and display metadata separately. The authority remains

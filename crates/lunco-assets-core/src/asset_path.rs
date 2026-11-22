@@ -37,12 +37,24 @@ pub fn source_uri(
     }
 }
 
-/// Convert an internal Twin load address or an existing public URI into the
-/// canonical URI used by scene commands, persisted identity and API facts.
+/// Convert an internal asset address, source-root URI, or existing public URI
+/// into the canonical URI used by scene commands, persisted identity and API
+/// facts.
 pub fn source_uri_for_address(
     reference: &str,
     roots: Option<&crate::TwinRoots>,
 ) -> Result<String, crate::TwinRootsError> {
+    if crate::parse_lunco_uri(reference).is_some_and(str::is_empty) {
+        return Ok(crate::engine_asset_uri(""));
+    }
+    if let Some(identity) = crate::parse_twin_root_uri(reference).or_else(|| {
+        crate::parse_twin_uri(reference)
+            .and_then(|(identity, relative)| relative.is_empty().then_some(identity))
+    }) {
+        let logical_identity = stable_twin_identity(identity, roots)?;
+        return Ok(crate::twin_uri(logical_identity, ""));
+    }
+
     let path = load_asset_path(reference, None, None, None)?;
     if path.source() != &AssetSourceId::Name(crate::TWIN_SCHEME.into()) {
         return Ok(anchor_of(&path));
@@ -51,23 +63,30 @@ pub fn source_uri_for_address(
     let Some((identity, relative)) = crate::parse_twin_uri(&canonical) else {
         return Err(crate::TwinRootsError::SourceNotMounted);
     };
-    let roots = roots.ok_or(crate::TwinRootsError::RegistryUnavailable)?;
-    let logical_identity = match roots.logical_identity_for_authority(identity) {
-        Ok(logical_identity) => logical_identity,
-        Err(crate::TwinRootsError::UnknownAuthority(_))
-            if roots.mounted_authority_for_logical(identity)?.is_some() =>
-        {
-            identity.to_owned()
-        }
-        Err(crate::TwinRootsError::UnknownAuthority(_)) => {
-            return Err(crate::TwinRootsError::SourceNotMounted);
-        }
-        Err(error) => return Err(error),
-    };
+    let logical_identity = stable_twin_identity(identity, roots)?;
     Ok(uri(
         crate::TWIN_SCHEME,
         &format!("{logical_identity}/{relative}"),
     ))
+}
+
+fn stable_twin_identity(
+    identity: &str,
+    roots: Option<&crate::TwinRoots>,
+) -> Result<String, crate::TwinRootsError> {
+    let roots = roots.ok_or(crate::TwinRootsError::RegistryUnavailable)?;
+    match roots.logical_identity_for_authority(identity) {
+        Ok(logical_identity) => Ok(logical_identity),
+        Err(crate::TwinRootsError::UnknownAuthority(_))
+            if roots.mounted_authority_for_logical(identity)?.is_some() =>
+        {
+            Ok(identity.to_owned())
+        }
+        Err(crate::TwinRootsError::UnknownAuthority(_)) => {
+            Err(crate::TwinRootsError::SourceNotMounted)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Present a source address with Twin names and paths suitable for UI labels.
@@ -592,6 +611,35 @@ pub fn web_url(reference: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_uri_for_address_canonicalizes_asset_roots_without_a_file_path() {
+        assert_eq!(
+            source_uri_for_address("lunco://", None).unwrap(),
+            "lunco://"
+        );
+
+        let folder = tempfile::tempdir().unwrap();
+        let roots = crate::TwinRoots::default();
+        let authority = roots.register_authority("fixture", folder.path()).unwrap();
+        let internal_root = crate::twin_uri(&authority, "");
+        assert_eq!(
+            source_uri_for_address(&internal_root, Some(&roots)).unwrap(),
+            "twin://fixture/"
+        );
+        assert_eq!(
+            source_uri_for_address("twin://fixture", Some(&roots)).unwrap(),
+            "twin://fixture/"
+        );
+        assert_eq!(
+            source_uri_for_address("twin://fixture/", Some(&roots)).unwrap(),
+            "twin://fixture/"
+        );
+        assert_eq!(
+            source_uri_for_address(&internal_root, None),
+            Err(crate::TwinRootsError::RegistryUnavailable)
+        );
+    }
 
     #[test]
     fn source_uris_remain_reusable_across_remounts_without_reviving_expired_leases() {

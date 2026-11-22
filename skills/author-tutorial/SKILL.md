@@ -53,6 +53,12 @@ marked catalog from generic asset-scope events and uses the shared `parse_json`
 function; do not add tutorial-specific Rust loading or menu code. The reserved
 experiment-results namespace is classified by the asset owner and excluded by
 the menu policy before parsing. Keep catalogs in authored source directories.
+Asset-scope events identify the library or Twin root before publishing the
+catalog snapshot, so root URI conversion must accept `lunco://` and empty-path
+`twin://<source-identity>/` addresses. When a catalog is missing from both
+surfaces, check `[application-assets]` runtime warnings before changing the
+catalog; a root-conversion failure prevents the shared menu and viewport
+contributions from being published.
 The same policy result supplies the Tutorials quick-navigation entries and
 their existing lesson actions; do not author a second list for the startup
 button.
