@@ -61,6 +61,12 @@ labels, ordering, visibility, and action meaning. Do not grow this into a
 second rich-dialog implementation without a separate typed contract and
 acceptance tests.
 
+For tabbed workspaces, prefer one `selection_setting` containing the active
+page ID. Rhai handles the tab action and writes that setting; the generic
+runtime mounts the matching Twin-authored page under the stable shell. Use the
+per-page boolean `setting` form only to preserve an older workspace contract.
+Do not mix both selection forms in one workspace.
+
 Twin-authored actions are open-ended semantic identifiers. The reusable
 `program-browser` surface publishes typed arrays of records; its HUI row
 template is reconciled by the generic keyed collection host. To diagnose a

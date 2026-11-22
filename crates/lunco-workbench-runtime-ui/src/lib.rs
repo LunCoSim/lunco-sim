@@ -1289,8 +1289,12 @@ pub struct RuntimeUiBindingDefinition {
 pub struct RuntimeUiWorkspaceDefinition {
     /// HUI `id` of the authored node that receives the selected page template.
     pub host: String,
-    /// The page selected when no page setting is enabled.
+    /// The page selected when the configured selection is absent or invalid.
     pub default_page: String,
+    /// Optional Twin text setting containing the one selected page id. When
+    /// present, pages must not also declare per-page boolean settings.
+    #[serde(default)]
+    pub selection_setting: Option<String>,
     pub pages: Vec<RuntimeUiWorkspacePageDefinition>,
 }
 
@@ -1303,7 +1307,7 @@ pub struct RuntimeUiWorkspacePageDefinition {
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
-    /// Twin setting selecting this page. Rhai remains the route policy owner.
+    /// Legacy Twin boolean selecting this page. Rhai remains the route policy owner.
     #[serde(default)]
     pub setting: Option<String>,
     #[serde(default)]
@@ -1543,6 +1547,25 @@ impl RuntimeUiManifest {
                 }
                 require_non_empty("workspace page host", &workspace.host)?;
                 require_non_empty("workspace default page", &workspace.default_page)?;
+                if let Some(setting) = &workspace.selection_setting {
+                    if surface.owner == RuntimeUiSurfaceOwner::Application {
+                        return Err(format!(
+                            "application workspace `{}` cannot bind Twin page settings",
+                            surface.id
+                        ));
+                    }
+                    lunco_twin::TwinManifest::validate_setting_key(setting)?;
+                    if workspace
+                        .pages
+                        .iter()
+                        .any(|page| page.setting.is_some() || page.setting_default)
+                    {
+                        return Err(format!(
+                            "workspace `{}` cannot combine a selection setting with per-page settings",
+                            surface.id
+                        ));
+                    }
+                }
                 if workspace.pages.len() < 2 || workspace.pages.len() > 64 {
                     return Err(format!(
                         "runtime UI workspace `{}` must declare 2–64 pages",
@@ -2585,6 +2608,7 @@ impl RuntimeUiSurface {
             Some(RuntimeUiWorkspace {
                 host: workspace.host.clone(),
                 default_page: workspace.default_page.clone(),
+                selection_setting: workspace.selection_setting.clone(),
                 pages,
             })
         } else {
@@ -2664,6 +2688,7 @@ impl RuntimeUiSurface {
 struct RuntimeUiWorkspace {
     host: String,
     default_page: String,
+    selection_setting: Option<String>,
     pages: Vec<RuntimeUiWorkspacePage>,
 }
 
@@ -3702,10 +3727,43 @@ fn active_twin_setting_value(
     }
 }
 
+fn active_twin_setting_text(workspace: Option<&WorkspaceResource>, key: &str) -> Option<String> {
+    let workspace = workspace?;
+    let twin_id = workspace.active_twin?;
+    match workspace
+        .twin(twin_id)
+        .and_then(|twin| twin.manifest.as_ref())
+        .and_then(|manifest| manifest.setting(key))
+    {
+        Some(lunco_twin::TwinSettingValue::Text(value)) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn selected_workspace_page_id<'a>(
+    page_ids: impl Iterator<Item = &'a str> + Clone,
+    selection: Option<&str>,
+    default_page: &'a str,
+) -> String {
+    let selected = selection
+        .and_then(|selection| page_ids.clone().find(|page_id| *page_id == selection))
+        .unwrap_or(default_page);
+    selected.to_owned()
+}
+
 fn selected_workspace_page<'a>(
     workspace: &'a RuntimeUiWorkspace,
     twin: Option<&WorkspaceResource>,
 ) -> Option<&'a RuntimeUiWorkspacePage> {
+    if let Some(setting) = &workspace.selection_setting {
+        let selection = active_twin_setting_text(twin, setting);
+        let page_id = selected_workspace_page_id(
+            workspace.pages.iter().map(|page| page.id.as_str()),
+            selection.as_deref(),
+            &workspace.default_page,
+        );
+        return workspace.pages.iter().find(|page| page.id == page_id);
+    }
     workspace
         .pages
         .iter()
@@ -3733,6 +3791,15 @@ fn selected_workspace_page_definition<'a>(
     workspace: &'a RuntimeUiWorkspaceDefinition,
     twin: Option<&WorkspaceResource>,
 ) -> Option<&'a RuntimeUiWorkspacePageDefinition> {
+    if let Some(setting) = &workspace.selection_setting {
+        let selection = active_twin_setting_text(twin, setting);
+        let page_id = selected_workspace_page_id(
+            workspace.pages.iter().map(|page| page.id.as_str()),
+            selection.as_deref(),
+            &workspace.default_page,
+        );
+        return workspace.pages.iter().find(|page| page.id == page_id);
+    }
     workspace
         .pages
         .iter()
@@ -7888,6 +7955,23 @@ mod tests {
     }
 
     #[test]
+    fn workspace_selection_setting_uses_one_valid_page_id_and_falls_back_safely() {
+        let pages = ["overview", "recipes", "materials"];
+        assert_eq!(
+            super::selected_workspace_page_id(pages.iter().copied(), Some("materials"), "overview"),
+            "materials"
+        );
+        assert_eq!(
+            super::selected_workspace_page_id(pages.iter().copied(), Some("unknown"), "overview"),
+            "overview"
+        );
+        assert_eq!(
+            super::selected_workspace_page_id(pages.iter().copied(), None, "overview"),
+            "overview"
+        );
+    }
+
+    #[test]
     fn authored_workspace_has_one_layout_owner_and_twin_scoped_pages() {
         let manifest: RuntimeUiManifest = serde_json::from_str(
             r#"{
@@ -7899,22 +7983,21 @@ mod tests {
                     "workspace": {
                         "host": "workspace-page",
                         "default_page": "recipes",
+                        "selection_setting": "factory.workspace_page",
                         "pages": [
                             {
                                 "id": "recipes",
                                 "label": "Recipes",
                                 "template": "ui/recipes.html",
                                 "stylesheet": "ui/recipes.css",
-                                "namespace": "factory-recipes",
-                                "setting": "ui.factory_recipes"
+                                "namespace": "factory-recipes"
                             },
                             {
                                 "id": "materials",
                                 "label": "Materials",
                                 "template": "ui/materials.html",
                                 "stylesheet": "ui/materials.css",
-                                "namespace": "factory-materials",
-                                "setting": "ui.factory_materials"
+                                "namespace": "factory-materials"
                             }
                         ]
                     },
@@ -7942,6 +8025,16 @@ mod tests {
         assert_eq!(surface.namespace(), "factory-recipes");
         assert_eq!(surface.active_workspace_page.as_deref(), Some("recipes"));
         assert_eq!(surface.layout_id, "factory-workspace");
+
+        let mixed_selection_error = {
+            let mut invalid = manifest.clone();
+            invalid.surfaces[0].workspace.as_mut().unwrap().pages[1].setting =
+                Some("ui.factory_materials".to_owned());
+            invalid
+                .validate()
+                .expect_err("one workspace must have one page-selection contract")
+        };
+        assert!(mixed_selection_error.contains("cannot combine a selection setting"));
 
         let error = {
             let mut invalid = manifest;

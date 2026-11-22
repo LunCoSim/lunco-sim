@@ -658,14 +658,16 @@ child when the selected Twin setting changes, without replacing or
 repositioning the shell.
 
 The workspace lists a `default_page` and two or more pages. Each page has a
-stable `id` and may name a Twin boolean `setting`. Rhai remains responsible for
-route policy and changes those settings; the runtime only resolves the
-selected page and mounts its authored assets. A shell tab control may set
-`tag:ui_tab_id` to a page id; the runtime adds the CSS class `is-active` to the
-selected control. The button's `on_press`, `tag:action`, and other parameters
-remain Twin-authored. This keeps layout identity and composition in the generic
-runtime while page copy, content, styles, data, and process rules stay in the
-Twin.
+stable `id`. Prefer one workspace `selection_setting` that stores the selected
+page id as Twin text; Rhai owns the route action and writes that key, and the
+runtime mounts the matching authored page. If the setting is absent or names
+no declared page, the runtime uses `default_page`. Older workspaces may retain
+per-page boolean `setting` fields, but a workspace cannot mix both selection
+contracts. A shell tab control may set `tag:ui_tab_id` to a page id; the runtime
+adds the CSS class `is-active` to the selected control. The button's
+`on_press`, `tag:action`, and other parameters remain Twin-authored. This keeps
+layout identity and composition in the generic runtime while page copy,
+content, styles, data, and process rules stay in the Twin.
 
 ```json
 {
@@ -676,23 +678,21 @@ Twin.
   "workspace": {
     "host": "workspace-page",
     "default_page": "recipes",
+    "selection_setting": "ui.factory_page",
     "pages": [
       {
         "id": "recipes",
         "label": "Recipes",
         "template": "ui/recipes.html",
         "stylesheet": "ui/recipes.css",
-        "namespace": "factory-recipes",
-        "setting": "ui.factory_recipes",
-        "setting_default": true
+        "namespace": "factory-recipes"
       },
       {
         "id": "materials",
         "label": "Materials",
         "template": "ui/materials.html",
         "stylesheet": "ui/materials.css",
-        "namespace": "factory-materials",
-        "setting": "ui.factory_materials"
+        "namespace": "factory-materials"
       }
     ]
   },
