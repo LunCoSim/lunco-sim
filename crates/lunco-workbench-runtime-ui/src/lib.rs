@@ -91,7 +91,7 @@ pub struct RuntimeUiAction {
 pub struct RuntimeUiForms {
     owner_twin_id: Option<u64>,
     forms: BTreeMap<String, RuntimeUiFormState>,
-    published_collections: HashMap<(String, String), Vec<ExposureValue>>,
+    published_data_sources: HashMap<(String, String), Vec<ExposureValue>>,
 }
 
 #[derive(Default)]
@@ -125,11 +125,11 @@ pub struct SetRuntimeUiFormValues {
     pub values: BTreeMap<String, String>,
 }
 
-/// Replace one authored keyed collection with rows from the active Twin's
-/// presentation policy. The destination must be declared by the active
-/// runtime UI manifest; the command cannot publish arbitrary exposures.
+/// Publish keyed rows from the active Twin's presentation policy. A declared
+/// data source can feed a native dropdown without creating a hidden HUI list;
+/// collection sources use the same rows for their authored HUI host.
 #[lunco_core::Command(default)]
-pub struct SetRuntimeUiCollectionData {
+pub struct SetRuntimeUiDataSource {
     pub namespace: String,
     pub source: String,
     pub items: Vec<BTreeMap<String, String>>,
@@ -496,7 +496,7 @@ fn on_set_runtime_ui_form_values(
         }
     }
     if forms.owner_twin_id != Some(owner) {
-        clear_runtime_ui_collections(&mut forms, exposures.as_deref_mut());
+        clear_runtime_ui_data_sources(&mut forms, exposures.as_deref_mut());
         forms.forms.clear();
         forms.owner_twin_id = Some(owner);
     }
@@ -506,78 +506,101 @@ fn on_set_runtime_ui_form_values(
     Ok(Ack::new(OpId::new()))
 }
 
-#[lunco_core::on_command(SetRuntimeUiCollectionData)]
-fn on_set_runtime_ui_collection_data(
-    trigger: On<SetRuntimeUiCollectionData>,
+#[lunco_core::on_command(SetRuntimeUiDataSource)]
+fn on_set_runtime_ui_data_source(
+    trigger: On<SetRuntimeUiDataSource>,
     workspace: Option<Res<WorkspaceResource>>,
     surfaces: Query<&RuntimeUiSurface>,
     manifest_state: Option<Res<RuntimeUiManifestState>>,
     mut forms: ResMut<RuntimeUiForms>,
-    exposures: Option<ResMut<EngineExposures>>,
+    mut exposures: Option<ResMut<EngineExposures>>,
 ) -> Result<Ack, String> {
     let active_twin = workspace
         .as_deref()
         .and_then(|workspace| workspace.active_twin)
-        .ok_or_else(|| "SetRuntimeUiCollectionData requires an active Twin".to_owned())?;
-    let owner = active_twin.raw();
+        .ok_or_else(|| "SetRuntimeUiDataSource requires an active Twin".to_owned())?;
     let event = trigger.event();
-    if event.namespace.trim().is_empty() || event.namespace.len() > 96 {
+    publish_runtime_ui_data_source(
+        active_twin,
+        &event.namespace,
+        &event.source,
+        &event.items,
+        &surfaces,
+        manifest_state.as_deref(),
+        &mut forms,
+        exposures.as_deref_mut(),
+    )
+}
+
+fn publish_runtime_ui_data_source(
+    active_twin: TwinId,
+    namespace: &str,
+    source: &str,
+    items: &[BTreeMap<String, String>],
+    surfaces: &Query<&RuntimeUiSurface>,
+    manifest_state: Option<&RuntimeUiManifestState>,
+    forms: &mut RuntimeUiForms,
+    mut exposures: Option<&mut EngineExposures>,
+) -> Result<Ack, String> {
+    let owner = active_twin.raw();
+    if namespace.trim().is_empty() || namespace.len() > 96 {
         return Err("namespace must contain 1 to 96 characters".to_owned());
     }
-    if event.source.trim().is_empty() || event.source.len() > 64 {
+    if source.trim().is_empty() || source.len() > 64 {
         return Err("source must contain 1 to 64 characters".to_owned());
     }
-    // Validate against authored manifest data when available. Surface roots
-    // mount asynchronously after Twin startup, so commands from on_start must
-    // not depend on HUI having spawned the presentation tree yet.
-    let collection_in_manifest = manifest_state
-        .as_deref()
-        .map(|state| state.find_collection(Some(active_twin), &event.namespace, &event.source))
-        .transpose()?
-        .flatten();
-    let collection_key = match collection_in_manifest {
-        Some(collection_key) => collection_key,
-        None => surfaces.iter().find_map(|surface| {
-            (surface.namespace == event.namespace
-                && surface.owner == RuntimeUiSurfaceOwner::Workspace)
+    // Resolve standalone data sources from the active manifest before HUI
+    // mounts. The mounted-root fallback only supports collection declarations
+    // when a manifest state is not available. A known manifest that omits a
+    // source must reject it instead of accepting stale mounted metadata.
+    let mounted_collection_source = || {
+        surfaces.iter().find_map(|surface| {
+            (surface.namespace == namespace && surface.owner == RuntimeUiSurfaceOwner::Workspace)
                 .then(|| {
                     surface
                         .collections
                         .iter()
-                        .find(|collection| collection.source == event.source)
+                        .find(|collection| collection.source == source)
+                        .map(|collection| collection.key.clone())
                 })
                 .flatten()
-                .map(|collection| collection.key.clone())
-        }),
+        })
     };
-    let Some(collection_key) = collection_key else {
+    let source_key = match manifest_state {
+        Some(state) => match state.find_data_source(Some(active_twin), namespace, source)? {
+            Some(Some(key)) => Some(key),
+            Some(None) => None,
+            None => mounted_collection_source(),
+        },
+        None => mounted_collection_source(),
+    };
+    let Some(source_key) = source_key else {
         return Err(format!(
-            "`{}` is not a declared collection source on runtime surface `{}`",
-            event.source, event.namespace
+            "`{source}` is not a declared data source on runtime surface `{namespace}`"
         ));
     };
-    let rows = runtime_ui_collection_value(&collection_key, &event.items)?;
+    let rows = runtime_ui_data_source_value(&source_key, items)?;
     let ExposureValue::Array(rows) = rows else {
-        unreachable!("validated runtime UI collection data is always an array")
+        unreachable!("validated runtime UI data source rows are always an array")
     };
-    let Some(mut exposures) = exposures else {
-        return Err("EngineExposures is not available for runtime collection data".to_owned());
+    let Some(exposures) = exposures.as_deref_mut() else {
+        return Err("EngineExposures is not available for runtime UI data sources".to_owned());
     };
     if forms.owner_twin_id != Some(owner) {
-        clear_runtime_ui_collections(&mut forms, Some(&mut exposures));
+        clear_runtime_ui_data_sources(forms, Some(exposures));
         forms.forms.clear();
         forms.owner_twin_id = Some(owner);
     }
     exposures
-        .writer(&event.namespace)
-        .property(&event.source, ExposureValue::Array(rows.clone()));
+        .writer(namespace)
+        .property(source, ExposureValue::Array(rows.clone()));
     forms
-        .published_collections
-        .insert((event.namespace.clone(), event.source.clone()), rows);
+        .published_data_sources
+        .insert((namespace.to_owned(), source.to_owned()), rows);
     Ok(Ack::new(OpId::new()))
 }
 
-fn runtime_ui_collection_value(
+fn runtime_ui_data_source_value(
     key_field: &str,
     items: &[BTreeMap<String, String>],
 ) -> Result<ExposureValue, String> {
@@ -586,7 +609,7 @@ fn runtime_ui_collection_value(
     const MAX_TOTAL_BYTES: usize = 262_144;
     if items.len() > MAX_ITEMS {
         return Err(format!(
-            "a runtime UI collection may contain at most {MAX_ITEMS} rows"
+            "a runtime UI data source may contain at most {MAX_ITEMS} rows"
         ));
     }
     let mut seen = HashSet::with_capacity(items.len());
@@ -595,35 +618,39 @@ fn runtime_ui_collection_value(
     for (row_index, item) in items.iter().enumerate() {
         if item.is_empty() || item.len() > MAX_FIELDS_PER_ITEM {
             return Err(format!(
-                "collection row {} must contain 1 to {MAX_FIELDS_PER_ITEM} fields",
+                "data source row {} must contain 1 to {MAX_FIELDS_PER_ITEM} fields",
                 row_index + 1
             ));
         }
         let Some(key) = item.get(key_field).filter(|key| !key.trim().is_empty()) else {
             return Err(format!(
-                "collection row {} is missing its non-empty `{key_field}` key",
+                "data source row {} is missing its non-empty `{key_field}` key",
                 row_index + 1
             ));
         };
         if !seen.insert(key.as_str()) {
-            return Err(format!("collection key `{key}` appears more than once"));
+            return Err(format!("data source key `{key}` appears more than once"));
         }
         let mut fields = Vec::with_capacity(item.len());
         for (name, value) in item {
             if name.trim().is_empty() || name.len() > 64 {
                 return Err(format!(
-                    "collection row {} contains an invalid field name",
+                    "data source row {} contains an invalid field name",
                     row_index + 1
                 ));
             }
             if value.len() > 2048 {
-                return Err(format!("collection value `{name}` exceeds 2048 characters"));
+                return Err(format!(
+                    "data source value `{name}` exceeds 2048 characters"
+                ));
             }
             total_bytes = total_bytes
                 .saturating_add(name.len())
                 .saturating_add(value.len());
             if total_bytes > MAX_TOTAL_BYTES {
-                return Err(format!("collection data exceeds {MAX_TOTAL_BYTES} bytes"));
+                return Err(format!(
+                    "runtime UI data source exceeds {MAX_TOTAL_BYTES} bytes"
+                ));
             }
             fields.push((name.clone(), ExposureValue::Text(value.clone())));
         }
@@ -632,15 +659,15 @@ fn runtime_ui_collection_value(
     Ok(ExposureValue::Array(rows))
 }
 
-fn clear_runtime_ui_collections(
+fn clear_runtime_ui_data_sources(
     forms: &mut RuntimeUiForms,
     exposures: Option<&mut EngineExposures>,
 ) {
     let Some(exposures) = exposures else {
-        forms.published_collections.clear();
+        forms.published_data_sources.clear();
         return;
     };
-    for ((namespace, source), _) in forms.published_collections.drain() {
+    for ((namespace, source), _) in forms.published_data_sources.drain() {
         if exposures.surfaces.contains_key(&namespace) {
             exposures.writer(&namespace).remove_property(&source);
         }
@@ -697,6 +724,16 @@ fn on_inspect_runtime_ui_form(
             .any(|page| page.owner == entity && page.page_id == *active)
             .then(|| (surface.layout_id.clone(), HookValue::str(active.clone())))
     });
+    let published_rows = forms
+        .published_data_sources
+        .iter()
+        .map(|((namespace, source), rows)| {
+            (
+                format!("{namespace}/{source}"),
+                HookValue::UInt(rows.len() as u64),
+            )
+        })
+        .collect::<Vec<_>>();
     Ok(Ack::with_data(
         OpId::new(),
         lunco_hooks::HookValue::map([
@@ -704,17 +741,7 @@ fn on_inspect_runtime_ui_form(
             ("field_count", HookValue::UInt(form.values.len() as u64)),
             ("status", HookValue::str(form.status.clone())),
             ("owner_twin_id", HookValue::UInt(owner)),
-            (
-                "collections",
-                HookValue::map(forms.published_collections.iter().map(
-                    |((namespace, source), rows)| {
-                        (
-                            format!("{namespace}/{source}"),
-                            HookValue::UInt(rows.len() as u64),
-                        )
-                    },
-                )),
-            ),
+            ("data_sources", HookValue::map(published_rows)),
             (
                 "surfaces",
                 HookValue::map(surfaces.iter().map(|(_, surface)| {
@@ -747,7 +774,7 @@ fn on_runtime_ui_form_owner_closed(
     mut exposures: Option<ResMut<EngineExposures>>,
 ) {
     if forms.owner_twin_id == Some(trigger.event().twin.raw()) {
-        clear_runtime_ui_collections(&mut forms, exposures.as_deref_mut());
+        clear_runtime_ui_data_sources(&mut forms, exposures.as_deref_mut());
         *forms = RuntimeUiForms::default();
     }
 }
@@ -1190,6 +1217,10 @@ pub struct RuntimeUiSurfaceDefinition {
     /// array of typed records; the runtime only reconciles rows by key.
     #[serde(default)]
     pub collections: Vec<RuntimeUiCollectionDefinition>,
+    /// Twin-published typed rows that are consumed by native controls without
+    /// requiring a retained HUI collection host.
+    #[serde(default)]
+    pub data_sources: Vec<RuntimeUiDataSourceDefinition>,
     /// Generic option dropdowns. Each dropdown reads an exposure array of
     /// typed records and uses authored field names for identity, display, and
     /// action dispatch. The runtime does not know what the options represent.
@@ -1282,6 +1313,8 @@ pub struct RuntimeUiWorkspacePageDefinition {
     #[serde(default)]
     pub collections: Vec<RuntimeUiCollectionDefinition>,
     #[serde(default)]
+    pub data_sources: Vec<RuntimeUiDataSourceDefinition>,
+    #[serde(default)]
     pub dropdowns: Vec<RuntimeUiDropdownDefinition>,
 }
 
@@ -1310,12 +1343,22 @@ pub struct RuntimeUiCollectionDefinition {
     pub scrollbar: Option<String>,
 }
 
+/// An authored data source consumed by a generic runtime control such as a
+/// searchable dropdown. Collection sources are data sources too, with their
+/// retained HUI host declared separately by `collections`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeUiDataSourceDefinition {
+    pub source: String,
+    pub key: String,
+}
+
 /// Generic dropdown mechanics for an authored runtime surface.
 ///
 /// `width_source` and `max_height_source` name text or numeric exposure
-/// properties. Rhai owns those values, so a Twin can size a dropdown without a
-/// Rust constant or a camera-specific branch. The HTML surface may bind the
-/// same properties to CSS custom properties for its trigger styling.
+/// properties; `width_px` and `max_height_px` provide fixed logical pixels.
+/// Rhai can size a dropdown without a camera-specific branch. The HTML surface
+/// may bind the same properties to CSS custom properties for trigger styling.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeUiDropdownDefinition {
@@ -1325,8 +1368,14 @@ pub struct RuntimeUiDropdownDefinition {
     pub key: String,
     pub label: String,
     pub action: String,
-    pub width_source: String,
-    pub max_height_source: String,
+    #[serde(default)]
+    pub width_source: Option<String>,
+    #[serde(default)]
+    pub width_px: Option<f32>,
+    #[serde(default)]
+    pub max_height_source: Option<String>,
+    #[serde(default)]
+    pub max_height_px: Option<f32>,
     #[serde(default)]
     pub selected_source: Option<String>,
     /// Optional record field for group headings in authored row order.
@@ -1335,6 +1384,9 @@ pub struct RuntimeUiDropdownDefinition {
     /// Enables a local text filter over row labels, keys and groups.
     #[serde(default)]
     pub search_hint: Option<String>,
+    /// Option record fields copied into the selected semantic action map.
+    #[serde(default)]
+    pub parameters: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1481,10 +1533,11 @@ impl RuntimeUiManifest {
             if let Some(workspace) = &surface.workspace {
                 if !surface.bindings.is_empty()
                     || !surface.collections.is_empty()
+                    || !surface.data_sources.is_empty()
                     || !surface.dropdowns.is_empty()
                 {
                     return Err(format!(
-                        "workspace `{}` must declare bindings, collections, and dropdowns on its pages",
+                        "workspace `{}` must declare bindings, collections, data sources, and dropdowns on its pages",
                         surface.id
                     ));
                 }
@@ -1573,6 +1626,16 @@ impl RuntimeUiManifest {
                             ));
                         }
                     }
+                    for data_source in &page.data_sources {
+                        require_non_empty("workspace data source", &data_source.source)?;
+                        require_non_empty("workspace data source key", &data_source.key)?;
+                        if !sources.insert(data_source.source.as_str()) {
+                            return Err(format!(
+                                "duplicate workspace data source `{}` on page `{}`",
+                                data_source.source, page.id
+                            ));
+                        }
+                    }
                     let mut dropdown_ids = HashSet::new();
                     let mut dropdown_sources = HashSet::new();
                     for dropdown in &page.dropdowns {
@@ -1586,14 +1649,20 @@ impl RuntimeUiManifest {
                             ("workspace dropdown key", &dropdown.key),
                             ("workspace dropdown label", &dropdown.label),
                             ("workspace dropdown action", &dropdown.action),
-                            ("workspace dropdown width source", &dropdown.width_source),
-                            (
-                                "workspace dropdown max height source",
-                                &dropdown.max_height_source,
-                            ),
                         ] {
                             require_non_empty(label, value)?;
                         }
+                        validate_dropdown_dimension(
+                            "workspace dropdown width",
+                            dropdown.width_source.as_deref(),
+                            dropdown.width_px,
+                        )?;
+                        validate_dropdown_dimension(
+                            "workspace dropdown maximum height",
+                            dropdown.max_height_source.as_deref(),
+                            dropdown.max_height_px,
+                        )?;
+                        validate_dropdown_parameters(&dropdown.parameters)?;
                         if !dropdown_ids.insert(dropdown.id.as_str()) {
                             return Err(format!(
                                 "duplicate workspace dropdown id `{}` on page `{}`",
@@ -1725,7 +1794,7 @@ impl RuntimeUiManifest {
                     require_non_empty("binding map value", rendered_value)?;
                 }
             }
-            let mut collection_sources = HashSet::new();
+            let mut sources = HashSet::new();
             let mut collection_hosts = HashSet::new();
             for collection in &surface.collections {
                 require_non_empty("collection source", &collection.source)?;
@@ -1736,7 +1805,7 @@ impl RuntimeUiManifest {
                 if let Some(scrollbar) = &collection.scrollbar {
                     require_non_empty("collection scrollbar", scrollbar)?;
                 }
-                if !collection_sources.insert(collection.source.as_str()) {
+                if !sources.insert(collection.source.as_str()) {
                     return Err(format!(
                         "duplicate runtime UI collection source `{}` on `{}`",
                         collection.source, surface.id
@@ -1749,6 +1818,16 @@ impl RuntimeUiManifest {
                     ));
                 }
             }
+            for data_source in &surface.data_sources {
+                require_non_empty("data source", &data_source.source)?;
+                require_non_empty("data source key", &data_source.key)?;
+                if !sources.insert(data_source.source.as_str()) {
+                    return Err(format!(
+                        "duplicate runtime UI data source `{}` on `{}`",
+                        data_source.source, surface.id
+                    ));
+                }
+            }
             let mut dropdown_ids = HashSet::new();
             let mut dropdown_sources = HashSet::new();
             for dropdown in &surface.dropdowns {
@@ -1758,8 +1837,17 @@ impl RuntimeUiManifest {
                 require_non_empty("dropdown key", &dropdown.key)?;
                 require_non_empty("dropdown label", &dropdown.label)?;
                 require_non_empty("dropdown action", &dropdown.action)?;
-                require_non_empty("dropdown width source", &dropdown.width_source)?;
-                require_non_empty("dropdown max height source", &dropdown.max_height_source)?;
+                validate_dropdown_dimension(
+                    "dropdown width",
+                    dropdown.width_source.as_deref(),
+                    dropdown.width_px,
+                )?;
+                validate_dropdown_dimension(
+                    "dropdown maximum height",
+                    dropdown.max_height_source.as_deref(),
+                    dropdown.max_height_px,
+                )?;
+                validate_dropdown_parameters(&dropdown.parameters)?;
                 if !dropdown_ids.insert(dropdown.id.as_str()) {
                     return Err(format!(
                         "duplicate runtime UI dropdown id `{}` on `{}`",
@@ -1809,6 +1897,46 @@ fn runtime_ui_dropdown_key(surface_id: &str, dropdown_id: &str) -> String {
 
 fn runtime_ui_workspace_dropdown_key(surface_id: &str, page_id: &str, dropdown_id: &str) -> String {
     format!("{surface_id}::{page_id}::{dropdown_id}")
+}
+
+fn validate_dropdown_dimension(
+    label: &str,
+    source: Option<&str>,
+    pixels: Option<f32>,
+) -> Result<(), String> {
+    match (source, pixels) {
+        (Some(source), None) => require_non_empty(label, source),
+        (None, Some(pixels)) if pixels.is_finite() && pixels > 0.0 => Ok(()),
+        (Some(_), Some(_)) => Err(format!(
+            "{label} must use either an exposure source or a fixed pixel size"
+        )),
+        _ => Err(format!(
+            "{label} must use an exposure source or a fixed positive pixel size"
+        )),
+    }
+}
+
+fn validate_dropdown_parameters(parameters: &BTreeMap<String, String>) -> Result<(), String> {
+    for (name, field) in parameters {
+        require_non_empty("dropdown action parameter", name)?;
+        require_non_empty("dropdown option parameter field", field)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod dropdown_dimension_tests {
+    use super::validate_dropdown_dimension;
+
+    #[test]
+    fn dropdown_dimensions_use_one_finite_positive_source() {
+        assert!(validate_dropdown_dimension("width", Some("popup_width"), None).is_ok());
+        assert!(validate_dropdown_dimension("width", None, Some(360.0)).is_ok());
+        assert!(validate_dropdown_dimension("width", None, None).is_err());
+        assert!(validate_dropdown_dimension("width", Some("popup_width"), Some(360.0)).is_err());
+        assert!(validate_dropdown_dimension("width", None, Some(0.0)).is_err());
+        assert!(validate_dropdown_dimension("width", None, Some(f32::INFINITY)).is_err());
+    }
 }
 
 fn require_non_empty(label: &str, value: &str) -> Result<(), String> {
@@ -2115,7 +2243,7 @@ impl RuntimeUiManifestState {
             .map(Option::flatten)
     }
 
-    fn find_collection(
+    fn find_data_source(
         &self,
         selected: Option<TwinId>,
         namespace: &str,
@@ -2134,6 +2262,13 @@ impl RuntimeUiManifestState {
                     {
                         return Some(collection.key.clone());
                     }
+                    if let Some(data_source) = surface
+                        .data_sources
+                        .iter()
+                        .find(|data_source| data_source.source == source)
+                    {
+                        return Some(data_source.key.clone());
+                    }
                 }
                 surface.workspace.as_ref().and_then(|workspace| {
                     workspace.pages.iter().find_map(|page| {
@@ -2144,6 +2279,12 @@ impl RuntimeUiManifestState {
                             .iter()
                             .find(|collection| collection.source == source)
                             .map(|collection| collection.key.clone())
+                            .or_else(|| {
+                                page.data_sources
+                                    .iter()
+                                    .find(|data_source| data_source.source == source)
+                                    .map(|data_source| data_source.key.clone())
+                            })
                     })
                 })
             })
@@ -4207,7 +4348,7 @@ fn reconcile_runtime_ui_collections(
             let cached_values = collections_belong_to_active_twin
                 .then(|| {
                     forms
-                        .published_collections
+                        .published_data_sources
                         .get(&(surface.namespace.clone(), collection.source.clone()))
                         .map(Vec::as_slice)
                 })
@@ -5118,7 +5259,7 @@ fn placement_is_applied(node: &Node, rect: egui::Rect) -> bool {
 
 lunco_core::register_commands!(
     on_set_runtime_ui_form_values,
-    on_set_runtime_ui_collection_data,
+    on_set_runtime_ui_data_source,
     on_set_runtime_ui_form_status,
     on_inspect_runtime_ui_form
 );
@@ -5160,7 +5301,7 @@ mod tests {
     }
 
     #[test]
-    fn authored_collection_publication_is_twin_scoped_typed_and_key_safe() {
+    fn authored_data_source_publication_is_twin_scoped_typed_and_key_safe() {
         use super::*;
 
         let mut app = App::new();
@@ -5185,6 +5326,10 @@ mod tests {
                     "template":"ui/factory_ingredient_row.html",
                     "key":"row_key"
                 }],
+                "data_sources":[{
+                    "source":"recipe_options",
+                    "key":"row_key"
+                }],
                 "placement":{"mode":"window","anchor":"top_left","offset":[0,0],"width":640,"height":900}
             }"#,
         )
@@ -5205,7 +5350,7 @@ mod tests {
                 ("material_field".to_owned(), field.to_owned()),
             ])
         };
-        app.world_mut().trigger(SetRuntimeUiCollectionData {
+        app.world_mut().trigger(SetRuntimeUiDataSource {
             namespace: "factory-studio".to_owned(),
             source: "ingredient_rows".to_owned(),
             items: vec![
@@ -5225,11 +5370,11 @@ mod tests {
         assert_eq!(
             app.world()
                 .resource::<RuntimeUiForms>()
-                .published_collections
+                .published_data_sources
                 .get(&("factory-studio".to_owned(), "ingredient_rows".to_owned()))
                 .map(Vec::len),
             Some(2),
-            "the runtime UI must retain Twin-owned collection data until its host mounts"
+            "the runtime UI must retain Twin-owned rows until their consumer mounts"
         );
         assert_eq!(
             collection_item_fields(&rows[1], "row_key").unwrap(),
@@ -5238,9 +5383,35 @@ mod tests {
                 ("row_key".to_owned(), "ingredient-2".to_owned()),
             ]
         );
+        app.world_mut().trigger(SetRuntimeUiDataSource {
+            namespace: "factory-studio".to_owned(),
+            source: "recipe_options".to_owned(),
+            items: vec![BTreeMap::from([
+                ("row_key".to_owned(), "Vanilla_r2".to_owned()),
+                ("label".to_owned(), "Vanilla sugar · Rev 2".to_owned()),
+                ("recipe_id".to_owned(), "Vanilla_r2".to_owned()),
+            ])],
+        });
+        let exposures = app.world().resource::<EngineExposures>();
+        let Some(ExposureValue::Array(options)) = exposures
+            .surfaces
+            .get("factory-studio")
+            .and_then(|surface| surface.properties.get("recipe_options"))
+        else {
+            panic!("Twin data source rows were not published without a HUI collection host");
+        };
+        assert_eq!(options.len(), 1);
+        assert_eq!(
+            collection_item_fields(&options[0], "row_key").unwrap(),
+            vec![
+                ("label".to_owned(), "Vanilla sugar · Rev 2".to_owned()),
+                ("recipe_id".to_owned(), "Vanilla_r2".to_owned()),
+                ("row_key".to_owned(), "Vanilla_r2".to_owned()),
+            ]
+        );
         let published_revision = exposures.revision;
 
-        app.world_mut().trigger(SetRuntimeUiCollectionData {
+        app.world_mut().trigger(SetRuntimeUiDataSource {
             namespace: "factory-studio".to_owned(),
             source: "ingredient_rows".to_owned(),
             items: vec![
@@ -5248,7 +5419,7 @@ mod tests {
                 row("duplicate", "ingredient_2"),
             ],
         });
-        app.world_mut().trigger(SetRuntimeUiCollectionData {
+        app.world_mut().trigger(SetRuntimeUiDataSource {
             namespace: "factory-studio".to_owned(),
             source: "undeclared_rows".to_owned(),
             items: Vec::new(),
@@ -5256,7 +5427,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<EngineExposures>().revision,
             published_revision,
-            "invalid keys and undeclared sources must not change the live collection"
+            "invalid keys and undeclared sources must not change the published data"
         );
 
         app.world_mut()
@@ -5277,14 +5448,91 @@ mod tests {
     }
 
     #[test]
-    fn authored_collection_payload_limits_are_enforced_before_publication() {
+    fn workspace_data_source_dropdown_is_resolved_from_twin_page_manifest() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{
+                "surfaces":[{
+                    "id":"production-workspace",
+                    "namespace":"factory-workspace",
+                    "template":"ui/shell.html",
+                    "stylesheet":"ui/shell.css",
+                    "workspace":{
+                        "host":"page-host",
+                        "default_page":"week",
+                        "pages":[
+                            {
+                                "id":"week",
+                                "label":"Weekly plan",
+                                "template":"ui/week.html",
+                                "stylesheet":"ui/week.css",
+                                "namespace":"factory-week",
+                                "data_sources":[{"source":"recipe_options","key":"row_key"}],
+                                "dropdowns":[{
+                                    "id":"recipe",
+                                    "trigger_action":"factory.recipe.toggle",
+                                    "source":"recipe_options",
+                                    "key":"row_key",
+                                    "label":"label",
+                                    "action":"action",
+                                    "width_px":360.0,
+                                    "max_height_px":320.0,
+                                    "search_hint":"Search recipes",
+                                    "parameters":{"recipe_key":"recipe_key"}
+                                }]
+                            },
+                            {
+                                "id":"run",
+                                "label":"Line trial",
+                                "template":"ui/run.html",
+                                "stylesheet":"ui/run.css",
+                                "namespace":"factory-run"
+                            }
+                        ]
+                    },
+                    "placement":{"mode":"window","anchor":"top_left","width":900,"height":640}
+                }]
+            }"#,
+        )
+        .expect("workspace dropdown manifest should parse");
+        manifest
+            .validate()
+            .expect("workspace dropdown should validate");
+
+        let mut state = RuntimeUiManifestState::default();
+        state
+            .scopes
+            .insert(Some(TwinId::new(41)), Ok(Some(manifest)));
+        assert_eq!(
+            state
+                .find_data_source(Some(TwinId::new(41)), "factory-week", "recipe_options")
+                .unwrap(),
+            Some(Some("row_key".to_owned()))
+        );
+        assert_eq!(
+            state
+                .find_data_source(Some(TwinId::new(41)), "factory-run", "recipe_options")
+                .unwrap(),
+            Some(None),
+            "a page source must not leak into a different workspace page namespace"
+        );
+        assert_eq!(
+            state
+                .find_data_source(Some(TwinId::new(41)), "factory-week", "undeclared_rows")
+                .unwrap(),
+            Some(None),
+            "a known manifest must distinguish an undeclared source from an unavailable manifest"
+        );
+    }
+
+    #[test]
+    fn authored_data_source_payload_limits_are_enforced_before_publication() {
         use super::*;
 
         let too_many_rows = (0..129)
             .map(|index| BTreeMap::from([("row_key".to_owned(), format!("row-{index}"))]))
             .collect::<Vec<_>>();
         assert!(
-            runtime_ui_collection_value("row_key", &too_many_rows)
+            runtime_ui_data_source_value("row_key", &too_many_rows)
                 .unwrap_err()
                 .contains("at most 128")
         );
@@ -5294,7 +5542,7 @@ mod tests {
                 .chain((0..32).map(|index| (format!("field-{index}"), "value".to_owned()))),
         );
         assert!(
-            runtime_ui_collection_value("row_key", &[too_many_fields])
+            runtime_ui_data_source_value("row_key", &[too_many_fields])
                 .unwrap_err()
                 .contains("1 to 32 fields")
         );
@@ -5304,7 +5552,7 @@ mod tests {
             ("value".to_owned(), "x".repeat(2049)),
         ]);
         assert!(
-            runtime_ui_collection_value("row_key", &[oversized])
+            runtime_ui_data_source_value("row_key", &[oversized])
                 .unwrap_err()
                 .contains("exceeds 2048 characters")
         );
@@ -5315,7 +5563,7 @@ mod tests {
         use super::*;
 
         let exposures = EngineExposures::default();
-        let first_rows = runtime_ui_collection_value(
+        let first_rows = runtime_ui_data_source_value(
             "row_key",
             &[
                 BTreeMap::from([
@@ -5404,7 +5652,7 @@ mod tests {
         assert_eq!(initial.len(), 2);
         let retained_second = initial["ingredient-2"].0;
 
-        let next_rows = runtime_ui_collection_value(
+        let next_rows = runtime_ui_data_source_value(
             "row_key",
             &[
                 BTreeMap::from([
@@ -5503,13 +5751,13 @@ mod tests {
                 ("material_value".to_owned(), "Vanilla".to_owned()),
             ]),
         ];
-        let ExposureValue::Array(rows) = runtime_ui_collection_value("row_key", &items).unwrap()
+        let ExposureValue::Array(rows) = runtime_ui_data_source_value("row_key", &items).unwrap()
         else {
             unreachable!("validated collection snapshots are arrays")
         };
         let mut forms = RuntimeUiForms::default();
         forms.owner_twin_id = Some(41);
-        forms.published_collections.insert(
+        forms.published_data_sources.insert(
             ("factory-studio".to_owned(), "ingredient_rows".to_owned()),
             rows,
         );

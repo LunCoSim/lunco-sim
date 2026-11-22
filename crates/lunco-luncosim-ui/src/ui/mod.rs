@@ -49,6 +49,8 @@ struct DismissTerrainOverlay;
 #[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
 struct RuntimeUiDropdownState {
     open: Option<String>,
+    /// Pressed HUI control whose bounds anchor the native popup.
+    anchor_entity: Option<Entity>,
     search: String,
     /// Keep the press that opened the dropdown from immediately closing it
     /// when the matching pointer release reaches egui on the next frame.
@@ -63,11 +65,12 @@ fn install_runtime_ui_dropdown_state(app: &mut App) {
 }
 
 impl RuntimeUiDropdownState {
-    fn toggle(&mut self, key: &str) {
+    fn toggle(&mut self, key: &str, anchor_entity: Entity) {
         if self.open.as_deref() == Some(key) {
             self.close();
         } else {
             self.open = Some(key.to_owned());
+            self.anchor_entity = Some(anchor_entity);
             self.search.clear();
             self.ignore_opening_click = true;
         }
@@ -868,7 +871,7 @@ fn on_runtime_ui_action(
             if let Some(key) = manifest_state
                 .dropdown_key_for_action(&action, trigger.event().scope.surface_owner())
             {
-                dropdowns.toggle(&key);
+                dropdowns.toggle(&key, trigger.event().source);
                 return;
             }
             let parameters = match runtime_ui_action_parameters_to_telemetry(
@@ -1186,7 +1189,7 @@ fn runtime_ui_dropdown_options(
     definition: &runtime_ui::RuntimeUiDropdownDefinition,
     selected_key: Option<&str>,
     search: &str,
-) -> Option<String> {
+) -> Option<(String, lunco_hooks::HookValue)> {
     let Some(lunco_exposure_core::ExposureValue::Array(values)) =
         exposure.properties.get(&definition.source)
     else {
@@ -1195,7 +1198,6 @@ fn runtime_ui_dropdown_options(
     };
 
     let mut selected = None;
-    let search = search.to_lowercase();
     let mut previous_group = None;
     let mut shown = 0;
     for value in values {
@@ -1216,11 +1218,7 @@ fn runtime_ui_dropdown_options(
         else {
             continue;
         };
-        let Some(action) = fields
-            .iter()
-            .find(|(name, _)| name == &definition.action)
-            .map(|(_, value)| value.as_str())
-        else {
+        let Some(option_action) = runtime_ui_dropdown_action(&fields, definition) else {
             continue;
         };
         let group = definition.group.as_ref().and_then(|field| {
@@ -1229,11 +1227,7 @@ fn runtime_ui_dropdown_options(
                 .find(|(name, _)| name == field)
                 .map(|(_, value)| value.as_str())
         });
-        if !search.is_empty()
-            && ![key, label, group.unwrap_or("")]
-                .iter()
-                .any(|value| value.to_lowercase().contains(&search))
-        {
+        if !runtime_ui_dropdown_matches(&search, key, label, group) {
             continue;
         }
         if let Some(group) = group {
@@ -1251,7 +1245,7 @@ fn runtime_ui_dropdown_options(
             .on_hover_text(key)
             .clicked()
         {
-            selected = Some(action.to_owned());
+            selected = Some(option_action);
         }
     }
     if shown == 0 {
@@ -1260,20 +1254,52 @@ fn runtime_ui_dropdown_options(
     selected
 }
 
+fn runtime_ui_dropdown_matches(search: &str, key: &str, label: &str, group: Option<&str>) -> bool {
+    let search = search.trim().to_lowercase();
+    search.is_empty()
+        || [key, label, group.unwrap_or("")]
+            .iter()
+            .any(|value| value.to_lowercase().contains(&search))
+}
+
+fn runtime_ui_dropdown_action(
+    fields: &[(String, String)],
+    definition: &runtime_ui::RuntimeUiDropdownDefinition,
+) -> Option<(String, lunco_hooks::HookValue)> {
+    let action = fields
+        .iter()
+        .find(|(name, _)| name == &definition.action)
+        .map(|(_, value)| value.clone())?;
+    let mut parameters = Vec::with_capacity(definition.parameters.len());
+    for (parameter, field) in &definition.parameters {
+        let value = fields
+            .iter()
+            .find(|(name, _)| name == field)
+            .map(|(_, value)| value.clone())?;
+        parameters.push((parameter.clone(), lunco_hooks::HookValue::str(value)));
+    }
+    Some((action, lunco_hooks::HookValue::Map(parameters)))
+}
+
 fn runtime_ui_dimension(
     exposure: &lunco_exposure_core::ExposureSurface,
-    source: &str,
+    source: Option<&str>,
+    fixed_pixels: Option<f32>,
 ) -> Option<f32> {
-    let value = exposure.properties.get(source)?;
-    let pixels = match value {
-        lunco_exposure_core::ExposureValue::Number(value) => *value as f32,
-        lunco_exposure_core::ExposureValue::Text(value) => value
-            .trim()
-            .strip_suffix("px")?
-            .trim()
-            .parse::<f32>()
-            .ok()?,
-        _ => return None,
+    let pixels = if let Some(pixels) = fixed_pixels {
+        pixels
+    } else {
+        let value = exposure.properties.get(source?)?;
+        match value {
+            lunco_exposure_core::ExposureValue::Number(value) => *value as f32,
+            lunco_exposure_core::ExposureValue::Text(value) => value
+                .trim()
+                .strip_suffix("px")?
+                .trim()
+                .parse::<f32>()
+                .ok()?,
+            _ => return None,
+        }
     };
     pixels
         .is_finite()
@@ -1289,6 +1315,7 @@ fn draw_runtime_ui_dropdowns(
     mut dropdowns: ResMut<RuntimeUiDropdownState>,
     exposures: Res<lunco_exposure_core::EngineExposures>,
     roots: Query<(Entity, &runtime_ui::RuntimeUiSurface, &Visibility)>,
+    anchors: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
     layout: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
@@ -1317,19 +1344,29 @@ fn draw_runtime_ui_dropdowns(
         dropdowns.close();
         return;
     };
-    let Some((source, anchor, namespace)) =
-        roots.iter().find_map(|(entity, surface, visibility)| {
-            (surface.id() == surface_definition.id
-                && matches!(*visibility, Visibility::Visible)
-                && surface.is_mounted())
-            .then(|| {
-                surface
-                    .applied_rect()
-                    .map(|rect| (entity, rect, surface.namespace().to_owned()))
-            })
-            .flatten()
-        })
-    else {
+    let Some((source, namespace)) = roots.iter().find_map(|(entity, surface, visibility)| {
+        (surface.id() == surface_definition.id
+            && matches!(*visibility, Visibility::Visible)
+            && surface.is_mounted())
+        .then(|| (entity, surface.namespace().to_owned()))
+    }) else {
+        dropdowns.close();
+        return;
+    };
+    let Some(anchor_entity) = dropdowns.anchor_entity else {
+        dropdowns.close();
+        return;
+    };
+    let Ok((anchor_node, anchor_transform, anchor_visibility)) = anchors.get(anchor_entity) else {
+        dropdowns.close();
+        return;
+    };
+    if !anchor_visibility.get() {
+        dropdowns.close();
+        return;
+    }
+    let Some(anchor) = runtime_ui::runtime_ui_input_rect(anchor_node, anchor_transform) else {
+        dropdowns.close();
         return;
     };
     let Some(exposure) = exposures.surfaces.get(&namespace) else {
@@ -1351,8 +1388,16 @@ fn draw_runtime_ui_dropdowns(
         .as_deref()
         .and_then(|source| exposure.properties.get(source))
         .and_then(lunco_exposure_core::ExposureValue::scalar_render);
-    let width = runtime_ui_dimension(exposure, &definition.width_source);
-    let max_height = runtime_ui_dimension(exposure, &definition.max_height_source);
+    let width = runtime_ui_dimension(
+        exposure,
+        definition.width_source.as_deref(),
+        definition.width_px,
+    );
+    let max_height = runtime_ui_dimension(
+        exposure,
+        definition.max_height_source.as_deref(),
+        definition.max_height_px,
+    );
     let (Some(width), Some(max_height)) = (width, max_height) else {
         report_runtime_ui_failure(
             &mut commands,
@@ -1388,7 +1433,7 @@ fn draw_runtime_ui_dropdowns(
     .show(|ui| {
         let viewport_width = ctx.content_rect().width().max(1.0);
         ui.set_width(width.min(viewport_width));
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
         if let Some(hint) = &definition.search_hint {
             ui.add(
                 lunco_workbench_widgets::text_editor::singleline(&mut dropdowns.search)
@@ -1423,7 +1468,7 @@ fn draw_runtime_ui_dropdowns(
     if !open {
         dropdowns.close();
     }
-    if let Some(action) = selected_action {
+    if let Some((action, parameters)) = selected_action {
         commands.trigger(runtime_ui::RuntimeUiAction {
             scope: runtime_ui::RuntimeUiActionScope::capture(
                 workspace.as_deref(),
@@ -1431,7 +1476,7 @@ fn draw_runtime_ui_dropdowns(
             ),
             action,
             source,
-            parameters: lunco_hooks::HookValue::Map(Vec::new()),
+            parameters,
         });
     }
 }
@@ -1466,7 +1511,7 @@ fn register_camera_menu(world: &mut World) {
                     .as_deref()
                     .and_then(|source| exposure.properties.get(source))
                     .and_then(lunco_exposure_core::ExposureValue::scalar_render);
-                if let Some(action) =
+                if let Some((action, parameters)) =
                     runtime_ui_dropdown_options(ui, exposure, dropdown, selected_key.as_deref(), "")
                 {
                     let scope = runtime_ui::RuntimeUiActionScope::capture(
@@ -1477,7 +1522,7 @@ fn register_camera_menu(world: &mut World) {
                         scope,
                         action,
                         source: Entity::PLACEHOLDER,
-                        parameters: lunco_hooks::HookValue::Map(Vec::new()),
+                        parameters,
                     });
                     ui.close();
                 }
@@ -2013,7 +2058,10 @@ fn register_downloadable_assets_settings(world: &mut World) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeUiDropdownState, runtime_ui_dimension};
+    use super::{
+        RuntimeUiDropdownState, runtime_ui, runtime_ui_dimension, runtime_ui_dropdown_action,
+        runtime_ui_dropdown_matches,
+    };
     use lunco_exposure_core::{ExposureSurface, ExposureValue};
     use std::collections::HashMap;
 
@@ -2094,13 +2142,13 @@ mod tests {
         app.add_systems(
             lunco_core::SceneTeardown,
             |mut state: ResMut<RuntimeUiDropdownState>| {
-                state.toggle("shutdown_dropdown");
+                state.toggle("shutdown_dropdown", Entity::PLACEHOLDER);
             },
         );
         for _ in 0..3 {
             app.world_mut()
                 .resource_mut::<RuntimeUiDropdownState>()
-                .toggle("active_dropdown");
+                .toggle("active_dropdown", Entity::PLACEHOLDER);
             let closed = lunco_workspace::TwinClosed {
                 twin: lunco_workspace::TwinId::new(7),
                 root: Default::default(),
@@ -2121,7 +2169,7 @@ mod tests {
             );
             app.world_mut()
                 .resource_mut::<RuntimeUiDropdownState>()
-                .toggle("active_dropdown");
+                .toggle("active_dropdown", Entity::PLACEHOLDER);
             app.world_mut().trigger(lunco_workspace::TwinClosed {
                 was_active: true,
                 ..closed
@@ -2146,8 +2194,10 @@ mod tests {
     #[test]
     fn authored_dropdown_keeps_open_after_the_trigger_press() {
         let mut dropdowns = RuntimeUiDropdownState::default();
-        dropdowns.toggle("surface::dropdown");
+        let trigger = bevy::prelude::Entity::PLACEHOLDER;
+        dropdowns.toggle("surface::dropdown", trigger);
         assert_eq!(dropdowns.open.as_deref(), Some("surface::dropdown"));
+        assert_eq!(dropdowns.anchor_entity, Some(trigger));
         assert!(dropdowns.ignore_opening_click);
 
         dropdowns.consume_opening_click(true);
@@ -2167,8 +2217,88 @@ mod tests {
             properties,
             ..Default::default()
         };
-        assert_eq!(runtime_ui_dimension(&exposure, "width"), Some(280.0));
-        assert_eq!(runtime_ui_dimension(&exposure, "height"), Some(240.0));
+        assert_eq!(
+            runtime_ui_dimension(&exposure, Some("width"), None),
+            Some(280.0)
+        );
+        assert_eq!(
+            runtime_ui_dimension(&exposure, Some("height"), None),
+            Some(240.0)
+        );
+        assert_eq!(
+            runtime_ui_dimension(&exposure, None, Some(360.0)),
+            Some(360.0)
+        );
+        assert_eq!(runtime_ui_dimension(&exposure, None, Some(f32::NAN)), None);
+    }
+
+    #[test]
+    fn authored_dropdown_returns_typed_option_parameters() {
+        let definition = runtime_ui::RuntimeUiDropdownDefinition {
+            id: "recipe".to_owned(),
+            trigger_action: "factory.recipe.toggle".to_owned(),
+            source: "recipes".to_owned(),
+            key: "key".to_owned(),
+            label: "label".to_owned(),
+            action: "action".to_owned(),
+            width_source: None,
+            width_px: Some(320.0),
+            max_height_source: None,
+            max_height_px: Some(360.0),
+            selected_source: None,
+            group: None,
+            search_hint: Some("Find a recipe…".to_owned()),
+            parameters: std::collections::BTreeMap::from([
+                ("id".to_owned(), "recipe_id".to_owned()),
+                ("slot".to_owned(), "slot".to_owned()),
+            ]),
+        };
+        let fields = vec![
+            ("key".to_owned(), "vanilla".to_owned()),
+            ("label".to_owned(), "Vanilla sugar".to_owned()),
+            ("action".to_owned(), "factory.recipe.select".to_owned()),
+            ("recipe_id".to_owned(), "Vanilla_r2".to_owned()),
+            ("slot".to_owned(), "trial".to_owned()),
+        ];
+        let (action, parameters) = runtime_ui_dropdown_action(&fields, &definition).unwrap();
+        assert_eq!(action, "factory.recipe.select");
+        assert_eq!(
+            parameters.get("id").and_then(|value| value.as_str()),
+            Some("Vanilla_r2")
+        );
+        assert_eq!(
+            parameters.get("slot").and_then(|value| value.as_str()),
+            Some("trial")
+        );
+    }
+
+    #[test]
+    fn authored_dropdown_search_matches_key_label_and_group_without_case_sensitivity() {
+        assert!(runtime_ui_dropdown_matches(
+            "vanilla",
+            "Vanilla_r2",
+            "Sugar blend",
+            None
+        ));
+        assert!(runtime_ui_dropdown_matches(
+            "sugar",
+            "Vanilla_r2",
+            "Sugar blend",
+            None
+        ));
+        assert!(runtime_ui_dropdown_matches(
+            " POWDERS ",
+            "Cocoa",
+            "Chocolate",
+            Some("Powders")
+        ));
+        assert!(!runtime_ui_dropdown_matches(
+            "milk",
+            "Cocoa",
+            "Chocolate",
+            Some("Powders")
+        ));
+        assert!(runtime_ui_dropdown_matches("", "Cocoa", "Chocolate", None));
     }
 
     #[test]
