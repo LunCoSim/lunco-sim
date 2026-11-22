@@ -33,6 +33,7 @@ Runtime templates currently rely on:
 - standard text and number `<input>` elements with Twin-scoped form fields;
 - stable `id` values and `{property}` interpolation;
 - `on_press="callback_name"` for semantic actions;
+- authored horizontal, vertical, or two-axis scroll areas;
 - Flair `#id` selectors, flex/limited grid layout, absolute positioning,
   dimensions, spacing, borders, backgrounds, colors, text properties,
   `display`, custom properties, and `var(...)`.
@@ -41,6 +42,11 @@ Every template, including a keyed collection row, must have one `<node>` root.
 Put buttons and text elements beneath that root: HUI reuses its scope entity
 while rebuilding the tree, and a root leaf element can reapply its Flair type
 name to retained selector metadata.
+
+Set `tag:ui_scroll_area` on a clipped `<node>` to `vertical`, `horizontal`, or
+`both` to enable pointer scrolling on the authored axes.
+Horizontal-only areas also map an ordinary vertical mouse wheel to horizontal
+movement; trackpads and Shift-wheel use their native horizontal delta.
 
 For tabs that are pages of one working area, add a manifest `workspace` to one
 surface. Its HTML shell provides `workspace.host`, authored tab controls, and
