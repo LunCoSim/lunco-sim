@@ -257,8 +257,10 @@ publish the snapshot through `EngineExposures` with
 `retain_across_scenes(namespace)`. The manifest field controls the retained UI
 and callback lifetime. The publisher controls the snapshot lifetime.
 Application surfaces get their collection data from the application exposure
-publisher. `SetRuntimeUiCollectionData` targets workspace surfaces, and the
-`setting` field binds workspace surfaces to the active Twin's settings.
+publisher. Native dropdowns can read application-owned exposure arrays or
+engine exposure sources. `SetRuntimeUiDataSource` publishes Twin-owned rows to
+declared workspace collections or standalone data sources, and the `setting`
+field binds workspace surfaces to the active Twin's settings.
 
 The runtime rejects a Twin manifest that claims application ownership or
 reuses an application-owned ID or namespace. It raises the
@@ -610,18 +612,105 @@ one retained row per stable key, updates changed template properties in place,
 removes retired keys, and orders children to match the published array.
 
 Engine-owned lists use their normal `EngineExposures` producer. Twin Rhai
-policies can publish UI-owned rows with `SetRuntimeUiCollectionData`, which
-accepts an ordered array of string maps. The command requires an active Twin,
-checks the namespace and source against the active authored manifest (or the
-mounted surface when no manifest state is available), rejects missing or
-duplicate keys, and bounds row/field/payload sizes. Validation uses the
-manifest declaration before waiting for HUI to mount its surface tree, so
-startup scripts can publish initial rows without racing presentation creation.
+policies can publish UI-owned rows with `SetRuntimeUiDataSource`, which accepts
+an ordered array of string maps. A collection declaration adds a HUI row host;
+a `data_sources` declaration exposes the same typed records directly to native
+controls without mounting a hidden list. The command requires an active Twin,
+checks the namespace and source against the active authored manifest, rejects
+missing or duplicate keys, and bounds row/field/payload sizes. When manifest
+state is unavailable, only a mounted collection declaration can authorize the
+publication. Validation uses the manifest declaration before waiting for HUI
+to mount its surface tree, so startup scripts can publish initial rows without
+racing presentation creation.
 The runtime retains the typed rows with their Twin owner and uses that snapshot
 when the keyed host mounts, including after an exposure rebuild. Publications
 are removed when the owner Twin closes or another Twin takes ownership. This
 keeps application code, Rhai policy, and HTML templates on the same generic
-collection path without giving scripts direct resource access.
+data path without giving scripts direct resource access.
+
+### Native searchable dropdowns
+
+Declare a dropdown on a surface or workspace page with a unique `id`, a
+`trigger_action`, and the record fields for its key, label, and selected action.
+Twin-owned option arrays must be declared as a collection or data source;
+application controls can read engine-owned exposure arrays. Its search box
+filters option keys, labels, and optional group headings. `width_source` and
+`max_height_source` read presentation values from the namespace exposure;
+`width_px` and `max_height_px` provide fixed logical pixels when the Twin has no
+scalar producer. A dropdown must declare exactly one source for each dimension.
+The native popup anchors to the bounds of the pressed HUI trigger.
+
+The optional `parameters` map copies named string fields from the selected
+record into the semantic action's typed `HookValue::Map`. The action identifier
+and parameter names are manifest-owned; option rows and their meaning remain
+Twin-authored. This keeps searchable selection reusable without moving recipe,
+material, or other domain policy into Rust.
+
+### Twin-authored tabbed workspaces
+
+Use a manifest `workspace` on one runtime surface when several page templates
+belong to the same working area. The surface `id` is the single geometry,
+drag/resize, and persisted-layout owner. Its shell template authors the tab
+controls and declares the page host node with the configured `id`; each page
+keeps its own HTML template, stylesheet, exposure `namespace`, bindings,
+collections, data sources, and dropdowns. The runtime replaces the host's page
+child when the selected Twin setting changes, without replacing or
+repositioning the shell.
+
+The workspace lists a `default_page` and two or more pages. Each page has a
+stable `id`. Prefer one workspace `selection_setting` that stores the selected
+page id as Twin text; Rhai owns the route action and writes that key, and the
+runtime mounts the matching authored page. If the setting is absent or names
+no declared page, the runtime uses `default_page`. Older workspaces may retain
+per-page boolean `setting` fields, but a workspace cannot mix both selection
+contracts. A shell tab control may set `tag:ui_tab_id` to a page id; the runtime
+adds the CSS class `is-active` to the selected control. The button's
+`on_press`, `tag:action`, and other parameters remain Twin-authored. This keeps
+layout identity and composition in the generic runtime while page copy,
+content, styles, data, and process rules stay in the Twin.
+
+```json
+{
+  "id": "factory-workspace",
+  "template": "ui/factory_workspace.html",
+  "stylesheet": "ui/factory_workspace.css",
+  "namespace": "factory-workspace",
+  "workspace": {
+    "host": "workspace-page",
+    "default_page": "recipes",
+    "selection_setting": "ui.factory_page",
+    "pages": [
+      {
+        "id": "recipes",
+        "label": "Recipes",
+        "template": "ui/recipes.html",
+        "stylesheet": "ui/recipes.css",
+        "namespace": "factory-recipes"
+      },
+      {
+        "id": "materials",
+        "label": "Materials",
+        "template": "ui/materials.html",
+        "stylesheet": "ui/materials.css",
+        "namespace": "factory-materials"
+      }
+    ]
+  },
+  "placement": {
+    "mode": "window",
+    "anchor": "top_left",
+    "offset": [254, 58],
+    "width": 900,
+    "height": 820
+  }
+}
+```
+
+Page IDs and namespaces must be unique. The selected page's exposure must be
+visible for the shell to mount. Runtime UI forms remain Twin-scoped, so a page
+switch recreates its HUI controls and reapplies retained form values. Keep
+secondary pickers and modal workflows as separate surfaces when they need to
+overlay the working page.
 
 ### 3. Style the contents
 

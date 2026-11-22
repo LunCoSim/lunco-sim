@@ -487,6 +487,10 @@ private Xvfb and cannot access the NVIDIA driver; the user's display was left
 untouched. The receipt and log are in
 `target/perf/rumoca-main-current/griffin-headless-20261122/`.
 
+After integrating the newer local `main`, the combined tree passed
+`cargo test --locked -p lunco-modelica-solver --test simulation_session -j 4`
+(3 passed) and `cargo build --locked -p lunco-luncosim --bin luncosim -j 4`.
+
 ## Griffin surface-present attribution — 2026-11-21
 
 A matching Tracy 0.14.1 profile used the instrumented production binary

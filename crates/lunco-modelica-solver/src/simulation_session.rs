@@ -1,7 +1,7 @@
 //! LunCo solver selection over Rumoca's public simulation-session API.
 
 use rumoca_core::VarName;
-use rumoca_ir_dae::{Dae, VariableRole};
+use rumoca_ir_dae::{Dae, ScalarType, VariableRole};
 use rumoca_sim::{SimOptions, SimSolverMode, SimulationDiagnosticError, SimulationSession};
 use std::collections::HashMap;
 
@@ -136,6 +136,13 @@ impl LiveStepper {
     }
 }
 
+fn parameter_has_numeric_projection(scalar_type: ScalarType) -> bool {
+    matches!(
+        scalar_type,
+        ScalarType::Real | ScalarType::Integer | ScalarType::Enumeration | ScalarType::Boolean
+    )
+}
+
 fn parameter_values(
     dae: &Dae,
     options: &SimOptions,
@@ -157,10 +164,10 @@ fn parameter_values(
                     .flatten()
             });
         let mut values = Vec::new();
-        for (id, variable) in view
-            .variables()
-            .filter(|(_, variable)| variable.role() == VariableRole::Parameter)
-        {
+        for (id, variable) in view.variables().filter(|(_, variable)| {
+            variable.role() == VariableRole::Parameter
+                && parameter_has_numeric_projection(variable.value_type().scalar_type())
+        }) {
             let names = variable.scalar_names().collect::<Vec<_>>();
             let evaluated = evaluator
                 .initial_value(id)

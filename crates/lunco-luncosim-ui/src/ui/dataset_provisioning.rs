@@ -127,7 +127,10 @@ fn scope_kind(scope: &DatasetScope) -> &'static str {
 }
 
 fn needs_provisioning(state: &DatasetState) -> bool {
-    !state.is_installed()
+    matches!(
+        state,
+        DatasetState::Missing | DatasetState::Cancelled | DatasetState::Failed(_)
+    )
 }
 
 fn required_missing(
@@ -629,7 +632,6 @@ fn publish_view(
     view: Option<&ProvisioningView>,
     exposures: &mut EngineExposures,
 ) {
-    exposures.retain_across_scenes(namespace);
     let mut writer = exposures.writer(namespace);
     writer.clear_properties();
     let Some(view) = view else {
@@ -1201,14 +1203,22 @@ mod tests {
     }
 
     #[test]
-    fn missing_states_are_the_only_requestable_states() {
+    fn only_idle_missing_or_failed_states_are_requestable() {
         assert!(needs_provisioning(&DatasetState::Missing));
         assert!(needs_provisioning(&DatasetState::Cancelled));
+        assert!(needs_provisioning(&DatasetState::Failed(
+            "fixture failure".to_owned()
+        )));
         assert!(!needs_provisioning(&DatasetState::Installed));
+        assert!(!needs_provisioning(&DatasetState::Queued));
         assert!(!needs_provisioning(&DatasetState::Downloading {
             source: "Fixture".to_owned(),
             bytes_done: 1,
             bytes_total: 2
         }));
+        assert!(!needs_provisioning(&DatasetState::Processing {
+            kind: "fixture".to_owned(),
+        }));
+        assert!(!needs_provisioning(&DatasetState::Cancelling));
     }
 }

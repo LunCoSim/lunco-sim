@@ -78,3 +78,63 @@ fn fixed_rk4_capability_uses_rumocas_fixed_step_session() {
     assert!((values[0].expect("output y is present") - 0.2).abs() < 1.0e-6);
     assert_eq!(values[1], Some(2.0));
 }
+
+#[test]
+fn string_metadata_parameters_are_not_projected_as_numeric_values() {
+    let source = r#"model StringMetadata
+        parameter String label="bulk mixer";
+        parameter Real gain=2;
+        output Real y;
+    equation
+        y=gain;
+    end StringMetadata;"#;
+    let mut compiler = rumoca_compile::Session::default();
+    compiler.add_document("StringMetadata.mo", source).unwrap();
+    let compiled = compiler
+        .compile_model_dae_strict_reachable_uncached_with_recovery("StringMetadata")
+        .unwrap();
+    let mut live = simulation_session::live(&compiled.dae, SimOptions::default())
+        .expect("nonnumeric metadata must not enter the numeric parameter projection");
+
+    assert!(
+        live.parameter_values()
+            .iter()
+            .any(|(name, value)| { name == "gain" && (*value - 2.0).abs() < f64::EPSILON })
+    );
+    assert!(
+        live.parameter_values()
+            .iter()
+            .all(|(name, _)| name != "label"),
+        "String metadata has no f64 solver value"
+    );
+    live.advance_to(0.1)
+        .expect("string metadata does not prevent numerical stepping");
+    assert_eq!(live.get("y").unwrap(), Some(2.0));
+
+    lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
+    let spec = lunco_experiments::solver::resolve(&lunco_experiments::solver::SolverRequest {
+        profile: lunco_experiments::solver::RuntimeProfile {
+            live: true,
+            predicted: true,
+        },
+        authored: None,
+    })
+    .expect("prediction resolves to the fixed-step capability");
+    let options = lunco_modelica_solver::solver_backends::rumoca_options(
+        &spec,
+        &lunco_experiments::solver::SolverParams {
+            atol: 1.0e-6,
+            rtol: 1.0e-6,
+            h0: Some(0.01),
+            t_start: 0.0,
+            t_end: 1.0,
+        },
+    )
+    .expect("Rumoca receives the Model Exchange execution family");
+    let mut fixed = simulation_session::live_for_solver(&compiled.dae, &spec, options)
+        .expect("fixed-step sessions must also skip nonnumeric metadata");
+    fixed
+        .advance_to(0.05)
+        .expect("fixed-step sessions advance with String metadata present");
+    assert_eq!(fixed.get("y").unwrap(), Some(2.0));
+}

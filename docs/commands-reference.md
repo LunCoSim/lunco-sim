@@ -4719,10 +4719,10 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `form_id` | `String` |   |
 
-#### `SetRuntimeUiCollectionData`
+#### `SetRuntimeUiDataSource`
 
- Replace one authored keyed collection with rows from the active Twin's
- presentation policy. The destination must be declared by the active
+ Publish rows from the active Twin's presentation policy to a declared runtime
+ UI collection or data source. The destination must be declared by the active
  runtime UI manifest; the command cannot publish arbitrary exposures.
 
 - *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`

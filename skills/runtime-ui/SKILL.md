@@ -61,6 +61,12 @@ labels, ordering, visibility, and action meaning. Do not grow this into a
 second rich-dialog implementation without a separate typed contract and
 acceptance tests.
 
+For tabbed workspaces, prefer one `selection_setting` containing the active
+page ID. Rhai handles the tab action and writes that setting; the generic
+runtime mounts the matching Twin-authored page under the stable shell. Use the
+per-page boolean `setting` form only to preserve an older workspace contract.
+Do not mix both selection forms in one workspace.
+
 Twin-authored actions are open-ended semantic identifiers. The reusable
 `program-browser` surface publishes typed arrays of records; its HUI row
 template is reconciled by the generic keyed collection host. To diagnose a
@@ -69,7 +75,12 @@ projection under the primary scene mount. A surface may also
 declare a generic dropdown: the manifest supplies the trigger, option source,
 key/label/action field names, and Rhai-owned width/max-height sources. The
 compact `camera-status` surface is one consumer of that primitive, not a
-camera-specific widget.
+camera-specific widget. Twin-authored `data_sources` publish typed records for
+native controls without a hidden HUI collection host. A dropdown can use
+`width_px` and `max_height_px` when no scalar producer is needed, and it anchors
+to its pressed HUI control. Dropdowns can copy declared option fields into
+their selected action's typed parameter map; the manifest owns the field
+mapping while Rhai owns option rows and policy.
 `program_editor` owns selection, editor focus, atomic source switching, and
 creation for any authored program, regardless of whether its owner is a rover,
 lander, route, or another model. Rich source text entry remains in the existing
