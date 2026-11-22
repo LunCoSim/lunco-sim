@@ -21,7 +21,6 @@ use lunco_experiments::{
     ParamPath, ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
-use lunco_modelica_solver::simulation_session::SelectedValuesExt;
 use rumoca_compile::compile::Dae;
 /// Immutable Modelica source and runtime owner supplied at run admission.
 #[derive(Clone, Debug)]

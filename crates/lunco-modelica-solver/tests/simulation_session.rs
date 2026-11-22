@@ -41,18 +41,16 @@ fn luncosim_live_adapter_uses_rumoca_session_for_inputs_steps_and_observations()
 }
 
 #[test]
-fn fixed_rk4_adapter_uses_rumocas_model_exchange_integrator() {
+fn fixed_rk4_capability_uses_rumocas_fixed_step_session() {
     let compiled = compiled_ramp();
     lunco_modelica_solver::solver_backends::ensure_builtin_solvers();
-    let spec = lunco_experiments::solver::resolve(
-        &lunco_experiments::solver::SolverRequest {
-            profile: lunco_experiments::solver::RuntimeProfile {
-                live: true,
-                predicted: true,
-            },
-            authored: None,
+    let spec = lunco_experiments::solver::resolve(&lunco_experiments::solver::SolverRequest {
+        profile: lunco_experiments::solver::RuntimeProfile {
+            live: true,
+            predicted: true,
         },
-    )
+        authored: None,
+    })
     .expect("prediction resolves to the fixed-step capability");
     let options = lunco_modelica_solver::solver_backends::rumoca_options(
         &spec,
@@ -66,17 +64,17 @@ fn fixed_rk4_adapter_uses_rumocas_model_exchange_integrator() {
     )
     .expect("Rumoca receives the Model Exchange execution family");
     let mut live = simulation_session::live_for_solver(&compiled.dae, &spec, options)
-        .expect("the adapter installs fixed RK4 for predicted sessions");
+        .expect("Rumoca constructs a fixed-step session for predicted models");
 
     live.set_inputs(&[("u", 2.0)])
         .expect("the ME host accepts the complete input transaction");
     live.advance_to(0.05)
-        .expect("the adapter advances on its 10 ms fixed lattice");
+        .expect("Rumoca's fixed-step session reaches the requested target");
 
     assert_eq!(live.time(), 0.05);
     let values = live
         .selected_values(&["y".to_owned(), "u".to_owned()])
-        .expect("fixed-step observations use Rumoca's visible values");
+        .expect("fixed-step observations use Rumoca's selected values");
     assert!((values[0].expect("output y is present") - 0.2).abs() < 1.0e-6);
     assert_eq!(values[1], Some(2.0));
 }

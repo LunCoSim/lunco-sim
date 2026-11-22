@@ -8,6 +8,7 @@ use lunco_modelica_ast::resolved_interface::{
 use rumoca_eval_dae::{NumericEvaluationErrorKind, NumericEvaluator};
 use rumoca_ir_dae::{
     Dae, DaeView, ExprId, ExpressionVariability, ScalarType, VariableRole, VariableView,
+    for_each_expression,
 };
 
 use super::ModelicaCompiler;
@@ -106,9 +107,8 @@ impl ModelicaCompiler {
             .map(|(name, value)| (name.as_str(), *value))
             .collect::<std::collections::HashMap<_, _>>();
         dae.inspect(|view| {
-            let mut evaluator = NumericEvaluator::with_parameter_bindings(
-                view,
-                |variable: VariableView<'_>, scalar| {
+            let mut evaluator =
+                NumericEvaluator::with_overrides(view, |variable: VariableView<'_>, scalar| {
                     if variable.role() == VariableRole::Parameter && variable.is_tunable() {
                         variable
                             .scalar_name(scalar)
@@ -116,8 +116,7 @@ impl ModelicaCompiler {
                     } else {
                         None
                     }
-                },
-            );
+                });
             let mut declarations = std::collections::BTreeMap::new();
             let mut input_groups = Vec::new();
             for (_, variable) in view.variables() {
@@ -244,6 +243,9 @@ where
     if expression_view.variability() > ExpressionVariability::Parameter {
         return Ok(None);
     }
+    if has_unbound_parameter_binding(view, expression) {
+        return Ok(None);
+    }
     match evaluator.expression(expression) {
         Ok(mut values) => {
             variable.broadcast_values(&mut values);
@@ -275,6 +277,39 @@ where
             variable.name()
         ))),
     }
+}
+
+/// A parameter start is an initialization guess, not a bound value for static
+/// interface projection. Follow static parameter bindings transitively before
+/// using Rumoca's numeric evaluator, whose general parameter policy also admits
+/// starts.
+fn has_unbound_parameter_binding<'dae>(view: DaeView<'dae>, root: ExprId<'dae>) -> bool {
+    let mut pending = vec![root];
+    let mut visited_parameters = std::collections::HashSet::new();
+    let mut unbound = false;
+
+    while let Some(expression) = pending.pop() {
+        for_each_expression(view, expression, |_, node| {
+            let Some(id) = node.variable_coordinate() else {
+                return;
+            };
+            let Some(variable) = view.variable(id) else {
+                return;
+            };
+            if variable.role() != VariableRole::Parameter || !visited_parameters.insert(id) {
+                return;
+            }
+            match variable.binding() {
+                Some(binding) => pending.push(binding),
+                None => unbound = true,
+            }
+        });
+        if unbound {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn scalar_bounds<'dae, F>(

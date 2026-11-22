@@ -67,9 +67,9 @@ Rust panic handling alone cannot contain a native access violation. See the
 [native execution contract](../../docs/architecture/20-domain-modelica.md).
 
 Predicted participants resolve through LunCoSim's solver capability registry.
-The `fixed-rk4` adapter installs Rumoca's public `FixedRk4Integrator` in its
-Model Exchange session and validates the fixed communication lattice. Rumoca
-owns model compatibility and component diagnostics.
+The `fixed-rk4` capability selects Rumoca's `SimSolverMode::FixedStep` through
+the public `SimulationSession`. Rumoca owns model compatibility and component
+diagnostics.
 Inspect a construction failure in Recent Events and `GetReadiness.fault`. A
 predicted participant must not fall back to an adaptive solver.
 
