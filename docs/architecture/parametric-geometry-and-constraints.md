@@ -132,9 +132,9 @@ USD itself can solve design constraints.
    direct general geometric residual-Jacobian/rank API. It is useful machinery
    to reuse, not a drop-in CAD optimizer. Any reuse should be exposed through
    a typed asynchronous API and preserve Rhai-authored relations, objectives,
-   and solve evidence. See the [pinned structural analysis source](https://github.com/LunCoSim/rumoca/blob/e86e9a0137562fca38998524fc5ac2a4600b41f1/crates/rumoca-phase-structural/src/lib.rs),
-   [Jacobian source](https://github.com/LunCoSim/rumoca/blob/e86e9a0137562fca38998524fc5ac2a4600b41f1/crates/rumoca-eval-solve/src/model_jacobian.rs),
-   and [implicit sensitivity source](https://github.com/LunCoSim/rumoca/blob/e86e9a0137562fca38998524fc5ac2a4600b41f1/crates/rumoca-eval-solve/src/fmi_tangents.rs).
+   and solve evidence. See the [pinned structural analysis source](https://github.com/CogniPilot/rumoca/blob/488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396/crates/rumoca-phase-structural/src/lib.rs),
+   [Jacobian source](https://github.com/CogniPilot/rumoca/blob/488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396/crates/rumoca-eval-solve/src/model_jacobian.rs),
+   and [implicit sensitivity source](https://github.com/CogniPilot/rumoca/blob/488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396/crates/rumoca-eval-solve/src/fmi_tangents.rs).
 4. Add a typed, inspectable placement plan that consumes those relations and
    returns proposed transforms plus residual evidence. Keep Editor generation
    checks, review, and apply as separate steps.

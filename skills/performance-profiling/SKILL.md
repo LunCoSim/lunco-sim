@@ -376,11 +376,11 @@ Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.
 
-For fixed RK4, verify that LunCoSim resolves its registered capability and
-installs Rumoca's public `FixedRk4Integrator` into its Model Exchange session
-adapter. Keep the same communication lattice, atomic input transaction and
-complete checked observation when comparing runs. A solver microbenchmark
-does not certify whole coupled ticks or production frame time.
+For fixed RK4, verify that LunCoSim resolves its registered capability to
+Rumoca's `SimSolverMode::FixedStep` on the public `SimulationSession` path. Keep
+the same master communication targets, atomic input transaction and complete
+checked observation when comparing runs. A solver microbenchmark does not
+certify whole coupled ticks or production frame time.
 
 For terrain certificate lookups, whole-cell identity is the fenced surface and
 the two raster indices. Refined rectangles also retain exact coordinate bits.

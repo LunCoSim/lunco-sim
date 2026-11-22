@@ -2,58 +2,24 @@
 
 use rumoca_core::VarName;
 use rumoca_ir_dae::{Dae, ScalarType, VariableRole};
-use rumoca_sim::{SimOptions, SimulationDiagnosticError, SimulationSession};
+use rumoca_sim::{SimOptions, SimSolverMode, SimulationDiagnosticError, SimulationSession};
 use std::collections::HashMap;
-
-enum LiveSession {
-    Adaptive(SimulationSession),
-    Fixed(crate::fixed_step::FixedStepSession),
-}
-
-/// LunCo convenience lookup for a requested subset of Rumoca session values.
-/// Rumoca exposes the complete checked session state; name selection belongs
-/// to this application adapter.
-pub trait SelectedValuesExt {
-    fn selected_values(
-        &self,
-        names: &[String],
-    ) -> Result<Vec<Option<f64>>, SimulationDiagnosticError>;
-}
-
-impl SelectedValuesExt for SimulationSession {
-    fn selected_values(
-        &self,
-        names: &[String],
-    ) -> Result<Vec<Option<f64>>, SimulationDiagnosticError> {
-        let state = self.state()?;
-        Ok(names
-            .iter()
-            .map(|name| state.values.get(name).copied())
-            .collect())
-    }
-}
 
 /// Live Modelica session selected by LunCo's registered solver capability.
 pub struct LiveStepper {
-    session: LiveSession,
+    session: SimulationSession,
     parameter_values: Vec<(String, f64)>,
 }
 
 impl LiveStepper {
     /// Admit the complete communication-point input vector atomically.
     pub fn set_inputs(&mut self, inputs: &[(&str, f64)]) -> Result<(), SimulationDiagnosticError> {
-        match &mut self.session {
-            LiveSession::Adaptive(session) => session.set_inputs(inputs),
-            LiveSession::Fixed(session) => session.set_inputs(inputs),
-        }
+        self.session.set_inputs(inputs)
     }
 
     /// Reach the master's communication point using Rumoca's solver policy.
     pub fn advance_to(&mut self, target_time: f64) -> Result<(), SimulationDiagnosticError> {
-        match &mut self.session {
-            LiveSession::Adaptive(session) => session.advance_to(target_time),
-            LiveSession::Fixed(session) => session.advance_to(target_time),
-        }
+        self.session.advance_to(target_time)
     }
 
     /// Collect the visible host observation with canonical variable names.
@@ -86,57 +52,38 @@ impl LiveStepper {
     }
 
     pub fn time(&self) -> f64 {
-        match &self.session {
-            LiveSession::Adaptive(session) => session.time(),
-            LiveSession::Fixed(session) => session.time(),
-        }
+        self.session.time()
     }
 
     pub fn input_names(&self) -> &[String] {
-        match &self.session {
-            LiveSession::Adaptive(session) => session.input_names(),
-            LiveSession::Fixed(session) => session.input_names(),
-        }
+        self.session.input_names()
     }
 
     pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {
-        match &self.session {
-            LiveSession::Adaptive(session) => session.get(name),
-            LiveSession::Fixed(session) => Ok(session
-                .visible_values()?
-                .into_iter()
-                .find_map(|(visible, value)| (visible == name).then_some(value))
-                .or_else(|| {
-                    self.parameter_values
-                        .iter()
-                        .find_map(|(parameter, value)| (parameter == name).then_some(*value))
-                })),
-        }
+        Ok(self.session.get(name)?.or_else(|| {
+            self.parameter_values
+                .iter()
+                .find_map(|(parameter, value)| (parameter == name).then_some(*value))
+        }))
     }
 
     pub fn selected_values(
         &self,
         names: &[String],
     ) -> Result<Vec<Option<f64>>, SimulationDiagnosticError> {
-        match &self.session {
-            LiveSession::Adaptive(session) => session.selected_values(names),
-            LiveSession::Fixed(session) => {
-                let values = session.visible_values()?;
-                Ok(names
-                    .iter()
-                    .map(|name| {
-                        values
-                            .iter()
-                            .find_map(|(visible, value)| (visible == name).then_some(*value))
-                            .or_else(|| {
-                                self.parameter_values.iter().find_map(|(parameter, value)| {
-                                    (parameter == name).then_some(*value)
-                                })
-                            })
-                    })
-                    .collect())
-            }
-        }
+        Ok(self
+            .session
+            .selected_values(names)?
+            .into_iter()
+            .zip(names)
+            .map(|(value, name)| {
+                value.or_else(|| {
+                    self.parameter_values
+                        .iter()
+                        .find_map(|(parameter, value)| (parameter == name).then_some(*value))
+                })
+            })
+            .collect())
     }
 
     /// Initialized numeric parameter coordinates, including dependent values.
@@ -150,7 +97,7 @@ pub fn live(dae: &Dae, options: SimOptions) -> Result<LiveStepper, SimulationDia
     let parameter_values = parameter_values(dae, &options)?;
     let session = SimulationSession::new_with_diagnostics(dae, options)?;
     Ok(LiveStepper {
-        session: LiveSession::Adaptive(session),
+        session,
         parameter_values,
     })
 }
@@ -168,12 +115,12 @@ pub fn live_for_solver(
                     "fixed-rk4 must declare fixed-step deterministic capability".into(),
                 ));
             }
-            let session = crate::fixed_step::FixedStepSession::new(dae, options)?;
-            let parameter_values = session.parameter_values()?;
-            Ok(LiveStepper {
-                session: LiveSession::Fixed(session),
-                parameter_values,
-            })
+            if options.solver_mode != SimSolverMode::FixedStep {
+                return Err(SimulationDiagnosticError::Solver(
+                    "fixed-rk4 requires Rumoca fixed-step options".into(),
+                ));
+            }
+            live(dae, options)
         }
         "bdf" | "rk45" => live(dae, options),
         _ => Err(SimulationDiagnosticError::Solver(format!(
@@ -185,10 +132,7 @@ pub fn live_for_solver(
 
 impl LiveStepper {
     fn visible_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
-        match &self.session {
-            LiveSession::Adaptive(session) => Ok(session.state()?.values.into_iter().collect()),
-            LiveSession::Fixed(session) => session.visible_values(),
-        }
+        Ok(self.session.state()?.values.into_iter().collect())
     }
 }
 

@@ -284,11 +284,10 @@ errors abort publication with the source identity.
 `solver_backends` registers BDF for offline implicit integration, RK45 for
 adaptive live integration, and fixed RK4 for predicted models. A requested
 solver must resolve to a registered capability; unsupported selections are
-terminal errors. LunCoSim translates the adaptive backends into Rumoca's
-`SimOptions`. For prediction, LunCoSim installs Rumoca's public fixed RK4
-Model Exchange integrator in its `FixedStepSession` and enforces the master's
-fixed communication lattice. Rumoca owns session initialization, input
-transactions, component evaluation and event handling.
+terminal errors. LunCoSim maps the selected capability to Rumoca's `SimOptions`.
+For prediction, it selects `SimSolverMode::FixedStep` on the same public
+`SimulationSession` path. Rumoca owns the fixed-step integrator, session
+initialization, input transactions, component evaluation and event handling.
 
 Live sessions have no stop time. Their finite options span supplies the
 root-scan scale. Batch runs use the admitted `RunBounds`; LunCoSim builds and
@@ -388,9 +387,10 @@ that consumer and its negative cases.
 
 ## Ownership review
 
-All Rumoca dependencies pin the current official LunCoSim fork revision
-`e86e9a0137562fca38998524fc5ac2a4600b41f1`. LunCoSim stores checked DAE
-artifacts; each adaptive live or batch solver uses Rumoca's public
+All Rumoca dependencies pin upstream commit
+`488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396` from
+[CogniPilot/rumoca](https://github.com/CogniPilot/rumoca). LunCoSim stores
+checked DAE artifacts; each adaptive live or batch solver uses Rumoca's public
 `SimulationSession` API. Predicted models use Rumoca's public Model Exchange
 session and fixed RK4 integrator. Parsed AST fields are consumed by LunCoSim
 adapters that compose public Rumoca queries with source-coordinate and
@@ -409,8 +409,8 @@ numerical-kernel cancellation hook.
 | Live and batch solver sessions | `rumoca_sim::SimulationSession::new_with_diagnostics` | Select registered solver capabilities and keep each mutable session in its owning worker. |
 | DAE scalar declarations and checked bounds | `lunco-modelica-compiler::scalar_declarations_from_checked_dae` over Rumoca DAE views and `NumericEvaluator` | Project checked facts once for worker metadata; keep USD provenance and channel retention at their application owners. |
 | Retained trajectory units and descriptions | `SimResult::variable_meta` and `rumoca_sim::build_variable_meta` | Store exact per-run series facts with completed artifacts; graphs consume retained facts. |
-| Component initialization, input transactions and observations | Rumoca `SimulationSession` and `MeSimulationSession` | Live sessions and initial observations share this owner. LunCo's `SelectedValuesExt` selects requested values from the checked state; Rumoca completes initialization before the first observation. |
-| Fixed-step integration | Rumoca `MeSimulationSession` with `FixedRk4Integrator` | Install the public integrator through LunCo's `FixedStepSession` and preserve the master's fixed communication cadence. |
+| Component initialization, input transactions and observations | Rumoca `SimulationSession` | Live sessions and initial observations share this owner. `SimulationSession::selected_values` selects requested values from the checked state; Rumoca completes initialization before the first observation. |
+| Fixed-step integration | Rumoca `SimulationSession` with `SimSolverMode::FixedStep` | The upstream RK45 solver supplies the fixed-step plugin, advancing to master targets with the configured step and clipping at accepted boundaries. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |
 

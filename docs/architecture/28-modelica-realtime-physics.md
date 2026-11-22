@@ -126,9 +126,9 @@ The master supplies the exact communication target through
 - `rk45` uses Rumoca's checked Model Exchange session, including its adaptive
   integration and event handling. Internal accepted steps do not become public
   communication points.
-- `fixed-rk4` installs Rumoca's public `FixedRk4Integrator` in LunCoSim's
-  Model Exchange session adapter. LunCoSim validates each communication target
-  against the fixed lattice; Rumoca reports model and component failures.
+- `fixed-rk4` selects Rumoca's `SimSolverMode::FixedStep` through the same
+  public `SimulationSession` path as the other solvers. Rumoca owns the fixed
+  integrator and reports model and component failures.
 
 Live construction supplies explicit tolerance and an internal step setting;
 offline experiment annotations do not change the realtime solver profile. The
@@ -343,12 +343,12 @@ LunCoSim maps that choice to Rumoca's public session options, while Rumoca
 validates and runs the numerical method. Production replay establishes whether
 the selected model and platform meet the determinism promise.
 
-`fixed-rk4` installs Rumoca's public `FixedRk4Integrator` through LunCoSim's
-`FixedStepSession`. Rumoca owns session initialization, event behavior and
-component evaluation. LunCoSim owns solver capability selection and validates
-communication targets on the master's fixed lattice. Stability remains a model
-responsibility, and production replay is required before claiming deterministic
-behavior for a specific scene and platform.
+`fixed-rk4` selects Rumoca's `SimSolverMode::FixedStep` through the public
+`SimulationSession`. Rumoca owns session initialization, fixed-step integration,
+event behavior and component evaluation. LunCoSim owns solver capability
+selection and supplies the master's communication targets. Stability remains a
+model responsibility, and production replay is required before claiming
+deterministic behavior for a specific scene and platform.
 
 This is the same profile **robots** want (§6): a controller / articulated-body
 loop is exactly a fixed-step, bounded, deterministic model driving a predicted body.
