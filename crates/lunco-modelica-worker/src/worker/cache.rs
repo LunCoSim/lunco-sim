@@ -1,12 +1,5 @@
-//! In-memory and persistent compiled-DAE and prepared-solve caches.
-//!
-//! Prepared graphs use participating-source content identity, solver identity,
-//! and exact parameter and admitted input bits. Compiler admission revisions fence compiled
-//! artifacts independently of immutable prepared-graph reuse.
+//! In-memory and persistent compiled-DAE cache.
 
-#[cfg(not(target_arch = "wasm32"))]
-use super::PREPARED_SOLVE_CACHE_VERSION;
-use super::solver;
 use linked_hash_map::LinkedHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
@@ -16,6 +9,7 @@ use lunco_storage::{FileStorage, Storage, StorageError, StorageHandle};
 use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
+#[cfg(test)]
 use std::sync::Arc;
 
 /// Immutable strict compilation results. Persistent reuse is installed only
@@ -95,7 +89,7 @@ struct CompiledArtifactDiskRecord<C> {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl CompiledArtifactCache {
-    const DISK_VERSION: u32 = 5;
+    const DISK_VERSION: u32 = 6;
 
     pub(super) fn enable_disk(&mut self, limits: ModelicaArtifactDiskLimits) {
         self.disk_limits = Some(limits);
@@ -103,7 +97,7 @@ impl CompiledArtifactCache {
 
     pub(super) fn disk_key(
         &self,
-        resolution: &lunco_hash::content::Cid,
+        source_identity: &lunco_hash::content::Cid,
         numeric: &[(String, f64)],
     ) -> Option<CompiledArtifactDiskKey> {
         self.disk_limits?;
@@ -119,7 +113,7 @@ impl CompiledArtifactCache {
         field(identity.as_bytes());
         field(std::env::consts::ARCH.as_bytes());
         field(std::env::consts::OS.as_bytes());
-        field(&resolution.to_bytes());
+        field(&source_identity.to_bytes());
         field(&(numeric.len() as u64).to_le_bytes());
         for (name, value) in numeric {
             field(name.as_bytes());
@@ -299,6 +293,7 @@ impl<K: Eq + Hash, V> BoundedReuseCache<K, V> {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn contains_key(&self, key: &K) -> bool {
         self.entries.contains_key(key)
     }
@@ -401,11 +396,9 @@ pub(super) enum ModelicaCacheReadError {
 #[derive(Debug)]
 pub(super) enum ModelicaCacheWriteError {
     InvalidLimits(String),
-    MissingCompilerIdentity,
     InvalidPath,
     ConstructionWire(String),
     Codec(serde_json::Error),
-    BinaryCodec(bincode::error::EncodeError),
     Compression(std::io::Error),
     Storage(StorageError),
 }
@@ -415,8 +408,6 @@ impl std::fmt::Display for ModelicaCacheWriteError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidLimits(error) => formatter.write_str(error),
-            Self::MissingCompilerIdentity => formatter
-                .write_str("persistent solver caching requires an identified clean compiler build"),
             Self::ConstructionWire(error) => write!(
                 formatter,
                 "checked component serialization rejected: {error}"
@@ -425,7 +416,6 @@ impl std::fmt::Display for ModelicaCacheWriteError {
                 formatter.write_str("publication is outside its owned cache namespace")
             }
             Self::Codec(error) => write!(formatter, "cache serialization rejected: {error}"),
-            Self::BinaryCodec(error) => write!(formatter, "cache serialization rejected: {error}"),
             Self::Compression(error) => write!(formatter, "cache compression rejected: {error}"),
             Self::Storage(error) => {
                 write!(formatter, "cache publication/retention failed: {error}")
@@ -515,229 +505,6 @@ impl std::fmt::Display for ModelicaCacheReadError {
             Self::Codec(error) => write!(formatter, "cache record decode rejected: {error}"),
             Self::Identity => formatter.write_str("cache record identity does not match its owner"),
         }
-    }
-}
-
-/// A prepared solve model is reusable for the exact structural source key,
-/// solver, parameter overrides, and initial input vector that produced it. This is the same
-/// identity used by the persistent cache, so equivalent generated networks
-/// share pure solve IR within one session too.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(super) struct PreparedSolveKey {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) compiler_identity: Option<&'static str>,
-    pub(super) source_key: u64,
-    pub(super) solver_id: String,
-    pub(super) parameter_overrides: Vec<(String, u64)>,
-    pub(super) initial_inputs: Vec<(String, u64)>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Serialize)]
-struct PreparedSolveDiskRecord<M, S, P> {
-    compiler_identity: Option<String>,
-    version: u32,
-    source_key: u64,
-    solver_id: S,
-    parameter_overrides: P,
-    initial_inputs: P,
-    model: M,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Deserialize)]
-struct DecodedPreparedSolveDiskRecord {
-    compiler_identity: Option<String>,
-    version: u32,
-    source_key: u64,
-    solver_id: String,
-    parameter_overrides: Vec<(String, u64)>,
-    initial_inputs: Vec<(String, u64)>,
-    #[serde(deserialize_with = "rumoca_sim::deserialize_fmi_component")]
-    model: rumoca_ir_solve::fmi::FmiComponent,
-}
-
-pub(super) struct PreparedSolveCache {
-    models: BoundedReuseCache<PreparedSolveKey, Arc<rumoca_ir_solve::fmi::FmiComponent>>,
-}
-
-impl PreparedSolveCache {
-    pub(super) fn new(capacity: NonZeroUsize) -> Self {
-        Self {
-            models: BoundedReuseCache::new(capacity),
-        }
-    }
-
-    pub(super) fn contains_key(&self, key: &PreparedSolveKey) -> bool {
-        self.models.contains_key(key)
-    }
-
-    pub(super) fn get(
-        &mut self,
-        key: &PreparedSolveKey,
-    ) -> Option<&Arc<rumoca_ir_solve::fmi::FmiComponent>> {
-        self.models.get(key)
-    }
-
-    pub(super) fn insert(
-        &mut self,
-        key: PreparedSolveKey,
-        model: Arc<rumoca_ir_solve::fmi::FmiComponent>,
-    ) {
-        self.models.insert(key, model);
-    }
-
-    pub(super) fn key(
-        source_key: u64,
-        spec: &solver::SolverSpec,
-        parameter_overrides: &[(String, f64)],
-        initial_inputs: &[(String, f64)],
-    ) -> PreparedSolveKey {
-        PreparedSolveKey {
-            #[cfg(not(target_arch = "wasm32"))]
-            compiler_identity: rumoca_tool_build_info::build_identity()
-                .filter(|identity| !identity.ends_with("-dirty")),
-            source_key,
-            solver_id: spec.id.to_string(),
-            parameter_overrides: parameter_overrides
-                .iter()
-                .map(|(name, value)| (name.clone(), value.to_bits()))
-                .collect(),
-            initial_inputs: initial_inputs
-                .iter()
-                .map(|(name, value)| (name.clone(), value.to_bits()))
-                .collect(),
-        }
-    }
-
-    #[cfg(any(test, target_arch = "wasm32"))]
-    pub(super) fn clear(&mut self) {
-        self.models.clear();
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn disk_filename(key: &PreparedSolveKey) -> String {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        PREPARED_SOLVE_CACHE_VERSION.hash(&mut hasher);
-        key.compiler_identity.hash(&mut hasher);
-        key.source_key.hash(&mut hasher);
-        key.solver_id.hash(&mut hasher);
-        key.parameter_overrides.hash(&mut hasher);
-        key.initial_inputs.hash(&mut hasher);
-        let hash = hasher.finish();
-        format!("{:016x}-{hash:016x}.bin.zst", key.source_key)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn disk_path(key: &PreparedSolveKey) -> std::path::PathBuf {
-        modelica_dir()
-            .join(format!("prepared-solve-v{PREPARED_SOLVE_CACHE_VERSION}"))
-            .join(Self::disk_filename(key))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn load_disk(
-        key: &PreparedSolveKey,
-        limits: ModelicaArtifactDiskLimits,
-    ) -> Result<Option<rumoca_ir_solve::fmi::FmiComponent>, ModelicaCacheReadError> {
-        let path = Self::disk_path(key);
-        Self::load_disk_at(&FileStorage::new(), &StorageHandle::File(path), key, limits)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn load_disk_at(
-        storage: &FileStorage,
-        handle: &StorageHandle,
-        key: &PreparedSolveKey,
-        limits: ModelicaArtifactDiskLimits,
-    ) -> Result<Option<rumoca_ir_solve::fmi::FmiComponent>, ModelicaCacheReadError> {
-        let Some(record) = read_record::<DecodedPreparedSolveDiskRecord>(storage, handle, limits)?
-        else {
-            return Ok(None);
-        };
-        if record.version != PREPARED_SOLVE_CACHE_VERSION
-            || key.compiler_identity.is_none()
-            || record.compiler_identity.as_deref() != key.compiler_identity
-            || record.source_key != key.source_key
-            || record.solver_id != key.solver_id
-            || record.parameter_overrides != key.parameter_overrides
-            || record.initial_inputs != key.initial_inputs
-        {
-            return Err(ModelicaCacheReadError::Identity);
-        }
-        // Recency is retention metadata, not cache validity: a failed mark
-        // keeps the verified model and only ages this record sooner.
-        if let Err(error) = storage.mark_cache_file_used(handle) {
-            log::warn!("[modelica-runtime] prepared-solve cache use was not recorded: {error}");
-        }
-        Ok(Some(record.model))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn save_disk(
-        key: &PreparedSolveKey,
-        model: &rumoca_ir_solve::fmi::FmiComponent,
-        limits: ModelicaArtifactDiskLimits,
-    ) -> Result<(), ModelicaCacheWriteError> {
-        let path = Self::disk_path(key);
-        let root = path.parent().ok_or(ModelicaCacheWriteError::InvalidPath)?;
-        Self::save_disk_at(&FileStorage::new(), root, &path, key, model, limits)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn encode_disk(
-        key: &PreparedSolveKey,
-        model: &rumoca_ir_solve::fmi::FmiComponent,
-        limits: ModelicaArtifactDiskLimits,
-    ) -> Result<Vec<u8>, ModelicaCacheWriteError> {
-        limits
-            .validate()
-            .map_err(ModelicaCacheWriteError::InvalidLimits)?;
-        let root = model.runtime_view().retain_assertion_root();
-        let record = PreparedSolveDiskRecord {
-            compiler_identity: Some(
-                key.compiler_identity
-                    .ok_or(ModelicaCacheWriteError::MissingCompilerIdentity)?
-                    .to_string(),
-            ),
-            version: PREPARED_SOLVE_CACHE_VERSION,
-            source_key: key.source_key,
-            solver_id: key.solver_id.as_str(),
-            parameter_overrides: key.parameter_overrides.as_slice(),
-            initial_inputs: key.initial_inputs.as_slice(),
-            model: rumoca_sim::retained_fmi_component_wire(&root)
-                .map_err(|error| ModelicaCacheWriteError::ConstructionWire(error.to_string()))?,
-        };
-        encode_record(&record, limits)
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn save_disk_at(
-        storage: &FileStorage,
-        root: &std::path::Path,
-        path: &std::path::Path,
-        key: &PreparedSolveKey,
-        model: &rumoca_ir_solve::fmi::FmiComponent,
-        limits: ModelicaArtifactDiskLimits,
-    ) -> Result<(), ModelicaCacheWriteError> {
-        if path.parent() != Some(root)
-            || path.file_name().and_then(|name| name.to_str())
-                != Some(Self::disk_filename(key).as_str())
-        {
-            return Err(ModelicaCacheWriteError::InvalidPath);
-        }
-        // Serialization/compression do not hold the cross-process publication lock.
-        let compressed = Self::encode_disk(key, model, limits)?;
-        let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
-        let incoming = transaction.directory().join(
-            path.file_name()
-                .ok_or(ModelicaCacheWriteError::InvalidPath)?,
-        );
-        retain_disk_artifacts(storage, &transaction, &incoming, compressed.len(), limits)?;
-        storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
-        Ok(())
     }
 }
 
@@ -950,20 +717,19 @@ mod tests {
 
     #[test]
     fn compiled_artifact_round_trip_uses_native_checked_dae() {
-        let (mut compiler, unit, artifact) = compiled_fixture();
+        let (compiler, unit, artifact) = compiled_fixture();
         let limits = ModelicaArtifactDiskLimits::default();
         let mut cache = CompiledArtifactCache::new(NonZeroUsize::new(2).unwrap());
         cache.enable_disk(limits);
-        let prepared = compiler
-            .prepare_compile_after_source_root_admission(
+        let source_identity = compiler
+            .source_unit_identity(
                 "CompileCacheProbe",
                 &unit.source,
                 "compile-cache.mo",
                 &unit.extras,
-                &[],
             )
             .unwrap();
-        let key = cache.disk_key(prepared.resolution_identity(), &[]).unwrap();
+        let key = cache.disk_key(&source_identity, &[]).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let handle = StorageHandle::File(directory.path().join("artifact.bin.zst"));
         let storage = FileStorage::new();
@@ -1016,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_artifact_identity_covers_inputs_and_exact_structural_bits() {
+    fn compiled_artifact_identity_covers_source_unit_and_structural_bits() {
         let (mut compiler, unit, _) = compiled_fixture();
         let mut cache = CompiledArtifactCache::new(NonZeroUsize::new(2).unwrap());
         cache.enable_disk(ModelicaArtifactDiskLimits::default());
@@ -1024,18 +790,10 @@ mod tests {
                    unit: &super::super::CompileUnit,
                    uri,
                    numeric: &[(String, f64)]| {
-            let prepared = compiler
-                .prepare_compile_after_source_root_admission(
-                    "CompileCacheProbe",
-                    &unit.source,
-                    uri,
-                    &unit.extras,
-                    numeric,
-                )
+            let identity = compiler
+                .source_unit_identity("CompileCacheProbe", &unit.source, uri, &unit.extras)
                 .unwrap();
-            cache
-                .disk_key(prepared.resolution_identity(), numeric)
-                .unwrap()
+            cache.disk_key(&identity, numeric).unwrap()
         };
         let first = key(&mut compiler, &unit, "compile-cache.mo", &[]);
         assert_eq!(
@@ -1055,7 +813,7 @@ mod tests {
                 "model ExtraProbe Real x=1; end ExtraProbe;".into(),
             )],
         );
-        assert_eq!(first, key(&mut compiler, &extra, "compile-cache.mo", &[]));
+        assert_ne!(first, key(&mut compiler, &extra, "compile-cache.mo", &[]));
         let changed = super::super::assemble_compile_unit(
             &unit.source.replace("0.10000000000000002", "0.25"),
             Vec::new(),
@@ -1104,7 +862,7 @@ mod tests {
         install(&mut compiler, 1, 1);
         let first = key(&mut compiler, &dependency, "compile-cache.mo", &[]);
         install(&mut compiler, 1, 2);
-        assert_eq!(
+        assert_ne!(
             first,
             key(&mut compiler, &dependency, "compile-cache.mo", &[])
         );
@@ -1116,7 +874,7 @@ mod tests {
         compiler.remove_source_root("library");
         assert!(
             compiler
-                .prepare_compile_after_source_root_admission(
+                .compile_str_multi_after_source_root_admission(
                     "CompileCacheProbe",
                     &dependency.source,
                     "compile-cache.mo",
@@ -1184,635 +942,6 @@ mod tests {
             Err(ModelicaCacheWriteError::ConstructionWire(_))
         ));
     }
-
-    fn key() -> PreparedSolveKey {
-        PreparedSolveKey {
-            compiler_identity: Some("test-compiler"),
-            source_key: 11,
-            solver_id: "generic-solver".into(),
-            parameter_overrides: vec![("gain".into(), 3.5_f64.to_bits())],
-            initial_inputs: Vec::new(),
-        }
-    }
-
-    pub(super) fn component() -> rumoca_ir_solve::fmi::FmiComponent {
-        let mut session = rumoca_compile::Session::new(rumoca_compile::SessionConfig::default());
-        session.add_document("CacheProbe.mo", "model CacheProbe parameter Real gain = 3.5; Real x(start=42, fixed=true); equation der(x) = -gain*x; end CacheProbe;").unwrap();
-        let compiled = session.compile_model("CacheProbe").unwrap();
-        let (_, _, options) = super::super::live_stepper_options(solver::RuntimeProfile {
-            live: true,
-            predicted: false,
-        })
-        .unwrap();
-        rumoca_sim::prepare_fmi_component(&compiled.dae, &options).unwrap()
-    }
-
-    fn record(
-        key: &PreparedSolveKey,
-    ) -> PreparedSolveDiskRecord<rumoca_ir_solve::fmi::FmiComponent, String, Vec<(String, u64)>>
-    {
-        PreparedSolveDiskRecord {
-            compiler_identity: key.compiler_identity.map(str::to_string),
-            version: PREPARED_SOLVE_CACHE_VERSION,
-            source_key: key.source_key,
-            solver_id: key.solver_id.clone(),
-            parameter_overrides: key.parameter_overrides.clone(),
-            initial_inputs: key.initial_inputs.clone(),
-            model: component(),
-        }
-    }
-
-    fn encode(
-        record: &PreparedSolveDiskRecord<
-            rumoca_ir_solve::fmi::FmiComponent,
-            String,
-            Vec<(String, u64)>,
-        >,
-    ) -> Vec<u8> {
-        let root = record.model.runtime_view().retain_assertion_root();
-        let wire = PreparedSolveDiskRecord {
-            compiler_identity: record.compiler_identity.clone(),
-            version: record.version,
-            source_key: record.source_key,
-            solver_id: &record.solver_id,
-            parameter_overrides: &record.parameter_overrides,
-            initial_inputs: &record.initial_inputs,
-            model: rumoca_sim::retained_fmi_component_wire(&root).unwrap(),
-        };
-        serde_json::to_vec(&wire).unwrap()
-    }
-
-    fn compress(bytes: &[u8]) -> Vec<u8> {
-        zstd::stream::encode_all(bytes, 3).unwrap()
-    }
-
-    fn stored(bytes: &[u8]) -> (FileStorage, StorageHandle) {
-        let storage = FileStorage::new();
-        let handle = StorageHandle::Memory("generic-solve-cache".into());
-        storage.write_sync(&handle, bytes).unwrap();
-        (storage, handle)
-    }
-
-    #[test]
-    fn persistent_solve_cache_streams_borrowed_record_and_bounds_both_byte_budgets() {
-        use std::io::Write;
-        let key = key();
-        let record = record(&key);
-        let decoded_len = encode(&record).len();
-        let limits = ModelicaArtifactDiskLimits {
-            decoded_bytes: decoded_len,
-            ..Default::default()
-        };
-        let compressed = PreparedSolveCache::encode_disk(&key, &record.model, limits).unwrap();
-        let exact = ModelicaArtifactDiskLimits {
-            compressed_bytes: compressed.len(),
-            ..limits
-        };
-        assert_eq!(
-            PreparedSolveCache::encode_disk(&key, &record.model, exact).unwrap(),
-            compressed
-        );
-        let (storage, handle) = stored(&compressed);
-        let model = PreparedSolveCache::load_disk_at(&storage, &handle, &key, exact)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            model.runtime_view().model().initial_y,
-            record.model.runtime_view().model().initial_y
-        );
-        assert_eq!(
-            model.runtime_view().model().parameters,
-            record.model.runtime_view().model().parameters
-        );
-        let decoded_error = PreparedSolveCache::encode_disk(
-            &key,
-            &record.model,
-            ModelicaArtifactDiskLimits {
-                decoded_bytes: decoded_len - 1,
-                ..exact
-            },
-        )
-        .unwrap_err();
-        assert!(decoded_error.to_string().contains("decoded byte budget"));
-        let compressed_error = PreparedSolveCache::encode_disk(
-            &key,
-            &record.model,
-            ModelicaArtifactDiskLimits {
-                compressed_bytes: 1,
-                ..exact
-            },
-        )
-        .unwrap_err();
-        assert!(
-            compressed_error
-                .to_string()
-                .contains("compressed byte budget")
-        );
-        let mut writer = BudgetWriter::new(CacheBuffer::default(), 2, "test");
-        assert!(writer.write_all(b"abc").is_err());
-        assert_eq!(writer.used, 0);
-        assert!(writer.inner.0.is_empty());
-        assert_eq!(writer.inner.0.capacity(), 0);
-        writer.write_all(b"ab").unwrap();
-        assert_eq!(writer.inner.0, b"ab");
-    }
-
-    #[test]
-    fn persistent_solve_cache_byte_quota_retains_recent_owned_regular_files() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("cache é");
-        let storage = FileStorage::new();
-        let limits = ModelicaArtifactDiskLimits {
-            retained_entries: 8,
-            retained_bytes: 64 * 1024,
-            compressed_bytes: 64 * 1024,
-            ..Default::default()
-        };
-        for source in 1..=8_u64 {
-            let name = format!("{source:016x}-0000000000000000.bin.zst");
-            storage
-                .write_sync(&StorageHandle::File(directory.join(name)), &[0; 32 * 1024])
-                .unwrap();
-        }
-        // A later recorded use makes source 3 the most recent pre-existing record.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        storage
-            .mark_cache_file_used(&StorageHandle::File(
-                directory.join("0000000000000003-0000000000000000.bin.zst"),
-            ))
-            .unwrap();
-        let oversized = directory.join("0000000000000000-0000000000000000.bin.zst");
-        storage
-            .write_sync(
-                &StorageHandle::File(oversized.clone()),
-                &vec![0; limits.compressed_bytes + 1],
-            )
-            .unwrap();
-        let unrelated = StorageHandle::File(directory.join("settings.json"));
-        storage.write_sync(&unrelated, b"user preferences").unwrap();
-        let malformed =
-            StorageHandle::File(directory.join("FFFFFFFFFFFFFFFF-0000000000000000.bin.zst"));
-        storage.write_sync(&malformed, b"unrecognized").unwrap();
-        let nested =
-            StorageHandle::File(directory.join("0000000000000000-0000000000000001.bin.zst"));
-        storage.ensure_directory_sync(&nested).unwrap();
-        #[cfg(unix)]
-        let link = directory.join("0000000000000000-0000000000000002.bin.zst");
-        #[cfg(unix)]
-        lunco_storage::create_file_symlink_sync(&directory.join("settings.json"), &link).unwrap();
-        let mut key = key();
-        key.source_key = 100;
-        let incoming = directory.join(PreparedSolveCache::disk_filename(&key));
-        let model = record(&key).model;
-        PreparedSolveCache::save_disk_at(&storage, &directory, &incoming, &key, &model, limits)
-            .unwrap();
-        let transaction = storage
-            .lock_cache_directory(&StorageHandle::File(directory.clone()))
-            .unwrap();
-        let retained = transaction
-            .files()
-            .unwrap()
-            .filter_map(|entry| {
-                let file = entry.unwrap();
-                let StorageHandle::File(path) = file.handle else {
-                    panic!("native file");
-                };
-                owned_cache_filename(&path).then_some((path, file.bytes))
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
-        assert_eq!(retained.len(), 2);
-        assert!(retained.values().sum::<u64>() <= limits.retained_bytes);
-        assert!(
-            retained.contains_key(
-                &transaction
-                    .directory()
-                    .join("0000000000000003-0000000000000000.bin.zst")
-            ),
-            "the most recently used record survives regardless of filename order"
-        );
-        assert!(
-            retained.contains_key(&transaction.directory().join(incoming.file_name().unwrap()))
-        );
-        assert!(!bevy::tasks::block_on(
-            storage.exists(&StorageHandle::File(oversized))
-        ));
-        assert_eq!(storage.read_sync(&unrelated).unwrap(), b"user preferences");
-        assert_eq!(storage.read_sync(&malformed).unwrap(), b"unrecognized");
-        assert_eq!(
-            storage.entry_kind_sync(&nested).unwrap(),
-            lunco_storage::StorageEntryKind::Directory
-        );
-        #[cfg(unix)]
-        assert_eq!(
-            storage.read_sync(&StorageHandle::File(link)).unwrap(),
-            b"user preferences"
-        );
-        drop(transaction);
-        let loaded = PreparedSolveCache::load_disk_at(
-            &storage,
-            &StorageHandle::File(incoming),
-            &key,
-            limits,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            loaded.runtime_view().model().initial_y,
-            model.runtime_view().model().initial_y
-        );
-    }
-
-    #[test]
-    fn persistent_solve_cache_concurrent_publications_enforce_exact_directory_quota() {
-        let root = tempfile::tempdir().unwrap();
-        let directory = root.path().join("shared cache");
-        let limits = ModelicaArtifactDiskLimits {
-            retained_entries: 3,
-            compressed_bytes: 64 * 1024,
-            ..Default::default()
-        };
-        std::thread::scope(|scope| {
-            for source in 0..8 {
-                let directory = &directory;
-                scope.spawn(move || {
-                    let storage = FileStorage::new();
-                    for parameter in 0..8 {
-                        let mut key = key();
-                        key.source_key = source;
-                        key.parameter_overrides[0].1 = f64::from(parameter).to_bits();
-                        let model = record(&key).model;
-                        let path = directory.join(PreparedSolveCache::disk_filename(&key));
-                        PreparedSolveCache::save_disk_at(
-                            &storage, directory, &path, &key, &model, limits,
-                        )
-                        .unwrap();
-                    }
-                });
-            }
-        });
-        let storage = FileStorage::new();
-        let transaction = storage
-            .lock_cache_directory(&StorageHandle::File(directory.clone()))
-            .unwrap();
-        let owned = transaction
-            .files()
-            .unwrap()
-            .filter_map(|entry| {
-                let file = entry.unwrap();
-                let StorageHandle::File(path) = file.handle else {
-                    panic!("native file");
-                };
-                owned_cache_filename(&path).then_some((path, file.bytes))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(owned.len(), limits.retained_entries);
-        assert!(
-            owned
-                .iter()
-                .all(|(_, bytes)| *bytes <= limits.compressed_bytes as u64)
-        );
-        for (path, _) in owned {
-            let mut matching_keys = 0;
-            for source in 0..8 {
-                for parameter in 0..8 {
-                    let mut key = key();
-                    key.source_key = source;
-                    key.parameter_overrides[0].1 = f64::from(parameter).to_bits();
-                    if path.file_name().unwrap()
-                        == std::ffi::OsStr::new(&PreparedSolveCache::disk_filename(&key))
-                    {
-                        let loaded = PreparedSolveCache::load_disk_at(
-                            &storage,
-                            &StorageHandle::File(path.clone()),
-                            &key,
-                            limits,
-                        )
-                        .unwrap()
-                        .unwrap();
-                        assert_eq!(loaded.runtime_view().model().initial_y.as_slice(), &[42.0]);
-                        matching_keys += 1;
-                    }
-                }
-            }
-            assert_eq!(matching_keys, 1);
-        }
-    }
-
-    #[test]
-    fn persistent_solve_cache_rejects_invalid_limits_paths_and_storage_failure() {
-        let root = tempfile::tempdir().unwrap();
-        let storage = FileStorage::new();
-        let key = key();
-        let model = record(&key).model;
-        let path = root.path().join(PreparedSolveCache::disk_filename(&key));
-        let invalid = ModelicaArtifactDiskLimits {
-            retained_entries: 0,
-            ..Default::default()
-        };
-        assert!(matches!(
-            PreparedSolveCache::save_disk_at(&storage, root.path(), &path, &key, &model, invalid),
-            Err(ModelicaCacheWriteError::InvalidLimits(_))
-        ));
-        assert!(
-            ModelicaArtifactDiskLimits {
-                retained_bytes: 1,
-                ..Default::default()
-            }
-            .validate()
-            .is_err()
-        );
-        assert_eq!(ModelicaArtifactDiskLimits::default().retained_entries, 128);
-        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (result_tx, result_rx) = crossbeam_channel::unbounded();
-        super::super::modelica_worker(
-            command_rx,
-            lunco_modelica_runtime::ModelicaResponseSender::new(
-                result_tx,
-                crossbeam_channel::unbounded().0,
-            ),
-            invalid,
-            lunco_modelica_runtime::ModelicaCacheLimits::default(),
-            super::super::TEST_NATIVE_CODE_CAPACITY,
-            super::super::ModelicaWorkerLimits::default(),
-        );
-        assert!(
-            result_rx
-                .try_recv()
-                .unwrap()
-                .worker_failure
-                .unwrap()
-                .contains("retained entries must be positive")
-        );
-        assert!(matches!(
-            PreparedSolveCache::save_disk_at(
-                &storage,
-                root.path(),
-                &root.path().join("not-owned.bin.zst"),
-                &key,
-                &model,
-                Default::default()
-            ),
-            Err(ModelicaCacheWriteError::InvalidPath)
-        ));
-        let outside = root
-            .path()
-            .join("other-directory")
-            .join(path.file_name().unwrap());
-        assert!(matches!(
-            PreparedSolveCache::save_disk_at(
-                &storage,
-                root.path(),
-                &outside,
-                &key,
-                &model,
-                Default::default()
-            ),
-            Err(ModelicaCacheWriteError::InvalidPath)
-        ));
-        let blocked = root.path().join("file-is-not-a-directory");
-        storage
-            .write_sync(&StorageHandle::File(blocked.clone()), b"preserve")
-            .unwrap();
-        let path = blocked.join(PreparedSolveCache::disk_filename(&key));
-        let error = PreparedSolveCache::save_disk_at(
-            &storage,
-            &blocked,
-            &path,
-            &key,
-            &model,
-            Default::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(error, ModelicaCacheWriteError::Storage(_)));
-        assert!(error.to_string().contains("publication/retention failed"));
-        assert_eq!(
-            storage.read_sync(&StorageHandle::File(blocked)).unwrap(),
-            b"preserve"
-        );
-    }
-
-    #[test]
-    fn prepared_solve_disk_cache_accepts_exact_budgets_and_missing_record() {
-        let key = key();
-        let encoded = encode(&record(&key));
-        let compressed = compress(&encoded);
-        let (storage, handle) = stored(&compressed);
-        let limits = ModelicaArtifactDiskLimits {
-            compressed_bytes: compressed.len(),
-            decoded_bytes: encoded.len(),
-            ..Default::default()
-        };
-        let model = PreparedSolveCache::load_disk_at(&storage, &handle, &key, limits)
-            .unwrap()
-            .unwrap();
-        let model = model.runtime_view().model();
-        assert_eq!(model.initial_y.as_slice(), &[42.0]);
-        assert_eq!(model.parameters.as_slice(), &[3.5]);
-        assert!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &StorageHandle::Memory("absent-cache".into()),
-                &key,
-                limits,
-            )
-            .unwrap()
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn prepared_solve_disk_cache_rejects_storage_and_expansion_over_budget() {
-        let key = key();
-        let encoded = encode(&record(&key));
-        let compressed = compress(&encoded);
-        let (storage, handle) = stored(&compressed);
-        assert!(matches!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &handle,
-                &key,
-                ModelicaArtifactDiskLimits {
-                    compressed_bytes: compressed.len() - 1,
-                    ..Default::default()
-                },
-            ),
-            Err(ModelicaCacheReadError::Storage(
-                StorageError::SizeLimitExceeded { .. }
-            ))
-        ));
-        assert!(matches!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &handle,
-                &key,
-                ModelicaArtifactDiskLimits {
-                    decoded_bytes: encoded.len() - 1,
-                    ..Default::default()
-                },
-            ),
-            Err(ModelicaCacheReadError::DecodedLimit { .. })
-        ));
-        let (storage, handle) = stored(&compress(&vec![0; 1024 * 1024]));
-        assert!(matches!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &handle,
-                &key,
-                ModelicaArtifactDiskLimits {
-                    decoded_bytes: 32,
-                    ..Default::default()
-                },
-            ),
-            Err(ModelicaCacheReadError::DecodedLimit { max_bytes: 32 })
-        ));
-    }
-
-    #[test]
-    fn prepared_solve_disk_cache_rejects_malformed_truncated_and_trailing_records() {
-        let key = key();
-        let encoded = encode(&record(&key));
-        let compressed = compress(&encoded);
-        for bytes in [
-            b"invalid zstd".as_slice(),
-            &compressed[..compressed.len() - 1],
-        ] {
-            let (storage, handle) = stored(bytes);
-            assert!(matches!(
-                PreparedSolveCache::load_disk_at(
-                    &storage,
-                    &handle,
-                    &key,
-                    ModelicaArtifactDiskLimits::default(),
-                ),
-                Err(ModelicaCacheReadError::Decompression(_))
-            ));
-        }
-        let (storage, handle) = stored(&compress(&encoded[..encoded.len() - 1]));
-        assert!(matches!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &handle,
-                &key,
-                ModelicaArtifactDiskLimits::default(),
-            ),
-            Err(ModelicaCacheReadError::Codec(_))
-        ));
-        let mut trailing = encoded;
-        trailing.push(0);
-        let (storage, handle) = stored(&compress(&trailing));
-        assert!(matches!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &handle,
-                &key,
-                ModelicaArtifactDiskLimits::default(),
-            ),
-            Err(ModelicaCacheReadError::Codec(_))
-        ));
-    }
-
-    #[test]
-    fn prepared_solve_disk_cache_rejects_every_identity_mismatch() {
-        let key = key();
-        for field in 0..7 {
-            let mut record = record(&key);
-            match field {
-                0 => record.version += 1,
-                1 => record.source_key += 1,
-                2 => record.solver_id.push('x'),
-                3 => record.parameter_overrides[0].1 = 7.0_f64.to_bits(),
-                4 => record
-                    .initial_inputs
-                    .push(("forcing".into(), 7.0_f64.to_bits())),
-                5 => record.compiler_identity = Some("another-compiler".into()),
-                6 => record.compiler_identity = None,
-                _ => unreachable!(),
-            }
-            let (storage, handle) = stored(&compress(&encode(&record)));
-            assert!(
-                matches!(
-                    PreparedSolveCache::load_disk_at(
-                        &storage,
-                        &handle,
-                        &key,
-                        ModelicaArtifactDiskLimits::default(),
-                    ),
-                    Err(ModelicaCacheReadError::Identity)
-                ),
-                "field {field}"
-            );
-        }
-    }
-
-    #[test]
-    fn prepared_solve_disk_cache_rejects_excessive_zstd_window() {
-        use std::io::Write;
-        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 3).unwrap();
-        encoder.window_log(20).unwrap();
-        encoder.write_all(&vec![0; 64 * 1024]).unwrap();
-        let (storage, handle) = stored(&encoder.finish().unwrap());
-        assert!(matches!(
-            PreparedSolveCache::load_disk_at(
-                &storage,
-                &handle,
-                &key(),
-                ModelicaArtifactDiskLimits {
-                    zstd_window_log_max: 10,
-                    ..Default::default()
-                },
-            ),
-            Err(ModelicaCacheReadError::Decompression(_))
-        ));
-    }
-
-    #[test]
-    fn prepared_solve_disk_cache_rejects_invalid_limits_before_worker_start() {
-        let invalid = ModelicaArtifactDiskLimits {
-            decoded_bytes: 0,
-            ..Default::default()
-        };
-        let (_command_tx, command_rx) = crossbeam_channel::unbounded();
-        let (result_tx, result_rx) = crossbeam_channel::unbounded();
-        super::super::modelica_worker(
-            command_rx,
-            lunco_modelica_runtime::ModelicaResponseSender::new(
-                result_tx,
-                crossbeam_channel::unbounded().0,
-            ),
-            invalid,
-            lunco_modelica_runtime::ModelicaCacheLimits::default(),
-            super::super::TEST_NATIVE_CODE_CAPACITY,
-            super::super::ModelicaWorkerLimits::default(),
-        );
-        let result = result_rx.try_recv().unwrap();
-        assert!(
-            result
-                .worker_failure
-                .as_deref()
-                .unwrap()
-                .contains("invalid Modelica artifact disk-cache limits")
-        );
-        for limits in [
-            ModelicaArtifactDiskLimits {
-                compressed_bytes: 0,
-                ..Default::default()
-            },
-            ModelicaArtifactDiskLimits {
-                decoded_bytes: ModelicaArtifactDiskLimits::CODEC_MAX_DECODED_BYTES + 1,
-                ..Default::default()
-            },
-            ModelicaArtifactDiskLimits {
-                zstd_window_log_max: 9,
-                ..Default::default()
-            },
-            ModelicaArtifactDiskLimits {
-                zstd_window_log_max: ModelicaArtifactDiskLimits::MAX_WINDOW_LOG + 1,
-                ..Default::default()
-            },
-        ] {
-            assert!(limits.validate().is_err());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1866,56 +995,14 @@ mod reuse_tests {
     }
 
     #[test]
-    fn immutable_reuse_cache_keeps_exact_solve_key_and_shared_model_identity() {
-        let mut cache = PreparedSolveCache::new(NonZeroUsize::new(2).unwrap());
-        let key = PreparedSolveKey {
-            #[cfg(not(target_arch = "wasm32"))]
-            compiler_identity: Some("test-compiler"),
-            source_key: 1,
-            solver_id: "generic-solver".into(),
-            parameter_overrides: vec![("gain".into(), 3.0_f64.to_bits())],
-            initial_inputs: Vec::new(),
-        };
-        let graph = Arc::new(super::tests::component());
-        cache.insert(key.clone(), Arc::clone(&graph));
-        assert!(Arc::ptr_eq(cache.get(&key).unwrap(), &graph));
-        let mut parameter_key = key.clone();
-        parameter_key.parameter_overrides[0].1 = 4.0_f64.to_bits();
-        assert!(!cache.contains_key(&parameter_key));
-        let mut input_key = key.clone();
-        input_key
-            .initial_inputs
-            .push(("drive".into(), 2.0_f64.to_bits()));
-        assert!(!cache.contains_key(&input_key));
-        cache.insert(parameter_key.clone(), Arc::clone(&graph));
-        let mut solver_key = key.clone();
-        solver_key.solver_id.push('x');
-        cache.insert(solver_key.clone(), Arc::clone(&graph));
-        assert!(!cache.contains_key(&key));
-        assert!(cache.contains_key(&parameter_key));
-        assert!(cache.contains_key(&solver_key));
-        cache.clear();
-        assert!(!cache.contains_key(&solver_key));
-        assert_eq!(Arc::strong_count(&graph), 1);
-    }
-
-    #[test]
     fn immutable_reuse_cache_limits_reject_zero_capacity() {
-        for limits in [
-            ModelicaCacheLimits {
-                compiled_artifact_entries: 0,
-                ..Default::default()
-            },
-            ModelicaCacheLimits {
-                prepared_solve_entries: 0,
-                ..Default::default()
-            },
-        ] {
-            assert!(limits.validate().is_err());
-        }
+        let limits = ModelicaCacheLimits {
+            compiled_artifact_entries: 0,
+            ..Default::default()
+        };
+        assert!(limits.validate().is_err());
         let capacities = ModelicaCacheLimits::default().validate().unwrap();
         assert_eq!(capacities.compiled_artifacts.get(), 64);
-        assert_eq!(capacities.prepared_solves.get(), 64);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1934,7 +1021,6 @@ mod reuse_tests {
                 compiled_artifact_entries: 0,
                 ..Default::default()
             },
-            super::super::TEST_NATIVE_CODE_CAPACITY,
             super::super::ModelicaWorkerLimits::default(),
         );
         let result = result_rx.try_recv().unwrap();

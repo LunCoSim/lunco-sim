@@ -21,6 +21,7 @@ use lunco_experiments::{
     ParamPath, ParamValue, RunBounds, RunCancelled, RunCompleted, RunFailed, RunHandle, RunMeta,
     RunProgress, RunResult, RunStatus, RunUpdate,
 };
+use lunco_modelica_solver::simulation_session::SelectedValuesExt;
 use rumoca_compile::compile::Dae;
 /// Immutable Modelica source and runtime owner supplied at run admission.
 #[derive(Clone, Debug)]
@@ -585,7 +586,6 @@ fn run_inner(
     cancel: Arc<AtomicBool>,
     tx: Sender<RunUpdate>,
 ) {
-    let _cancellation = rumoca_eval_solve::EvaluationCancellationGuard::install(cancel.clone());
     let t_wall = web_time::Instant::now();
 
     if cancel.load(Ordering::SeqCst) {
@@ -593,14 +593,8 @@ fn run_inner(
         return;
     }
 
-    // Announce that this job has left the queue and is now executing. The
-    // batch path is one blocking `simulate_fmi_component` call that emits
-    // no mid-solve `Progress`, so without this the registry status would sit
-    // at `Queued` (set at dispatch) for the entire compile + solve and only
-    // flip straight to `Done` — making a long-grinding run look stuck in a
-    // queue. `drain_pending_handles` maps any `Progress` to
-    // `RunStatus::Running`, so this single emit flips the label to "Running"
-    // the moment the worker thread picks the job up, including compile time.
+    // Mark the run active as soon as its worker takes ownership. Later progress
+    // events report the admitted observation times.
     let _ = tx.send(RunUpdate::Progress {
         t_current: bounds.t_start,
     });
@@ -700,20 +694,12 @@ pub fn drive_run(
         sink.emit(RunUpdate::Cancelled);
         return;
     }
-    let output_budget = match limits
-        .validate()
-        .map_err(|error| error.to_string())
-        .and_then(|()| {
-            rumoca_solver::SolverOutputBudget::new(limits.max_values)
-                .map_err(|error| error.to_string())
-        }) {
-        Ok(budget) => budget,
-        Err(error) => {
-            sink.emit(RunUpdate::Failed { error });
-            return;
-        }
-    };
-    let _output_budget = rumoca_solver::SolverOutputBudgetGuard::install(output_budget);
+    if let Err(error) = limits.validate() {
+        sink.emit(RunUpdate::Failed {
+            error: error.to_string(),
+        });
+        return;
+    }
     let output_dt = match lunco_modelica_core::sim_target::validate_run_bounds(bounds) {
         Ok(dt) => dt,
         Err(error) => {
@@ -750,7 +736,7 @@ pub fn drive_run(
         bounds.dt,
         bounds.n_intervals
     );
-    run_batch_sim(dae, &batch_opts, output_budget, started, sink);
+    run_batch_sim(dae, &batch_opts, limits, started, sink);
 }
 
 /// Retain Rumoca's checked output facts under the experiment's series identity.
@@ -774,25 +760,13 @@ fn series_metadata(
     )
 }
 
-/// Drive a [`Dae`] to `t_end` through the non-interactive dense-output batch
-/// solver ([`rumoca_sim::simulate_fmi_component`]) and emit the trajectory
-/// as a single [`RunUpdate::Completed`]. The
-/// solver owns its own adaptive time loop and the output samples are taken by
-/// dense interpolation, so the solver step size is independent of the output
-/// spacing — the robust path for stiff long-horizon runs.
-///
-/// Native admitted runs install their cancellation flag at the solver owner.
-/// Evaluation and driver checkpoints return before the trajectory can publish.
-/// An executing numerical kernel returns before its next checkpoint. Browser
-/// cancellation uses the worker transport's separate lifetime boundary.
-///
-/// Platform-agnostic: called by both native ([`drive_run`] via [`run_inner`])
-/// and the wasm worker. On wasm the whole solve runs off the main thread in
-/// the Web Worker, so the single blocking call doesn't stall the UI.
+/// Drive a [`Dae`] through Rumoca's public incremental session and emit the
+/// admitted LunCo output grid. The session retains its selected solver state
+/// between requested observation times.
 fn run_batch_sim(
     dae: &Dae,
     opts: &rumoca_sim::SimOptions,
-    budget: rumoca_solver::SolverOutputBudget,
+    limits: lunco_experiments::RunResultLimits,
     started: web_time::Instant,
     sink: &mut impl RunSink,
 ) {
@@ -815,89 +789,134 @@ fn run_batch_sim(
             return;
         }
     };
-    let model = match rumoca_sim::prepare_fmi_component(dae, opts) {
-        Ok(model) => model,
+    let times =
+        match lunco_modelica_core::sim_target::output_times(opts.t_start, opts.t_end, output_dt) {
+            Ok(times) => times,
+            Err(error) => {
+                sink.emit(RunUpdate::Failed {
+                    error: error.to_string(),
+                });
+                return;
+            }
+        };
+    let mut session = match rumoca_sim::SimulationSession::new_with_diagnostics(dae, opts.clone()) {
+        Ok(session) => session,
         Err(error) => {
             sink.emit(RunUpdate::Failed {
-                error: format!("solve lowering failed: {error}"),
+                error: format!("solve session construction failed: {error}"),
             });
             return;
         }
     };
-    // Count the canonical grid without allocating, then admit all output
-    // columns and the separate time vector through the solver's budget.
-    let output_count = model
-        .runtime_view()
-        .model()
-        .visible_projection()
-        .scalar_count();
-    let admission = rumoca_solver::timeline::output_sample_count(
-        opts.t_start,
-        opts.t_end,
-        output_dt,
-        usize::MAX,
-    )
-    .and_then(|samples| budget.validate_dimensions(output_count, samples));
-    if let Err(error) = admission {
+    if sink.is_cancelled() {
+        sink.emit(RunUpdate::Cancelled);
+        return;
+    }
+    let names = session
+        .variable_names()
+        .iter()
+        .filter(|name| name.as_str() != "time")
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Err(error) = limits.validate_dimensions(names.len(), times.len()) {
         sink.emit(RunUpdate::Failed {
             error: error.to_string(),
         });
         return;
     }
-    let result = match rumoca_sim::simulate_fmi_component(model, opts) {
-        Ok(r) => r,
-        Err(e) => {
-            if sink.is_cancelled() {
-                sink.emit(RunUpdate::Cancelled);
-                return;
-            }
+    let metadata = match rumoca_sim::build_variable_meta(dae, &names) {
+        Ok(metadata) => metadata,
+        Err(error) => {
             sink.emit(RunUpdate::Failed {
-                error: format!("simulate failed: {e}"),
+                error: format!("output metadata admission failed: {error}"),
             });
             return;
         }
     };
-
-    if sink.is_cancelled() {
-        sink.emit(RunUpdate::Cancelled);
-        return;
-    }
-
-    if result.data.len() != result.names.len()
-        || result
-            .data
-            .iter()
-            .any(|column| column.len() != result.times.len())
-    {
-        sink.emit(RunUpdate::Failed {
-            error: "solver trajectory columns do not match their names and time vector".into(),
-        });
-        return;
-    }
-    let variable_metadata = series_metadata(result.variable_meta);
-    if result
-        .names
+    let variable_metadata = series_metadata(metadata);
+    if names
         .iter()
-        .filter(|name| name.as_str() != "time")
         .any(|name| !variable_metadata.contains_key(name))
     {
         sink.emit(RunUpdate::Failed {
-            error: "solver trajectory has a series without checked metadata".into(),
+            error: "solver output has a variable without checked metadata".into(),
         });
         return;
     }
-    // SimResult stores one column per visible variable (`data[var][t]`),
-    // mirroring the `RunResult` series map keyed by variable name. Drop the
-    // synthetic `time` column — `times` carries it.
-    let mut series: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    for (name, column) in result.names.into_iter().zip(result.data) {
-        if name == "time" {
-            continue;
+    let mut output_times = Vec::with_capacity(times.len());
+    let mut series = names
+        .iter()
+        .map(|name| (name.clone(), Vec::with_capacity(times.len())))
+        .collect::<BTreeMap<_, _>>();
+    for (index, target_time) in times.iter().copied().enumerate() {
+        if sink.is_cancelled() {
+            sink.emit(RunUpdate::Cancelled);
+            return;
         }
-        series.insert(name, column);
+        if index > 0 {
+            if let Err(error) = session.advance_to(target_time) {
+                if sink.is_cancelled() {
+                    sink.emit(RunUpdate::Cancelled);
+                    return;
+                }
+                sink.emit(RunUpdate::Failed {
+                    error: format!("simulation failed at t={target_time}: {error}"),
+                });
+                return;
+            }
+        }
+        if sink.is_cancelled() {
+            sink.emit(RunUpdate::Cancelled);
+            return;
+        }
+        let actual_time = session.time();
+        if !actual_time.is_finite() || actual_time != target_time {
+            sink.emit(RunUpdate::Failed {
+                error: format!(
+                    "solver stopped at t={actual_time} while the admitted output grid requires t={target_time}"
+                ),
+            });
+            return;
+        }
+        let values = match session.selected_values(&names) {
+            Ok(values) if values.len() == names.len() => values,
+            Ok(_) => {
+                sink.emit(RunUpdate::Failed {
+                    error: "solver output values do not match the admitted names".into(),
+                });
+                return;
+            }
+            Err(error) => {
+                sink.emit(RunUpdate::Failed {
+                    error: format!("solver output observation failed: {error}"),
+                });
+                return;
+            }
+        };
+        for (name, value) in names.iter().zip(values) {
+            let Some(value) = value.filter(|value| value.is_finite()) else {
+                sink.emit(RunUpdate::Failed {
+                    error: format!(
+                        "solver output `{name}` is missing or nonfinite at t={actual_time}"
+                    ),
+                });
+                return;
+            };
+            series
+                .get_mut(name)
+                .expect("admitted series name")
+                .push(value);
+        }
+        output_times.push(actual_time);
+        let progress_stride = (times.len() / 100).max(1);
+        if index % progress_stride == 0 || index + 1 == times.len() {
+            sink.emit(RunUpdate::Progress {
+                t_current: actual_time,
+            });
+        }
     }
 
-    let n_samples = result.times.len();
+    let n_samples = output_times.len();
     bevy::log::info!(
         "[sim] simulate ok (batch): {} samples, {} vars, {:.2}s wall",
         n_samples,
@@ -905,7 +924,7 @@ fn run_batch_sim(
         started.elapsed().as_secs_f64(),
     );
     sink.emit(RunUpdate::Completed(RunResult {
-        times: result.times,
+        times: output_times,
         series,
         meta: RunMeta {
             variable_metadata,

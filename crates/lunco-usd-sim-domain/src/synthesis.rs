@@ -5,6 +5,7 @@
 //! Modelica plan; runtime ECS projection remains in the parent module.
 
 use super::*;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 
 lunco_hooks::declare_hook! {
     id: "synth.acausal-network",
@@ -741,7 +742,7 @@ fn parse_validated_root_interface(
     let ast = rumoca_phase_parse::parse_to_ast(source, &uri)
         .map_err(|error| format!("strict Modelica parse failed: {error:?}"))?;
     let root = ast
-        .get_class_by_qualified_name(model_name)
+        .class_by_path(model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
 
     let mut expected_root_outputs = outputs.clone();
@@ -813,7 +814,7 @@ fn validate_generated_source(
     let ast =
         parse_validated_root_interface(source, model_name, &network.inputs, &outputs, aliases)?;
     let root = ast
-        .get_class_by_qualified_name(model_name)
+        .class_by_path(model_name)
         .ok_or_else(|| format!("root class `{model_name}` is missing"))?;
 
     let expected_members: BTreeMap<String, String> = network
@@ -869,7 +870,7 @@ fn validate_generated_source(
 
     for unit in units {
         let class = ast
-            .get_class_by_qualified_name(&unit.name)
+            .class_by_path(&unit.name)
             .ok_or_else(|| format!("generated unit class `{}` is missing", unit.name))?;
         let mut expected_unit_outputs = unit.outputs.clone();
         expected_unit_outputs.extend(

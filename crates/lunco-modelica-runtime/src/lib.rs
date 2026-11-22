@@ -51,7 +51,7 @@ pub struct ModelicaSourceSnapshot {
     pub source_roots: Vec<(String, u64)>,
 }
 
-/// Facts for one scalar identity in the installed checked FMI component.
+/// Facts for one scalar identity in the installed checked Modelica session.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelicaScalarMetadata {
     pub unit: Option<String>,
@@ -71,21 +71,18 @@ pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = lunco_core_runtime::SECS_PER_
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelicaCacheLimits {
     pub compiled_artifact_entries: usize,
-    pub prepared_solve_entries: usize,
 }
 
 /// Positive cache capacities admitted before starting Modelica workers.
 #[derive(Clone, Copy, Debug)]
 pub struct ModelicaCacheCapacities {
     pub compiled_artifacts: std::num::NonZeroUsize,
-    pub prepared_solves: std::num::NonZeroUsize,
 }
 
 impl Default for ModelicaCacheLimits {
     fn default() -> Self {
         Self {
             compiled_artifact_entries: 64,
-            prepared_solve_entries: 64,
         }
     }
 }
@@ -97,11 +94,8 @@ impl ModelicaCacheLimits {
             std::num::NonZeroUsize::new(self.compiled_artifact_entries).ok_or_else(|| {
                 "Modelica compiled-artifact cache capacity must be positive".to_owned()
             })?;
-        let prepared = std::num::NonZeroUsize::new(self.prepared_solve_entries)
-            .ok_or_else(|| "Modelica prepared-solve cache capacity must be positive".to_owned())?;
         Ok(ModelicaCacheCapacities {
             compiled_artifacts: compiled,
-            prepared_solves: prepared,
         })
     }
 }
@@ -425,11 +419,6 @@ pub enum ModelicaCommand {
         /// Monotonic registry operation identity that fences older loads.
         operation_id: u64,
     },
-    /// Apply the new active application or Twin budget at the native cache owner.
-    #[cfg(not(target_arch = "wasm32"))]
-    SetNativeCodeCacheBudget {
-        bytes: std::num::NonZeroUsize,
-    },
     /// Native batch preparation shares the admitted source roots and cache.
     /// This typed in-process request never crosses the serialized worker wire.
     #[cfg(not(target_arch = "wasm32"))]
@@ -502,7 +491,7 @@ pub struct ModelicaResult {
     /// Canonical name handles serialize as text on the external worker wire.
     pub outputs: Vec<(VarName, f64)>,
     pub detected_symbols: Vec<(String, f64)>,
-    /// Exact scalar declaration facts from the checked FMI component.
+    /// Exact scalar declaration facts from the checked DAE.
     /// Published once when construction installs or replaces a live stepper.
     pub variable_metadata: Option<BTreeMap<String, ModelicaScalarMetadata>>,
     pub error: Option<String>,
@@ -540,7 +529,7 @@ pub struct ModelicaResult {
     /// The authoring mirror consumes these documents without parsing source on
     /// the page thread or repeating worker preparation.
     #[serde(default)]
-    pub loaded_source_root_documents: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    pub loaded_source_root_documents: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
     /// Source-set unload acknowledgement from the Modelica worker.
     #[serde(default)]
     pub unloaded_source_root_id: Option<String>,
@@ -619,10 +608,7 @@ impl Default for ModelicaResult {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ModelicaPreparationPhase {
     QueuedForCompilation,
-    CheckingSolverCache,
-    LoweringEquations,
-    CachedSolverLoaded,
-    SolverPrepared { elapsed_secs: f64 },
+    ConstructingSession,
     LiveSolverConstructed(ModelicaConstructionProfile),
 }
 
@@ -635,23 +621,6 @@ pub struct ModelicaConstructionProfile {
     pub session_ns: u64,
     pub metadata_ns: u64,
     pub initial_observation_ns: u64,
-    pub native_code_cache: Option<ModelicaNativeCodeCacheProfile>,
-}
-
-/// Native compilation work; rejections are also counted in compilations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelicaNativeCodeCacheProfile {
-    pub attempts: u64,
-    pub hits: u64,
-    pub compilations: u64,
-    pub rejected_entries: u64,
-    /// Artifacts evicted by insertions from this construction scope.
-    pub evictions: u64,
-    /// Shared cache residency observed when this construction completes.
-    pub retained_entries: u64,
-    pub retained_bytes: u64,
-    /// Effective active cache budget when this construction completes.
-    pub capacity_bytes: u64,
 }
 
 /// The registered solver capabilities selected for one live Modelica model.
@@ -716,7 +685,7 @@ pub struct ModelicaLiveSolverSnapshot {
     /// Exact free-state constraints accepted by checked initialization
     /// admission. This contains the applied constraints, not all candidate
     /// source-state observations supplied by a coupled solution.
-    pub initial_state_constraints: Vec<(String, f64)>,
+    pub initial_state_overrides: Vec<(String, f64)>,
 }
 
 /// Bounded aggregate diagnostics for the live Modelica step handoff.

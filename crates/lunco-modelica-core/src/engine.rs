@@ -6,6 +6,7 @@
 //! The separate compiler/worker host owns checked compilation and simulation.
 
 use lunco_doc::DocumentId;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use rumoca_compile::{
     Session,
     parsing::ast::{AstIndexMap, ClassDef, StoredDefinition},
@@ -345,11 +346,17 @@ impl ModelicaEngine {
         &mut self,
         set_id: &str,
         kind: rumoca_compile::compile::SourceRootKind,
-        files: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+        files: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
     ) -> usize {
-        let count = self
-            .session
-            .replace_in_memory_source_set(set_id, kind, files, None);
+        let count = self.session.replace_parsed_source_set(
+            set_id,
+            kind,
+            files
+                .into_iter()
+                .map(|file| (file.source_uri, file.definition))
+                .collect(),
+            None,
+        );
         if count > 0 {
             self.installed_source_sets.insert(set_id.to_string());
             lunco_modelica_ast::source_memo::invalidate_source_memos();
@@ -370,7 +377,7 @@ impl ModelicaEngine {
     pub fn update_admitted_source_set(
         &mut self,
         id: &str,
-        files: Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>,
+        files: Option<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>>,
     ) -> Result<(), String> {
         match files {
             Some(files) => {
@@ -434,7 +441,10 @@ impl ModelicaEngine {
     /// Project Rumoca's complete inherited declarations into the application
     /// member ABI. Unresolved source facts have no complete member result.
     pub fn inherited_members_typed(&mut self, qualified: &str) -> Option<Vec<InheritedMember>> {
-        let members = self.session.class_component_declarations_query(qualified)?;
+        let members = lunco_modelica_ast::rumoca_adapter::component_declarations(
+            &mut self.session,
+            qualified,
+        )?;
         Some(
             members
                 .iter()
@@ -499,7 +509,7 @@ impl ModelicaEngine {
             .session
             .get_document(&uri)
             .and_then(|document| document.parsed());
-        let owned: HashSet<_> = ast.declared_class_names().into_iter().collect();
+        let owned: HashSet<_> = ast.class_paths().into_iter().collect();
         let competing: Vec<_> = self
             .session
             .document_uris()
@@ -554,7 +564,7 @@ impl ModelicaEngine {
     /// Retrieve a class declaration through Rumoca's current session index.
     /// The caller owns the returned definition independently of the engine lock.
     pub fn class_def(&mut self, qualified: &str) -> Option<rumoca_compile::parsing::ast::ClassDef> {
-        self.session.class_definition_query(qualified).cloned()
+        lunco_modelica_ast::rumoca_adapter::class_definition(&mut self.session, qualified)
     }
 
     /// Whether `qualified` resolves to a class currently in the
@@ -765,8 +775,11 @@ mod tests {
 
     #[test]
     fn admitted_source_sets_resolve_diagrams_and_retire_only_their_owner() {
-        use rumoca_compile::compile::ParsedSourceDocument;
-        let file = |uri: &str, source: &str| ParsedSourceDocument::parse(uri, source).unwrap();
+        let file = |uri: &str, source: &str| {
+            lunco_modelica_ast::rumoca_adapter::SourceFileParser::default()
+                .parse(uri, source)
+                .unwrap()
+        };
         let mut engine = ModelicaEngine::new();
         engine
             .update_admitted_source_set(

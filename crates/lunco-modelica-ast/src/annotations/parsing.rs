@@ -127,33 +127,33 @@ pub fn project_session_icon(
     session: &mut rumoca_compile::Session,
     qualified: &str,
 ) -> Option<Icon> {
-    use rumoca_core::{PredefinedComponentType, Variability};
-    let members = session.class_component_declarations_query(qualified)?;
-    let falsy_params = members
-        .iter()
-        .filter_map(|member| {
-            let component = &member.component;
-            if !matches!(component.variability, Variability::Parameter(_))
-                || member.scalar_type != Some(PredefinedComponentType::Boolean)
-                || member.has_type_dimensions
-                || !component.shape.is_empty()
-                || !component.shape_expr.is_empty()
-            {
-                return None;
-            }
-            let value = component
-                .binding
-                .as_ref()
-                .map(ToString::to_string)
-                .or_else(|| {
-                    component
-                        .start_is_modification
-                        .then(|| component.start.to_string())
-                });
-            (value.as_deref() == Some("false")).then(|| component.name.clone())
-        })
-        .collect();
-    let top = session.class_definition_query(qualified)?.clone();
+    use rumoca_core::Variability;
+    let target = session.class_lookup_query(qualified)?;
+    let top = crate::rumoca_adapter::class_definition(session, &target)?;
+    let mut falsy_params = HashSet::new();
+    for declaration in crate::rumoca_adapter::component_declarations(session, &target)? {
+        let component = &declaration.component;
+        if !matches!(component.variability, Variability::Parameter(_))
+            || !component.shape.is_empty()
+            || !component.shape_expr.is_empty()
+            || declaration.has_type_dimensions
+            || declaration.scalar_type != Some(rumoca_core::PredefinedComponentType::Boolean)
+        {
+            continue;
+        }
+        let value = component
+            .binding
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| {
+                component
+                    .start_is_modification
+                    .then(|| component.start.to_string())
+            });
+        if value.as_deref() == Some("false") {
+            falsy_params.insert(component.name.clone());
+        }
+    }
     let mut resolver = |scope: &str, reference: &str| {
         session
             .class_type_resolution_candidates_in_class_query(scope, reference)
@@ -161,12 +161,12 @@ pub fn project_session_icon(
             .find_map(|candidate| {
                 let resolved = session.class_lookup_query(&candidate)?;
                 (resolved == candidate).then_some(())?;
-                let class = session.class_definition_query(&resolved)?.clone();
+                let class = crate::rumoca_adapter::class_definition(session, &resolved)?;
                 Some((resolved, Arc::new(class)))
             })
     };
     project_inherited_icon(
-        qualified,
+        &target,
         &top,
         &mut resolver,
         &falsy_params,
@@ -392,6 +392,17 @@ pub fn extract_line_full(annotation: &[Expression]) -> Option<LineRoute> {
         color,
         thickness,
     })
+}
+
+/// Extract a connection's authored `Line` annotation from its exact source
+/// statement. Rumoca's semantic equation retains endpoints and source location;
+/// editor presentation annotations remain in the source text.
+pub fn extract_connection_line(
+    source: &str,
+    equation: &rumoca_ir_ast::Equation,
+) -> Option<LineRoute> {
+    let annotation = crate::ast_mut::connection_annotation(source, equation)?;
+    extract_line_full(&annotation)
 }
 
 fn extract_line(args: &[Expression]) -> Option<Line> {

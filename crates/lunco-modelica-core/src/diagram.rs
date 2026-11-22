@@ -10,12 +10,13 @@
 //! - **Connection Diagram**: Like block diagram but connector nodes expanded
 //! - **Package Hierarchy**: Packages as subsystem nodes with containment edges
 //!
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_modelica_ast::diagram_model::{
     ComponentGraph, ComponentPort, EdgeKind, NodeId, NodeKind, PortDirection,
 };
 use lunco_modelica_ast::{Causality, ClassType};
+use rumoca_compile::Session;
 use rumoca_compile::parsing::ast::{ClassDef, Equation, Expression, StoredDefinition};
-use rumoca_compile::{Session, compile::ClassComponentDeclaration};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -34,7 +35,7 @@ pub enum DiagramScope {
 #[derive(Debug, Clone)]
 pub struct DiagramSnapshot {
     pub target: String,
-    pub members: Arc<Vec<ClassComponentDeclaration>>,
+    pub members: Arc<Vec<lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration>>,
     /// Authored target equations for component-graph capture; omitted from interface capture.
     pub equations: Vec<Equation>,
     classes: HashMap<String, DiagramClass>,
@@ -47,14 +48,13 @@ pub struct DiagramClass {
     pub partial: bool,
     pub annotation: Vec<Expression>,
     pub icon: Option<lunco_modelica_ast::annotations::Icon>,
-    pub members: Arc<Vec<ClassComponentDeclaration>>,
+    pub members: Arc<Vec<lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration>>,
 }
 
 /// Resolve a class's source owner through the shared session symbol index.
 pub fn class_source_uri(session: &mut Session, target: &str) -> Result<String, String> {
-    let leaf = rumoca_core::qualified_name_segments(target)
-        .last()
-        .unwrap_or(target);
+    let parts = lunco_modelica_ast::modelica_path_parts(target);
+    let leaf = parts.last().map(String::as_str).unwrap_or(target);
     for symbol in session.workspace_symbol_query(leaf) {
         if symbol.name != leaf
             || !matches!(
@@ -67,7 +67,7 @@ pub fn class_source_uri(session: &mut Session, target: &str) -> Result<String, S
         let declares_target = session
             .get_document(&symbol.uri)
             .and_then(|document| document.parsed())
-            .is_some_and(|definition| definition.get_class_by_qualified_name(target).is_some());
+            .is_some_and(|definition| definition.class_by_path(target).is_some());
         if declares_target {
             return Ok(symbol.uri);
         }
@@ -85,10 +85,8 @@ fn inherited_equations(
     if ancestry.iter().any(|name| name == target) {
         return Err(format!("Cyclic Modelica diagram inheritance at `{target}`"));
     }
-    let definition = session
-        .class_definition_query(target)
-        .ok_or_else(|| format!("Modelica definition `{target}` is unavailable"))?
-        .clone();
+    let definition = lunco_modelica_ast::rumoca_adapter::class_definition(session, target)
+        .ok_or_else(|| format!("Modelica definition `{target}` is unavailable"))?;
     ancestry.push(target.to_string());
     let mut equations = Vec::new();
     if !definition.extends.is_empty() {
@@ -136,14 +134,13 @@ impl DiagramSnapshot {
             DiagramScope::ClassInterface => Vec::new(),
             DiagramScope::ComponentGraph => inherited_equations(session, target, &mut Vec::new())?,
         };
-        let members = session
-            .class_component_declarations_query(target)
+        let members = lunco_modelica_ast::rumoca_adapter::component_declarations(session, target)
             .ok_or_else(|| {
-                format!("Modelica diagram declarations for `{target}` are unresolved or cyclic")
-            })?;
+            format!("Modelica diagram declarations for `{target}` are unresolved or cyclic")
+        })?;
         let mut snapshot = Self {
             target: target.to_owned(),
-            members,
+            members: Arc::new(members),
             equations,
             classes: HashMap::new(),
         };
@@ -155,9 +152,11 @@ impl DiagramSnapshot {
                 scope == DiagramScope::ComponentGraph
                     || (!member.component.is_protected
                         && (!matches!(member.effective_causality, Causality::Empty)
-                            || session
-                                .class_definition_query(&member.type_name)
-                                .is_some_and(|class| class.class_type == ClassType::Connector)))
+                            || lunco_modelica_ast::rumoca_adapter::class_definition(
+                                session,
+                                &member.type_name,
+                            )
+                            .is_some_and(|class| class.class_type == ClassType::Connector)))
             })
             .map(|member| member.type_name.clone())
             .collect();
@@ -171,8 +170,7 @@ impl DiagramSnapshot {
                 .flat_map(|class| class.members.iter().map(|member| member.type_name.clone()))
                 .collect();
             for name in port_types {
-                if session
-                    .class_definition_query(&name)
+                if lunco_modelica_ast::rumoca_adapter::class_definition(session, &name)
                     .is_some_and(|class| class.class_type == ClassType::Connector)
                 {
                     snapshot.capture_class(session, &name)?;
@@ -186,8 +184,7 @@ impl DiagramSnapshot {
         if rumoca_core::is_builtin_type(name) || self.classes.contains_key(name) {
             return Ok(());
         }
-        let class = session
-            .class_definition_query(name)
+        let class = lunco_modelica_ast::rumoca_adapter::class_definition(session, name)
             .ok_or_else(|| format!("Modelica diagram type `{name}` is unavailable"))?;
         let (class_type, expandable, partial, annotation, icon) = (
             class.class_type.clone(),
@@ -196,8 +193,7 @@ impl DiagramSnapshot {
             class.annotation.clone(),
             lunco_modelica_ast::annotations::extract_icon(&class.annotation),
         );
-        let members = session
-            .class_component_declarations_query(name)
+        let members = lunco_modelica_ast::rumoca_adapter::component_declarations(session, name)
             .ok_or_else(|| {
                 format!("Modelica diagram declarations for `{name}` are unresolved or cyclic")
             })?;
@@ -209,7 +205,7 @@ impl DiagramSnapshot {
                 partial,
                 annotation,
                 icon,
-                members,
+                members: Arc::new(members),
             },
         );
         Ok(())
@@ -272,7 +268,10 @@ impl DiagramSnapshot {
         self.classes.get(name)
     }
 
-    pub fn is_port(&self, member: &ClassComponentDeclaration) -> bool {
+    pub fn is_port(
+        &self,
+        member: &lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration,
+    ) -> bool {
         !member.component.is_protected
             && (!matches!(member.effective_causality, Causality::Empty)
                 || self
@@ -280,7 +279,10 @@ impl DiagramSnapshot {
                     .is_some_and(|class| class.class_type == ClassType::Connector))
     }
 
-    fn ports_for_component(&self, member: &ClassComponentDeclaration) -> Vec<ComponentPort> {
+    fn ports_for_component(
+        &self,
+        member: &lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration,
+    ) -> Vec<ComponentPort> {
         if self
             .class(&member.type_name)
             .is_some_and(|class| class.class_type == ClassType::Connector)
@@ -352,7 +354,10 @@ impl DiagramClass {
     }
 }
 
-fn declaration_port(member: &ClassComponentDeclaration, name: &str) -> ComponentPort {
+fn declaration_port(
+    member: &lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration,
+    name: &str,
+) -> ComponentPort {
     let mut port = ComponentPort::output(name).with_type(&member.type_name);
     port.direction = match member.effective_causality {
         Causality::Input(_) => PortDirection::Input,

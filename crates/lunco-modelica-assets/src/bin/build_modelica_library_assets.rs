@@ -66,8 +66,8 @@ mod native {
     /// Tag stamped into the manifest's `rumoca_artifact_tag` field. Shared with the
     /// runtime via [`lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG`] so producer
     /// and consumer can't drift; the runtime refuses a parsed bundle whose tag
-    /// doesn't match (the bincode'd `ParsedSourceDocument` layout is rumoca-version
-    /// sensitive). Bump the shared const when the rumoca AST shape changes.
+    /// doesn't match (the bincode'd source-snapshot layout is version sensitive).
+    /// Bump the shared const when that wire contract changes.
     use lunco_assets_runtime::library::EXPECTED_RUMOCA_ARTIFACT_TAG as RUMOCA_ARTIFACT_TAG;
     use lunco_modelica_index::visual_diagram::LIBRARY_INDEX_FILE_NAME;
 
@@ -269,7 +269,7 @@ mod native {
     /// distinct top-level package namespace.
     fn pre_parse(
         entries: &[(PathBuf, PathBuf)],
-    ) -> Result<Vec<rumoca_compile::compile::ParsedSourceDocument>, String> {
+    ) -> Result<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>, String> {
         use rayon::prelude::*;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -286,30 +286,35 @@ mod native {
             rayon::current_num_threads()
         );
 
-        // Parse in parallel — each file is independent and `ParsedSourceDocument::parse` is
-        // pure. `.map(...).collect::<Vec<_>>()` over an *indexed* parallel
+        // Parse in parallel using one Rumoca session per Rayon worker.
+        // `.map(...).collect::<Vec<_>>()` over an *indexed* parallel
         // iterator preserves input order exactly, including the first
         // diagnostic when any source fails admission.
         let done = AtomicUsize::new(0);
-        let parsed: Vec<Result<rumoca_compile::compile::ParsedSourceDocument, String>> = mo_entries
-            .par_iter()
-            .map(|(root, path)| {
-                let uri = rel_key(root, path);
-                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                if n.is_multiple_of(500) || n == total {
-                    eprintln!("  parsed {n} / {total}");
-                }
-                let source = fs::read_to_string(path)
-                    .map_err(|error| format!("{uri}: source read failed: {error}"))?;
-                rumoca_compile::compile::ParsedSourceDocument::parse(uri.clone(), source)
-                    .map_err(|error| format!("{uri}: parse failed: {error}"))
-            })
-            .collect();
+        let parsed: Vec<Result<lunco_modelica_ast::resource_uri::SourceFileSnapshot, String>> =
+            mo_entries
+                .par_iter()
+                .map_init(
+                    lunco_modelica_ast::rumoca_adapter::SourceFileParser::default,
+                    |parser, (root, path)| {
+                        let uri = rel_key(root, path);
+                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        if n.is_multiple_of(500) || n == total {
+                            eprintln!("  parsed {n} / {total}");
+                        }
+                        let source = fs::read_to_string(path)
+                            .map_err(|error| format!("{uri}: source read failed: {error}"))?;
+                        parser
+                            .parse(uri.clone(), source)
+                            .map_err(|error| format!("{uri}: parse failed: {error}"))
+                    },
+                )
+                .collect();
         parsed.into_iter().collect()
     }
 
     fn serialise_parsed(
-        parsed: &[rumoca_compile::compile::ParsedSourceDocument],
+        parsed: &[lunco_modelica_ast::resource_uri::SourceFileSnapshot],
         dest: &Path,
     ) -> u64 {
         let raw = bincode::serde::encode_to_vec(parsed, bincode::config::standard())

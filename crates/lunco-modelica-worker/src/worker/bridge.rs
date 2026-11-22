@@ -1551,19 +1551,9 @@ pub fn handle_modelica_responses(
                         model.construction_profile = None;
                         "queued for compilation".to_owned()
                     }
-                    ModelicaPreparationPhase::CheckingSolverCache => {
-                        "compiled; checking the prepared solver cache".to_owned()
+                    ModelicaPreparationPhase::ConstructingSession => {
+                        "constructing Rumoca simulation session".to_owned()
                     }
-                    ModelicaPreparationPhase::LoweringEquations => {
-                        "preparing simulation equations and telemetry (solver cache miss)"
-                            .to_owned()
-                    }
-                    ModelicaPreparationPhase::CachedSolverLoaded => {
-                        "loaded the prepared solver from cache".to_owned()
-                    }
-                    ModelicaPreparationPhase::SolverPrepared { elapsed_secs } => format!(
-                        "solver preparation finished in {elapsed_secs:.2} s; awaiting initialization"
-                    ),
                     ModelicaPreparationPhase::LiveSolverConstructed(profile) => {
                         model.construction_profile = Some(*profile);
                         bevy::log::info!(model = %model.model_name,
@@ -1571,7 +1561,6 @@ pub fn handle_modelica_responses(
                             session_ns = profile.session_ns,
                             metadata_ns = profile.metadata_ns,
                             initial_observation_ns = profile.initial_observation_ns,
-                            native_code_cache = ?profile.native_code_cache,
                             "[modelica-runtime] live solver construction phases completed");
                         format!(
                             "live initialization finished: solver {:.1} ms, metadata {:.1} ms, initial observation {:.1} ms",
@@ -2464,7 +2453,7 @@ mod compile_fault_tests {
             },
             parameter_overrides: vec![("mass".to_owned(), 2.0)],
             initial_inputs: Vec::new(),
-            initial_state_constraints: Vec::new(),
+            initial_state_overrides: Vec::new(),
         })
     }
 

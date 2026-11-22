@@ -663,9 +663,8 @@ pub fn drill_into_class(
     // docs, AND bundled demos — through one command instead of the Welcome
     // panel owning a separate bundled opener. Match the top-level qualified
     // segment against a bundled model's filename stem and open it in-memory.
-    let stem = rumoca_core::qualified_name_segments(qualified)
-        .next()
-        .unwrap_or(qualified);
+    let parts = lunco_modelica_ast::modelica_path_parts(qualified);
+    let stem = parts.first().map(String::as_str).unwrap_or(qualified);
     if crate::models::bundled_models().is_ok_and(|models| {
         models
             .iter()

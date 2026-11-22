@@ -4671,7 +4671,7 @@ def Scope "Rig"
         let ast = rumoca_phase_parse::parse_to_ast(&source, "wrench.mo")
             .expect("generated actuator visual schema must remain valid Modelica");
         let class = ast
-            .get_class_by_qualified_name("AttitudeActuation")
+            .class_by_path("AttitudeActuation")
             .expect("generated actuator model");
         assert!(lunco_modelica_ast::annotations::extract_icon(&class.annotation).is_some());
         assert!(lunco_modelica_ast::annotations::extract_diagram(&class.annotation).is_some());

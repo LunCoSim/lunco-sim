@@ -659,9 +659,9 @@ pub fn on_duplicate_model_from_read_only(
             .and_then(|ast| ast.classes.iter().next().map(|(n, _)| n.clone()))
             .or_else(|| {
                 fqn.as_ref().and_then(|q| {
-                    rumoca_core::qualified_name_segments(q)
+                    lunco_modelica_ast::modelica_path_parts(q)
+                        .into_iter()
                         .next()
-                        .map(String::from)
                 })
             })
             .unwrap_or_else(|| doc.origin().display_name());
@@ -673,9 +673,8 @@ pub fn on_duplicate_model_from_read_only(
             Some(package) if !package.is_empty() => format!("{package}.{top_short}"),
             _ => top_short.clone(),
         });
-        let origin_short = rumoca_core::qualified_name_segments(&origin_fqn)
-            .last()
-            .map(String::from)
+        let origin_short = lunco_modelica_ast::modelica_path_parts(&origin_fqn)
+            .pop()
             .unwrap_or(top_short);
         (doc.source_arc(), origin_short, origin_fqn)
     };
@@ -814,9 +813,8 @@ fn spawn_duplicate_class_task(
         });
         return;
     }
-    let origin_short = rumoca_core::qualified_name_segments(&qualified)
-        .last()
-        .map(str::to_string)
+    let origin_short = lunco_modelica_ast::modelica_path_parts(&qualified)
+        .pop()
         .unwrap_or_else(|| qualified.clone());
 
     let base_name = if name_hint.is_empty() {

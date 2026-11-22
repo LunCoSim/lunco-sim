@@ -66,13 +66,12 @@ failures; those errors must leave the application available for inspection.
 Rust panic handling alone cannot contain a native access violation. See the
 [native execution contract](../../docs/architecture/20-domain-modelica.md).
 
-Predicted participants use Rumoca's fixed RK4 integrator on LunCoSim's
-communication lattice. Admission uses Rumoca's shared
-parameter-only event proof: parameter assertions execute at initialization and
-after parameter changes, while dynamic error predicates, discrete updates,
-clocks, delays and external tables remain rejected. Inspect the model's startup
-failure in Recent Events and `GetReadiness.fault`; do not switch a predicted
-participant to an adaptive solver to hide a rejection.
+Predicted participants resolve through LunCoSim's solver capability registry.
+The `fixed-rk4` adapter installs Rumoca's public `FixedRk4Integrator` in its
+Model Exchange session and validates the fixed communication lattice. Rumoca
+owns model compatibility and component diagnostics.
+Inspect a construction failure in Recent Events and `GetReadiness.fault`. A
+predicted participant must not fall back to an adaptive solver.
 
 For a participant that stays `Compiling` without a compiler outcome, inspect
 its connected producers and input admission before diagnosing compiler work.
@@ -163,14 +162,12 @@ Dynamic icon values use the component's exact runtime path; only Modelica's
 built-in `time` reads the participant or selected experiment clock. A missing
 component value cannot read an unrelated root variable with the same leaf name.
 
-Compiled reuse requires the exact target and source unit. Prepared solver reuse
-uses the compiler's exact participating-source identity, including generated
-identifiers and literals. Class documentation uses qualified declaration ownership
-and Rumoca-decoded strings. Optional prepared disk records use version 14 and
-require the exact clean compiler build identity; an unknown or dirty compiler
-build disables disk reuse.
+Compiled reuse requires the exact target and admitted source unit. Class
+documentation uses qualified declaration ownership and Rumoca-decoded strings.
+Optional compiled-DAE records use the exact clean Rumoca build identity; an
+unknown or dirty compiler build disables disk reuse.
 
-Live `ListTelemetryChannels` facts come from the checked FMI scalar inventory,
+Live `ListTelemetryChannels` facts come from the checked DAE scalar declarations,
 including inherited units and scalar array entries. Editing a draft does not
 change live units or descriptions; recompile to install a new inventory. A name
 such as `p.v` alone implies no electrical unit. Use
@@ -492,31 +489,18 @@ closure. Changed or conflicting source text is rejected; update and readmit
 the source root before compiling it. This prevents a second URI from duplicating
 the same root definition while preserving the root's authority.
 The policy list does not replace composed USD facts for member-class
-discovery. The worker's prepared-solve cache includes contributing library
-content in the source key captured from the successful strict compiler's
-participating-source closure before clearing user overlays. The exact selected
-target, declarations, equations, parameters, initial values, participating siblings,
-and contributing library bytes determine that identity. Unrelated sibling edits and runtime
-document IDs do not invalidate prepared FMI components. The captured key remains with
-the immutable DAE through shared reuse and resets; the precompile DAE cache uses
-the full submitted input set until the strict closure is known. It does not scan
-the complete Modelica tree during the first live stepper build. USD participants
+discovery. The compiler retains bounded checked DAE artifacts. Cache identity
+uses the admitted source bytes, numeric structural values, Rumoca build identity,
+and host platform; it never includes initialized solver state. USD participants
 submit canonical source URIs for checked compilation. Asset reads and worker
 result admission retain the exact mount lease.
 
-For preparation evidence, use actual owner INFO logs: `cache=memory-hit` at
-in-memory admission, `cache=disk-hit` after persistent lookup, and `cache=miss`
-when lowering runs. Disk preparation includes lookup, lowering, and total
-duration plus the source key. Stepper construction is not evidence of cache reuse.
-
 Generated USD networks compile their complete synthesized source plus admitted
 source roots; unrelated editor documents are not sibling inputs. The reserved
-bundled `generated/` filename namespace records provenance. Cache identity uses
-exact declarations and participating bytes. Verify repeat-load cache reuse while changing document-open
-order; authored Modelica documents retain their multi-document source sets.
-Generated documents reuse the synthesis worker's strict AST for the same
-source generation. Check indexed generated classes, model readiness and
-document retirement through the production runtime after changing this path.
+bundled `generated/` filename namespace records provenance. Generated documents
+reuse the synthesis worker's strict AST for the same source generation. Check
+indexed generated classes, model readiness and document retirement through the
+production runtime after changing this path.
 
 Domain discovery does not resynthesize ordinary scene-owned networks when a
 content prim receives its GID: that identity does not enter their namespace.
@@ -527,106 +511,60 @@ Initial network results may publish as a bounded four-root prefix only while
 their own fixed-clock admission hold is present and no prior projection is
 installed. Live replacements remain one per Update; repeated results for a
 root wait for ECS publication. Worker completion never bypasses the oldest
-request or its Twin/stage/source-revision validation.
-Independent prepared networks evaluate Rhai on bounded worker jobs and share
-one telemetry index at publication.
+request or its Twin/stage/source-revision validation. Independent prepared
+networks evaluate Rhai on bounded worker jobs and share one telemetry index at
+publication.
 
-On native runs, one dedicated Rumoca actor owns the mutable session and shared
-DAE cache. Native experiment `CompileBatch` requests use this same actor and
-admitted package context; copies retain their `within` scope without injecting
-imports. The typed batch reply carries the DAE and participating-source CID.
-Only the background run thread waits, and cancellation releases its scheduler
-slot while the compiler finishes immutable preparation. Source-root installation,
-`Compile`, `Reset`, parameter updates, and
+On native runs, one dedicated Rumoca actor owns the mutable compiler session and
+shared DAE cache. Native experiment `CompileBatch` requests use this same actor
+and admitted package context; copies retain their `within` scope without
+injecting imports. The typed batch reply carries the DAE and participating
+source CID. Cancellation releases the run's scheduler slot promptly, while the
+compiler returns from its current operation before the canceled result is
+discarded. Source-root installation, `Compile`, `Reset`, parameter updates and
 cache-invalidating Step auto-init share a FIFO. The worker commits results in
-submission order after entity-session and library-generation checks; a Step
-that needs a rebuild resumes only after its initialization commits. These
-continuations leave the Modelica command owner free to service other entities,
-and actor requests plus solve preparations share bounded admission. Persistent
-solve-cache reads and writes run with DAE lowering in the preparation pool; the
-native owner thread does not perform cache I/O or fall back to synchronous
-lowering. Wasm keeps compilation inside its Modelica Web Worker.
+submission order after entity-session and library-generation checks. Session
+construction uses Rumoca's public `SimulationSession` API on the owning worker
+lane. Wasm keeps compilation and session operations inside its Modelica Web
+Worker.
 
 Windowed, headless, and offscreen LunCoSim install the compiler and execution
 plugins through `LunCoSimSimulationPlugin`. Workbench plugins add presentation
 to that engine; they do not start another worker. Standalone `lunica` installs
 the same compiler/execution pair before choosing its host presentation.
 
-Native preparation uses the startup-captured
-`lunco_modelica_worker::worker::ModelicaWorkerLimits` resource. Its independent
-`preparation` and `live_execution` budgets each default to six maximum workers
-and two reserved reported CPU threads, retaining one worker on small hosts.
-Its `document_execution` budget defaults to one owner. The three pools can
-therefore total thirteen workers. The typed compile command captures `Scene`
-or `Document` from the admitted actor kind and cached rebuilds retain it;
-document construction and preparation never run on a scene session owner.
-Insert it before
+Native worker budgets come from the startup-captured
+`lunco_modelica_worker::worker::ModelicaWorkerLimits` resource. The independent
+`preparation` and `live_execution` pools default to six maximum workers and two
+reserved reported CPU threads, retaining one worker on small hosts. The
+`document_execution` pool defaults to one owner. Insert the resource before
 `ModelicaExecutionPlugin` to configure capacity. Invalid zero capacity fails
-visibly through the worker diagnostic; changing the resource after launch
-does not resize the pools or alter solver clocks.
+visibly; changing the resource after launch does not resize pools or alter
+solver clocks.
 
-Shared immutable RAM caches use the captured
-`lunco_modelica_runtime::ModelicaCacheLimits` resource: positive compiled and
-prepared entry capacities, each defaulting to 64 per worker. Set the shared
-native compiler artifact byte budget under **Settings
-→ General → Modelica native cache** (96 MiB by default). Set or reset
-`modelica.native_code_cache_mib` from **Twin settings** to override or
-inherit the application value. Native construction receipts report
-`capacity_bytes`; compare it with `retained_bytes` after changing the setting
-or replacing the Twin. Run `scripts/api/test_modelica_native_cache_settings.py`
-against the production binary to check loading, editing, rejecting, resetting
-and replacing a Twin override. Follow the
-[Modelica cache contract](../../docs/architecture/20-domain-modelica.md) for
-configuration timing, least-recently-used retention, and browser startup/respawn
-admission. Entry
-caps bound graph count rather than heap bytes; eviction preserves live owners.
-Run the generic `immutable_reuse_cache_` tests and compile the browser worker
-bundle when changing configuration transport. Do not infer Twin teardown from
-shared immutable cache contents.
-Native compilation scopes reuse only relocatable artifacts, never live solver
-state. `CosimStatus.modelica_construction_profile.native_code_cache` reports
-actual attempts, hits, compilations and rejected entries. Native artifact I/O
-uses a separate asynchronous owner; missing snapshots are ordinary cold builds,
-and invalid records warn before fresh compilation. Compare actual hit counts
-across process restarts when measuring loading improvements.
+`lunco_modelica_runtime::ModelicaCacheLimits` captures the compiled-DAE memory
+entry capacity at worker startup; it defaults to 64. Native optional disk reuse
+is configured through `ModelicaArtifactDiskLimits`, defaults to 128 records and
+256 MiB per artifact family, and stores checked compiled-DAE artifacts. Rumoca
+constructs every live session from the admitted DAE. Cache eviction releases
+only the shared immutable artifact reference; active sessions retain their own
+state. For disk decode and retention changes, run the focused compiled-artifact
+cache tests and the storage directory transaction tests on native platforms.
+
+Batch output admission belongs to LunCoSim. `sim_target::output_times` builds
+the canonical grid under `SAMPLE_CAP`; `RunResultLimits` checks all output
+columns and the time vector before trajectory allocation. The runner advances a
+public Rumoca session through those observations and checks cancellation between
+operations. Rumoca main exposes no cancellation hook inside compilation or
+numerical kernels, so an operation already in progress must return first.
+
 For shared browser worker transport changes, run the generic `worker_lifecycle_`
 tests in a real browser and compile both Modelica execution and DEM bake
 consumers. Replacement must release the old handlers, including replacement
-inside an executing callback; failed replacement leaves an empty slot.
-For native compiler heartbeat changes, run the generic `compile_heartbeat_`
-lifetime tests; ensure normal, error, and unwind exit interrupt the wait and
-release the owned thread.
-
-Native optional Modelica artifact persistence captures the cache-owned
-`lunco_modelica_worker::worker::ModelicaArtifactDiskLimits` resource before
-`ModelicaExecutionPlugin` starts the worker. Each compiled-DAE or prepared-solve
-family retains up to 128 records and 256 MiB. The record limits are 64 MiB compressed,
-256 MiB decoded, and a 64 MiB zstd window. See
-[the cache ownership contract](../../docs/architecture/20-domain-modelica.md) for
-valid ranges and configuration timing. Missing records are cache misses;
-rejected existing records warn and recompute admitted equations. Invalid limits
-are a typed worker startup failure. For decode changes, run the generic
-`prepared_solve_disk_cache_` tests; do not substitute repository models for the
-inline-storage boundary fixtures.
-For publication/retention changes, also run `persistent_solve_cache_` and storage
-`cache_directory_transaction_` tests, including the native Windows CI path.
-Keep heavy encoding outside the storage transaction; never remove its lock
-file or broaden retention beyond the owned cache namespace. Optional publication
-failures warn while preserving the admitted solver result.
-
-On native desktop startup, cache-miss solve-IR lowering runs in the worker's
-bounded preparation pool because the DAE input and solve options are immutable.
-The worker alone commits the resulting solve model and constructs the live
-stepper; `Step`, `Reset`, parameter updates, and source-root changes remain
-ordered behind that commit. Persistent solve-IR entries are keyed by structural
-participating-source closure identity, solver, and exact parameter-override and initial-input bits.
-Source-root changes invalidate compilation; bounded prepared models remain
-reusable when fresh strict resolution yields the same participating closure.
-A contributing-library edit changes that closure key. Native disk records use
-the current `prepared-solve-v8` namespace. Readiness is still
-the completion barrier, so
-physics must not be started before `/api/ready` reports `ready=true`,
-`world_hold=false`, and `pending_count=0`.
+inside an executing callback; failed replacement leaves an empty slot. For
+native compiler heartbeat changes, run the generic `compile_heartbeat_` lifetime
+tests; ensure normal, error, and unwind exit interrupt the wait and release the
+owned thread.
 
 Bundled and workspace source roots are parsed to completion before admission and
 installed as one parsed source set. A failed member therefore keeps the root out
@@ -735,21 +673,21 @@ default run targets against the document index's eligible candidates and parsed
 identity unchanged. Verify both run APIs and an unrelated-prefix rejection through
 `assets/scenarios/tests/modelica_class_compile.rhai`.
 
-Compiler admission uses Rumoca's `ParsedSourceDocument` once per unique URI and
-the definition's `qualified_class_name`/`declared_class_names` queries. Reuse a
-loaded source root only for exact admitted source bytes; changed or mixed owned
-definitions require updating that root or choosing a distinct namespace.
-Read participating text through `Session::document_source_text` for content
-identity. Single-source and multi-source compiles share this admission boundary.
+Compiler admission parses each unique URI through Rumoca's public
+`ParsedSourceDocument` and retains it beside the serializable LunCo
+`SourceFileSnapshot`. Install source roots with Rumoca's source-bearing session
+APIs so provenance includes exact source bytes, including for `twin://` URIs.
+Serialized source libraries retain snapshots; the preparation worker rebuilds
+Rumoca documents from those bytes. Reuse a loaded root only for exact admitted
+source bytes. Single-source and multi-source compiles share this admission
+boundary. An empty `within;` uses the document's top-level class names as its
+source-root identities.
 
-Use Rumoca's `StoredDefinition::get_class_by_qualified_name` and mutable
-query for exact source selection and editing. `relative_class_name` strips only
-the actual authored `within` package. Use `rumoca_core::qualified_name_segments`
-and its parent/leaf helpers for path boundaries; quoted dots remain inside
-identifiers. The engine uses `Session::class_definition_query` for the current
-source revision and `class_component_declarations_query` for complete inherited
-facts. Do not add a second class index, miss cache, first-leaf search, or guessed
-member classification.
+LunCo's `ModelicaDefinitionExt` selects exact source declarations from parsed
+name tokens and authored `within` scope. Use `Session::class_lookup_query` to
+select the current indexed declaration. Do not split qualified names on dots:
+quoted identifiers can contain them. Do not add a second class index, miss
+cache, first-leaf search, or guessed member classification.
 
 `DescribeModel.class_name` is the canonical authored name. Verify duplicate
 leaves, quoted identifiers, document-relative requests under `within`, and
@@ -908,8 +846,8 @@ state, and a failed Reset must reject Restart.
 Pause changes future run intent; an already dispatched Step still owns the
 shared-clock barrier until its exact result is admitted. Replacement compilation
 also drains that receipt before retiring its session, and prevents further old
-session steps while queued. Qualified sibling identity comes from Rumoca
-`declared_class_names()`; actual duplicate qualified declarations reject with
+session steps while queued. Qualified sibling identity comes from the parsed
+class inventory; actual duplicate qualified declarations reject with
 both source document identities instead of dropping a sibling source. Wait for that endpoint
 to settle before asserting frozen observations. Compile commands retain arrival
 order, including different classes in one document; only consecutive identical

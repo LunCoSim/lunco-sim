@@ -107,7 +107,7 @@ const PARSED_BUNDLE_ZSTD_LEVEL: i32 = 9;
 /// producer.
 fn write_parsed_bundle(
     path: &std::path::Path,
-    docs: &[rumoca_compile::compile::ParsedSourceDocument],
+    docs: &[lunco_modelica_ast::resource_uri::SourceFileSnapshot],
 ) -> std::io::Result<()> {
     let file = std::fs::File::create(path)?;
     encode_parsed_bundle(std::io::BufWriter::new(file), docs)
@@ -115,7 +115,7 @@ fn write_parsed_bundle(
 
 fn encode_parsed_bundle<W: std::io::Write>(
     writer: W,
-    docs: &[rumoca_compile::compile::ParsedSourceDocument],
+    docs: &[lunco_modelica_ast::resource_uri::SourceFileSnapshot],
 ) -> std::io::Result<()> {
     let mut encoder = zstd::stream::write::Encoder::new(writer, PARSED_BUNDLE_ZSTD_LEVEL)?;
     bincode::serde::encode_into_std_write(docs, &mut encoder, bincode::config::standard())
@@ -180,9 +180,10 @@ struct SourceLibraryIndexer {
     /// Bundle of every parsed `.mo` collected during the scan. Written
     /// at the end of `main()` to `.cache/library/parsed-library.bin` so the
     /// workbench can install paired source text and syntax
-    /// via `Session::replace_in_memory_source_set` — mirrors the wasm
+    /// via `Session::replace_parsed_source_set` — mirrors the wasm
     /// runtime's `parsed-*.bin.zst` strategy on native.
-    parsed_bundle: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    parsed_bundle: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
+    source_parser: lunco_modelica_ast::rumoca_adapter::SourceFileParser,
     source_errors: Vec<String>,
 }
 
@@ -233,6 +234,7 @@ impl SourceLibraryIndexer {
             scan_started: None,
             last_progress_print: None,
             parsed_bundle: Vec::with_capacity(2700),
+            source_parser: lunco_modelica_ast::rumoca_adapter::SourceFileParser::default(),
             source_errors: Vec::new(),
         }
     }
@@ -348,10 +350,10 @@ impl SourceLibraryIndexer {
         // both the placement mapping below and `add_stored_definition`
         // treat the class name correctly.
         let is_package_file = file_name == "package.mo";
-        let parsed = match rumoca_compile::compile::ParsedSourceDocument::parse(
-            path.to_string_lossy().to_string(),
-            source.to_owned(),
-        ) {
+        let parsed = match self
+            .source_parser
+            .parse(path.to_string_lossy().to_string(), source.to_owned())
+        {
             Ok(document) => document,
             Err(error) => {
                 self.source_errors
@@ -359,7 +361,7 @@ impl SourceLibraryIndexer {
                 return;
             }
         };
-        let ast = parsed.definition().clone();
+        let ast = parsed.definition.clone();
         self.parsed_bundle.push(parsed);
         self.add_stored_definition(ast, package_prefix, is_package_file);
     }
@@ -714,8 +716,8 @@ pub fn run_with_cancel(
 
     // Pre-parsed bundle for the workbench's fast path. Native mirror
     // of the wasm `parsed-*.bin.zst` artifact: bincode-serialised
-    // `Vec<ParsedSourceDocument>` that the workbench installs
-    // directly via `Session::replace_in_memory_source_set`, bypassing
+    // source snapshots that the workbench installs directly via
+    // `Session::replace_parsed_source_set`, bypassing
     // every per-file cache key concern.
     bail_if_cancelled!();
     // The package is native-only for this module, while the surrounding asset
@@ -1206,7 +1208,8 @@ end Facts;
     fn parsed_bundle_roundtrips_in_memory() {
         let source = "function External input Real x; output Real y; external \"C\" y = external_call(x); end External; model M Real x; equation der(x) = -x; end M;";
         let docs = vec![
-            rumoca_compile::compile::ParsedSourceDocument::parse("M.mo", source)
+            lunco_modelica_ast::rumoca_adapter::SourceFileParser::default()
+                .parse("M.mo", source)
                 .expect("parse sample model"),
         ];
 
@@ -1222,14 +1225,16 @@ end Facts;
         decoder
             .read_to_end(&mut decoded)
             .expect("decode zstd stream");
-        let (back, consumed): (Vec<rumoca_compile::compile::ParsedSourceDocument>, usize) =
-            bincode::serde::decode_from_slice(&decoded, bincode::config::standard())
-                .expect("decode parsed bundle");
+        let (back, consumed): (
+            Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
+            usize,
+        ) = bincode::serde::decode_from_slice(&decoded, bincode::config::standard())
+            .expect("decode parsed bundle");
 
         assert_eq!(back.len(), docs.len());
         assert_eq!(consumed, decoded.len());
-        assert_eq!(back[0].uri(), docs[0].uri());
-        assert_eq!(back[0].source(), source);
-        assert!(back[0].definition().classes.contains_key("M"));
+        assert_eq!(back[0].source_uri, docs[0].source_uri);
+        assert_eq!(back[0].source, source);
+        assert!(back[0].definition.classes.contains_key("M"));
     }
 }

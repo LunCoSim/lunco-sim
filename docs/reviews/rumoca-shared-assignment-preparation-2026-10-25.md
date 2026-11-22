@@ -3,7 +3,7 @@
 Immutable assignment preparation is qualified independently of mutable sweep
 storage. Its original native commit is `45d66677bd1e287491279823c039e1da954880be`;
 current pins retain it. Mutable storage has a separate
-[integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
+[Rumoca runtime contract](../architecture/29-rumoca-runtime-contracts.md).
 
 ## Scope and ownership
 

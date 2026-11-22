@@ -8,7 +8,7 @@ use crate::ui::viz::{is_signal_plotted, set_signal_plotted};
 use crate::ui::workbench_state::WorkbenchState;
 use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 
-/// Per-input facts from the installed checked FMI scalar inventory.
+/// Per-input facts from the installed checked Modelica declarations.
 struct InputRow {
     name: String,
     value: f64,

@@ -1,6 +1,7 @@
 //! MLS 13.5 URI interpretation. This module supplies language facts only;
 //! asset sources own addressing, containment and bytes.
 
+use crate::ModelicaDefinitionExt;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,12 +49,12 @@ impl ModelicaUri {
             None => (body, None),
         };
         let qualified = lunco_assets_path::decode_uri_component(qualified)?;
-        let segments = rumoca_core::qualified_name_segments(&qualified).collect::<Vec<_>>();
+        let segments = super::modelica_path_parts(&qualified);
         if segments.is_empty() || segments.iter().any(|part| part.is_empty()) {
             return Err("invalid fully qualified Modelica URI name".into());
         }
-        // Rumoca owns identifier syntax, including quoted identifiers. No URI
-        // parser maintains a second Modelica lexer.
+        // Rumoca validates identifier syntax. The shared path splitter above
+        // keeps quoted segments intact while checking this qualified name.
         let declaration = format!("within {qualified}; model UriName end UriName;");
         let parsed = rumoca_phase_parse::parse_to_ast(&declaration, "modelica-uri")
             .map_err(|error| format!("invalid Modelica URI name: {error}"))?;
@@ -75,8 +76,11 @@ impl ModelicaUri {
             .as_ref()
             .ok_or("class reference is not a resource")?;
         let mut path = PathBuf::new();
-        for part in rumoca_core::qualified_name_segments(&self.qualified).skip(1) {
-            let component = lunco_assets_path::relative_path(part)
+        for part in super::modelica_path_parts(&self.qualified)
+            .into_iter()
+            .skip(1)
+        {
+            let component = lunco_assets_path::relative_path(&part)
                 .filter(|path| path.components().count() == 1)
                 .ok_or("package name cannot be represented by this asset store")?;
             path.push(component);
@@ -144,9 +148,37 @@ pub struct SourceFileFacts {
     pub error: Option<String>,
 }
 
+/// Serializable LunCo source snapshot used at worker and cache boundaries.
+/// The AST carries Rumoca source spans; `source` is the exact expanded text
+/// those spans address.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SourceFileSnapshot {
+    pub source_uri: String,
+    pub source: String,
+    pub definition: rumoca_ir_ast::StoredDefinition,
+}
+
+impl SourceFileSnapshot {
+    pub fn new(
+        source_uri: impl Into<String>,
+        source: impl Into<String>,
+        definition: rumoca_ir_ast::StoredDefinition,
+    ) -> Self {
+        Self {
+            source_uri: source_uri.into(),
+            source: source.into(),
+            definition,
+        }
+    }
+
+    pub fn facts(&self) -> SourceFileFacts {
+        SourceFileFacts::parsed(&self.definition, &self.source_uri)
+    }
+}
+
 impl SourceFileFacts {
     pub fn parsed(definition: &rumoca_ir_ast::StoredDefinition, source_uri: &str) -> Self {
-        let mut classes = definition.declared_class_names();
+        let mut classes = definition.class_paths();
         classes.sort();
         Self {
             source_uri: source_uri.to_owned(),
@@ -171,12 +203,9 @@ pub fn package_sources_for_files<'a>(
         }
         packages.extend(file.packages.iter().cloned());
         for qualified in &file.classes {
-            let mut parts = rumoca_core::qualified_name_segments(qualified).collect::<Vec<_>>();
+            let mut parts = super::modelica_path_parts(qualified);
             if let Some(member) = (parts.len() > 1).then(|| parts.pop()).flatten() {
-                members
-                    .entry(parts.join("."))
-                    .or_default()
-                    .insert(member.to_owned());
+                members.entry(parts.join(".")).or_default().insert(member);
             }
         }
     }

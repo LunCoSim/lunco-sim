@@ -702,10 +702,10 @@ participants before the simulation-admission boundary. A participant whose curre
 needs compilation owns one `ModelicaPreparation` key; compile intent is admitted
 in the lifecycle cycle, which continues while `Time<Virtual>` is held. The
 worker result is committed by the Modelica response handler before the next
-lifecycle pass releases that key. Concurrent requests with the same prepared
-solve key share one immutable worker result, but retain their individual IDs in
-the ordered commit queue. Intentionally paused and noncausal models do not hold
-world time. This gate covers prepared solver state; the first normal
+lifecycle pass releases that key. Equivalent requests may reuse an immutable checked DAE artifact, while each
+participant receives an independently constructed mutable session. Their
+individual result IDs stay in the ordered commit queue. Intentionally paused and noncausal models do not hold
+world time. This gate covers session construction; the first normal
 co-simulation step remains governed by the per-step barrier after activation.
 A terminal Modelica error also releases the preparation key, while the
 readiness owner keeps the failure visible as `program_failed` and applies its
@@ -1878,14 +1878,12 @@ The simulator can claim whole-simulation determinism only when these phases
 close with production evidence. Current stable ordering is a necessary first
 phase, not that final claim.
 
-The fixed-step Modelica adapter uses Rumoca's Model Exchange host for checked
-initialization, input transactions, algebraic refresh and output publication.
-`FixedStepSession` supplies a `MeIntegratorBackend` plugin that takes exactly
-four classical RK4 derivative stages per configured step on its integer-indexed
-time grid. A cubic continuous extension reads retained stages and never calls
-the component during sampling. The host owns derivative-capability activation,
-accepted-step validation, and the complete initial-equation solve. A raw lowered
-start vector is not an initialized participant.
+The Modelica worker owns one Rumoca `SimulationSession` per participant.
+LunCoSim translates its registered solver capability and communication settings
+into Rumoca's public options, applies typed inputs at the owning transaction
+boundary, and publishes only finite observations at the requested master time.
+Rumoca owns initialization and numerical integration; whole-simulation
+determinism still requires production replay evidence.
 
 Rumoca owns reusable torn-sweep scratch per runtime. It reinitializes every
 live value and retains independent per-row numerical checks; runtime clones

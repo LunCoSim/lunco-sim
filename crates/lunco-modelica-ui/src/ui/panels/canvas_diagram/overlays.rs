@@ -6,6 +6,7 @@
 //! diagram (no graphics in the AST yet).
 
 use bevy_egui::egui;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_theme::ColorAlpha;
 use lunco_workbench_core::PanelCtx;
 
@@ -294,7 +295,7 @@ pub(super) fn empty_overlay_class_info(
     };
 
     // Preserve the selected declaration identity in the authoring preview.
-    let class_def = ast_arc.get_class_by_qualified_name(class_name);
+    let class_def = ast_arc.class_by_path(class_name);
     let Some(class) = class_def else {
         return (None, None, None, vec![], vec![], vec![]);
     };
@@ -306,7 +307,7 @@ pub(super) fn empty_overlay_class_info(
     // projection task owns that work off-thread and publishes its memoized
     // result; this overlay only reads a completed cache entry and otherwise
     // uses the class's own authored Icon while the projection is pending.
-    let relative = ast_arc.relative_class_name(class_name);
+    let relative = ast_arc.relative_class_path(class_name);
     let class_context = match ast_arc.within.as_ref().map(ToString::to_string) {
         Some(package) if !package.is_empty() => format!("{package}.{relative}"),
         _ => relative.to_owned(),

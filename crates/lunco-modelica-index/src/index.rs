@@ -230,10 +230,11 @@ impl ClassEntry {
     /// Second-level segment of the qualified name — e.g.
     /// `"SampleLibrary.Electrical.Examples.X"` → `"Electrical"`.
     /// Empty when the name has fewer than two dotted segments.
-    pub fn domain(&self) -> &str {
-        rumoca_core::qualified_name_segments(&self.name)
-            .nth(1)
-            .unwrap_or("")
+    pub fn domain(&self) -> String {
+        lunco_modelica_ast::modelica_path_parts(&self.name)
+            .get(1)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// `true` when the qualified name sits under any `Examples.`

@@ -129,7 +129,7 @@ pub enum SourceRootOperationReservationError {
 #[derive(Clone)]
 pub enum SourceRootMirrorUpdate {
     /// Replace the complete source set with worker-prepared syntax.
-    Install(Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>),
+    Install(Arc<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>>),
     /// Remove a source set whose registry owner was retired.
     Retire,
     /// Publish a worker or authoring-mirror failure for this source set.
@@ -1095,8 +1095,8 @@ pub fn drive_engine_sync(
                             .and_then(|bundle| {
                                 bundle
                                     .iter()
-                                    .find(|document| document.uri() == key)
-                                    .map(|document| document.definition().clone())
+                                    .find(|document| document.source_uri == key)
+                                    .map(|document| document.definition.clone())
                             })
                     })
                 };
@@ -1362,7 +1362,8 @@ mod tests {
             .reserve_source_root_operation("twin:7:models", 7)
             .unwrap();
         let update = SourceRootMirrorUpdate::Install(std::sync::Arc::new(vec![
-            rumoca_compile::compile::ParsedSourceDocument::parse("One.mo", "model One end One;")
+            lunco_modelica_ast::rumoca_adapter::SourceFileParser::default()
+                .parse("One.mo", "model One end One;")
                 .unwrap(),
         ]));
         assert_eq!(
@@ -1723,7 +1724,7 @@ pub struct SourceRootChanged {
 ///
 /// **The parsed source slot is the readiness predicate.** Install fires iff
 /// `source_library::global_parsed_source_bundle()` is populated (the in-process slot holds the
-/// source-bearing `Vec<ParsedSourceDocument>`); install is a clone plus the engine's
+/// source-bearing AST snapshots; install is a clone plus the engine's
 /// source-set boundary, with no re-parsing. `LibraryLoadState::Ready` only means
 /// that the source tree/index is available; native fills the parsed slot lazily
 /// after a class is first opened, so using that UI state as the bootstrap gate

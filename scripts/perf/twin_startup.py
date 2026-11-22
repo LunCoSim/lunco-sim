@@ -273,9 +273,17 @@ def main():
             if args.pointer_passthrough:
                 set_owned_pointer_passthrough(pid, receipt["native_window"])
             if args.tracy_port:
-                sockets = subprocess.check_output(["ss", "-tnp"], text=True)
-                owned = [line for line in sockets.splitlines() if f"pid={pid}," in line]
-                assert any(f":{args.tracy_port} " in line for line in owned), "owned Tracy connection absent"
+                deadline = time.monotonic() + 10
+                while True:
+                    sockets = subprocess.check_output(["ss", "-tnp"], text=True)
+                    owned = [line for line in sockets.splitlines() if f"pid={pid}," in line]
+                    if any(f":{args.tracy_port} " in line for line in owned):
+                        break
+                    if session.process.poll() is not None:
+                        raise RuntimeError("owned simulator exited before its Tracy connection opened")
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("owned Tracy connection did not open within 10 seconds")
+                    time.sleep(0.05)
                 receipt["profiler_sockets"] = sockets
             if args.symbols:
                 (output / "process-maps.txt").write_text(Path(f"/proc/{pid}/maps").read_text())

@@ -157,7 +157,7 @@ pub(super) fn take_runnable_compile_command(
         ModelicaCommand::Reset { entity, .. } => {
             preparation_capacity_available && !pending_entities.contains(entity)
         }
-        ModelicaCommand::Despawn { .. } | ModelicaCommand::SetNativeCodeCacheBudget { .. } => true,
+        ModelicaCommand::Despawn { .. } => true,
         ModelicaCommand::LoadSourceRoot { .. } => {
             !preparation_pending && preparation_capacity_available
         }
@@ -185,44 +185,24 @@ pub(super) fn pop_ready_in_order<T>(
 /// Reserve publication and live-owner identity before immutable preparation runs.
 /// Preparation can advance while an earlier live constructor is unfinished;
 /// neither stage consumes results in worker completion order.
-pub(super) struct PreparationOrder<L> {
-    preparation: VecDeque<(u64, L)>,
+pub(super) struct PreparationOrder {
     construction: VecDeque<u64>,
 }
 
-impl<L> PreparationOrder<L> {
+impl PreparationOrder {
     pub(super) fn new() -> Self {
         Self {
-            preparation: VecDeque::new(),
             construction: VecDeque::new(),
         }
     }
 
-    pub(super) fn admit(&mut self, id: u64, preparation: Option<L>) {
+    pub(super) fn admit(&mut self, id: u64) {
         self.construction.push_back(id);
-        if let Some(lane) = preparation {
-            self.preparation.push_back((id, lane));
-        }
-    }
-
-    pub(super) fn pop_prepared<T>(&mut self, ready: &mut HashMap<u64, T>) -> Option<(L, T)> {
-        let id = self.preparation.front()?.0;
-        let result = ready.remove(&id)?;
-        let (_, lane) = self
-            .preparation
-            .pop_front()
-            .expect("preparation head exists");
-        Some((lane, result))
     }
 
     pub(super) fn pop_constructed<T>(&mut self, ready: &mut HashMap<u64, T>) -> Option<(u64, T)> {
         let id = *self.construction.front()?;
         pop_ready_in_order(&mut self.construction, ready).map(|result| (id, result))
-    }
-
-    /// Retire an obsolete request after its immutable preparation drains.
-    pub(super) fn retire(&mut self, id: u64) {
-        self.construction.retain(|pending| *pending != id);
     }
 }
 
@@ -234,19 +214,13 @@ mod tests {
     use lunco_modelica_runtime::ModelicaResult;
 
     #[test]
-    fn independent_preparations_advance_while_live_publication_stays_ordered() {
+    fn live_construction_publication_stays_ordered() {
         let mut order = PreparationOrder::new();
-        order.admit(10, Some(0));
-        order.admit(20, Some(1));
-        order.admit(30, None); // An already prepared component still owns its FIFO slot.
-        let mut prepared = HashMap::from([(20, "second IR")]);
+        order.admit(10);
+        order.admit(20);
+        order.admit(30);
         let mut constructed = HashMap::from([(30, Ok("cached component"))]);
-        assert!(order.pop_prepared(&mut prepared).is_none());
         assert!(order.pop_constructed(&mut constructed).is_none());
-        prepared.insert(10, "first IR");
-        assert_eq!(order.pop_prepared(&mut prepared), Some((0, "first IR")));
-        // The first live job is still running; the second must now be dispatchable.
-        assert_eq!(order.pop_prepared(&mut prepared), Some((1, "second IR")));
         constructed.insert(20, Err("second constructor rejected"));
         assert!(order.pop_constructed(&mut constructed).is_none());
         constructed.insert(10, Ok("first component"));
@@ -263,18 +237,19 @@ mod tests {
             Some((30, Ok("cached component")))
         );
 
-        order.admit(40, Some(2));
-        order.admit(50, Some(3));
-        prepared.extend([(40, "retired IR"), (50, "current IR")]);
-        assert_eq!(order.pop_prepared(&mut prepared), Some((2, "retired IR")));
-        order.retire(40);
-        assert_eq!(order.pop_prepared(&mut prepared), Some((3, "current IR")));
+        order.admit(40);
+        order.admit(50);
+        constructed.insert(40, Err("retired construction failed"));
         constructed.insert(50, Ok("current component"));
+        assert_eq!(
+            order.pop_constructed(&mut constructed),
+            Some((40, Err("retired construction failed")))
+        );
         assert_eq!(
             order.pop_constructed(&mut constructed),
             Some((50, Ok("current component")))
         );
-        assert!(prepared.is_empty() && constructed.is_empty());
+        assert!(constructed.is_empty());
     }
 
     fn ent(n: u32) -> Entity {

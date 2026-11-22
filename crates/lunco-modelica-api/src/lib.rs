@@ -17,6 +17,7 @@ use lunco_api::queries::{ApiQueryError, ApiQueryResult, api_param_array, api_par
 use lunco_api::{ApiQueryProvider, ApiQueryRegistry};
 use lunco_api_core::{ApiErrorCode, ApiValue, api_value};
 use lunco_doc::{Document, DocumentOrigin};
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_modelica_runtime::{ModelicaModel, ModelicaVariables};
 use lunco_workspace::WorkspaceResource;
 
@@ -1293,7 +1294,7 @@ impl ApiQueryProvider for DescribeModelProvider {
                 );
             }
         };
-        let Some(class) = ast.get_class_by_qualified_name(&target_name) else {
+        let Some(class) = ast.class_by_path(&target_name) else {
             return query_error(
                 ApiErrorCode::InternalError,
                 format!(

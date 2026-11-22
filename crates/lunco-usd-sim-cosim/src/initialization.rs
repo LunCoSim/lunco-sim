@@ -898,7 +898,7 @@ fn certify(world: &mut World, certificate: &Certificate) -> Result<bool, String>
             .live_solver_snapshot
             .as_ref()
             .ok_or("initialized participant has no construction receipt")?;
-        for (name, value) in &snapshot.initial_state_constraints {
+        for (name, value) in &snapshot.initial_state_overrides {
             if !states
                 .into_iter()
                 .flatten()

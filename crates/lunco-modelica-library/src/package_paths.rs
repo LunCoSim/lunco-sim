@@ -45,7 +45,7 @@ fn build_class_to_file_index() -> std::collections::HashMap<String, std::path::P
 }
 
 pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
-    let segments: Vec<&str> = rumoca_core::qualified_name_segments(qualified).collect();
+    let segments = lunco_modelica_ast::modelica_path_parts(qualified);
     if segments.is_empty() {
         return None;
     }
@@ -75,7 +75,7 @@ pub fn locate_library_file(qualified: &str) -> Option<std::path::PathBuf> {
 /// bundle's relative keys); `contains` tests membership against that
 /// root's backend. Returns the first hit's (base-joined) path.
 fn resolve_in_root<F>(
-    segments: &[&str],
+    segments: &[String],
     base: &std::path::Path,
     contains: F,
 ) -> Option<std::path::PathBuf>
@@ -119,7 +119,7 @@ pub fn package_declaration(
         for package in lunco_modelica_ast::resource_uri::source_set_package_sources(
             bundle
                 .iter()
-                .map(|document| (document.definition(), document.uri())),
+                .map(|document| (&document.definition, document.source_uri.as_str())),
         )? {
             let name = package.namespace.clone();
             if packages.insert(name.clone(), package).is_some() {

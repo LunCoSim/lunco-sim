@@ -23,7 +23,7 @@ use super::port::{port_fallback_offset_for_size, port_kind_str, resolve_port_ico
 
 /// Resolve a drilled class's unique owning instance from Rumoca declarations.
 pub(super) fn target_unit_instance(
-    members: &[rumoca_compile::compile::ClassComponentDeclaration],
+    members: &[lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration],
     target: &str,
 ) -> Option<String> {
     let mut candidates = members.iter().filter(|member| member.type_name == target);
@@ -594,14 +594,14 @@ mod tests {
 
     fn members(
         source: &str,
-    ) -> std::sync::Arc<Vec<rumoca_compile::compile::ClassComponentDeclaration>> {
+    ) -> std::sync::Arc<Vec<lunco_modelica_ast::rumoca_adapter::ResolvedComponentDeclaration>> {
         let mut session = rumoca_compile::Session::default();
         session
             .add_document("scope.mo", source)
             .expect("fixture admission");
-        session
-            .class_component_declarations_query("Root")
+        lunco_modelica_ast::rumoca_adapter::component_declarations(&mut session, "Root")
             .expect("resolved root")
+            .into()
     }
 
     #[test]

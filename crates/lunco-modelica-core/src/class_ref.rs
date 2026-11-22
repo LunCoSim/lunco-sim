@@ -221,7 +221,7 @@ fn parse_library_qualified(qualified: &str) -> Option<ClassRef> {
     if qualified.is_empty() {
         return None;
     }
-    let mut parts = rumoca_core::qualified_name_segments(qualified).map(String::from);
+    let mut parts = lunco_modelica_ast::modelica_path_parts(qualified).into_iter();
     let head = parts.next()?;
     let tail: Vec<String> = parts.collect();
     Some(ClassRef::source(head, tail))
@@ -239,11 +239,11 @@ fn parse_bundled(tail: &str) -> ClassRef {
         // class (= file stem). Replace `path` with the fragment if
         // it starts with the stem, otherwise nest the fragment under
         // the stem.
-        let parts: Vec<&str> = rumoca_core::qualified_name_segments(q).collect();
+        let parts = lunco_modelica_ast::modelica_path_parts(q);
         if parts.first().map(|s| s.eq(&stem)).unwrap_or(false) {
-            path = parts.into_iter().map(String::from).collect();
+            path = parts;
         } else {
-            path.extend(parts.into_iter().map(String::from));
+            path.extend(parts);
         }
     }
     ClassRef::new(Library::Bundled, path)

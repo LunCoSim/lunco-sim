@@ -108,14 +108,11 @@ pub fn source_library_asset_path(file_name: &str) -> Result<String, String> {
     Ok(format!("{SOURCE_LIBRARY_ASSET_ROOT}/{file_name}"))
 }
 
-/// Process-wide pre-parsed source library documents. Populated on wasm by the
-/// chunked parse driver once the full bundle has been turned into
-/// source-bearing `ParsedSourceDocument`s. `ModelicaCompiler::new` reads it (via
-/// [`global_parsed_source_bundle`]) and installs into rumoca via
-/// `Session::replace_in_memory_source_set` — the entire parse cost is
-/// already paid by then, so compile init is fast.
+/// Process-wide source snapshots decoded on native or transferred from the
+/// Web Worker. Rumoca's AST and its expanded source text stay paired so the
+/// authoring and compiler sessions can install the same revision.
 static GLOBAL_PARSED_SOURCE_BUNDLE: OnceLock<
-    Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>,
+    Arc<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>>,
 > = OnceLock::new();
 static GLOBAL_PARSED_SOURCE_BUNDLE_REVISION: OnceLock<Option<u64>> = OnceLock::new();
 
@@ -132,12 +129,14 @@ impl std::io::Write for HashWriter<'_> {
     }
 }
 
-fn parsed_bundle_revision(docs: &[rumoca_compile::compile::ParsedSourceDocument]) -> Option<u64> {
+fn parsed_bundle_revision(
+    docs: &[lunco_modelica_ast::resource_uri::SourceFileSnapshot],
+) -> Option<u64> {
     use std::hash::{Hash, Hasher};
 
     let mut entries = docs
         .iter()
-        .map(|document| (document.uri(), document))
+        .map(|document| (document.source_uri.as_str(), document))
         .collect::<Vec<_>>();
     entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
 
@@ -146,11 +145,11 @@ fn parsed_bundle_revision(docs: &[rumoca_compile::compile::ParsedSourceDocument]
     "source-bundle".hash(&mut revision);
     for (uri, definition) in entries {
         uri.hash(&mut revision);
-        let mut definition_revision = std::collections::hash_map::DefaultHasher::new();
-        let mut writer = HashWriter(&mut definition_revision);
+        let mut document_revision = std::collections::hash_map::DefaultHasher::new();
+        let mut writer = HashWriter(&mut document_revision);
         bincode::serde::encode_into_std_write(definition, &mut writer, bincode::config::standard())
             .ok()?;
-        definition_revision.finish().hash(&mut revision);
+        document_revision.finish().hash(&mut revision);
     }
     Some(revision.finish())
 }
@@ -168,7 +167,7 @@ static SOURCE_BUNDLE_DECODE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Read the pre-parsed source library bundle if any has been installed.
 pub fn global_parsed_source_bundle()
--> Option<&'static Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>> {
+-> Option<&'static Arc<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>>> {
     GLOBAL_PARSED_SOURCE_BUNDLE.get()
 }
 
@@ -186,7 +185,9 @@ pub fn parsed_source_bundle_revision() -> Option<u64> {
 /// the first install wins; subsequent calls are silently ignored
 /// (the `OnceLock` guarantees a stable handle for the lifetime of
 /// the page session).
-fn install_global_parsed_source_bundle(parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>) {
+fn install_global_parsed_source_bundle(
+    parsed: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
+) {
     let _ = GLOBAL_PARSED_SOURCE_BUNDLE.set(Arc::new(parsed));
 }
 
@@ -203,7 +204,7 @@ fn install_global_parsed_source_bundle(parsed: Vec<rumoca_compile::compile::Pars
 /// - On **wasm** there is no synchronous disk path, so a miss just
 ///   returns `None` (the worker transfer fills the slot asynchronously).
 pub fn parsed_source_bundle()
--> Option<&'static Arc<Vec<rumoca_compile::compile::ParsedSourceDocument>>> {
+-> Option<&'static Arc<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>>> {
     if let Some(bundle) = GLOBAL_PARSED_SOURCE_BUNDLE.get() {
         return Some(bundle);
     }
@@ -257,7 +258,7 @@ pub fn parsed_source_bundle()
 /// before source-library admission can succeed.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_parsed_bundle_file()
--> Result<Option<Vec<rumoca_compile::compile::ParsedSourceDocument>>, String> {
+-> Result<Option<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>>, String> {
     let Some((_, file)) = lunco_assets_runtime::library::library_open(std::path::Path::new(
         PARSED_LIBRARY_BUNDLE_FILE_NAME,
     ))
@@ -268,7 +269,7 @@ fn read_parsed_bundle_file()
     let mut decoder = ruzstd::StreamingDecoder::new(std::io::BufReader::new(file))
         .map_err(|e| format!("zstd decoder: {e}"))?;
     let documents = bincode::serde::decode_from_std_read::<
-        Vec<rumoca_compile::compile::ParsedSourceDocument>,
+        Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
         _,
         _,
     >(&mut decoder, bincode::config::standard())
@@ -302,11 +303,14 @@ pub fn decompress_parsed_bundle(compressed: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// bincode-deserialize the *decompressed* bundle bytes (output of
-/// [`decompress_parsed_bundle`]) into the `Vec<ParsedSourceDocument>`.
+/// [`decompress_parsed_bundle`]) into the source snapshot vector.
 pub fn deserialize_parsed_bundle(
     decoded: &[u8],
-) -> Result<Vec<rumoca_compile::compile::ParsedSourceDocument>, String> {
-    bincode::serde::decode_from_slice::<Vec<rumoca_compile::compile::ParsedSourceDocument>, _>(
+) -> Result<Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>, String> {
+    bincode::serde::decode_from_slice::<
+        Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
+        _,
+    >(
         decoded,
         bincode::config::standard(),
     )
@@ -368,7 +372,7 @@ struct MainDecodeState {
     /// Total element count (read from the bincode seq header).
     total: u64,
     header_read: bool,
-    acc: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    acc: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -433,7 +437,7 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
         };
 
         // Bincode-deserialize, bounded docs per frame. The blob is a
-        // bincode `standard()` encoding of `Vec<ParsedSourceDocument>`: a
+        // bincode `standard()` encoding of the source snapshot vector: a
         // variable-int element count followed by the elements back-to-back.
         // Decode the count once, then walk elements one at a time, advancing
         // `pos` by the bytes each consumes so the work splits across frames.
@@ -470,7 +474,7 @@ fn drive_library_main_decode(mut state: ResMut<LibraryLoadState>) {
                 break;
             }
             match bincode::serde::decode_from_slice::<
-                rumoca_compile::compile::ParsedSourceDocument,
+                lunco_modelica_ast::resource_uri::SourceFileSnapshot,
                 _,
             >(&d.out[d.pos as usize..], cfg)
             {
@@ -575,7 +579,7 @@ pub fn ensure_library_source_unpacked() -> Result<(), String> {
 /// receives over postMessage.
 #[cfg(target_arch = "wasm32")]
 pub fn install_global_parsed_source_bundle_pub(
-    parsed: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    parsed: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
 ) {
     install_global_parsed_source_bundle(parsed);
 }
@@ -1124,9 +1128,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parsed_bundle_preserves_source_and_syntax_provenance() {
+    fn parsed_bundle_preserves_source_and_ast_coordinates() {
         let source = "model Probe input Real u=7.0; output Real y; equation y=u; end Probe;";
-        let document = rumoca_compile::compile::ParsedSourceDocument::parse("Probe.mo", source)
+        let document = lunco_modelica_ast::rumoca_adapter::SourceFileParser::default()
+            .parse("Probe.mo", source)
             .expect("source parses");
         let bytes = bincode::serde::encode_to_vec(vec![document], bincode::config::standard())
             .expect("source document encodes");
@@ -1135,13 +1140,17 @@ mod tests {
         let mut trailing = bytes.clone();
         trailing.push(0);
         assert!(deserialize_parsed_bundle(&trailing).is_err());
-        assert_eq!(documents[0].source(), source);
+        assert_eq!(documents[0].source, source);
+        assert!(documents[0].definition.classes.contains_key("Probe"));
         let mut session = rumoca_compile::Session::default();
         assert_eq!(
-            session.replace_in_memory_source_set(
+            session.replace_parsed_source_set(
                 "library",
                 rumoca_compile::compile::SourceRootKind::DurableExternal,
-                documents,
+                documents
+                    .into_iter()
+                    .map(|document| (document.source_uri, document.definition))
+                    .collect(),
                 None
             ),
             1

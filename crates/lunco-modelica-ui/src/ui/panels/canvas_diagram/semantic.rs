@@ -93,10 +93,10 @@ fn enrich(
         } else {
             format!("{prefix}.{}", data.instance_name)
         };
-        let definition = engine
-            .session_mut()
-            .class_definition_query(&data.qualified_type)
-            .cloned();
+        let definition = lunco_modelica_ast::rumoca_adapter::class_definition(
+            engine.session_mut(),
+            &data.qualified_type,
+        );
         let Some(definition) = definition else {
             continue;
         };
@@ -141,6 +141,7 @@ fn enrich(
                 )?;
                 match crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                     ast.clone(),
+                    &source,
                     Arc::new(snapshot),
                     *remaining,
                     layout,
@@ -393,6 +394,7 @@ end Parts;
         let sources = [parts, root];
         let diagram = crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
             ast,
+            root.source.as_ref(),
             Arc::new(snapshot),
             100,
             &layout,

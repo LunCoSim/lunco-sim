@@ -210,6 +210,26 @@ pub(super) fn find_keyword(source: &str, range: Range<usize>, kw: &str) -> Optio
     hit
 }
 
+/// Last whole-word `kw` at nesting depth 0 before `end`.
+pub(super) fn find_last_keyword_before(source: &str, end: usize, kw: &str) -> Option<usize> {
+    let src = source.as_bytes();
+    let end = end.min(src.len());
+    let mut hit = None;
+    for_each_code(source, 0..end, |i, _byte, depth| {
+        if depth != 0 || i + kw.len() > end || src.get(i..i + kw.len()) != Some(kw.as_bytes()) {
+            return true;
+        }
+        let before_ok = i == 0 || !is_ident_byte(src[i - 1]);
+        let after = i + kw.len();
+        let after_ok = after >= src.len() || !is_ident_byte(src[after]);
+        if before_ok && after_ok {
+            hit = Some(i);
+        }
+        true
+    });
+    hit
+}
+
 /// Top-level comma-separated argument ranges inside `group` (which includes its
 /// brackets). Empty groups yield an empty list.
 pub(super) fn split_args(source: &str, group: Range<usize>) -> Vec<Range<usize>> {

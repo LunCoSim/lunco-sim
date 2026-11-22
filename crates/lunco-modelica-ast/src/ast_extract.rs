@@ -6,6 +6,7 @@
 //! alias causality, scalarization and effective instance metadata. Numerical
 //! initialization owns evaluated defaults and live variable values.
 
+use crate::ModelicaDefinitionExt;
 use rumoca_core::{Causality, ClassType, Variability};
 use rumoca_ir_ast::{
     AstIndexMap, ClassDef, Component, Expression, Import, StoredDefinition, TerminalType,
@@ -62,7 +63,7 @@ pub struct ModelInterface {
     /// USD-generated diagram policies use these source facts to classify
     /// connector edges without guessing from instance or class names.
     pub component_types: std::collections::BTreeMap<String, String>,
-    /// Authored documentation from the selected declarations. Checked FMI
+    /// Authored documentation from the selected declarations. Checked DAE
     /// inventory supplies live telemetry metadata.
     pub variable_metadata: HashMap<String, ModelicaVariableMetadata>,
 }
@@ -118,8 +119,8 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
     };
     let mut interface = project_model_interface(ast, model_name, class);
     let mut session = None;
-    for name in ast.declared_class_names() {
-        if let Some(class) = ast.get_class_by_qualified_name(&name) {
+    for name in ast.class_paths() {
+        if let Some(class) = ast.class_by_path(&name) {
             let icon = if class.extends.is_empty() {
                 None
             } else {
@@ -143,7 +144,7 @@ pub fn parse_model_interface_from_ast(ast: &StoredDefinition) -> ModelInterface 
 /// Project one explicitly selected class through Rumoca's qualified AST lookup.
 /// Missing targets return no interface and never select another class.
 pub fn model_interface_for_class(ast: &StoredDefinition, target: &str) -> Option<ModelInterface> {
-    let class = ast.get_class_by_qualified_name(target)?;
+    let class = ast.class_by_path(target)?;
     let within = within_package(ast);
     let name = within
         .as_deref()
@@ -164,7 +165,7 @@ fn project_model_interface(
     let mut interface = ModelInterface {
         model_name: model_name.clone(),
         within: within_package(ast),
-        required_source_roots: rumoca_compile::compile::source_root_dependencies(ast),
+        required_source_roots: crate::source_dependencies::required_source_roots(ast),
         ..Default::default()
     };
     if let Some(class) = class {
@@ -311,7 +312,7 @@ pub fn within_package(ast: &StoredDefinition) -> Option<String> {
 pub fn declared_class_names(source: &str, file_label: &str) -> Vec<String> {
     rumoca_phase_parse::parse_to_syntax(source, file_label)
         .best_effort()
-        .declared_class_names()
+        .class_paths()
 }
 
 /// Join a parent qualified name with a child segment to form a new

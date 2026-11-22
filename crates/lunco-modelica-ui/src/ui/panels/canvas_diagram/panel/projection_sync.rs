@@ -673,9 +673,11 @@ fn spawn_projection_task(
                                 .as_deref()
                                 .filter(|root| *root != target)
                                 .and_then(|root| {
-                                    engine
-                                        .session_mut()
-                                        .class_component_declarations_query(root)
+                                    lunco_modelica_ast::rumoca_adapter::component_declarations(
+                                        engine.session_mut(),
+                                        root,
+                                    )
+                                    .map(std::sync::Arc::new)
                                 })
                                 .and_then(|members| target_unit_instance(&members, &target));
                             (snapshot, unit_instance)
@@ -685,9 +687,11 @@ fn spawn_projection_task(
                 let (snapshot, unit_instance) = match snapshot_result {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
-                        let roots = rumoca_compile::compile::source_root_dependencies(&ast_arc)
-                            .into_iter()
-                            .collect::<Vec<_>>();
+                        let roots = lunco_modelica_ast::source_dependencies::required_source_roots(
+                            &ast_arc,
+                        )
+                        .into_iter()
+                        .collect::<Vec<_>>();
                         let waiting = {
                             let mut engine = handle.lock();
                             roots
@@ -704,6 +708,7 @@ fn spawn_projection_task(
                 let diagram =
                     crate::ui::panels::canvas_projection::import_model_to_diagram_from_ast(
                         ast_arc,
+                        source.as_ref(),
                         std::sync::Arc::new(snapshot),
                         max_nodes,
                         &layout,

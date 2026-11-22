@@ -1,9 +1,8 @@
 # Rumoca torn-sweep workspace
 
-The user-authorized native change is published as
-`eca3948416fa90d8695e2f91557ee9db18dbe75d` on LunCoSim/rumoca branch
-`fix/torn-sweep-workspace`. The
-[current integration review](rumoca-refresh-runtime-preparation-2026-10-25.md)
+LunCoSim consumes Rumoca's torn-sweep workspace through its public runtime API
+and owns worker and session lifecycle. The
+[Rumoca runtime contract](../architecture/29-rumoca-runtime-contracts.md)
 owns implementation, qualification and production timing status.
 
 The source-matched Summer capture uses owned PID 2811282, API 5306 and Tracy

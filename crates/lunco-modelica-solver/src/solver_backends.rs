@@ -53,9 +53,8 @@ pub fn ensure_builtin_solvers() {
             label: "RK45 / Tsit45 (non-stiff, authoritative live)".into(),
         });
 
-        // The live construction boundary selects Rumoca's fixed RK4 integrator.
-        // Its qualified model contract is continuous with parameter-only event
-        // partitions and no external tables. Rumoca owns the event-dependency proof.
+        // The live construction boundary selects Rumoca's fixed-step session.
+        // Rumoca owns model compatibility and numerical-method behavior.
         solver::register(SolverSpec {
             id: SolverId::from("fixed-rk4"),
             caps: SolverCaps {
@@ -71,7 +70,8 @@ pub fn ensure_builtin_solvers() {
     });
 }
 
-/// The ONE place a resolved [`SolverSpec`] becomes rumoca's `SimOptions`.
+/// The ONE place a resolved [`SolverSpec`] becomes Rumoca solver options.
+/// LunCo-owned integration policies are installed by the live-session adapter.
 ///
 /// An id with no rumoca mapping is an ERROR, never a silent degradation to BDF:
 /// degrading turns a typo into a different solver with no diagnostic. A backend
@@ -86,8 +86,8 @@ pub fn rumoca_options(
     let mode = match spec.id.as_str() {
         "bdf" => M::Bdf,
         "rk45" => M::RkLike,
-        // The fixed-step host selects Rumoca's fixed RK4 integrator separately.
-        // These options configure checked FMI preparation and model exchange.
+        // Fixed RK4 is installed as Rumoca's public Model Exchange plugin by
+        // LunCo's live-session adapter.
         "fixedrk4" => M::RkLike,
         _ => {
             return Err(SolverError::Incapable {
@@ -196,5 +196,32 @@ mod tests {
         assert_eq!(spec.id, SolverId::from("fixed-rk4"));
         assert!(spec.caps.fixed_step);
         assert!(spec.caps.deterministic);
+    }
+
+    #[test]
+    fn fixed_rk4_selects_rumocas_me_execution_family() {
+        ensure_builtin_solvers();
+        let spec = solver::resolve(&SolverRequest {
+            profile: RuntimeProfile {
+                live: true,
+                predicted: true,
+            },
+            authored: None,
+        })
+        .expect("prediction resolves to a deterministic backend");
+        let options = rumoca_options(
+            &spec,
+            &SolverParams {
+                atol: 1.0e-6,
+                rtol: 1.0e-6,
+                h0: Some(0.01),
+                t_start: 0.0,
+                t_end: 1.0,
+            },
+        )
+        .expect("fixed-step options map to Rumoca");
+
+        assert_eq!(options.solver_mode, rumoca_sim::SimSolverMode::RkLike);
+        assert_eq!(options.dt, Some(0.01));
     }
 }

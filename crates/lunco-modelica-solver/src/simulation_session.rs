@@ -1,124 +1,241 @@
-//! Live solver selection over checked Rumoca FMI components.
+//! LunCo solver selection over Rumoca's public simulation-session API.
 
-use rumoca_compile::compile::Dae;
 use rumoca_core::VarName;
-use rumoca_ir_solve::fmi::FmiComponent;
-use rumoca_sim::{SimOptions, SimulationDiagnosticError};
+use rumoca_ir_dae::{Dae, VariableRole};
+use rumoca_sim::{SimOptions, SimulationDiagnosticError, SimulationSession};
+use std::collections::HashMap;
 
-use crate::fixed_step::FixedStepSession;
-use lunco_experiments::solver::SolverSpec;
-
-/// Live Modelica stepper selected by the authoritative solver capability.
-pub enum LiveStepper {
-    Adaptive(Box<rumoca_sim::rk45::SimulationSession>),
-    Fixed(Box<FixedStepSession>),
+enum LiveSession {
+    Adaptive(SimulationSession),
+    Fixed(crate::fixed_step::FixedStepSession),
 }
 
-fn adaptive_error(error: rumoca_sim::SimError) -> SimulationDiagnosticError {
-    SimulationDiagnosticError::Solver(error.to_string())
+/// LunCo convenience lookup for a requested subset of Rumoca session values.
+/// Rumoca exposes the complete checked session state; name selection belongs
+/// to this application adapter.
+pub trait SelectedValuesExt {
+    fn selected_values(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<Option<f64>>, SimulationDiagnosticError>;
+}
+
+impl SelectedValuesExt for SimulationSession {
+    fn selected_values(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<Option<f64>>, SimulationDiagnosticError> {
+        let state = self.state()?;
+        Ok(names
+            .iter()
+            .map(|name| state.values.get(name).copied())
+            .collect())
+    }
+}
+
+/// Live Modelica session selected by LunCo's registered solver capability.
+pub struct LiveStepper {
+    session: LiveSession,
+    parameter_values: Vec<(String, f64)>,
 }
 
 impl LiveStepper {
     /// Admit the complete communication-point input vector atomically.
     pub fn set_inputs(&mut self, inputs: &[(&str, f64)]) -> Result<(), SimulationDiagnosticError> {
-        match self {
-            Self::Adaptive(session) => session.set_inputs(inputs).map_err(adaptive_error),
-            Self::Fixed(session) => session.set_inputs(inputs),
+        match &mut self.session {
+            LiveSession::Adaptive(session) => session.set_inputs(inputs),
+            LiveSession::Fixed(session) => session.set_inputs(inputs),
         }
     }
 
-    /// Reach the master's communication point using the selected backend's
-    /// internal integration policy.
+    /// Reach the master's communication point using Rumoca's solver policy.
     pub fn advance_to(&mut self, target_time: f64) -> Result<(), SimulationDiagnosticError> {
-        match self {
-            Self::Adaptive(session) => session.advance_to(target_time).map_err(adaptive_error),
-            Self::Fixed(session) => session.advance_to(target_time),
+        match &mut self.session {
+            LiveSession::Adaptive(session) => session.advance_to(target_time),
+            LiveSession::Fixed(session) => session.advance_to(target_time),
         }
     }
 
-    /// Collect the complete host observation with shared canonical variable names.
+    /// Collect the visible host observation with canonical variable names.
     pub fn observables(&self) -> Result<Vec<(VarName, f64)>, SimulationDiagnosticError> {
-        let output_count = match self {
-            Self::Adaptive(session) => session.variable_names().len(),
-            Self::Fixed(session) => session.output_count(),
-        };
-        let mut values = Vec::with_capacity(output_count + self.input_names().len());
-        let visit = |name: &VarName, value| values.push((name.clone(), value));
-        match self {
-            Self::Adaptive(session) => session.visit_visible_values(visit).map_err(adaptive_error),
-            Self::Fixed(session) => session.visit_visible_values(visit),
-        }?;
         let time = self.time();
         if !time.is_finite() {
             return Err(SimulationDiagnosticError::Solver(format!(
-                "observation time is not finite: {}",
-                time
+                "observation time is not finite: {time}"
             )));
         }
-        if let Some((name, value)) = values.iter().find(|(_, value)| !value.is_finite()) {
-            return Err(SimulationDiagnosticError::Solver(format!(
-                "observation '{name}' is not finite ({value}) at t={}",
-                time
-            )));
+        let mut values = self.visible_values()?;
+        for (name, value) in &self.parameter_values {
+            if let Some((_, current)) = values.iter_mut().find(|(current, _)| current == name) {
+                *current = *value;
+            } else {
+                values.push((name.clone(), *value));
+            }
         }
-        Ok(values)
+        values
+            .into_iter()
+            .map(|(name, value)| {
+                if !value.is_finite() {
+                    return Err(SimulationDiagnosticError::Solver(format!(
+                        "observation '{name}' is not finite ({value}) at t={time}"
+                    )));
+                }
+                Ok((VarName::from(name), value))
+            })
+            .collect()
     }
 
     pub fn time(&self) -> f64 {
-        match self {
-            Self::Adaptive(session) => session.time(),
-            Self::Fixed(session) => session.time(),
+        match &self.session {
+            LiveSession::Adaptive(session) => session.time(),
+            LiveSession::Fixed(session) => session.time(),
         }
     }
 
     pub fn input_names(&self) -> &[String] {
-        match self {
-            Self::Adaptive(session) => session.input_names(),
-            Self::Fixed(session) => session.input_names(),
+        match &self.session {
+            LiveSession::Adaptive(session) => session.input_names(),
+            LiveSession::Fixed(session) => session.input_names(),
         }
     }
 
-    /// Parameter values belong to the initialized common host, independent of
-    /// whether the numerical backend uses fixed or adaptive steps.
-    pub fn parameter_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
-        match self {
-            Self::Adaptive(session) => session
-                .parameter_values()
-                .map(|values| values.into_iter().collect())
-                .map_err(adaptive_error),
-            Self::Fixed(session) => session.parameter_values(),
+    pub fn get(&self, name: &str) -> Result<Option<f64>, SimulationDiagnosticError> {
+        match &self.session {
+            LiveSession::Adaptive(session) => session.get(name),
+            LiveSession::Fixed(session) => Ok(session
+                .visible_values()?
+                .into_iter()
+                .find_map(|(visible, value)| (visible == name).then_some(value))
+                .or_else(|| {
+                    self.parameter_values
+                        .iter()
+                        .find_map(|(parameter, value)| (parameter == name).then_some(*value))
+                })),
         }
+    }
+
+    pub fn selected_values(
+        &self,
+        names: &[String],
+    ) -> Result<Vec<Option<f64>>, SimulationDiagnosticError> {
+        match &self.session {
+            LiveSession::Adaptive(session) => session.selected_values(names),
+            LiveSession::Fixed(session) => {
+                let values = session.visible_values()?;
+                Ok(names
+                    .iter()
+                    .map(|name| {
+                        values
+                            .iter()
+                            .find_map(|(visible, value)| (visible == name).then_some(*value))
+                            .or_else(|| {
+                                self.parameter_values.iter().find_map(|(parameter, value)| {
+                                    (parameter == name).then_some(*value)
+                                })
+                            })
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    /// Initialized numeric parameter coordinates, including dependent values.
+    pub fn parameter_values(&self) -> &[(String, f64)] {
+        &self.parameter_values
     }
 }
 
-/// Build the real-time co-simulation session.
-///
-/// This boundary selects the registered live backend. Rumoca owns checked
-/// preparation and adaptive session construction.
-pub fn live(
+/// Build a live session through Rumoca's authoritative solver constructor.
+pub fn live(dae: &Dae, options: SimOptions) -> Result<LiveStepper, SimulationDiagnosticError> {
+    let parameter_values = parameter_values(dae, &options)?;
+    let session = SimulationSession::new_with_diagnostics(dae, options)?;
+    Ok(LiveStepper {
+        session: LiveSession::Adaptive(session),
+        parameter_values,
+    })
+}
+
+/// Construct the session implementation selected by LunCo's solver registry.
+pub fn live_for_solver(
     dae: &Dae,
-    spec: &SolverSpec,
-    options: SimOptions,
-) -> Result<LiveStepper, SimulationDiagnosticError> {
-    let component = rumoca_sim::prepare_fmi_component(dae, &options)?;
-    live_from_fmi_component(&component, spec, options)
-}
-
-/// Build a live session from a checked FMI component. This keeps solver construction
-/// separate from DAE lowering, which is the expensive and reusable part.
-pub fn live_from_fmi_component(
-    component: &FmiComponent,
-    spec: &SolverSpec,
+    spec: &lunco_experiments::solver::SolverSpec,
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
     match spec.id.as_str() {
-        "fixedrk4" => FixedStepSession::from_fmi_component(component, options)
-            .map(|session| LiveStepper::Fixed(Box::new(session))),
-        "rk45" => rumoca_sim::rk45::SimulationSession::from_fmi_component(component, options)
-            .map(|session| LiveStepper::Adaptive(Box::new(session))),
+        "fixedrk4" => {
+            if !spec.caps.fixed_step || !spec.caps.deterministic {
+                return Err(SimulationDiagnosticError::Solver(
+                    "fixed-rk4 must declare fixed-step deterministic capability".into(),
+                ));
+            }
+            let session = crate::fixed_step::FixedStepSession::new(dae, options)?;
+            let parameter_values = session.parameter_values()?;
+            Ok(LiveStepper {
+                session: LiveSession::Fixed(session),
+                parameter_values,
+            })
+        }
+        "bdf" | "rk45" => live(dae, options),
         _ => Err(SimulationDiagnosticError::Solver(format!(
-            "solver '{}' has no admitted live session constructor",
-            spec.id.as_str()
+            "registered solver '{}' has no live session adapter",
+            spec.id
         ))),
     }
+}
+
+impl LiveStepper {
+    fn visible_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
+        match &self.session {
+            LiveSession::Adaptive(session) => Ok(session.state()?.values.into_iter().collect()),
+            LiveSession::Fixed(session) => session.visible_values(),
+        }
+    }
+}
+
+fn parameter_values(
+    dae: &Dae,
+    options: &SimOptions,
+) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
+    let overrides = options
+        .param_overrides
+        .iter()
+        .map(|(name, value)| (name.as_str(), *value))
+        .collect::<HashMap<_, _>>();
+    dae.inspect(|view| {
+        let mut evaluator =
+            rumoca_eval_dae::NumericEvaluator::with_overrides(view, |variable, scalar| {
+                (variable.role() == VariableRole::Parameter && variable.is_tunable())
+                    .then(|| {
+                        variable
+                            .scalar_name(scalar)
+                            .and_then(|name| overrides.get(name.as_str()).copied())
+                    })
+                    .flatten()
+            });
+        let mut values = Vec::new();
+        for (id, variable) in view
+            .variables()
+            .filter(|(_, variable)| variable.role() == VariableRole::Parameter)
+        {
+            let names = variable.scalar_names().collect::<Vec<_>>();
+            let evaluated = evaluator
+                .initial_value(id)
+                .map_err(|error| SimulationDiagnosticError::Solver(error.to_string()))?;
+            if names.len() != evaluated.len() {
+                return Err(SimulationDiagnosticError::Solver(format!(
+                    "parameter '{}' has {} scalar names but {} initialized values",
+                    variable.name(),
+                    names.len(),
+                    evaluated.len()
+                )));
+            }
+            values.extend(names.into_iter().zip(evaluated));
+        }
+        if let Some((name, value)) = values.iter().find(|(_, value)| !value.is_finite()) {
+            return Err(SimulationDiagnosticError::Solver(format!(
+                "initialized parameter '{name}' is not finite ({value})"
+            )));
+        }
+        Ok(values)
+    })
 }

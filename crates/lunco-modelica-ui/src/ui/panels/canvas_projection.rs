@@ -100,6 +100,7 @@ pub const DEFAULT_MAX_DIAGRAM_NODES: usize = 1000;
 /// users editing deeply composed models can raise it in Settings.
 pub fn import_model_to_diagram_from_ast(
     ast: std::sync::Arc<rumoca_compile::parsing::ast::StoredDefinition>,
+    source: &str,
     snapshot: Arc<crate::diagram::DiagramSnapshot>,
     max_nodes: usize,
     layout: &DiagramAutoLayoutSettings,
@@ -107,7 +108,7 @@ pub fn import_model_to_diagram_from_ast(
     use crate::diagram::ModelicaComponentBuilder;
     let graph =
         ModelicaComponentBuilder::from_snapshot(Arc::clone(&ast), Arc::clone(&snapshot)).build();
-    let waypoint_map = connect_line_routes(&ast, &snapshot.target);
+    let waypoint_map = connect_line_routes(source, &ast, &snapshot.target);
 
     // An empty semantic graph is a valid equation-only class. Do not scan raw
     // source text here: a scanner cannot obey Modelica class scope and would
@@ -432,7 +433,13 @@ mod composite_slim_slice_tests {
             &target,
             crate::diagram::DiagramScope::ComponentGraph,
         )?;
-        import_model_to_diagram_from_ast(ast, Arc::new(snapshot), max_nodes, layout)
+        import_model_to_diagram_from_ast(
+            ast,
+            admitted_source,
+            Arc::new(snapshot),
+            max_nodes,
+            layout,
+        )
     }
 
     #[test]
@@ -580,7 +587,7 @@ end CompositeFixture;
         // Reproduce load_library_class's slice: within + RocketStage body.
         let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
         let class = ast_full
-            .get_class_by_qualified_name("CompositeFixture.RocketStage")
+            .class_by_path("CompositeFixture.RocketStage")
             .expect("RocketStage in package");
         let (s, e) = (class.location.start as usize, class.location.end as usize);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);
@@ -725,7 +732,7 @@ end Unit_One;
         // slim slice with no target
         let ast_full = rumoca_phase_parse::parse_to_ast(full, "rs.mo").unwrap();
         let class = ast_full
-            .get_class_by_qualified_name("CompositeFixture.RocketStage")
+            .class_by_path("CompositeFixture.RocketStage")
             .unwrap();
         let (s, e) = (class.location.start as usize, class.location.end as usize);
         let slim = format!("within CompositeFixture;\n{}", &full[s..e]);

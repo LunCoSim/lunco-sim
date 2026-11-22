@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_workbench_core::commands::{FocusPanel, OpenTab};
 use lunco_workbench_core::tabs::PendingTabCloses;
 use lunco_workbench_core::{InstancePanel, Panel, PanelCtx, PanelId, PanelScrollPolicy, PanelSlot};
@@ -891,7 +892,7 @@ fn render_icon_view(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
         ) else {
             return;
         };
-        let Some(class) = ast.get_class_by_qualified_name(&qualified) else {
+        let Some(class) = ast.class_by_path(&qualified) else {
             return;
         };
 

@@ -339,45 +339,15 @@ the integrator state.
 1. **Compiled connection table** — compiles connection topology into a flat index table rebuilt only on connection change (in `lunco-cosim/src/systems/propagate.rs`). Replaces per-tick string cloning and map accumulation with direct index offsets.
 2. **Avian port resolution index** — resolves name-based ports once during compile (`lunco-port-core/src/ports.rs` `ResolvedPort`) instead of scanning const tables on every tick read/write.
 3. **`sync_collider` volume-dirty gate** — gates `Collider::sphere` rebuilds on volume change (`Changed<>`), eliminating per-frame allocations during steady-state.
-4. **Compiled DAE and prepared solve-IR caches** — `lunco-modelica-worker/src/worker.rs` owns
-   worker execution, while `worker/cache.rs` owns the prepared-solve cache
-   and `worker/scheduling.rs` owns the native command lanes.
-   Native optional disk reuse follows the cache-owned budgets and rejection
-   contract in [the Modelica architecture](20-domain-modelica.md).
-   The worker keeps the per-entity `CachedModel` for instant Reset and a worker-owned
-   exact source-unit artifact cache that shares immutable DAE compilation
-   across identical admissions. Both RAM caches follow the bounded least-recently-used entry contract in
-   [the Modelica architecture](20-domain-modelica.md). The prepared live solve IR is reused by exact participating-source
-   identity in RAM and persisted by exact participating-source key plus the compiler-owned library
-   admission revision, solver, and parameter overrides. The persistent key
-   includes solver identity because Rumoca's lowering mode can change the solve
-   model. Root admission clears only the worker-local cache; its deterministic,
-   content-sensitive revision keeps disk entries for other admitted source sets
-   isolated without disabling reuse for the worker's lifetime. `ModelicaCompiler`
-   computes file-root revisions while reading each root into its Rumoca
-   session, and the source-library owner hashes parsed bundle content only when
-   that bundle is admitted. The cache never rescans the full Modelica tree
-   during the first live stepper build. The exact selected target and participating
-   primary and sibling source bytes determine identity; transient source URIs
-   and sibling-document iteration order do not. The admitted-library content revision is a separate key
-   field, so a worker-local generation counter does not prevent reuse across
-   launches.
-
-   Generated-network compile requests use only their synthesized document and
-   admitted roots. Source identity preserves synthesized declarations exactly.
-   Unrelated open documents and
-   other generated-network completions do not enter their source identity;
-   authored multi-document compilation still includes its sibling sources.
-
-   Live solve-IR lowering is an immutable operation over the compiled DAE, so
-   native startup submits cache misses to a small bounded Rayon pool. The
-   worker thread remains the sole owner of compiler/session state and commits
-   each resulting `SolveModel` before constructing the non-`Send` live stepper.
-   Per-entity commands wait for that commit, source-root changes wait for all
-   active preparations, and despawned work remains counted until its pool job
-   drains. This keeps the readiness barrier and physics admission ordering
-   unchanged while overlapping independent models; it does not parallelize
-   mutable compilation or simulation stepping.
+4. **Checked Modelica DAE artifacts** — `lunco-modelica-worker` owns a bounded
+   in-memory cache of compiled DAE artifacts; native optional disk reuse stores
+   only checked DAE records under a versioned, build- and platform-bound key.
+   The compiler and worker own source admission, artifact identity and lifecycle.
+   Each participant gets a new Rumoca public `SimulationSession`; no solver
+   instance, initialized state or executable code is cached. See the
+   [Modelica architecture](20-domain-modelica.md) for identity and storage
+   budgets. Generated requests compile their synthesized document plus admitted
+   roots, while authored multi-document requests include their admitted siblings.
 
 5. **Stage-local USD joint topology index** — `lunco-usd-sim/src/lib.rs`
    caches composed joint and wheel-attachment facts by canonical stage. Live
@@ -398,9 +368,9 @@ pose, direction, and surface revision for physical consumers.
 
 ## 6. In-RAM memoization (existing, sound — leave alone)
 
-Terrain derived layers (disk), `LodMeshCache`/`LodMaterials` (RAM), rumoca
-session phase caches + source-library bincode bundle, the worker's shared DAE/prepared
-solve-IR caches, per-entity `CachedModel` for Reset, Modelica icon/class/
+Terrain derived layers (disk), `LodMeshCache`/`LodMaterials` (RAM), Rumoca
+session phase caches + source-library bincode bundle, the worker's checked DAE
+artifact cache, per-entity `CachedModel` for Reset, Modelica icon/class/
 negative-resolution caches, USD generation-gated parse cache. The
 change-detection idiom (`Added<>`, marker `Without<>`) is sound and should be
 the template for new dirty-flags.

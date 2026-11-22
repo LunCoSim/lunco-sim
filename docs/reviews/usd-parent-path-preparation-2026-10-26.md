@@ -114,7 +114,7 @@ Raw binaries and logs stay ignored under
 The regular candidate passes the ten-check production reference-edit scenario;
 its authored fixture remains unchanged. Griffin's source-preserved sleeping
 landing, initialization/fault gates and the three-model numerical coverage are
-recorded in the [Rumoca qualification](rumoca-assignment-producer-index-2026-10-26.md).
+recorded in the [Rumoca runtime contract](../architecture/29-rumoca-runtime-contracts.md).
 
 The new Tracy capture belongs to API 5496 / PID 1090867, collector PID 1090826
 on port 8458, with 1 kHz samples and projection-group spans. Its largest facts

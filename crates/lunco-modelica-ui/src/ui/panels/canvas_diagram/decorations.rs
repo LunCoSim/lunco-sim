@@ -8,6 +8,7 @@
 //! text-node materialisation.
 
 use super::BackgroundDiagramHandle;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 
 /// Paints the target class's `Diagram(graphics={...})` annotation as
 /// canvas background — the red labelled rectangles, text callouts,
@@ -231,7 +232,7 @@ pub(super) fn diagram_annotation_for_target(
     // The canonical class lookup respects qualified segment boundaries.
     // With no selected target, preview the first non-package declaration.
     let class = if let Some(qualified) = target {
-        ast.get_class_by_qualified_name(qualified)
+        ast.class_by_path(qualified)
     } else {
         use lunco_modelica_ast::ClassType;
         ast.classes

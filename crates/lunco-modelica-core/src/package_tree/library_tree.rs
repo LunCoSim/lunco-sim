@@ -107,8 +107,9 @@ impl LibraryTree for InstalledLibraryTree {
     fn children(&self, package_path: &str) -> Result<Vec<PackageNode>, String> {
         let file = lunco_modelica_library::package_paths::locate_library_file(package_path)
             .ok_or_else(|| format!("unknown source package `{package_path}`"))?;
-        let relative: std::path::PathBuf =
-            rumoca_core::qualified_name_segments(package_path).collect();
+        let relative: std::path::PathBuf = lunco_modelica_ast::modelica_path_parts(package_path)
+            .into_iter()
+            .collect();
         for source in lunco_assets_runtime::library::global_library_sources() {
             if source.contains(&file) && source.base().join(&relative).join("package.mo") == file {
                 return super::scanner::scan_library_source(source, &relative, package_path);
