@@ -411,8 +411,8 @@ bottom egui bar).
 
 ## Rumoca dependency verification
 
-Compilation, tools, and browser simulation consume the same Rumoca 0.10.4
-revision. Prepared execution uses checked FMI components; source-root loading
+Compilation, tools, and browser simulation consume the same Rumoca revision.
+Browser execution uses Rumoca's public `SimulationSession`; source-root loading
 uses the maintained compile session. Temporary local dependency paths and
 branch-based dependency pins must not enter a release.
 
@@ -480,7 +480,7 @@ or remove the `brotli_static on;` line and rely on gzip.
 
 | Symptom                                     | Cause                                       | Fix                                                       |
 |---------------------------------------------|---------------------------------------------|-----------------------------------------------------------|
-| `time not implemented on this platform`     | direct `std::time::Instant` usage           | use `web_time::Instant` (or rely on the rumoca fork)      |
+| `time not implemented on this platform`     | direct `std::time::Instant` usage           | use `web_time::Instant`                                   |
 | `thread::spawn` / `failed to spawn thread`  | raw `std::thread::spawn` on wasm            | `AsyncComputeTaskPool::get().spawn(async {…}).detach()`   |
 | Blank/dark canvas, no UI                    | wasm loaded, Bevy not painted yet           | check console for plugin-build panics; loader hides on first egui frame |
 | 404 on `lunica.js`                          | stale `dist/` after a layout change         | re-run `./scripts/build_web.sh build …`                   |

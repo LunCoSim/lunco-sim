@@ -1,7 +1,6 @@
 //! Connection and port mutation helpers.
 //!
 //! Source splices retain comments and unrelated fields of connection annotations.
-//! The Rumoca parser supplies the typed annotation for the edited connection.
 
 use std::ops::Range;
 
@@ -10,10 +9,34 @@ use rumoca_ir_ast::{ClassDef, Equation};
 use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
-use super::parsing::parse_equation_fragment;
+use super::parsing::{FRAGMENT_CLASS_NAME, parse_equation_fragment, parse_stub_cached};
 use super::text;
 use super::util::matches_port_ref;
 use crate::pretty;
+
+/// Parse a connect equation's authored annotation from its source statement.
+/// Rumoca's semantic `Equation` intentionally contains only the two endpoints.
+pub(crate) fn connection_annotation(
+    source: &str,
+    equation: &Equation,
+) -> Option<Vec<rumoca_ir_ast::Expression>> {
+    if !matches!(equation, Equation::Connect { .. }) {
+        return None;
+    }
+    let location = equation.get_location()?;
+    let connect = text::find_last_keyword_before(source, location.start as usize + 1, "connect")?;
+    let statement_end = text::statement_end(source, connect)?;
+    let (annotation_start, annotation_group) =
+        text::annotation_clause(source, connect..statement_end)?;
+    let annotation_source = &source[annotation_start..annotation_group.end];
+    let stub =
+        format!("model {FRAGMENT_CLASS_NAME}\n{annotation_source};\nend {FRAGMENT_CLASS_NAME};\n");
+    let parsed = parse_stub_cached(&stub)?;
+    parsed
+        .classes
+        .get(FRAGMENT_CLASS_NAME)
+        .map(|class| class.annotation.clone())
+}
 
 /// Locate the `connect(...)` equation matching `(from, to)`: its index in
 /// `class.equations` and the byte extent of its statement.
@@ -161,13 +184,8 @@ pub fn set_connection_line(
     to: &pretty::PortRef,
     points: &[(f32, f32)],
 ) -> Result<(), AstMutError> {
-    let (index, stmt) = find_connect(class, edit.source(), from, to)?;
-    edit_line_fields(
-        &mut class.equations[index],
-        edit,
-        stmt,
-        &[("points", pretty::fmt_points(points))],
-    )
+    let (_, stmt) = find_connect(class, edit.source(), from, to)?;
+    edit_line_fields(edit, stmt, &[("points", pretty::fmt_points(points))])
 }
 
 /// Set individual `Line(...)` style fields on a `connect(...)` equation.
@@ -181,7 +199,7 @@ pub fn set_connection_line_style(
     thickness: Option<f64>,
     smooth_bezier: Option<bool>,
 ) -> Result<(), AstMutError> {
-    let (index, stmt) = find_connect(class, edit.source(), from, to)?;
+    let (_, stmt) = find_connect(class, edit.source(), from, to)?;
     let mut fields: Vec<(&str, String)> = Vec::new();
     if let Some([r, g, b]) = color {
         fields.push(("color", format!("{{{r},{g},{b}}}")));
@@ -193,11 +211,10 @@ pub fn set_connection_line_style(
         let value = if s { "Smooth.Bezier" } else { "Smooth.None" };
         fields.push(("smooth", value.to_string()));
     }
-    edit_line_fields(&mut class.equations[index], edit, stmt, &fields)
+    edit_line_fields(edit, stmt, &fields)
 }
 
 fn edit_line_fields(
-    equation: &mut Equation,
     edit: &mut Edit<'_>,
     statement: Range<usize>,
     fields: &[(&str, String)],
@@ -212,17 +229,7 @@ fn edit_line_fields(
     let mut updated = source[statement.start..range.start].to_string();
     updated.push_str(&replacement);
     updated.push_str(&source[range.end..statement.end]);
-    let Equation::Connect { annotation, .. } = equation else {
-        unreachable!("find_connect only selects connect equations");
-    };
-    let Equation::Connect {
-        annotation: updated_annotation,
-        ..
-    } = parse_equation_fragment(&updated)?
-    else {
-        return Err(AstMutError::ValueParseFailed { value: updated });
-    };
-    *annotation = updated_annotation;
+    parse_equation_fragment(&updated)?;
     edit.replace(range, replacement);
     Ok(())
 }

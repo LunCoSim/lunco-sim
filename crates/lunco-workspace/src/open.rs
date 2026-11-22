@@ -92,25 +92,6 @@ fn into_twin_setting(value: TwinSettingInput) -> TwinSettingValue {
     }
 }
 
-/// Read an optional native compiler cache limit from the authored Twin.
-pub fn twin_modelica_cache_mib(manifest: Option<&TwinManifest>) -> Result<Option<u16>, String> {
-    use lunco_settings::ModelicaCacheSettings;
-
-    manifest
-        .and_then(|manifest| manifest.setting(ModelicaCacheSettings::TWIN_KEY))
-        .map(validate_twin_modelica_cache_mib)
-        .transpose()
-}
-
-fn validate_twin_modelica_cache_mib(value: &TwinSettingValue) -> Result<u16, String> {
-    use lunco_settings::ModelicaCacheSettings;
-
-    match value {
-        TwinSettingValue::Integer(mib) => ModelicaCacheSettings::validate_mib(*mib),
-        _ => Err(ModelicaCacheSettings::invalid_mib()),
-    }
-}
-
 #[on_command(SetTwinSetting)]
 fn on_set_twin_setting(
     trigger: On<SetTwinSetting>,
@@ -137,14 +118,6 @@ fn on_set_twin_setting(
         ));
     }
     let value = into_twin_setting(event.value.clone());
-    if event.key == lunco_settings::ModelicaCacheSettings::TWIN_KEY
-        && let Err(error) = validate_twin_modelica_cache_mib(&value)
-    {
-        warn!("SetTwinSetting rejected: {error}");
-        return Ok(lunco_core::CommandOutcome::Rejected(
-            lunco_command_contracts::Reject::InvalidOp(error),
-        ));
-    }
     let twin_id = workspace.active_twin;
     let Some(twin_id) = twin_id else {
         warn!("SetTwinSetting requires an active Twin");
@@ -791,10 +764,6 @@ fn prepare_twin_settings(twin: &TwinMode) -> Result<PreparedTwinSettings, TwinEr
             path: root.join(lunco_twin::MANIFEST_FILENAME),
             source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
         }
-    })?;
-    twin_modelica_cache_mib(twin.manifest.as_ref()).map_err(|error| TwinError::Io {
-        path: root.join(lunco_twin::MANIFEST_FILENAME),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
     })?;
     Ok(PreparedTwinSettings {
         project_scene: project,

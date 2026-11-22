@@ -41,26 +41,6 @@ every render operation has a supported timestamp.
 The capture is diagnostic and contention-affected. It does not certify the
 10 ms graphics target or justify lowering shadow or terrain quality. The
 qualified scene image was already inspected; no rendering change is made.
-
-## Prepared-solver retention
-
-The later compact-transaction Griffin run misses the prepared-solver disk
-record and spends 5.043 s lowering it. Inspection of the shared
-`prepared-solve-v13` directory finds 32 records totaling 3,943,086 bytes:
-18 for compiler `eca3948416fa`, 14 for `41637b1eba18`. Both compiler cohorts
-contain the same initializer source key `e0d18b33ab35b48d`, solver `rk45`,
-and empty parameter/initial-input overrides.
-
-`lunco-modelica-worker::worker::cache::PreparedSolveCache` already validates
-the full key, updates last-use metadata after a valid read, and publishes under
-the storage owner's cross-process lock. Retention admits 32 records across
-compiler identities within this cache version. Mixed-cohort capacity pressure
-can explain eviction, but the inventory does not identify the historical
-writer or prove why that particular record disappeared. No cache size change,
-new cache layer, shared-cache cleanup or validation bypass is warranted by
-this evidence alone. A future warm/cold comparison must record the exact key
-and cache result at each launch.
-
 ## Observation allocation
 
 On sampled worker lane 55, 302 exact-zone observation samples include 78

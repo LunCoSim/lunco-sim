@@ -6,6 +6,8 @@
 //!
 //! Scheduling and publication stay in `ui::commands` and the document loader.
 
+use lunco_modelica_ast::ModelicaDefinitionExt;
+
 /// Class-name and end-token byte spans, plus the parsed declaration slice.
 /// All offsets refer to the exact source given to `parse_to_syntax`.
 /// `rename_class_tokens`
@@ -41,7 +43,7 @@ pub(crate) fn spans_from_ast(
     source: &str,
     class_name: &str,
 ) -> Option<DuplicateExtract> {
-    let class = ast.get_class_by_qualified_name(class_name)?;
+    let class = ast.class_by_path(class_name)?;
     let end_tok = class.end_name_token.as_ref()?;
     let full_start = class.location.start as usize;
     let full_end = class.location.end as usize;

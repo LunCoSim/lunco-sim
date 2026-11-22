@@ -252,6 +252,64 @@ impl FileStorage {
     ) -> StorageResult<crate::BoundedDirectoryEntries> {
         self.read_directory_contents(handle, Some(cap))
     }
+
+    /// Retain the newest direct regular files by modification time, with a
+    /// stable filename tie-break. Memory use stays bounded by `cap`.
+    pub async fn read_directory_newest_bounded(
+        &self,
+        handle: &StorageHandle,
+        cap: usize,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        self.read_directory_newest_matching_bounded(handle, None, cap)
+            .await
+    }
+
+    /// Retain the newest direct files matching an optional extension.
+    pub async fn read_directory_newest_matching_bounded(
+        &self,
+        handle: &StorageHandle,
+        extension: Option<&str>,
+        cap: usize,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        let mut retained: Vec<(i128, StorageHandle)> = Vec::new();
+        let mut truncated = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let StorageHandle::File(path) = handle {
+            for entry in std::fs::read_dir(path).map_err(|error| match error.kind() {
+                std::io::ErrorKind::NotFound => StorageError::NotFound,
+                _ => StorageError::Io(error),
+            })? {
+                let entry = entry.map_err(StorageError::Io)?;
+                if !entry.file_type().map_err(StorageError::Io)?.is_file() {
+                    continue;
+                }
+                let path = entry.path();
+                if extension.is_some_and(|extension| {
+                    path.extension().and_then(|value| value.to_str()) != Some(extension)
+                }) {
+                    continue;
+                }
+                let metadata = entry.metadata().map_err(StorageError::Io)?;
+                let modified =
+                    crate::system_time_nanos(metadata.modified().map_err(StorageError::Io)?);
+                crate::retain_recent_entry(
+                    &mut retained,
+                    StorageHandle::File(path),
+                    modified,
+                    cap,
+                    &mut truncated,
+                );
+            }
+            return Ok(crate::BoundedDirectoryEntries {
+                entries: retained.into_iter().map(|(_, entry)| entry).collect(),
+                truncated,
+            });
+        }
+        let _ = (handle, extension, cap, &mut retained, &mut truncated);
+        Err(StorageError::Unsupported(
+            "newest-file listing requires a native File directory".into(),
+        ))
+    }
     fn read_directory_contents(
         &self,
         handle: &StorageHandle,
@@ -768,6 +826,67 @@ mod tests {
                     .len(),
                 5
             );
+        });
+    }
+
+    #[test]
+    fn newest_bounded_directory_listing_retains_recent_files_and_stable_ties() {
+        block_on(async {
+            use std::time::{Duration, UNIX_EPOCH};
+
+            let root = tempdir().expect("temporary storage root");
+            for (name, seconds) in [
+                ("z-new.json", 300),
+                ("a-middle.json", 200),
+                ("m-old.json", 100),
+                ("b-newest.json", 400),
+                ("c-newest.json", 400),
+            ] {
+                let path = root.path().join(name);
+                std::fs::write(&path, b"{}").expect("fixture bytes");
+                std::fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .expect("open fixture")
+                    .set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
+                    .expect("set fixture modification time");
+            }
+            std::fs::create_dir(root.path().join("0-directory.json")).expect("non-file child");
+
+            let storage = FileStorage::new();
+            let handle = StorageHandle::File(root.path().to_path_buf());
+            let snapshot = storage
+                .read_directory_newest_bounded(&handle, 3)
+                .await
+                .expect("newest bounded listing");
+            assert!(snapshot.truncated);
+            assert_eq!(
+                snapshot
+                    .entries
+                    .iter()
+                    .map(|entry| entry
+                        .as_file_path()
+                        .expect("File")
+                        .file_name()
+                        .expect("name")
+                        .to_string_lossy()
+                        .into_owned())
+                    .collect::<Vec<_>>(),
+                vec!["b-newest.json", "c-newest.json", "z-new.json"]
+            );
+
+            let exact = storage
+                .read_directory_newest_bounded(&handle, 5)
+                .await
+                .expect("full newest listing");
+            assert_eq!(exact.entries.len(), 5);
+            assert!(!exact.truncated);
+            let empty = storage
+                .read_directory_newest_bounded(&handle, 0)
+                .await
+                .expect("zero retention");
+            assert!(empty.entries.is_empty());
+            assert!(empty.truncated);
         });
     }
 

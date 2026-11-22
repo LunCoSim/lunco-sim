@@ -79,9 +79,9 @@ pub struct PaletteState {
     /// Current search query — normalized on compare (lowercase).
     pub query: String,
     /// Selected installed source root (`None` = all roots).
-    pub library: Option<&'static str>,
+    pub library: Option<String>,
     /// Selected immediate package within the selected root.
-    pub category: Option<&'static str>,
+    pub category: Option<String>,
 }
 
 /// Should this entry be shown in the instantiable palette?
@@ -116,13 +116,13 @@ struct PaletteCatalog {
     /// Instantiable classes (connectors/partials dropped), in library order.
     lib: Vec<&'static lunco_modelica_index::index::ClassEntry>,
     /// Installed source roots, sorted for stable filters.
-    libraries: Vec<&'static str>,
+    libraries: Vec<String>,
     /// Per-library counts with no search query active.
-    library_counts: std::collections::HashMap<&'static str, usize>,
+    library_counts: std::collections::HashMap<String, usize>,
     /// Immediate packages under each installed root.
-    packages: std::collections::HashMap<&'static str, Vec<&'static str>>,
+    packages: std::collections::HashMap<String, Vec<String>>,
     /// Per-package counts, keyed by root and package.
-    package_counts: std::collections::HashMap<(&'static str, &'static str), usize>,
+    package_counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
     /// `lib.len()` — total instantiable component count.
     total: usize,
 }
@@ -151,21 +151,27 @@ fn palette_catalog() -> &'static PaletteCatalog {
     }
     let lib: Vec<&'static lunco_modelica_index::index::ClassEntry> =
         lib_all.iter().filter(|c| is_instantiable(c)).collect();
-    let mut library_counts: std::collections::HashMap<&'static str, usize> =
+    let mut library_counts: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
-    let mut packages: std::collections::HashMap<&'static str, Vec<&'static str>> =
+    let mut packages: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
-    let mut package_counts: std::collections::HashMap<(&'static str, &'static str), usize> =
-        std::collections::HashMap::new();
+    let mut package_counts: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, usize>,
+    > = std::collections::HashMap::new();
     for c in &lib {
         let library = library_of(c.name.as_str());
         let package = category_of(c.name.as_str());
-        *library_counts.entry(library).or_insert(0) += 1;
-        *package_counts.entry((library, package)).or_insert(0) += 1;
+        *library_counts.entry(library.clone()).or_insert(0) += 1;
+        *package_counts
+            .entry(library.clone())
+            .or_insert_with(std::collections::HashMap::new)
+            .entry(package.clone())
+            .or_insert(0) += 1;
         packages.entry(library).or_default().push(package);
     }
-    let mut libraries = library_counts.keys().copied().collect::<Vec<_>>();
-    libraries.sort_unstable();
+    let mut libraries = library_counts.keys().cloned().collect::<Vec<_>>();
+    libraries.sort();
     for package_names in packages.values_mut() {
         package_names.sort_unstable();
         package_names.dedup();
@@ -183,20 +189,22 @@ fn palette_catalog() -> &'static PaletteCatalog {
 }
 
 /// Top-level installed source root for a fully-qualified class.
-fn library_of(qualified_path: &str) -> &str {
-    rumoca_core::qualified_name_segments(qualified_path)
-        .next()
-        .unwrap_or(qualified_path)
+fn library_of(qualified_path: &str) -> String {
+    let parts = lunco_modelica_ast::modelica_path_parts(qualified_path);
+    parts
+        .first()
+        .cloned()
+        .unwrap_or_else(|| qualified_path.to_owned())
 }
 
 /// Immediate package below the installed root for a fully-qualified class.
-fn category_of(qualified_path: &str) -> &str {
-    let Some((parent_path, _)) = qualified_path.rsplit_once('.') else {
-        return "General";
-    };
-    rumoca_core::qualified_name_segments(parent_path)
-        .nth(1)
-        .unwrap_or("General")
+fn category_of(qualified_path: &str) -> String {
+    let parts = lunco_modelica_ast::modelica_path_parts(qualified_path);
+    if parts.len() > 2 {
+        parts[1].clone()
+    } else {
+        "General".to_owned()
+    }
 }
 
 /// The panel. Zero-sized; state lives in [`PaletteState`].
@@ -247,13 +255,13 @@ impl Panel for ComponentPalettePanel {
         let state = ctx.resource::<PaletteState>();
         let query = state.map(|s| s.query.clone()).unwrap_or_default();
         let query_lc = query.to_lowercase();
-        let selected_library = state.and_then(|s| s.library);
-        let selected_category = state.and_then(|s| s.category);
+        let selected_library = state.and_then(|s| s.library.clone());
+        let selected_category = state.and_then(|s| s.category.clone());
 
         // Render the search box; capture any edit.
         let mut new_query = query.clone();
-        let mut new_library = selected_library;
-        let mut new_category = selected_category;
+        let mut new_library = selected_library.clone();
+        let mut new_category = selected_category.clone();
         let mut clear_all = false;
 
         ui.horizontal(|ui| {
@@ -289,16 +297,20 @@ impl Panel for ComponentPalettePanel {
                 query_matches += 1;
                 let library = library_of(c.name.as_str());
                 let category = category_of(c.name.as_str());
-                *library_counts.entry(library).or_insert(0) += 1;
-                *package_counts.entry((library, category)).or_insert(0) += 1;
+                *library_counts.entry(library.clone()).or_insert(0) += 1;
+                *package_counts
+                    .entry(library)
+                    .or_insert_with(std::collections::HashMap::new)
+                    .entry(category)
+                    .or_insert(0) += 1;
             }
         }
 
         // Installed roots are the first filter level. A dropdown keeps every
         // root reachable in the narrow sidebar without relying on hidden
         // horizontal scrolling.
-        let previous_library = new_library;
-        let library_label = new_library.map_or_else(
+        let previous_library = new_library.clone();
+        let library_label = new_library.as_deref().map_or_else(
             || format!("All libraries ({query_matches})"),
             |library| {
                 format!(
@@ -316,11 +328,11 @@ impl Panel for ComponentPalettePanel {
                     None,
                     format!("All libraries ({query_matches})"),
                 );
-                for &library in &catalog.libraries {
+                for library in &catalog.libraries {
                     let count = library_counts.get(library).copied().unwrap_or(0);
                     ui.selectable_value(
                         &mut new_library,
-                        Some(library),
+                        Some(library.clone()),
                         format!("{library} ({count})"),
                     );
                 }
@@ -332,15 +344,16 @@ impl Panel for ComponentPalettePanel {
         // Package filters are scoped to the selected root. This preserves
         // useful domain navigation for large libraries without hiding other
         // installed roots behind an "Other" bucket.
-        if let Some(library) = new_library {
+        if let Some(library) = new_library.as_deref() {
             let all_count = library_counts.get(library).copied().unwrap_or(0);
-            let package_label = new_category.map_or_else(
+            let package_label = new_category.as_deref().map_or_else(
                 || format!("All packages ({all_count})"),
                 |category| {
                     format!(
                         "{category} ({})",
                         package_counts
-                            .get(&(library, category))
+                            .get(library)
+                            .and_then(|counts| counts.get(category))
                             .copied()
                             .unwrap_or(0)
                     )
@@ -356,14 +369,15 @@ impl Panel for ComponentPalettePanel {
                         format!("All packages ({all_count})"),
                     );
                     if let Some(packages) = catalog.packages.get(library) {
-                        for &category in packages {
+                        for category in packages {
                             let count = package_counts
-                                .get(&(library, category))
+                                .get(library)
+                                .and_then(|counts| counts.get(category))
                                 .copied()
                                 .unwrap_or(0);
                             ui.selectable_value(
                                 &mut new_category,
-                                Some(category),
+                                Some(category.clone()),
                                 format!("{category} ({count})"),
                             );
                         }
@@ -373,12 +387,15 @@ impl Panel for ComponentPalettePanel {
 
         // Header row: summary + clear-filter.
         ui.horizontal(|ui| {
-            let visible = if let (Some(library), Some(category)) = (new_library, new_category) {
+            let visible = if let (Some(library), Some(category)) =
+                (new_library.as_deref(), new_category.as_deref())
+            {
                 package_counts
-                    .get(&(library, category))
+                    .get(library)
+                    .and_then(|counts| counts.get(category))
                     .copied()
                     .unwrap_or(0)
-            } else if let Some(library) = new_library {
+            } else if let Some(library) = new_library.as_deref() {
                 library_counts.get(library).copied().unwrap_or(0)
             } else {
                 query_matches
@@ -437,13 +454,13 @@ impl Panel for ComponentPalettePanel {
         {
             ctx.resource_scope::<PaletteState, _>(|_, state| {
                 state.query = new_query.clone();
-                state.library = new_library;
-                state.category = new_category;
+                state.library = new_library.clone();
+                state.category = new_category.clone();
             });
         }
         let query_lc = new_query.to_lowercase();
-        let selected_library = new_library;
-        let selected_category = new_category;
+        let selected_library = new_library.as_deref();
+        let selected_category = new_category.as_deref();
 
         // ── Filter + rank ──
         // Score higher for:
@@ -557,9 +574,9 @@ impl Panel for ComponentPalettePanel {
                     }
                 } else {
                     let mut groups: std::collections::BTreeMap<
-                        &'static str,
+                        String,
                         std::collections::BTreeMap<
-                            &'static str,
+                            String,
                             Vec<&lunco_modelica_index::index::ClassEntry>,
                         >,
                     > = std::collections::BTreeMap::new();
@@ -577,8 +594,8 @@ impl Panel for ComponentPalettePanel {
                             for (category, list) in packages {
                                 render_palette_package(
                                     ui,
-                                    library,
-                                    category,
+                                    &library,
+                                    &category,
                                     &list,
                                     &theme,
                                     can_insert,
@@ -597,13 +614,13 @@ impl Panel for ComponentPalettePanel {
                                     .strong(),
                             )
                             .default_open(false)
-                            .id_salt(("palette_library", library))
+                            .id_salt(("palette_library", library.as_str()))
                             .show(ui, |ui| {
                                 for (category, list) in packages {
                                     render_palette_package(
                                         ui,
-                                        library,
-                                        category,
+                                    &library,
+                                    &category,
                                         &list,
                                         &theme,
                                         can_insert,

@@ -1,5 +1,6 @@
 //! Backend scanning logic for the Package Browser.
 
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_modelica_index::package_tree::types::{ModelSource, PackageNode};
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
@@ -119,7 +120,7 @@ fn build_library_inmem_index()
     }
 
     for document in parsed.iter() {
-        let def = document.definition();
+        let def = &document.definition;
         let parent = def
             .within
             .as_ref()
@@ -214,7 +215,7 @@ pub(crate) fn scan_library_source(
 fn parse_source_file(
     source: &lunco_assets_runtime::library::LibrarySource,
     relative: &Path,
-) -> Result<rumoca_compile::compile::ParsedSourceDocument, String> {
+) -> Result<lunco_modelica_ast::resource_uri::SourceFileSnapshot, String> {
     let bytes = source
         .read(relative)
         .map_err(|error| format!("{}: {error}", relative.display()))?
@@ -222,26 +223,24 @@ fn parse_source_file(
     let text =
         String::from_utf8(bytes).map_err(|error| format!("{}: {error}", relative.display()))?;
     let uri = relative.to_str().ok_or("source identity is not UTF-8")?;
-    rumoca_compile::compile::ParsedSourceDocument::parse(uri.to_owned(), text)
-        .map_err(|error| format!("{uri}: {error:?}"))
+    lunco_modelica_ast::rumoca_adapter::SourceFileParser::default().parse(uri, text)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn source_class<'a>(
-    parsed: &'a rumoca_compile::compile::ParsedSourceDocument,
+    parsed: &'a lunco_modelica_ast::resource_uri::SourceFileSnapshot,
     qualified: &str,
 ) -> Result<&'a rumoca_compile::parsing::ast::ClassDef, String> {
-    let definition = parsed.definition();
+    let definition = &parsed.definition;
     if !definition
-        .declared_class_names()
+        .class_paths()
         .iter()
         .any(|name| name == qualified)
     {
         return Err(format!("source does not declare `{qualified}`"));
     }
-    let short = rumoca_core::qualified_name_segments(qualified)
-        .last()
-        .ok_or("empty class identity")?;
+    let parts = lunco_modelica_ast::modelica_path_parts(qualified);
+    let short = parts.last().ok_or("empty class identity")?;
     definition
         .classes
         .get(short)

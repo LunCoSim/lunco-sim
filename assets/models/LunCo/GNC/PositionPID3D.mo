@@ -227,13 +227,13 @@ model PositionPID3D
     output_limit = max_lateral_accel,
     anti_windup_gain = anti_windup_gain);
   AccelerationLimiter vertical_limiter(
-    command = max(
+    command = max({
       target_contact_engine_gate * (g + pid_y_command),
       landing_flare_gate
         * g * landing_handoff_position_gate * (1.0 - landing_handoff)
         * target_contact_engine_gate,
       recovery_vertical_command,
-      lateral_support_vertical_command),
+      lateral_support_vertical_command}),
     lower_limit = 0.0,
     upper_limit = max_vertical_accel);
 

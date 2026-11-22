@@ -1,11 +1,10 @@
 //! Native live-session mailboxes. Solver state stays on its constructing thread.
 
 use super::thread_pool::Lane;
-use super::{LiveBuildPlan, LiveStepper, VarName, WorkerPreparationResult, build_prepared_stepper};
+use super::{LiveBuildPlan, LiveStepper, VarName, WorkerPreparationResult, build_live_stepper};
 use crossbeam_channel::{Receiver, Sender, bounded};
 use rumoca_sim::SimulationDiagnosticError;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 type Sessions = HashMap<u64, LiveStepper>;
 
@@ -44,9 +43,8 @@ fn owner_error(message: impl Into<String>) -> SimulationDiagnosticError {
 pub(super) fn construct(
     id: u64,
     lane: Lane<Sessions>,
-    component: Arc<rumoca_ir_solve::fmi::FmiComponent>,
+    dae: std::sync::Arc<rumoca_ir_dae::Dae>,
     plan: LiveBuildPlan,
-    native_cache: super::native_code_cache::SharedNativeCodeCache,
     tx: Sender<WorkerPreparationResult>,
 ) -> Result<(), String> {
     let session_lane = lane.clone();
@@ -60,7 +58,7 @@ pub(super) fn construct(
         )
         .entered();
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            native_cache.construct(|| build_prepared_stepper(&component, plan))
+            build_live_stepper(&dae, plan)
         }))
         .unwrap_or_else(|payload| {
             let message = payload
@@ -73,9 +71,8 @@ pub(super) fn construct(
             )))
         });
         let result = built.map(
-            |((stepper, snapshot, metadata, symbols, mut profile, retained), native_profile)| {
+            |(stepper, snapshot, metadata, symbols, mut profile, retained)| {
                 profile.queue_wait_ns = Some(queue_wait_ns);
-                profile.native_code_cache = Some(native_profile);
                 let handle = SessionHandle {
                     lane: session_lane,
                     id,

@@ -338,10 +338,10 @@ Use `scripts/perf/twin_startup.py` for a windowed loading budget. Its
 in one read-only evaluation. Compare matching probe versions; removing
 inter-query delays improves measurement accuracy, not application performance.
 Inspect first-ready and final screenshots as well as the mission verdict.
-Record prepared-solver hits and native attempts/hits/compilations alongside
-startup time; tests and other Twins can legitimately evict bounded artifacts.
-An immediate repeat with unchanged inputs distinguishes cold-cache work from
-recurring constructor cost without changing retention limits.
+Record compiled-DAE cache hits alongside startup time; other workloads can evict
+bounded artifacts. An immediate repeat with unchanged inputs distinguishes cold
+compilation from recurring session-construction cost without changing retention
+limits.
 
 For Modelica native-construction costs, distinguish selected application work
 from whole-source preparation. Projection reuse storage is needed only for
@@ -369,23 +369,18 @@ Operation shapes use the complete typed IR encoding, including floating-point
 bits. A changed constant's bits must fail the checker; hash equality alone
 cannot establish operation identity.
 Private proof lookup tables use Rumoca's existing fast hasher. Preserve full
-key equality and program-order ID assignment. Qualify constructor costs with
-recorded prepared/native-cache hits and the fixed MSL canary; isolated proof
-benchmarks do not establish faster scene admission.
+key equality and program-order ID assignment. Isolated proof benchmarks do not
+establish faster scene admission; measure the actual production constructor
+and complete communication step.
 Exclude overlapping builds/apps and record local dependency patches separately
 from the portable lockfile. Dependency changes require the repository's explicit
 authorization before edits.
 
-For fixed RK4, verify that its ME component receives the opaque execution
-backend issued by `rumoca_sim::fmi_execution_backend`. Selecting a fixed
-integrator does not itself install compiled evaluation. Keep the same lattice,
-input transaction and complete checked observation when comparing native and
-reference execution. The nonlinear-array differential test qualifies numerical
-agreement; its small diagnostic timing does not certify whole coupled ticks.
-Use actual compiler-cache accounting on nontrivial production models to verify
-native work. A local dependency path patch can disable prepared-model disk
-caching; record that state and reject it as final loading acceptance for a
-portable Git pin.
+For fixed RK4, verify that LunCoSim resolves its registered capability and
+installs Rumoca's public `FixedRk4Integrator` into its Model Exchange session
+adapter. Keep the same communication lattice, atomic input transaction and
+complete checked observation when comparing runs. A solver microbenchmark
+does not certify whole coupled ticks or production frame time.
 
 For terrain certificate lookups, whole-cell identity is the fenced surface and
 the two raster indices. Refined rectangles also retain exact coordinate bits.
@@ -985,7 +980,8 @@ session requires binding cleanup. Verify retained history through
 `ListTelemetryChannels` and `QueryTelemetryHistory` in both hosts, and exercise
 the public accepted-step reader through production. Measure response latency
 separately from solver integration and fixed-step output publication.
-For loading, separate prepared-FMI lookup/lowering, live construction and ordered
+For Modelica loading, separate source admission, checked DAE compilation or
+artifact reuse, Rumoca session construction, metadata projection and ordered
 publication.
 Rumoca's `SharedAssignmentSchedule` carries the already-checked immutable
 programs to interpreter and native construction. Preserve that shared storage,
@@ -1009,67 +1005,20 @@ Read `CosimStatus.modelica_construction_profile` for queue wait, session,
 metadata and first-observation nanoseconds. Compact status retains the same
 facts; a non-compiled participant reports no construction profile. Model-attributed
 structured logs and Recent status also retain completed initialization timings.
-Native profiles include `native_code_cache` attempts, hits, compilations and
-rejected entries. Attempts equal hits plus compilations; rejected entries are
-included in compilations. Record these per constructor when comparing cold,
-warm and new-process loading. The worker's application-lived cache retains only
-relocatable compiler artifacts, under one effective native byte budget;
-it does not retain live FMI state. Cache I/O is asynchronous, so report observed
-hits rather than assuming that a disk snapshot was ready before construction.
-Pure-call helpers use full-width symbolic references to fresh module-owned result
-cells. Fault and observation source addresses are relocated to the current module's
-data, and scratch callbacks are read from the current invocation. The native cache
-regressions require hits with separate mutable state, original fault spans and
-the current assertion source binding. Compare complete constructor attempt/hit/compile
-counts across unchanged warm sources; code reuse alone does not establish total
-loading or tick improvements. Preserve the non-Sync/lifetime contract and every
-input-bit/numerical check when profiling this boundary.
-Inspect the separate `modelica_native_cache_load` and
-`modelica_native_cache_publish` zones when cache I/O consumes startup CPU.
-Also inspect `modelica_compiled_artifact_lookup` and
-`modelica_compiled_artifact_publish`: native-code hits do not imply equation
-compilation was reused. Check strict compiled-artifact hit logs across fresh
-processes. Isolate Modelica under `LUNCOSIM_CACHE` when concurrent sessions can
-evict records between parity runs. For retention changes, replay the same
-unrelated solves against equal starting inventories and count the original
-compiled records that remain available when the Twin reopens.
-Keep native checked DAE reconstruction, source/URI/structural-bit identity and
-external-resource eligibility intact; this cache retains no numerical state.
-The shared transport buffers serializer fragments before Zstd. Native artifacts
-use Bincode's direct byte-slice encoding; checked prepared-FMI records retain
-their native structured decoder. Preserve both byte budgets, the binary
-allocation ceiling, full consumption, explicit flush failure handling and the
-owned versioned namespace. Separate a new namespace's first fill from warm
-restart, without seeding it from an unrelated format. Codec diagnostics do not
-establish a complete-loading or coupled-tick speedup.
-For key-level attribution, enable
-`RUST_LOG=info,lunco_modelica_worker::worker::native_code_cache=trace`.
-The cache admission event identifies the actual storage path and entry/byte
-limits. `native-code-cache-operation` events record gets and inserts under the
-same cache lock, with compiler keys, hit flags, code sizes and post-insert
-eviction/retention counters. Replay that order to distinguish keys absent from
-the loaded snapshot from keys evicted before reuse. These events are disabled
-by the normal info filter; use a separate run for timing acceptance.
-When measuring a cache size change, read the admitted `capacity_bytes` in both
-the initializer and participant profiles. Use **Settings → General → Modelica
-native cache** or the active Twin's `modelica.native_code_cache_mib` override
-for the comparison. A new process uses the saved application value until a Twin
-override is admitted.
-Fingerprint the actual file before and after each process. Concurrent LunCoSim
-sessions merge accessed/compiled deltas in the same versioned cache under the
-storage transaction. Confirm that each writer uses that protocol; record its
-initial fill and warm reuse separately. Matching sources alone do not establish
-matching cache starting state or prove that another process caused a miss.
-The `native_code_cache_preserves_other_writers_and_recent_reads` regression
-rejects stale-owner replacement while preserving the shared byte budget.
-Check `evictions`, `retained_entries` and `retained_bytes` alongside the admitted
-`capacity_bytes`. A repeated load whose working set exceeds retention can evict
-the next functions before they are reused; a cache file alone proves no benefit.
+Construction profiles expose queue wait, public session construction, checked
+metadata projection and first observation. LunCoSim retains bounded checked
+DAE artifacts; record the actual
+compiled-artifact memory/disk lookup result and construction timings across cold,
+warm and new-process runs. Cache I/O and hits are diagnostics; they do not
+establish a loading or tick improvement. Preserve source identity, numeric
+structural values, external-resource eligibility and checked DAE reconstruction.
+Use a separate clean run for FPS acceptance; profiling and cache-attribution
+workloads are diagnostic.
 `CosimStatus.last_coupled_initialization` retains the successful one-shot actor's
-worker receipt after retirement. Compare its solver identity and
-construction timings with ordinary participants' construction profiles. Both native
-hosts use the same initializer and report its cache counters. Compare fresh-process
-warm runs before attributing differences to compilation or cache eviction.
+worker receipt after retirement. Compare its solver identity and construction
+timings with ordinary participants' construction profiles. Both native hosts use
+the same initializer. Compare fresh-process warm runs before attributing
+differences to compilation or session construction.
 Run `test_modelica_initialization_receipt.py` for retained construction facts and
 scene replacement; both full and fleet-only status must clear the old receipt.
 The `modelica_source_target` production gate checks the profile through rejection,
@@ -1079,32 +1028,21 @@ realtime cadence even while unfocused. Use ordinary background loading to
 check the preparation-to-idle handoff. Use `--no-throttle` for separate
 continuous-update attribution. `[pacing] host frame policy changed`
 logs primary-window focus and both effective update modes on transitions.
-The command owner reserves domain-worker lanes and publication slots before
-preparation. Attribute prepared-IR dispatch separately from live publication;
-later ready IR must not wait for an earlier constructor. Cache hits, errors,
-shared lowering and cancellation retain the reserved publication order. The
-low-level `independent_preparations_advance_while_live_publication_stays_ordered`
-regression covers those stage-ordering boundaries.
-`modelica_live_construction_job` records queue wait and measures the native session,
-metadata and initial-observation children. `modelica_live_construction_commit`
-measures publication. Preparation and live sessions use separate captured bounded
-worker budgets. Scene and document actors have separate live-owner pools;
-each session retains its construction thread through stepping
-and retirement. Compare concurrent construction intervals and end-to-end
-readiness, not only summed worker time. A round transfers complete input buffers
-once, runs independent participants concurrently, and admits checked results in
-command order. Require exact replay, terminal observation-failure and scene
+The worker reserves ordered completion slots before dispatching construction.
+`modelica_live_construction_job` measures queue wait and public session
+construction; its metadata, first-observation and commit spans separate the
+remaining work. Preparation and live sessions use separate captured bounded
+worker budgets. Scene and document actors have separate live-owner pools; each
+session retains its construction thread through stepping and retirement. Compare
+concurrent construction intervals and end-to-end readiness, not only summed
+worker time. Require exact replay, terminal observation-failure and scene
 replacement evidence before a scheduling gain claim. Preserve exact
-communication points, backend numerical profiles, metadata and generation
-retirement. The native
-compiler already shares its DAE and source map; additional metadata caches do
-not address dominant native construction cost.
-Inspect native artifact attempts, hits, compilations and evictions together
-with session construction time. Shared immutable caches refresh recency on
-successful lookup and replacement; both native artifact bounds remain active.
-Compare recorded source/solver identities and cache starting conditions before
-attributing a loading gain. Retain complete initialization and checked outputs;
-only relocatable compiler artifacts belong in the native code cache.
+communication points, solver profiles, metadata and generation retirement.
+The compiler shares its DAE and source map; a second metadata cache does not
+address session construction cost. Record compiled-artifact memory/disk hits
+and evictions with source identity, but attribute performance only from matched
+cold/warm startup and runtime measurements. The Modelica cache retains checked
+compiled-DAE artifacts; Rumoca sessions own live integration state.
 For source parsing, compare the logged queue `wait` against parse/install time.
 The engine-sync driver submits documents linked to non-editor scene participants
 at `SimulationRequired`, the focused editor document at `Interactive`, and
@@ -1354,44 +1292,30 @@ validation and document syntax admission. The document worker reports
 `reused=true` when it takes the AST from synthesis for the exact revision.
 Time the session copy and index publication independently of parsing.
 
-For Modelica startup, separate Rumoca compile time, prepared-solve cache lookup,
-`prepare_fmi_component`, and ordered result commit. Prepared-cache lookup includes
-Rumoca's checked FMI reconstruction, artifact derivation and model validation;
-separate native CPU samples from JSON/Zstd work before attributing it to I/O or
-changing codecs. A disk hit does not bypass construction checks.
-For warm startup, distinguish a checked DAE hit from a prepared-solve or native
-code hit. Verify checked DAE reuse across fresh Twin mounts with the same source
-bytes and strict resolution dependencies. The Modelica compiler receives
-canonical source URIs and uses the same prepared target for the disk key and
-lowering. The USD program owner retains exact mount leases for reads and result
-admission, including retirement during preparation. Measure checked interface
-reuse on exact live requests separately from DAE lookup. Test an unrelated
-edit inside a participating source set and an edit to a participating model.
-Only the latter changes the prepared solver's source identity.
+For Modelica startup, separate source admission, strict DAE compilation or
+compiled-artifact lookup, public `SimulationSession` construction, checked
+metadata projection, first observation and ordered result commit. The DAE cache
+stores no solver instance or numerical state. Verify actual memory/disk hit logs
+across fresh Twin mounts with identical source and structural values. Retain the
+USD program owner's exact mount leases through reads and result admission,
+including retirement during preparation. Measure checked interface reuse on
+exact live requests separately from DAE lookup. Test a participating source edit
+and an unrelated sibling edit against the actual admitted source closure.
+
 For immutable assignment ownership, measure native `producer_index_diagnostic`
 construction together with prefix queries and preserve overlap, sparse-register
 and full-range checks. For USD parent sharing, pair native
 `parent_derivation_timing` with `native_projection_snapshot_benchmark`; include
 first-read construction, retained memory and scene-edit invalidation. Fixture
 gains alone do not qualify Twin loading.
-When equivalent requests share the
-same structural solve key, coalesce in-flight lowering instead of occupying a
-second worker; preserve one result position per participant in the existing
-stable commit queue. Keep the combined compiler/root/lowering admission bounded
-to the largest pool count plus two staged operations, so the serialized
-Rumoca owner can compile later programs while solve workers are busy without
-building an unbounded DAE backlog.
-Measure preparation queue waits separately from lowering. The native host
-captures the typed `ModelicaWorkerLimits` resource before worker launch;
-its `preparation` and `live_execution` budgets each cap workers at six after
-reserving two reported CPU threads; small hosts retain one worker per pool.
-Its `document_execution` budget defaults to one owner; the default total can
-reach thirteen threads. Confirm all three pool counts in the
-production log and distinguish preparation from construction blocking. Preserve ordered result commits
-when changing that budget. Compare fresh isolated cold caches and the same
-exact scene/solver/override identities; retain sampled UI/API latency and peak
-process memory alongside readiness. A cache-hit replacement does not measure
-cold lowering, and concurrent Cargo or simulator work limits timing claims.
+Measure construction queue waits separately from compilation. The native host
+captures `ModelicaWorkerLimits` before worker launch; `preparation` and
+`live_execution` each allow up to six workers while reserving two reported CPU
+threads, and `document_execution` defaults to one owner. Confirm the effective
+pool counts in the production log and retain sampled UI/API latency and peak
+process memory alongside readiness. Compare fresh isolated cold caches using
+the same exact scene, solver and override identities; concurrent Cargo or
+simulator work limits timing claims.
 
 For root-condition cost, distinguish algebraic conditioning from selected-expression
 and native-call dispatch. Rumoca's fixed root and visible-output plans
@@ -1421,20 +1345,10 @@ mission after reassociation, then compare preparation and settled-step profiles.
 
 Confirm generated-network source-set stability across launches: identical
 generated text must not acquire unrelated open documents as compile siblings.
-Preserve exact generated target and source bytes in cache identity, and retain
-authored multi-document compilation. Inspect typed
-persistent-cache rejection warnings and the native preparation owner logs.
-`cache=memory-hit`, `cache=disk-hit`, and `cache=miss` identify the actual lookup;
-compare lookup, lowering, and total preparation durations for the same admitted
-solve key. The native `modelica_solve_preparation_job` span records source key,
-solver ID, exact override bit patterns, cache version and disk eligibility from
-the captured plan. `admitted_library_revision` records compiler context; reuse
-follows the successfully compiled participating closure, resolved solver and
-exact overrides. Source equality alone does not prove key
-equality or eviction. Compare the distinct admitted working set with the actual
-retention limit before blaming cache capacity. Stepper construction timing alone
-does not establish persistent reuse.
-
+Preserve the admitted source identity and authored multi-document compilation.
+Inspect compiled-artifact lookup diagnostics; they describe DAE reuse only.
+Separate source admission, strict compilation or artifact lookup, public session
+construction, metadata projection and first observation in the timing record.
 Count domain discovery and publication separately. Content prim GIDs do not
 enter ordinary scene-network namespaces; instance identities and stage/source
 events still invalidate their owners. Initial prepared results publish a
@@ -1894,7 +1808,7 @@ Temporary lookup indexes over immutable ECS queries should borrow path and port
 surface data instead of cloning those maps for a one-pass reconciliation.
 Build compatible per-entity indexes in one query traversal rather than running
 separate full-population passes for each index.
-Modelica live metadata comes from the worker's checked FMI scalar inventory.
+Modelica live metadata comes from the worker's checked DAE scalar declarations.
 Construction publishes it once; ordinary steps move only observations. Admit the
 inventory under the same session/source fences as the stepper and retain its
 immutable identity. Draft document edits must not invalidate live telemetry

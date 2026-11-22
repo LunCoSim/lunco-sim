@@ -406,15 +406,6 @@ with `setting_default`; the shipped camera-status surface declares `true`.
 Twin settings are authored in `twin.toml`; user-global preferences are stored
 in `<OS config dir>/lunco/settings.json` (or `LUNCOSIM_CONFIG/settings.json`).
 
-#### Modelica native cache
-
-Set `"modelica.native_code_cache_mib" = 128` in the manifest's `[settings]`
-or open **Twin settings → Modelica native cache → Set Twin limit**.
-**Use application setting** removes the override and restores the size from
-**Settings → General**. The override applies while this Twin is active.
-See the [Modelica cache contract](20-domain-modelica.md#modelica-native-cache-settings)
-for size limits and cache behavior.
-
 #### Default scene loading
 
 The global `scene.load_default` preference defaults to `true`. A project can

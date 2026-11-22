@@ -1,4 +1,4 @@
-// Live channel facts belong to the exact checked FMI scalar inventory.
+// Live channel facts belong to the exact compiled DAE scalar inventory.
 import "lunco://scripting/tools/modelica_editor" as editor;
 
 fn simulation_dependencies(me, ctx) {

@@ -1,6 +1,7 @@
 //! AST and text utility helpers.
 
 use super::errors::AstMutError;
+use crate::ModelicaDefinitionExt;
 use crate::ast_extract::string_literal_value;
 use crate::pretty;
 use rumoca_core::Token;
@@ -12,7 +13,7 @@ pub fn lookup_class_mut<'a>(
     sd: &'a mut StoredDefinition,
     qualified: &str,
 ) -> Result<&'a mut ClassDef, AstMutError> {
-    sd.get_class_by_qualified_name_mut(qualified)
+    sd.class_by_path_mut(qualified)
         .ok_or_else(|| AstMutError::ClassNotFound(qualified.to_string()))
 }
 

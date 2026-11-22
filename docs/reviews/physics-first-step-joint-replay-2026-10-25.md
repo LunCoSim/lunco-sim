@@ -68,7 +68,7 @@ The reference SHA-256 remains
 `6247db0dfefbd0eaedad3d712c359578f30a75addb6daea4a79584b784a70451`.
 No tolerance or expected state is changed. Rumoca workspace qualification
 against this native repair belongs to the
-[runtime integration review](rumoca-refresh-runtime-preparation-2026-10-25.md).
+[Rumoca runtime contract](../architecture/29-rumoca-runtime-contracts.md).
 
 The application integration preserves main's `532243895` presentation-clock
 repair. The rebuilt combined tree repeats all 360 exact replay checks, the 49

@@ -237,16 +237,16 @@ Logic engines for dynamic simulation behavior, the tool registry, and industrial
 | Crate | Responsibility |
 | :--- | :--- |
 | **`lunco-modelica-runtime`** | Render-free Modelica runtime contract: the `ModelicaModel` ECS component and its required `ModelicaVariables` native observable snapshot with private storage, canonical-ID row bindings and declared-output slot projection, immutable compiler variable declarations and live-solver facts shared by worker caches, receipts and models, native checked batch artifact reply, and immutable checked scalar metadata (units, descriptions, bounds), checked source-edit interfaces and exact source leases, worker command/result protocol including worker-prepared parsed source-root documents for the authoring-session mirror, source asset loader, exact runtime attribution for generated documents and live participants, per-entity session epochs, communication schedule, notices, output rows with canonical shared Rumoca `VarName` labels (text on the worker wire) retained by accepted transactions and the sample stream, and telemetry layout. It owns no Rumoca compiler session, worker implementation, document editor, or UI closure. It declares the renderer-free `SetModelicaParameter` command consumed by the headless core. |
-| **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes exact checked FMI unit/description facts with authored USD provenance. Session-scoped source/recorder slot pairs avoid text lookup during recording; membership/settings/layout revisions gate deferred admission, while catalog changes refresh metadata and wire ownership. It is installed by the execution host and is separate from compiler/document ownership. |
+| **`lunco-modelica-telemetry`** | Render-free Modelica telemetry capability: retains landed solver variables in the shared signal registry, applies the shared rate/retention/channel policy, and publishes checked DAE unit/description facts with authored USD provenance. Session-scoped source/recorder slot pairs avoid text lookup during recording; membership/settings/layout revisions gate deferred admission, while catalog changes refresh metadata and wire ownership. It is installed by the execution host and is separate from compiler/document ownership. |
 | **`lunco-modelica-index`** | Reusable Modelica metadata boundary: AST-derived document index, source-library editor-index artifact, diagram metadata/data, package-browser value types, class lookup, documentation extraction, and authored connect-line extraction. It is separate from the compiler host so asset/index consumers rebuild independently of worker and solver changes. |
 | **`lunco-modelica-library`** | Shared source-library capability: persisted library-root settings, native admission of the optional configured source library together with the engine Modelica asset root, explicit primary-root identity, parsed-source bundle admission, browser fetch/decode, lazy source unpacking, editor-index handoff, and the typed Modelica worker bridge. It is a production runtime package, not a test harness; compiler and execution hosts consume its contracts without owning its transport implementation. |
 | **`lunco-modelica-source-roots`** | Twin/workspace Modelica source-root admission: root inventory, manifest-aware Twin path resolution, demand-driven worker loading, source-root readiness state, and per-file resource facts with document overlays. `ModelicaCorePlugin` installs this capability for interactive and headless Modelica hosts; the document/runtime core consumes no Twin-specific admission policy. |
-| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, paired parsed-source batches, URI/CID ownership admission, per-root CID source closures, strict reachable-DAE compilation, typed structural root modifiers selected from checked DAE declaration facts, resolved source and captured external table CIDs, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. The maintained Rumoca dependency owns revision-cache validation, base-class lookup context, immutable shared interfaces, and lexical/import-aware source namespace dependencies. |
+| **`lunco-modelica-compiler`** | Headless Rumoca compiler and source-admission host: one production `ModelicaCompiler` session, Rumoca source-bearing `ParsedSourceDocument` admission paired with serializable `SourceFileSnapshot` records, URI/CID ownership admission, per-root CID source closures, strict reachable-DAE compilation, typed structural root modifiers selected from checked DAE declaration facts, compiled-source identity from flattened target spans and generated overrides, resolved source and captured external table CIDs, diagnostics, and library revision tracking. It is shared directly by workers, runners, asset tooling, and command-line hosts; tests exercise this same production package. The maintained Rumoca dependency owns revision-cache validation, base-class lookup context, immutable shared interfaces, and lexical/import-aware source namespace dependencies. |
 | **`lunco-modelica-core`** | Headless Modelica document/runtime host: document lifecycle, immutable Rumoca-resolved diagram snapshots, compiler-engine resource synchronization, the opt-in `ModelicaLintPlugin` for shared asynchronous Rumoca lint snapshots, and UI-agnostic runtime contracts. The workbench and Modelica API install the plugin and read the same generation-scoped results. It consumes the compiler, source-library, and source-root capabilities but does not own Twin-specific source admission, Rumoca compilation, source-library transport, solver workers, Fast Run execution, browser fetch, document editing, editor indexing, pure annotation values, solver implementation, API query registration, or generated USD-document metadata. It has no workbench, egui, tutorial, or UI dependency. `DiagramScope` selects class-interface facts for indexing or component-graph facts for canvas projection from the same declaration owner. Its source-snapshot owner fences exact document/runtime leases, candidate generations and source-root operations for compile, Run, status and deferred installation. Checked `SetModelicaParameter` transactions validate selected source ownership, scalar type and declaration mutability before source mutation or live-session replacement. |
-| **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, scoped declaration rows and typed scalar run-value parsing, shared worker compile admission, native scheduling, shared checked Rumoca batch execution and per-run output metadata, run-bound resolution, and experiment-side Bevy resources. It consumes typed runtime compilation and solver contracts; the execution host installs its transport. |
-| **`lunco-modelica-worker`** | Stateful Modelica worker engine: headless typed document-compile dispatch, thread-affine live sessions on persistent solver workers, a single-owner native Rumoca actor with ordered async compile/source-root commits and bounded checked-DAE and binding-projection reuse, worker-local prepared-solve cache fenced by the clean Rumoca build identity, startup-captured `worker::ModelicaWorkerLimits` for independent bounded preparation, scene-owner and document-owner budgets, native worker loop, and the Bevy co-simulation bridge. Compile results are fenced by exact runtime owner, per-entity session epoch and complete admitted source context. Reset prepares the retained checked DAE with current admitted initialization inputs and the exact solver plan, without rereading mutable compiler state. Numeric parameter inventory comes from the checked initialized Rumoca session, including expressions and inherited values. User overlays retire after captured outcomes and diagnostics. It is a production runtime package, not a test harness. |
+| **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, scoped declaration rows and typed scalar run-value parsing, shared worker compile admission, native scheduling, public Rumoca session execution over the LunCoSim-admitted output grid, per-run output metadata and `RunResultLimits` admission, run-bound resolution, and experiment-side Bevy resources. |
+| **`lunco-modelica-worker`** | Stateful Modelica worker engine: headless typed document-compile dispatch, thread-affine Rumoca public sessions on persistent solver workers, a single-owner native Rumoca compiler actor with ordered async compile/source-root commits and bounded checked-DAE artifact and binding-projection reuse, startup-captured `worker::ModelicaWorkerLimits` for independent bounded preparation, scene-owner and document-owner budgets, native worker loop, and Bevy co-simulation bridge. Compile results are fenced by exact runtime owner, per-entity session epoch and complete admitted source context. Reset constructs a fresh session from the retained checked DAE and current admitted inputs without rereading mutable compiler sources. The LunCoSim solver adapter derives numeric parameter inventory from the checked DAE through Rumoca `NumericEvaluator`, including expressions and inherited values. User overlays retire after captured outcomes and diagnostics. It is a production runtime package, not a test harness. |
 | **`lunco-modelica-execution`** | Modelica execution host: plugin assembly, required variable-state validation and serial worker completion admission through the shared clock-free schedule before projection, between held pending fixed cycles and on native driver readiness, lifecycle compile-intent consumption in `Update`, native worker launch, and wasm worker transport. It composes `lunco-modelica-worker` and `lunco-modelica-runner` through explicit contracts; compiler-only consumers do not inherit this host. |
-| **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, adaptive live sessions, deterministic co-simulation step scheduling over Rumoca's fixed RK4 integrator, and finite live-observation admission. Observations retain Rumoca's canonical shared `VarName` labels with native `f64` values. The execution host supplies checked FMI components and owns worker lifecycle. |
+| **`lunco-modelica-solver`** | Renderer-free Modelica solver capability: Rumoca backend registration, solver-option translation, public adaptive/fixed-step sessions, deterministic co-simulation scheduling and finite live-observation admission. Observations retain Rumoca canonical shared `VarName` labels with native `f64` values. The execution host owns session lifecycle. |
 | **`lunco-modelica-api`** | Production transport-free API capability for Modelica: registers document, compiler, experiment, solver, source, run, and parser/compiler/Rumoca-lint capabilities plus document edit, headless scratch-document creation, and explicit-snapshot solve commands. The shared `GetDiagnostics` query reads Modelica parser, compiler, and Rumoca lint channels. It depends on the headless document/runtime core and compiler contracts but is not part of the compiler host's default closure; Workspace queries remain in `lunco-workspace-api`. |
 | **`lunco-modelica-ui-core`** | Render-independent Modelica UI contracts: shared command/event payloads (`OpenClass`, `FocusDocumentByName`) and stable plot identities. It has no Modelica compiler, workbench shell, panel, or renderer dependency; observers remain in the owning UI package. |
 | **`lunco-modelica-ui`** | Modelica workbench UI and `lunica` application facade. It adapts core state to workbench contexts and owns Modelica panels, diagram/editor adapters, onboarding, and experiment-result view-models; reusable log, icon, documentation, and trajectory rendering lives in shared UI crates. It has no tutorial catalog or lifecycle. |
@@ -303,9 +303,9 @@ Primary entry points and simulation assembly targets.
 | **`lunco-modelica-index`** | — | Reusable Modelica index, diagram metadata, package-browser values, and editor-index artifact contract. |
 | **`lunco-modelica-library`** | — | Source-library runtime admission, artifacts, browser handoff, and the shared Modelica worker bridge. |
 | **`lunco-modelica-source-roots`** | — | Twin/workspace source-root inventory and demand-driven `LoadSourceRoot` admission. |
-| **`lunco-modelica-runner`** | — | Modelica experiment scheduling and shared native/browser batch backend. |
-| **`rumoca-compile`**, **`rumoca-phase-dae`**, **`rumoca-phase-structural`**, **`rumoca-solver`**, **`rumoca-eval-solve`** | — | Rumoca 0.10.4 compiler, checked DAE/FMI lowering, evaluator, and ME solver host. The LunCoSim fork adds exact compile source provenance, prepared FMI sessions, scoped cancellation, and output admission. All packages use one Git revision. |
-| **`lunco-modelica-worker`** | — | Headless Modelica worker engine and Bevy co-simulation bridge. It owns worker lifecycle internals, command dispatch, live stepping, and execution caches. |
+| **`lunco-modelica-runner`** | Modelica experiment backend: source snapshots, scoped declaration rows and typed scalar run-value parsing, shared worker compile admission, native scheduling, public Rumoca session execution over the LunCoSim-admitted output grid, per-run output metadata and `RunResultLimits` admission, run-bound resolution, and experiment-side Bevy resources. |
+| **`rumoca-compile`**, **`rumoca-phase-dae`**, **`rumoca-phase-structural`**, **`rumoca-solver`**, **`rumoca-eval-solve`** | — | Rumoca compiler, checked DAE construction, evaluator and simulation session APIs. The [workspace manifest](../Cargo.toml) pins a single revision across Rumoca packages. LunCoSim adapters compose public APIs for source metadata, experiment output grids, result budgets, cancellation boundaries and worker lifecycle. |
+| **`lunco-modelica-worker`** | Stateful Modelica worker engine: headless typed document-compile dispatch, thread-affine Rumoca public sessions on persistent solver workers, a single-owner native Rumoca compiler actor with ordered async compile/source-root commits and bounded checked-DAE artifact and binding-projection reuse, startup-captured `worker::ModelicaWorkerLimits` for independent bounded preparation, scene-owner and document-owner budgets, native worker loop, and Bevy co-simulation bridge. Compile results are fenced by exact runtime owner, per-entity session epoch and complete admitted source context. Reset constructs a fresh session from the retained checked DAE and current admitted inputs without rereading mutable compiler sources. The LunCoSim solver adapter derives numeric parameter inventory from the checked DAE through Rumoca `NumericEvaluator`, including expressions and inherited values. User overlays retire after captured outcomes and diagnostics. It is a production runtime package, not a test harness. |
 | **`lunco-modelica-execution`** | `lunica_worker`, `modelica_run`, `modelica_tester` | Modelica execution host. It assembles the worker engine, owns native/wasm host transport, and keeps the shared command/result protocol in `lunco-modelica-runtime`; `lunco-modelica-runner` owns experiment scheduling and run orchestration. |
 | **`lunco-modelica-assets`** | `build_modelica_library_assets`, `modelica_library_indexer` | Native Modelica source-library packaging and indexing tools. The CLI indexer publishes checked paired-source and class-index artifacts consumed by the compiler and UI. |
 | **`lunco-modelica-api`** | — | Transport-free Modelica API capability: query providers plus document edit and explicit-snapshot solve commands, installed by API-enabled Modelica and LunCoSim hosts. |
@@ -1486,12 +1486,12 @@ The UI owns only tab, canvas, and unfinished editor-preparation cleanup.
 Live `SetModelInput` admission and fixed-tick commit both read the target's
 `ModelicaModel` identity; USD participants do not require editor registry links.
 
-Modelica document/runtime host. It consumes the headless `ModelicaDocument`
+Modelica document/runtime host. It consumes the headless
 contract from `lunco-modelica-document`, owns Bevy lifecycle synchronization and
 engine resources, and composes the compiler and source-library capabilities. Its
 opt-in `ModelicaLintPlugin` shares asynchronous Rumoca lint snapshots with
 authoring surfaces. It does not own Twin/workspace source-root admission,
-Rumoca compilation, solver workers, Fast Runs, prepared solve caches, or browser
+Rumoca compilation, solver workers, Fast Runs, or browser
 transport. API commands are opt-in, and API query providers are owned by
 `lunco-modelica-api`.
 
@@ -1522,8 +1522,8 @@ launch, and the wasm `lunica_worker` transport. It composes the generic
 `lunco-worker-transport::WorkerPool` and installs the worker callbacks consumed
 by `lunco-modelica-runner`; source-library readiness and per-run routing remain
 Modelica-specific here. Compiler-only consumers do not inherit this host.
-It resolves the application Modelica native cache setting and the active Twin
-override, then passes the effective byte budget to the native worker.
+It configures compiled-DAE artifact retention from startup resources.
+
 It registers the lifecycle-notice queue with scene teardown so unread notices
 cannot repopulate cleared presentation state. It also owns the scene-registered
 Modelica performance window, publishing total measured worker service per physics
@@ -1531,19 +1531,19 @@ step, per-instance mean service time, and completion throughput through the shar
 typed health/exposure boundary.
 
 **`lunco-modelica-worker`**
-Stateful Modelica worker engine. It owns live solver construction and stepping,
-command dispatch, native worker scheduling, worker-local compiled/prepared
-artifacts, and the Bevy response/clock bridge. Keeping this package separate
+Stateful Modelica worker engine. It owns public session construction and stepping,
+command dispatch, native worker scheduling, checked DAE artifact retention,
+and the Bevy response/clock bridge. Keeping this package separate
 from the host transport lets worker changes and browser transport changes
 rebuild as independent production packages while both native and wasm paths
 use the same dispatch implementation.
-Native initialization, live and document construction share one bounded native
-artifact cache. The cache owner applies the same byte budget to memory and
-disk admission.
-Initialization-only jobs share its compiler, checked DAE/prepared-artifact caches
-and bounded preparation lanes. Their request-scoped replies bypass participant
-installation and telemetry. Accepted free-state constraints derive a checked
-per-instance FMI component without mutating the shared prepared artifact.
+Native initialization, live and document construction share the checked DAE
+artifact cache; this cache contains no solver state or executable code.
+
+Initialization-only jobs share its compiler and checked DAE cache
+and bounded session-construction lanes. Their request-scoped replies bypass participant
+installation and telemetry. Accepted state overrides initialize an independent
+Rumoca session without mutating the shared compiled DAE.
 Deferred compile requests validate source and participant retirement before
 publishing worker failures or diagnostics; cancelled work cannot fault a successor.
 
@@ -1569,7 +1569,7 @@ allocation on both platforms.
 Render-free execution-side telemetry projection. It retains the current
 variables of landed `ModelicaModel` sessions in the shared `SignalRegistry`,
 uses `TelemetrySettings` for rate, retention, and channel limits, and attaches
-Modelica scalar metadata from the admitted FMI inventory and authored provenance
+Modelica scalar metadata from the checked DAE and authored provenance
 from the generated USD layout. The execution host installs its plugin after
 worker responses; compiler/document hosts do not compile this projection.
 Participant removal retires its producer cache; scene teardown resets the
@@ -1586,13 +1586,12 @@ Bevy, compiler worker, UI, or simulation lifecycle; hosts install its
 `ModelicaDocument` through the generic `lunco-doc-bevy::DocumentRegistry`.
 
 **`lunco-modelica-solver`**
-Renderer-free Rumoca solver capability. It owns backend registration, solver-option translation, and the fixed prediction communication schedule. The execution host supplies checked FMI components and owns worker lifecycle.
-Both session types use Rumoca's Model Exchange host for initialization, input
-transactions and observations. The fixed-step adapter uses Rumoca's RK4
-integrator and its opaque execution handle from `rumoca_sim::fmi_execution_backend`.
-Its qualification consumes Rumoca's shared parameter-only event admission proof.
-It consumes the pure experiment solver registry with host features disabled,
-so a standalone solver build has no Bevy dependency.
+Renderer-free Rumoca solver capability. It owns backend registration,
+solver-option translation, and the fixed prediction communication schedule.
+Each participant uses Rumoca's public `SimulationSession`; the execution host
+owns worker placement, typed publication and lifecycle. The solver crate
+consumes the backend-neutral experiment solver registry with host features
+disabled, so a standalone solver build has no Bevy dependency.
 
 **`lunco-modelica-api`**
 Production API capability for Modelica hosts. It registers the domain-owned query providers for bundled sources, source-library classes, compile/run status, experiment results, document source, model metadata, variables, and share links, together with the transport-free document edit commands. The shared `GetDiagnostics` query exposes generation-scoped Modelica parser, compiler, and Rumoca lint findings, including stable codes, locations, and suggestions. `lunco-workspace-api` remains the owner of Workspace queries. Keeping the edit/query surface outside `lunco-modelica-core` keeps compiler-only hosts focused on document and compile mechanisms; API roots install the required capability explicitly.

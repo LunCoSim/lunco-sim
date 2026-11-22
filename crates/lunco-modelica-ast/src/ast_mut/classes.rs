@@ -1,5 +1,6 @@
 //! Class definition mutation helpers.
 
+use crate::ModelicaDefinitionExt;
 use rumoca_ir_ast::{ClassDef, StoredDefinition};
 
 use super::edit::Edit;
@@ -117,7 +118,7 @@ pub fn remove_class(
     if qualified.is_empty() {
         return Err(AstMutError::ClassNotFound(qualified.to_string()));
     }
-    let local: String = sd.relative_class_name(qualified).to_string();
+    let local: String = sd.relative_class_path(qualified).to_string();
 
     let (parent, leaf) = match rumoca_core::split_last_top_level(&local) {
         Some((p, l)) => (Some(p.to_string()), l.to_string()),

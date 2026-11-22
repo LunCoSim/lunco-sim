@@ -45,7 +45,7 @@ pub(super) struct SourceRootCommit {
     pub root_id: String,
     pub namespaces: Vec<String>,
     pub sources: Vec<lunco_modelica_ast::resource_uri::SourceFileFacts>,
-    pub documents: Vec<rumoca_compile::compile::ParsedSourceDocument>,
+    pub documents: Vec<lunco_modelica_ast::resource_uri::SourceFileSnapshot>,
     pub error: Option<String>,
     pub inserted_file_count: usize,
     pub parsed_file_count: usize,
@@ -274,9 +274,7 @@ fn compiler_actor_loop(
                 let outcome = if cancel.load(std::sync::atomic::Ordering::SeqCst) {
                     Err("batch compilation cancelled".to_owned())
                 } else {
-                    let _cancellation =
-                        rumoca_eval_solve::EvaluationCancellationGuard::install(cancel);
-                    compile_artifact(
+                    let outcome = compile_artifact(
                         &mut compiler,
                         &mut compiled_artifacts,
                         &mut terminal_error,
@@ -285,13 +283,15 @@ fn compiler_actor_loop(
                         &doc_uri,
                         library_gen,
                     )
-                    .outcome
-                    .map(|artifact| {
-                        lunco_modelica_runtime::ModelicaBatchArtifact {
+                    .outcome;
+                    if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        Err("batch compilation cancelled".to_owned())
+                    } else {
+                        outcome.map(|artifact| lunco_modelica_runtime::ModelicaBatchArtifact {
                             dae: artifact.compiled.dae.clone(),
                             source_content: artifact.source_content,
-                        }
-                    })
+                        })
+                    }
                 };
                 if results
                     .send(WorkerPreparationResult::Compiler(
@@ -501,7 +501,7 @@ fn install_source_root(
             library_revision: 0,
         };
     }
-    let documents = prepared.parsed_documents();
+    let documents = prepared.source_snapshots();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         compiler
             .get_or_insert_with(ModelicaCompiler::new)

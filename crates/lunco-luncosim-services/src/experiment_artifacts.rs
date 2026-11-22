@@ -25,7 +25,6 @@ use std::{
 pub(crate) struct MaterializedArtifacts {
     pub runtime: DocumentRuntimeOwner,
     pub root: PathBuf,
-    pub paths: Vec<PathBuf>,
 }
 struct PendingArtifact {
     runtime: DocumentRuntimeOwner,
@@ -223,7 +222,11 @@ async fn process_native(
         ArtifactOperation::List { directory, cap } => {
             let canonical = confined_existing(root, &directory)?;
             let listing = storage
-                .read_directory_bounded(&lunco_storage::StorageHandle::File(canonical), cap)
+                .read_directory_newest_matching_bounded(
+                    &lunco_storage::StorageHandle::File(canonical),
+                    Some("json"),
+                    cap,
+                )
                 .await
                 .map_err(|error| error.to_string())?;
             Ok(ArtifactOutcome::Listed {
@@ -393,15 +396,25 @@ fn load_materialized(
     let Some(settings) = settings else {
         return;
     };
-    admit_paths(
-        &mut jobs,
+    let admission = ArtifactAdmission {
+        root: event.root.clone(),
+        limits: settings.result_limits,
+    };
+    let directory = lunco_twin::results_dir(&event.root);
+    if let Err(error) = jobs.admit(
+        event.runtime.clone(),
+        admission,
+        None,
+        None,
+        ArtifactOperation::List {
+            directory,
+            cap: REGISTRY_CAP_PER_TWIN,
+        },
         &mut scheduler,
         transport.as_deref(),
-        event.runtime.clone(),
-        event.root.clone(),
-        settings.result_limits,
-        event.paths.clone(),
-    );
+    ) {
+        warn!("[experiment] optional replicated artifact listing rejected: {error}");
+    }
 }
 fn admit_paths(
     jobs: &mut ArtifactJobs,
@@ -475,7 +488,7 @@ fn commit_artifacts(
             Ok(ArtifactOutcome::Listed { paths, truncated }) => {
                 if truncated {
                     warn!(
-                        "[experiment] history listing exceeds retained run cap; admitting first {REGISTRY_CAP_PER_TWIN} lexical entries"
+                        "[experiment] history listing exceeds retained run cap; admitting newest {REGISTRY_CAP_PER_TWIN} entries by modification time"
                     );
                 }
                 admit_paths(
@@ -562,6 +575,54 @@ mod tests {
             sender,
         )
     }
+    #[test]
+    fn artifact_listing_retains_newest_files_by_modification_time() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let owner = tempfile::tempdir().expect("owner root");
+        let root = owner.path().canonicalize().expect("canonical owner");
+        let directory = lunco_twin::results_dir(&root);
+        std::fs::create_dir(&directory).expect("results directory");
+        for (name, seconds) in [
+            ("z-recent.json", 300),
+            ("a-middle.json", 200),
+            ("m-old.json", 100),
+            ("b-newest.json", 400),
+            ("newer-output.csv", 500),
+        ] {
+            let path = directory.join(name);
+            std::fs::write(&path, b"{}").expect("artifact fixture");
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .expect("open artifact fixture")
+                .set_modified(UNIX_EPOCH + Duration::from_secs(seconds))
+                .expect("set artifact modification time");
+        }
+        let cancelled = AtomicBool::new(false);
+        let result = bevy::tasks::block_on(process_native(
+            ArtifactOperation::List { directory, cap: 2 },
+            &cancelled,
+            &root,
+        ))
+        .expect("bounded history listing");
+        let ArtifactOutcome::Listed { paths, truncated } = result else {
+            panic!("expected listed artifact paths");
+        };
+        assert!(truncated);
+        assert_eq!(
+            paths
+                .iter()
+                .map(|path| path
+                    .file_name()
+                    .expect("filename")
+                    .to_string_lossy()
+                    .into_owned())
+                .collect::<Vec<_>>(),
+            vec!["b-newest.json", "z-recent.json"]
+        );
+    }
+
     #[test]
     fn artifact_routes_retire_exact_owner_and_fail_disconnected_preparation() {
         let outgoing = DocumentRuntimeOwner::LocalTwin(lunco_workspace::TwinId::new(1));

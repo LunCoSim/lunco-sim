@@ -1,17 +1,27 @@
 # 29 — Rumoca runtime contracts
 
-LunCoSim uses Rumoca 0.10.4 with one dependency revision across compilation,
-AST tools, lowering, simulation, and native execution. The LunCoSim fork supplies
-compile source-closure provenance, prepared FMI session construction,
-cooperative evaluation cancellation, and scoped retained-output admission.
+LunCoSim pins one Rumoca revision across compilation, AST tools, lowering,
+simulation, and native execution. Rumoca owns Modelica parsing, compilation, DAE construction, initialization, and
+numerical integration. LunCoSim uses Rumoca public queries and
+`SimulationSession`, with application-specific metadata, output grids, result
+budgets, and lifecycle policy kept in its owning crates.
 
 ## Compilation and source identity
 
 `ModelicaCompiler` owns user overlays and admitted source roots. Source enters
-unchanged through the shared parser and compilation session. The compile result
-carries the exact reachable file closure and source-set keys used for content
-identity. Invalid or unbalanced models stop at the compiler's phase diagnostic;
-unchecked DAE construction is not a diagnostic or runtime entry point.
+unchanged through Rumoca's public `ParsedSourceDocument`. LunCo keeps the
+serializable `SourceFileSnapshot` beside that source-bearing Rumoca document and
+admits roots through `replace_in_memory_source_set`; Twin and other virtual URIs
+therefore retain the exact text addressed by parser spans. The serialized
+library bundle remains a source snapshot, so source preparation rebuilds the
+Rumoca parsed document from its retained bytes before session admission.
+
+Rumoca's DAE result source map covers session documents. Compile identity keeps
+only source IDs present in the flattened target's declarations, equations,
+records, algorithms, and functions, plus Rumoca's generated structural-override
+sources. It hashes exact source-map bytes and external table values. Invalid or
+unbalanced models stop at the compiler's phase diagnostic; unchecked DAE
+construction is not a diagnostic or runtime entry point.
 
 Disk source discovery and source-root document/rename facts retain native
 absolute paths, including Windows verbatim drive and UNC prefixes. The compiler
@@ -48,6 +58,11 @@ and type-alias dimensions. Authored expressions and source coordinates remain
 separate from those type facts. Missing or cyclic type information is a visible
 query rejection, never a name-based signal classification.
 
+For an authored binding, the LunCoSim AST adapter asks Rumoca for the named
+member at each segment of the binding path. It projects that member with the
+same declaration logic used by the full editor inventory. The checked DAE
+validates the resulting instance bindings.
+
 `scalar_type` and `has_array_dimensions` describe the admitted declaration and
 its resolved type. Numeric run text uses the shared `parse_scalar_run_value` parser
 against the primitive enum. Empty text omits an override; malformed, non-finite,
@@ -83,7 +98,7 @@ declarations out of the one AST copy, rather than cloning descendants at every
 package level. Documentation comes from each qualified class's own annotation;
 there is no second documentation parse or short-name documentation map. Qualified
 class order is stable. Paired source/AST documents remain complete for session
-installation and the persisted parsed bundle.
+installation and the persisted source-snapshot bundle.
 
 Canvas projection captures an immutable `DiagramSnapshot` from the shared
 workbench engine's Rumoca session. The snapshot contains the selected class's
@@ -142,20 +157,27 @@ capture, and session-revision invalidation.
 
 The source-root owner loads the native declaration index off-thread and registers
 its exact declared namespaces for the installed library. Browser index readiness
-publishes the same registration. Library admission installs paired parsed records
-through the ordered worker channel without reparsing. Provisioning and index
-generation remain at the native workbench adapter.
+publishes the same registration. Source preparation pairs each snapshot with a
+Rumoca `ParsedSourceDocument`; the ordered worker channel installs those
+source-bearing documents without reparsing the prepared input. Provisioning and
+index generation remain at the native workbench adapter.
 
 Experiment admission uses the same source-root registry and ordered load channel as interactive compilation. Required roots are queued before the immutable batch job; unknown or failed roots reject admission before registering a run.
 
-## Prepared execution and persistence
+## Compiled artifacts and simulation sessions
 
-Compiled DAE reuse is keyed by the exact selected target, document URI,
-primary and sibling source bytes, and source-root revision. Prepared solver
-reuse uses the compiler's exact participating-source CID, excluding unrelated
-siblings and transient document paths. Generated and authored declarations use
-this same content contract. Identifiers, strings, annotations, and numeric
-literals remain unchanged throughout source admission and cache identity.
+Compiled DAE reuse is keyed by LunCo's `source_unit_identity`: selected target,
+document URI, primary and sibling source bytes, and the ordered content of all
+admitted source roots. The key also includes the exact numeric parameter bits,
+clean Rumoca build identity, operating system, and architecture. Current Rumoca
+main returns its exact participating-source closure with the compiled DAE, so
+the persistent lookup uses the already-admitted source unit before lowering;
+an unrelated source or root edit can conservatively invalidate that DAE entry.
+Compiled-artifact reuse uses the admitted source identity and numeric structural
+values; persistent records also bind the clean Rumoca build and host platform.
+Generated and authored declarations use the same source-admission boundaries.
+Identifiers, strings, annotations, and numeric literals remain unchanged
+throughout source admission and cache identity.
 
 Interactive reuse additionally checks the exact document runtime leases,
 candidate source generations and URIs, admitted source-root operations and requested
@@ -174,13 +196,13 @@ Any real nonzero library operation remains fenced, including document-backed loa
 A generated unit captures its own document and library operations, with no
 editor sibling overlays.
 
-The worker prepares one checked `FmiComponent`, borrowing it for live session
-construction. Its FMI inventory and executable model come from the same
-correlated lowering. Prepared cache version 14 stores the exact clean compiler
-build identity and canonical typed FMI
-construction wire through a bounded JSON persistence adapter and zstd. Loading
-replays Rumoca's checked construction; unsupported versions, malformed metadata,
-identity mismatches, and oversized records are rejected before use.
+The worker retains the checked DAE and constructs a separate public Rumoca
+`SimulationSession` for each participant. Session initialization, input handling,
+state observation and integration remain owned by Rumoca; solver selection,
+worker placement, typed snapshots and lifecycle fencing remain owned by LunCoSim.
+The compiler adapter projects scalar metadata from checked DAE views and the
+shared numeric evaluator. Persistent storage retains checked compiled artifacts;
+each participant owns its own initialized session and numerical state.
 
 Rumoca's immutable `ScalarProgramBlock` derives logical-output ownership from
 the same checked program/output bindings used by its readers. Sparse and
@@ -189,23 +211,18 @@ the index, and checked wire replay reconstructs it without adding serialized
 fields. The application consumes that owner directly; it maintains no parallel
 output-to-program map.
 
-Run inputs and tunable parameters enter `SimOptions::initial_inputs` and
-`param_overrides`. Rumoca validates targets and recomputes initialization and
-parameter dependents. The compiled DAE stays immutable across sweep points. Reset carries current
-admitted inputs explicitly across the worker boundary, including values changed
-while the participant is paused.
-Reset prepares that input vector against the installed session's retained checked
-DAE and exact solver plan. Its prepared-solve identity includes the input bits;
-an input-baked FMI component cannot initialize a different vector. This uses the
-ordinary preparation/cache owner without consulting mutable compiler sources or
-library revisions. Native preparation stays off the UI thread; browser
-preparation stays in its Modelica worker.
-The session's `parameter_values` reader supplies initialized numeric parameters
-through checked FMI storage identities, including expressions, inherited values
-and initialization-solved parameters. The numeric editing inventory excludes
-String declarations. Source edits validate checked scalar type, visibility,
-finality and bounds before changing either source or session. Reset refreshes
-that inventory from its own settled initialization.
+Run inputs and tunable parameters enter Rumoca's checked `SimOptions` fields.
+The compiled DAE stays immutable across sweep points. Reset carries current
+admitted inputs explicitly across the worker boundary and builds a fresh public
+`SimulationSession` from the retained DAE. Numerical state is never shared
+between participants.
+
+The LunCoSim solver adapter derives its `parameter_values` view from the
+admitted checked DAE through Rumoca's `NumericEvaluator`, including expressions
+and inherited values. The numeric editing inventory excludes String
+declarations. Source edits validate checked scalar type, visibility, finality
+and bounds before changing either source or session. Reset refreshes that view
+from its own checked DAE and admitted overrides.
 Pause and Resume record terminal applied/rejected outcomes and replace the
 document's exact-source-leased run intent, including before a compile creates
 its participant. Compile and Reset installation consume the latest intent.
@@ -230,30 +247,28 @@ observation failure terminate the step without publishing values or a stream
 snapshot. The live solver boundary requires finite time and visible values;
 invalid observations produce a `modelica-step-failed` runtime fault. Initial
 observations are checked before compile, reset, or parameter-update success.
-The common host's `visit_visible_values` emits the complete observation with
-applied-input overlays, checked cardinality and borrowed canonical `VarName`
-handles. Output labels resolve once at host construction; input labels and
-output positions resolve at first admission and retire with the input on reset.
-Native RK45 and the fixed session forward that reader. The live stepper clones
-shared labels into typed worker/accepted rows, validates finite time and every
-value, and the worker removes `time` in place. Names remain text on the external
-worker wire. The reflected variable snapshot retains String keys and one
-normalized publication reader. The named-map API collects the same native
-visitor; no second name interner, numeric evaluator or input overlay is added.
-The local SDK consumer and native API require coupled promotion as recorded in
-[the observation review](../reviews/modelica-batched-observation-2026-10-24.md).
+Rumoca's Model Exchange host exposes checked output values with applied-input
+overlays and verifies output cardinality. The fixed-step adapter reads that
+public `visible_values` map and implements LunCo's selected-value lookup over
+it. Output labels resolve at host construction; applied inputs are overlaid by
+the host and retire with the session. The live stepper validates finite time
+and every value before publishing typed worker rows. Names remain text on the
+external worker wire, and the reflected variable snapshot retains String keys.
 Native projection uses Rumoca's `TornTangentPreparation` owner to bind one JVP
 source and share temporary seed/output/coefficient storage across its block
 evaluators. Each invocation retains its exact logical seed shape and independently
 owned Jacobian result. Workspace contents are not simulation state; the native
 [workspace contract](../../../rumoca/docs/dev-guide/src/runtime/simulation-runtime.md#torn-tangent-workspaces)
 defines clearing, nested evaluation and teardown at that owner.
-The source-library bundle stores `ParsedSourceDocument` with expanded source
-text and syntax together. Admission uses `replace_in_memory_source_set`;
-source spans and portable content identities address those retained bytes.
-The native indexer writes the same paired-source record shape. Empty source sets
-and read or parse failures reject admission before publishing artifacts. The CLI and native workbench provisioning adapter invoke the same indexer;
-compiler and UI hosts consume its generated artifacts.
+The serialized source-library bundle stores `SourceFileSnapshot` records with
+expanded source text and syntax together. The compiler source-preparation worker
+rebuilds Rumoca `ParsedSourceDocument` values from those bytes and admits them
+through `replace_in_memory_source_set`; source spans and portable content
+identities address the retained text, including virtual Twin URIs. The native
+indexer writes the source-snapshot record shape. Empty source sets and read or
+parse failures reject admission before publishing artifacts. The CLI and native
+workbench provisioning adapter invoke the same indexer; compiler and UI hosts
+consume its generated artifacts.
 The artifact tag is `rumoca-0.10.4+bincode2-ast4`. Native and browser decoders require
 complete records and full byte consumption; a partial bundle is never installed.
 Class documentation reads each exact parsed declaration and consumes Rumoca's
@@ -267,36 +282,37 @@ errors abort publication with the source identity.
 ## Solvers and clocks
 
 `solver_backends` registers BDF for offline implicit integration, RK45 for
-adaptive authoritative live integration, and fixed RK4 for deterministic
-prediction of qualified continuous models with parameter-only event partitions. A requested solver must
-resolve to a registered capability; unsupported selections are terminal errors.
+adaptive live integration, and fixed RK4 for predicted models. A requested
+solver must resolve to a registered capability; unsupported selections are
+terminal errors. LunCoSim translates the adaptive backends into Rumoca's
+`SimOptions`. For prediction, LunCoSim installs Rumoca's public fixed RK4
+Model Exchange integrator in its `FixedStepSession` and enforces the master's
+fixed communication lattice. Rumoca owns session initialization, input
+transactions, component evaluation and event handling.
 
 Live sessions have no stop time. Their finite options span supplies the
-root-scan scale. Batch runs use the admitted `RunBounds` and canonical output
-grid through Rumoca's checked batch solver in both native and browser hosts.
-Live co-simulation uses the separately admitted persistent participant session.
+root-scan scale. Batch runs use the admitted `RunBounds`; LunCoSim builds and
+budgets the canonical output grid, then advances Rumoca's public session to each
+observation in both native and browser hosts. Live co-simulation uses the
+separately admitted persistent participant session.
 Its demand and communication endpoints come from `TickClock` on the physics
 master's integer lattice, with the default exchange every master interval.
 Explicit slower exchanges are validated integer multiples. The worker receives
 derived start/stop seconds and returns its actual accepted solver coordinate;
 transaction validation never fabricates a corrected output timestamp. See
 [architecture 19](19-unified-time-and-clock.md) for pause, reset and speed semantics.
-Rumoca's `FixedRk4Integrator` advances the continuous state and samples the accepted
-interval. LunCoSim admits and selects the fixed communication lattice. It uses
-`FmiRuntimeView::validate_parameter_only_events` to admit parameter-dependent
-assertions and settled parameter-only discrete equations through Rumoca's shared
-ME-EVENT-003 proof. Assertions remain executable at initialization and parameter
-changes. State-, input- or time-dependent error assertions, dynamic discrete
-updates, clocks and delays remain rejected; external tables are also rejected.
-The focused `lunco-modelica-solver` `fixed_step` integration target verifies
-admission, retained assertion failures, rejected dynamic predicates and the
-fixed-step numerical contract. Vehicle startup and native controls are verified
-through the production Twin scenarios and window-input API.
+The focused `lunco-modelica-solver` `simulation_session` integration target
+checks LunCoSim's adapter against Rumoca's public session API for input updates,
+advancing to a communication point, and observing state and output values.
+Rumoca owns numerical-method behavior and its solver-specific tests. Vehicle
+startup and native controls are verified through production Twin scenarios and
+the window-input API.
 
-A scoped cancellation guard is observed by the evaluator and ME session loop.
-A scoped output budget admits grid dimensions before allocation and every
-recorded trace append, including event observations. Guards are thread-local,
-restore nested callers, and cannot migrate between worker threads.
+`RunResultLimits` admits batch grid dimensions before LunCoSim allocates retained
+trajectory columns. Cancellation is checked before and after compiler replies,
+session construction, and each requested observation. Rumoca main currently has
+no public cancellation hook inside a numerical kernel, so an in-progress compile
+or session operation must return before its cancellation is observed.
 
 ## Parameter authoring and session replacement
 
@@ -372,29 +388,29 @@ that consumer and its negative cases.
 
 ## Ownership review
 
-The pinned fork includes upstream [Rumoca v0.10.4](https://github.com/CogniPilot/rumoca/releases/tag/v0.10.4) (`9c8c56fcd`).
-The prepared-solve cache writes Rumoca's retained FMI wire and replays each
-component through Rumoca's checked FMI constructor.
-Parsed AST fields must be serialized completely for positional readers.
-The Diffsol backend directly depends on the corrected source retained in the
-pinned Rumoca repository. Downstream Git consumers receive its accepted-state,
-minimum-step, Newton-convergence, and failure-budget corrections through that
-dependency edge. The application carries no separate solver patch or sampler
-endpoint substitution.
+All Rumoca dependencies pin the current official LunCoSim fork revision
+`e86e9a0137562fca38998524fc5ac2a4600b41f1`. LunCoSim stores checked DAE
+artifacts; each adaptive live or batch solver uses Rumoca's public
+`SimulationSession` API. Predicted models use Rumoca's public Model Exchange
+session and fixed RK4 integrator. Parsed AST fields are consumed by LunCoSim
+adapters that compose public Rumoca queries with source-coordinate and
+application metadata. Rumoca owns numerical integration; LunCoSim owns the
+requested output grid, value budget, cancellation checkpoints between session
+operations, and worker lifecycle. Rumoca currently exposes no
+numerical-kernel cancellation hook.
 
 | Mechanism | Authoritative owner | LunCoSim responsibility |
 |---|---|---|
 | Expression rendering | `rumoca-ir-ast::Expression` Display | Use its complete representation in component modifications, indexer defaults, and canvas labels. |
 | Complete declaration extents | Rumoca parser `ClassDef.location` | Slice the original source after range validation; use name tokens separately for renaming. |
-| Qualified source names | `rumoca_core::qualified_name_segments` and `StoredDefinition` declaration queries | Preserve quoted identifiers and exact package boundaries without a host name parser. |
+| Qualified source names | Rumoca `Name` tokens and `StoredDefinition` queries, composed by `ModelicaDefinitionExt` | Preserve authored `within` and quoted-identifier boundaries in source selection. |
 | String literal decoding and encoding | Rumoca parser tokens and `rumoca-core::escape_modelica_string` | Copy decoded values into typed metadata; use canonical escaping when inserting new source nodes. Descriptions concatenate decoded tokens without adding whitespace. |
-| Checked DAE, initialization, parameter and input binding | Rumoca compiler and `SimOptions` preparation | Supply the complete authored source closure and admitted causal inputs. |
-| FMI preparation and ordinary sessions | `rumoca_sim::prepare_fmi_component` and `SimulationSession::new` | Cache checked components and select registered live solver capabilities. |
-| Live scalar units, descriptions, and bounds | `FmiComponent::variables()` and `FmiVariable::scalar_names()` | Carry exact compiled facts through worker admission; keep USD provenance and channel retention at their application owners. |
+| Checked DAE, initialization, parameter and input binding | Rumoca compiler and `SimulationSession` | Supply the complete authored source closure and admitted causal inputs. |
+| Live and batch solver sessions | `rumoca_sim::SimulationSession::new_with_diagnostics` | Select registered solver capabilities and keep each mutable session in its owning worker. |
+| DAE scalar declarations and checked bounds | `lunco-modelica-compiler::scalar_declarations_from_checked_dae` over Rumoca DAE views and `NumericEvaluator` | Project checked facts once for worker metadata; keep USD provenance and channel retention at their application owners. |
 | Retained trajectory units and descriptions | `SimResult::variable_meta` and `rumoca_sim::build_variable_meta` | Store exact per-run series facts with completed artifacts; graphs consume retained facts. |
-| Component initialization, input transactions, algebraic refresh and observations | Rumoca Model Exchange host (`MeRetainedComponent` / `MeSimulationSession`) | Live sessions and initial observations share this owner. Initial equations and event iteration complete before the first observation. A request that ends after initialization prepares the compiled output expressions needed for its initial observations and the initialization itself. |
-| Classical RK4 stages and continuous extension | `rumoca_solver::fmi_me::fixed_step::FixedRk4Integrator` | Provide the admitted time origin and cadence. |
-| Fixed prediction step lattice | `lunco-modelica-solver::FixedStepSession` | Keep exact communication steps, use Rumoca's parameter-only event proof, and reject external tables. |
+| Component initialization, input transactions and observations | Rumoca `SimulationSession` and `MeSimulationSession` | Live sessions and initial observations share this owner. LunCo's `SelectedValuesExt` selects requested values from the checked state; Rumoca completes initialization before the first observation. |
+| Fixed-step integration | Rumoca `MeSimulationSession` with `FixedRk4Integrator` | Install the public integrator through LunCo's `FixedStepSession` and preserve the master's fixed communication cadence. |
 | Source edits and diagram projection | Modelica document/AST/index owners | Splice exact authored spans, preserve untouched text, and project typed presentation facts. |
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |
 
@@ -431,24 +447,23 @@ they do not select another class from the source-wide interface. The production
 `modelica_source_target.usda` runs its attached `modelica_source_target.rhai`
 gate through source rejection and live replacement, including construction
 profile availability and retirement.
-Native construction can reuse relocatable Cranelift artifacts through Rumoca's
-explicit thread-local cache scope; LunCoSim owns budgets, asynchronous persistence
-and public accounting. See the [cache ownership contract](20-domain-modelica.md)
-for identity, failure and lifetime boundaries. This scope retains no solver state.
+Native construction uses Rumoca's default parallel Cranelift compilation queue.
+LunCoSim caches checked compiled DAEs; it does not install Rumoca's optional
+native-code artifact store, which would serialize function compilation while
+the cache scope is active. JIT code and solver state remain session-owned.
 Native pure-call helpers address module-owned result cells through symbolic,
 full-width data relocations. Artifact reuse binds fresh cells in the current
 module; mutable results never travel with cached code. The compiled table
 remains non-Sync and releases its code/data arena after callable addresses.
-The workspace pins the Rumoca family from `LunCoSim/rumoca` in
-[`Cargo.toml`](../../Cargo.toml) and `Cargo.lock`; normal builds require no local
-dependency override.
+The workspace manifest and lockfile pin the Rumoca family. Normal builds resolve
+the published revision directly.
 
-The application compiler owner may persist the SDK's checked DAE and consumed
-experiment defaults for an exact admitted source context. Flat IR and additional
-compiler source-map/diagnostic data are not retained by live workers. Native DAE decoding
-reconstructs through the checked constructor. Compilation input identity,
-participating-source identity and solver-preparation identity remain distinct;
-the earlier cache cannot bypass source admission or retain a live session.
+The application compiler owner may persist a checked DAE and consumed experiment
+defaults for an exact admitted source context. Flat IR and compiler source-map /
+diagnostic data are not retained by live workers. Native DAE decoding
+reconstructs through the checked constructor. Compilation input identity and
+participating-source identity remain distinct; the artifact cache cannot bypass
+source admission or retain a live session.
 Rumoca's fixed root and visible-output plans carry checked executable selections
 alongside their semantic metadata. Their common `PreparedOutputSelection` owner
 retains program order, complete grouped outputs, direct/deduplicated observations,
@@ -473,10 +488,10 @@ class: parameter/input literal bindings, explicit causal ports, and authored
 documentation. Generated synthesis requests its exact validated class through
 Rumoca's qualified AST lookup. Sibling and nested class declarations never enter
 that interface. Source-root requirements still cover the complete definition;
-checked DAE/FMI facts own inheritance, aliases, evaluated defaults, and live
+checked DAE facts own inheritance, aliases, evaluated defaults, and live
 variable metadata.
 Live telemetry units, descriptions, and input bounds come exclusively from the
-checked FMI scalar inventory. Construction carries that inventory through the typed worker
+checked scalar projection of the admitted DAE. Construction carries that inventory through the typed worker
 result alongside the installed solver plan. Session and source-generation fences
 apply before publication; a successful lifecycle result without its inventory is
 a terminal protocol diagnostic. Ordinary steps carry no repeated inventory.
@@ -488,7 +503,7 @@ second live unit/description reader. Undocumented declarations remain absent,
 even for connector-shaped names.
 
 Input controls read per-scalar minimum and maximum values from the same checked
-FMI inventory. They do not parse bundled source to repair missing bounds.
+DAE projection. They do not parse bundled source to repair missing bounds.
 `SnapshotVariables.metadata` exposes exact checked scalar facts alongside values
 and applies the same optional name filter. Draft documents remain the owner of
 pre-compile authoring facts; the UI does not overwrite compiled channel metadata.

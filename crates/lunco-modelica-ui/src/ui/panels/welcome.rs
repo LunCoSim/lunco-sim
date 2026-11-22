@@ -222,9 +222,9 @@ struct WelcomeState {
 const STATE_ID: &str = "modelica_welcome_state_v2";
 
 fn library_domain(qualified: &str) -> String {
-    let mut parts = rumoca_core::qualified_name_segments(qualified);
-    let library = parts.next().unwrap_or(qualified);
-    match parts.next() {
+    let parts = lunco_modelica_ast::modelica_path_parts(qualified);
+    let library = parts.first().map(String::as_str).unwrap_or(qualified);
+    match parts.get(1).map(String::as_str) {
         Some(domain) => format!("{library}/{domain}"),
         None => library.to_owned(),
     }

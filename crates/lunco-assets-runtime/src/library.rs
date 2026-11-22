@@ -413,7 +413,8 @@ impl LibraryLoadPhase {
 /// Artifact codec/version tag shared by the Modelica library packager and
 /// runtime. A mismatch is a packaging error, not a request to use an older
 /// decoder.
-pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str = "rumoca-0.10.4+bincode2-ast4";
+pub const EXPECTED_RUMOCA_ARTIFACT_TAG: &str =
+    "rumoca-0.10.4-cognipilot-488d6d5+luncosim-source-snapshot-v1";
 
 /// Manifest for a source-library bundle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -525,7 +526,13 @@ mod resolution_tests {
 
         let additional_source = OnceLock::new();
         install_sources(&additional_source, vec![native.clone()], None).unwrap();
-        assert!(additional_source.get().unwrap().primary_filesystem_root.is_none());
+        assert!(
+            additional_source
+                .get()
+                .unwrap()
+                .primary_filesystem_root
+                .is_none()
+        );
         for source in [&native, &memory] {
             assert_eq!(source.read(literal).unwrap(), Some(b"inside".to_vec()));
             assert!(source.read(Path::new("../outside.bin")).is_err());

@@ -13,6 +13,17 @@ use rumoca_ir_dae::{
 use super::ModelicaCompiler;
 
 impl ModelicaCompiler {
+    /// Project checked scalar declarations from a DAE without requiring the
+    /// source document's class identity. Runtime consumers use this for
+    /// metadata; source edits continue to use the full interface projection.
+    pub fn scalar_declarations_from_checked_dae(
+        dae: &Dae,
+        parameter_overrides: &[(String, f64)],
+    ) -> Result<std::collections::BTreeMap<String, ModelicaScalarDeclaration>, String> {
+        Self::interface_from_checked_dae("", dae, parameter_overrides)
+            .map(|interface| interface.declarations)
+    }
+
     /// Preserve the checked scalar interface and source-level access facts
     /// while its exact source unit is still seated in the compiler session.
     pub fn interface_for_parameter_edits(
@@ -30,15 +41,17 @@ impl ModelicaCompiler {
             if !declaration.is_parameter {
                 continue;
             }
-            declaration.source_edit_error = match self
-                .session
-                .class_component_reference_query(&selected, name)
-            {
-                Some(target) => Self::raw_parameter_value(&target, 0.0).err(),
-                None => Some(format!(
-                    "parameter '{name}' has no resolved source declaration"
-                )),
-            };
+            declaration.source_edit_error =
+                match lunco_modelica_ast::rumoca_adapter::component_reference(
+                    &mut self.session,
+                    &selected,
+                    name,
+                ) {
+                    Some(target) => Self::raw_parameter_value(&target, 0.0).err(),
+                    None => Some(format!(
+                        "parameter '{name}' has no resolved source declaration"
+                    )),
+                };
         }
         Ok(interface)
     }
@@ -54,7 +67,7 @@ impl ModelicaCompiler {
     }
 
     pub(super) fn raw_parameter_value(
-        target: &rumoca_compile::compile::ClassComponentReferenceDeclaration,
+        target: &lunco_modelica_ast::rumoca_adapter::ResolvedComponentReference,
         value: f64,
     ) -> Result<ModelicaScalarValue, String> {
         if target.is_final || target.is_protected {
@@ -164,9 +177,10 @@ impl ModelicaCompiler {
                         dimensions: variable.value_type().dimensions().to_vec(),
                         scalar_names: variable.scalar_names().collect(),
                         scalar_type,
-                        aggregate_name_is_indexed: rumoca_core::qualified_name_segments(
+                        aggregate_name_is_indexed: lunco_modelica_ast::modelica_path_parts(
                             variable.name().as_str(),
                         )
+                        .iter()
                         .any(|segment| rumoca_core::parse_scalar_name(segment).is_some()),
                         default_values,
                     });

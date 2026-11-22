@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use lunco_command_contracts::{Ack, OpId};
 use lunco_core::{ActiveCommandId, on_command, register_commands};
 use lunco_doc_bevy::DocumentRegistry;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_modelica_document::{ModelicaDocument, ModelicaOp};
 use lunco_modelica_runtime::{
     ModelicaChannels, ModelicaCommand, ModelicaModel, ModelicaSessionEpoch, SetModelicaParameter,
@@ -235,7 +236,7 @@ fn dispatch_parameter_edit(
     let ast = document
         .strict_ast()
         .ok_or("parameter source has no valid parsed definition")?;
-    ast.get_class_by_qualified_name(&class)
+    ast.class_by_path(&class)
         .and_then(|class| class.components.get(&request.key))
         .ok_or_else(|| format!("parameter '{}' is not directly declared in selected class '{class}'; edit its owning declaration", request.key))?;
     let workspace = world.get_resource::<lunco_workspace::WorkspaceResource>();

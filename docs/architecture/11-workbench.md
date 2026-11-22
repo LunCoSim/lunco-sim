@@ -1294,10 +1294,6 @@ text. Edits dispatch the generic `SetTwinSetting` command;
 `ResetTwinSetting` removes a key so the owning authored surface's declared
 default applies.
 
-**Settings → General → Modelica native cache** edits the saved application
-size. **Twin settings → Modelica native cache** edits or removes the active
-Twin's override. See the [Twin settings guide](13-twin-and-workflow.md#modelica-native-cache).
-
 **Settings → General** holds the global scene-loading default. **Settings →
 Project** edits the active project's local override and reports a
 shared Twin or CLI override only when present. The Twin settings panel edits

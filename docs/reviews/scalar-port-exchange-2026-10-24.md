@@ -28,7 +28,7 @@ The regular production rebuild completes in 4m00s, with the existing unrelated
 `UsdStageProjectionPlan` unused-import warning. Its SHA-256 is
 `9c3f5d62c42034cbf9ceac64dc4c476b5a59b0ebdeacbba055d5cef1b1e0cbef`.
 Fresh graphical runs use the same admitted authored source hashes as
-[the preceding regular-build cohort](terrain-certificate-lookup-2026-10-24.md#regular-build-across-the-three-twins).
+[the current performance handover](open-400fps-performance-handover.md).
 Each requires the intended native body, fully resident terrain, completed derived
 maps, five seconds of sustained readiness and a ten-second measurement window.
 Each coupled-tick summary contains 240 complete samples.

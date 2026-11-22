@@ -105,7 +105,7 @@ fn on_run_modelica_solve(
     let ast = document.strict_ast().ok_or_else(|| {
         "RunModelicaSolve requires a current strict Modelica source snapshot".to_owned()
     })?;
-    let dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
+    let dependency_roots = lunco_modelica_ast::source_dependencies::required_source_roots(&ast);
     let source = lunco_modelica_source_roots::compile_overlay_source(document);
     let filename = document.origin().session_uri();
     let attribution = PinnedDocumentRuntimeOwner::for_document(

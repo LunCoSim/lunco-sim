@@ -1,10 +1,9 @@
 # Rumoca output preparation
 
-The application pins the Rumoca loading changes from `LunCoSim/rumoca` at
-`2db205a9d9468c08adda46c36ada02078db9b34f` through Git dependencies and the lockfile.
-Normal builds require no adjacent dependency checkout.
+LunCoSim consumes Rumoca's output preparation through the revision in its
+workspace manifest and lockfile.
 The implementation and current performance evidence are tracked in
-[Griffin loading budget](griffin-loading-budget-2026-10-30.md).
+[current Griffin handover](open-400fps-performance-handover.md).
 
 ## Owner and contract
 

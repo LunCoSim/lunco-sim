@@ -28,6 +28,7 @@ mod util;
 
 pub use classes::*;
 pub use components::*;
+pub(crate) use connections::connection_annotation;
 pub use connections::*;
 pub use edit::Edit;
 pub use equations::*;

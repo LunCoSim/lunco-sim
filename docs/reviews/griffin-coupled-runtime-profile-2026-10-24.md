@@ -4,7 +4,7 @@ The requested sub-second loading, sub-millisecond complete coupled tick and
 sub-10 ms graphics targets remain open. Fresh native Tracy captures separate
 airborne execution from settled, sleeping ground contact. Neither instrumented
 run is product-performance acceptance. The regular-build observations remain
-in [the three-Twin performance review](terrain-certificate-lookup-2026-10-24.md#regular-build-across-the-three-twins).
+in [the current performance handover](open-400fps-performance-handover.md).
 
 Both captures use the regular Cargo production Tracy artifact in `target/debug/deps`,
 SHA-256 `41fbfffca09fe494ef036562f7cdecff3e67a7f211ddc19dd09d52f8a1ca9e5f`.
@@ -45,13 +45,6 @@ identify allocation, map/string operations, checked runtime refresh and the
 debug-build torn-sweep reference comparison. Finiteness checks and numerical
 equivalence checks remain enabled. The input transaction already batches native
 writes; the application needs no duplicate input-transaction mechanism.
-
-The largest live constructor takes 4.760 seconds; the coupled initializer's
-prepared-solve disk lookup takes 0.874 seconds. Its exact constructor interval
-contains 4026 selected 1 kHz CPU samples. Shared-value symbolic construction,
-operation cloning and allocation remain visible despite native artifact hits.
-This is a focused lead for the existing shared-value proof owner, not evidence
-that compilation or all workers run serially.
 
 One application-side correction removes unconditional diagnostic invalidation
 on successful Modelica steps. `lunco-modelica-worker` reads the current document

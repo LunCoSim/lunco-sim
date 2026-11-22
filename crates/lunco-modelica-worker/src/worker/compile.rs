@@ -1,4 +1,5 @@
 use super::*;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use lunco_modelica_runtime::CompileRequested;
 use std::collections::BTreeMap;
 
@@ -704,11 +705,11 @@ fn dispatch_one(
     }
 
     let mut claimed: BTreeMap<_, _> = ast
-        .declared_class_names()
+        .class_paths()
         .into_iter()
         .map(|name| (name, doc))
         .collect();
-    let mut dependency_roots = rumoca_compile::compile::source_root_dependencies(&ast);
+    let mut dependency_roots = lunco_modelica_ast::source_dependencies::required_source_roots(&ast);
     let mut extra_sources = Vec::new();
     for other_doc in sibling_documents {
         let host = documents
@@ -716,7 +717,7 @@ fn dispatch_one(
             .expect("current participating source snapshot");
         let other_document = host.document();
         if let Some(other_ast) = other_document.strict_ast() {
-            let names = other_ast.declared_class_names();
+            let names = other_ast.class_paths();
             if let Some((name, previous_doc)) = names
                 .iter()
                 .find_map(|name| claimed.get(name).map(|previous| (name, *previous)))
@@ -734,9 +735,8 @@ fn dispatch_one(
                 return;
             }
             claimed.extend(names.into_iter().map(|name| (name, other_doc)));
-            dependency_roots.extend(rumoca_compile::compile::source_root_dependencies(
-                &other_ast,
-            ));
+            dependency_roots
+                .extend(lunco_modelica_ast::source_dependencies::required_source_roots(&other_ast));
         }
         extra_sources.push((
             format!("doc_{}.mo", other_doc.raw()),

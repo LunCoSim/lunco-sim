@@ -143,6 +143,78 @@ pub fn validate_run_bounds(bounds: &RunBounds) -> Result<f64, RunBoundsError> {
     Ok(dt)
 }
 
+/// Build the admitted output timeline for an experiment run.
+///
+/// The requested interval remains independent of the solver's internal step.
+/// The end point is included even when the interval does not divide the
+/// horizon, and a last point within one ULP of the end is clamped to it.
+pub fn output_times(t_start: f64, t_end: f64, dt: f64) -> Result<Vec<f64>, RunBoundsError> {
+    let dt = resolve_step_dt(t_start, t_end, Some(dt), None)?;
+    let span = t_end - t_start;
+    let quotient = span / dt;
+    if !quotient.is_finite() || quotient > SAMPLE_CAP {
+        return Err(invalid(
+            "output grid",
+            format!("requires more than {SAMPLE_CAP:.0} intervals"),
+        ));
+    }
+
+    let grid_count = (quotient.floor() as usize)
+        .checked_add(1)
+        .ok_or_else(|| invalid("output grid", "sample count overflow"))?;
+    let max_samples = SAMPLE_CAP as usize + 1;
+    if grid_count > max_samples {
+        return Err(invalid(
+            "output grid",
+            format!("exceeds the {}-sample limit", max_samples),
+        ));
+    }
+    let mut times = Vec::with_capacity(grid_count.saturating_add(1).min(max_samples));
+    for index in 0..grid_count {
+        let raw = t_start + (index as f64) * dt;
+        let time = if index > 0 && (raw >= t_end || within_one_ulp(raw, t_end)) {
+            t_end
+        } else {
+            raw
+        };
+        if times.last().is_some_and(|previous| time <= *previous) {
+            return Err(invalid(
+                "output grid",
+                "interval does not advance time at this magnitude",
+            ));
+        }
+        times.push(time);
+        if time == t_end {
+            return Ok(times);
+        }
+    }
+    if times.len() >= max_samples {
+        return Err(invalid(
+            "output grid",
+            format!("exceeds the {}-sample limit", max_samples),
+        ));
+    }
+    times.push(t_end);
+    Ok(times)
+}
+
+fn within_one_ulp(left: f64, right: f64) -> bool {
+    if left == right {
+        return true;
+    }
+    let ulp = [left, right]
+        .into_iter()
+        .flat_map(|value| {
+            [
+                (value.next_up() - value).abs(),
+                (value - value.next_down()).abs(),
+            ]
+        })
+        .filter(|spacing| spacing.is_finite())
+        .fold(0.0, f64::max);
+    ulp > 0.0 && (left - right).abs() <= ulp
+}
+
 /// The bounds used when no source supplies any: `[0, DEFAULT_STOP_TIME]`,
 /// adaptive solver, no fixed output interval.
 pub fn default_bounds() -> RunBounds {
@@ -305,6 +377,29 @@ mod tests {
             solver: None,
             h0: None,
         }
+    }
+
+    #[test]
+    fn output_grid_includes_a_non_divisible_endpoint_once() {
+        let non_divisible = output_times(0.0, 1.0, 0.3).unwrap();
+        assert_eq!(non_divisible.len(), 5);
+        for (actual, expected) in non_divisible.iter().zip([0.0, 0.3, 0.6, 0.9, 1.0]) {
+            assert!((*actual - expected).abs() <= f64::EPSILON);
+        }
+        assert_eq!(non_divisible.last().copied(), Some(1.0));
+        let exact = output_times(0.0, 1.0, 0.25).unwrap();
+        assert_eq!(exact, vec![0.0, 0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(exact.iter().filter(|&&time| time == 1.0).count(), 1);
+    }
+
+    #[test]
+    fn output_grid_clamps_a_one_ulp_endpoint_and_enforces_the_sample_cap() {
+        let near_end = f64::from_bits(1.0_f64.to_bits() - 1);
+        assert_eq!(output_times(0.0, 1.0, near_end).unwrap(), vec![0.0, 1.0]);
+
+        let too_dense = 1.0 / (SAMPLE_CAP + 1.0);
+        let error = output_times(0.0, 1.0, too_dense).unwrap_err();
+        assert!(error.to_string().contains("output grid"));
     }
 
     #[test]

@@ -698,56 +698,6 @@ impl SettingsSection for AssetProcessingSettings {
     }
 }
 
-/// Application defaults for the native Modelica compiler artifact cache.
-#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ModelicaCacheSettings {
-    pub native_code_cache_mib: u16,
-}
-
-impl ModelicaCacheSettings {
-    pub const TWIN_KEY: &'static str = "modelica.native_code_cache_mib";
-    pub const MIB_RANGE: std::ops::RangeInclusive<u16> = 1..=192;
-    pub const DEFAULT_MIB: u16 = 96;
-
-    pub fn validate_mib(value: i64) -> Result<u16, String> {
-        u16::try_from(value)
-            .ok()
-            .filter(|mib| Self::MIB_RANGE.contains(mib))
-            .ok_or_else(Self::invalid_mib)
-    }
-
-    pub fn invalid_mib() -> String {
-        format!(
-            "{} requires an integer from {} to {} MiB",
-            Self::TWIN_KEY,
-            Self::MIB_RANGE.start(),
-            Self::MIB_RANGE.end()
-        )
-    }
-
-    pub fn capacity_bytes(mib: u16) -> Result<std::num::NonZeroUsize, String> {
-        let mib = Self::validate_mib(i64::from(mib))?;
-        std::num::NonZeroUsize::new(usize::from(mib) << 20).ok_or_else(Self::invalid_mib)
-    }
-}
-
-impl Default for ModelicaCacheSettings {
-    fn default() -> Self {
-        Self {
-            native_code_cache_mib: Self::DEFAULT_MIB,
-        }
-    }
-}
-
-impl SettingsSection for ModelicaCacheSettings {
-    const KEY: &'static str = "modelica";
-
-    fn validate_section(&self) -> Result<(), String> {
-        Self::validate_mib(i64::from(self.native_code_cache_mib)).map(|_| ())
-    }
-}
-
 /// Persistent settings for asset downloading.
 #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]

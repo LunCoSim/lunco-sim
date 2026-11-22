@@ -214,6 +214,7 @@ fn set_connection_line_actually_writes_the_route() {
         "re-routing dropped the authored colour:\n{after}"
     );
     let routes = lunco_modelica_index::connection_routes::connect_line_routes(
+        after,
         host.document().syntax().ast(),
         "Foo.Bar.Sys",
     );

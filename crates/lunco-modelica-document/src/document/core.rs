@@ -1,5 +1,6 @@
 //! The core Document representation of one Modelica source file.
 
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -595,9 +596,9 @@ impl ModelicaDocument {
         if let ModelicaChange::ComponentAdded { class, name } = &change {
             let component = match &fresh_ast {
                 FreshAst::Mutated(ast) => ast
-                    .get_class_by_qualified_name(class)
+                    .class_by_path(class)
                     .and_then(|declaration| declaration.components.get(name))
-                    .map(|component| (ast.relative_class_name(class), component)),
+                    .map(|component| (ast.relative_class_path(class), component)),
                 FreshAst::TextEdit => None,
             };
             let (class, component) = component.ok_or_else(|| {
@@ -605,7 +606,7 @@ impl ModelicaDocument {
                     "added component `{class}.{name}` is missing from the updated Modelica AST"
                 ))
             })?;
-            self.index.patch_component_added(class, component);
+            self.index.patch_component_added(&class, component);
         }
 
         let removed: String = self.source[range.clone()].to_string();

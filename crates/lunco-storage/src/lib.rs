@@ -967,3 +967,35 @@ impl BoundedDirectoryEntries {
         self.entries.insert(index, entry);
     }
 }
+
+/// Retain the newest direct files, breaking equal timestamps by display name.
+/// The vector stays bounded by `cap` throughout directory enumeration.
+pub(crate) fn retain_recent_entry(
+    entries: &mut Vec<(i128, StorageHandle)>,
+    entry: StorageHandle,
+    modified_nanos: i128,
+    cap: usize,
+    truncated: &mut bool,
+) {
+    let name = entry.display_name();
+    let index = entries.partition_point(|(current_time, current)| {
+        *current_time > modified_nanos
+            || (*current_time == modified_nanos && current.display_name() < name)
+    });
+    if entries.len() == cap {
+        *truncated = true;
+        if index >= cap {
+            return;
+        }
+        entries.pop();
+    }
+    entries.insert(index, (modified_nanos, entry));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn system_time_nanos(time: std::time::SystemTime) -> i128 {
+    match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos() as i128,
+        Err(error) => -(error.duration().as_nanos() as i128),
+    }
+}

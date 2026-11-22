@@ -15,6 +15,7 @@
 //! Names retain their exact authored package identity.
 
 use bevy::prelude::World;
+use lunco_modelica_ast::ModelicaDefinitionExt;
 
 use crate::class_ref::{ClassRef, Library};
 use crate::sim_default::ResourceRead;
@@ -110,9 +111,9 @@ fn resolve_document_metadata(
         None => crate::sim_target::default_class(None, &document.index().simulation_candidates())?,
     };
     let ast = document.syntax().ast();
-    ast.get_class_by_qualified_name(&selected)?;
-    let relative = ast.relative_class_name(&selected);
-    let entry = document.index().classes.get(relative)?;
+    ast.class_by_path(&selected)?;
+    let relative = ast.relative_class_path(&selected);
+    let entry = document.index().classes.get(&relative)?;
     let mut metadata = ClassMetadata::from(entry);
     metadata.qualified = match document
         .index()

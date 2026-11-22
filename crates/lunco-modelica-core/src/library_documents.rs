@@ -5,6 +5,7 @@
 //! for the UI's drill-in flow; the headless document package remains unaware
 //! of library storage and compiler caches.
 
+use lunco_modelica_ast::ModelicaDefinitionExt;
 use std::path::Path;
 
 use lunco_doc::{DocumentId, DocumentOrigin};
@@ -47,8 +48,8 @@ pub async fn load_library_class(
         lunco_modelica_library::source_library::parsed_source_bundle().and_then(|bundle| {
             bundle
                 .iter()
-                .find(|document| document.uri() == key)
-                .map(|document| document.definition().clone())
+                .find(|document| document.source_uri == key)
+                .map(|document| document.definition.clone())
         });
     let bundle_hit = bundled_ast.is_some();
 
@@ -93,7 +94,7 @@ fn selected_class_source(
     qualified: &str,
 ) -> Result<String, String> {
     let class_def = ast
-        .get_class_by_qualified_name(qualified)
+        .class_by_path(qualified)
         .ok_or_else(|| format!("class `{qualified}` not found"))?;
     let full_start = class_def.location.start as usize;
     let full_end = class_def.location.end as usize;

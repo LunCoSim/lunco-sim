@@ -91,10 +91,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     continue;
                 };
                 let abs = root.join(&relative_path);
-                let qualified_parts: Vec<String> =
-                    rumoca_core::qualified_name_segments(&qualified_path)
-                        .map(String::from)
-                        .collect();
+                let qualified_parts = lunco_modelica_ast::modelica_path_parts(&qualified_path);
                 let class = crate::class_ref::ClassRef::user_file(abs, qualified_parts);
                 let admission = crate::ui::panels::package_browser::capture_file_admission(world);
                 crate::ui::panels::package_browser::open_class(world, class, false, admission);

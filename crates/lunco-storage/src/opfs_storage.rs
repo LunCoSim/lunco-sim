@@ -294,6 +294,99 @@ impl OpfsStorage {
     ) -> StorageResult<crate::BoundedDirectoryEntries> {
         self.read_directory_contents(handle, Some(cap)).await
     }
+
+    /// Retain the newest direct files by their OPFS modification time, with a
+    /// stable filename tie-break and memory bounded by `cap`.
+    pub async fn read_directory_newest_bounded(
+        &self,
+        handle: &StorageHandle,
+        cap: usize,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        self.read_directory_newest_matching_bounded(handle, None, cap)
+            .await
+    }
+
+    /// Retain the newest direct files matching an optional extension.
+    pub async fn read_directory_newest_matching_bounded(
+        &self,
+        handle: &StorageHandle,
+        extension: Option<&str>,
+        cap: usize,
+    ) -> StorageResult<crate::BoundedDirectoryEntries> {
+        let path = handle
+            .as_file_path()
+            .ok_or_else(|| unsupported("OpfsStorage addresses File handles only"))?;
+        let path = crate::canonicalize_file_path(path)?;
+        let segments = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let directory = resolve_dir(&segments_root().await?, &segments, false).await?;
+        let iterator = directory.entries();
+        let mut retained = Vec::new();
+        let mut truncated = false;
+        loop {
+            let result = JsFuture::from(iterator.next().map_err(js_err)?)
+                .await
+                .map_err(js_err)?;
+            let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
+                .map_err(js_err)?
+                .as_bool()
+                .ok_or_else(|| unsupported("OPFS directory iterator returned no done flag"))?;
+            if done {
+                break;
+            }
+            let entry = js_sys::Array::from(
+                &js_sys::Reflect::get(&result, &JsValue::from_str("value")).map_err(js_err)?,
+            );
+            let name = entry
+                .get(0)
+                .as_string()
+                .ok_or_else(|| unsupported("OPFS directory iterator returned no name"))?;
+            if extension.is_some_and(|extension| {
+                std::path::Path::new(&name)
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    != Some(extension)
+            }) {
+                continue;
+            }
+            let handle = entry.get(1);
+            if handle.is_instance_of::<web_sys::FileSystemDirectoryHandle>() {
+                continue;
+            }
+            let file_handle = handle
+                .dyn_into::<web_sys::FileSystemFileHandle>()
+                .map_err(|_| {
+                    unsupported("OPFS directory iterator returned an unknown entry kind")
+                })?;
+            let file = JsFuture::from(file_handle.get_file())
+                .await
+                .map_err(js_err)?
+                .dyn_into::<web_sys::File>()
+                .map_err(|_| unsupported("OPFS file handle returned an unknown file"))?;
+            let modified = file.last_modified();
+            if !modified.is_finite() || modified < i64::MIN as f64 || modified > i64::MAX as f64 {
+                return Err(unsupported(
+                    "OPFS file returned an invalid modification time",
+                ));
+            }
+            crate::retain_recent_entry(
+                &mut retained,
+                StorageHandle::File(path.join(name)),
+                (modified.round() as i128) * 1_000_000,
+                cap,
+                &mut truncated,
+            );
+        }
+        Ok(crate::BoundedDirectoryEntries {
+            entries: retained.into_iter().map(|(_, entry)| entry).collect(),
+            truncated,
+        })
+    }
     async fn read_directory_contents(
         &self,
         handle: &StorageHandle,

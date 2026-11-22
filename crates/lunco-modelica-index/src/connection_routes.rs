@@ -1,6 +1,7 @@
 //! Source-owned routes for diagram connections.
 
-use lunco_modelica_ast::annotations::{LineRoute, extract_line_full};
+use lunco_modelica_ast::ModelicaDefinitionExt;
+use lunco_modelica_ast::annotations::{LineRoute, extract_connection_line};
 use rumoca_compile::parsing::ast::{ComponentReference, Equation, StoredDefinition};
 use std::collections::HashMap;
 
@@ -13,18 +14,15 @@ pub type ConnectEndpointKey = (Endpoint, Endpoint);
 
 /// Collect the routes authored on the selected class's connection equations.
 pub fn connect_line_routes(
+    source: &str,
     ast: &StoredDefinition,
     target_class: &str,
 ) -> HashMap<ConnectEndpointKey, LineRoute> {
     let mut routes = HashMap::new();
-    if let Some(class) = ast.get_class_by_qualified_name(target_class) {
+    if let Some(class) = ast.class_by_path(target_class) {
         for equation in &class.equations {
-            if let Equation::Connect {
-                lhs,
-                rhs,
-                annotation,
-            } = equation
-                && let Some(route) = extract_line_full(annotation)
+            if let Equation::Connect { lhs, rhs, .. } = equation
+                && let Some(route) = extract_connection_line(source, equation)
             {
                 routes
                     .entry(connection_key(endpoint(lhs), endpoint(rhs)))

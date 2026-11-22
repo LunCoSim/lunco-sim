@@ -55,23 +55,17 @@ pub(super) fn execute_wasm(
     )
     .map_err(|error| error.to_string())?;
     plan.options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
-    if !state.prepared_solve_cache.contains_key(&plan.key) {
-        let component = rumoca_sim::prepare_fmi_component(&compiled.compiled.dae, &plan.options)
-            .map_err(|error| error.to_string())?;
-        state
-            .prepared_solve_cache
-            .insert(plan.key.clone(), Arc::new(component));
-    }
-    let component = state
-        .prepared_solve_cache
-        .get(&plan.key)
-        .ok_or("initialization prepared artifact was not retained")?;
-    observe_initialization(component, plan, &probes, &source_state_names(&compiled))
-        .map_err(|error| error.to_string())
+    observe_initialization(
+        &compiled.compiled.dae,
+        plan,
+        &probes,
+        &source_state_names(&compiled),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn observe_initialization(
-    component: &rumoca_ir_solve::fmi::FmiComponent,
+    dae: &rumoca_ir_dae::Dae,
     plan: LiveBuildPlan,
     probes: &[String],
     state_names: &[String],
@@ -83,7 +77,36 @@ fn observe_initialization(
         .chain(state_names)
         .cloned()
         .collect::<Vec<_>>();
-    let mut values = rumoca_sim::initialize_fmi_component(component, &plan.options, &requested)?;
+    let stepper = lunco_modelica_solver::simulation_session::live_for_solver(
+        dae,
+        &plan.spec,
+        plan.options.clone(),
+    )?;
+    let selected = stepper.selected_values(&requested)?;
+    if selected.len() != requested.len() {
+        return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
+            "initialization requested {} values but received {}",
+            requested.len(),
+            selected.len()
+        )));
+    }
+    let mut values = requested
+        .iter()
+        .zip(selected)
+        .map(|(name, value)| {
+            let value = value.ok_or_else(|| {
+                rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "initialization cannot observe requested variable `{name}`"
+                ))
+            })?;
+            if !value.is_finite() {
+                return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "initialization observed non-finite `{name}` value {value}"
+                )));
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let state_values = state_names
         .iter()
         .cloned()
@@ -100,7 +123,6 @@ fn observe_initialization(
             session_ns: started.elapsed().as_nanos() as u64,
             metadata_ns: 0,
             initial_observation_ns: 0,
-            native_code_cache: None,
         },
     })
 }
@@ -165,7 +187,6 @@ impl Drop for PreparationRequests {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct PendingInitialization {
     pub(super) request_id: ModelicaPreparationId,
-    pub(super) model_name: String,
     pub(super) parameter_overrides: Vec<(String, f64)>,
     pub(super) initial_inputs: Vec<(String, f64)>,
     pub(super) probes: Vec<String>,
@@ -207,7 +228,6 @@ impl PendingRequest {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct InitializationWork {
     pub(super) request_id: ModelicaPreparationId,
-    pub(super) model_name: String,
     pub(super) comp_res: CompiledModelArtifact,
     pub(super) plan: LiveBuildPlan,
     pub(super) probes: Vec<String>,
@@ -242,7 +262,6 @@ pub(super) fn compiled_work(
     .map_err(|error| error.to_string())?;
     Ok(InitializationWork {
         request_id: pending.request_id,
-        model_name: pending.model_name,
         comp_res,
         plan,
         probes: pending.probes,
@@ -268,12 +287,6 @@ impl PreparationWork {
         match self {
             Self::Participant(work) => Some(work),
             Self::Initialization(_) => None,
-        }
-    }
-    pub(super) fn model_name(&self) -> &str {
-        match self {
-            Self::Participant(work) => &work.model_name,
-            Self::Initialization(work) => &work.model_name,
         }
     }
     pub(super) fn plan(&self) -> &LiveBuildPlan {
@@ -338,7 +351,7 @@ pub(super) enum ConstructedPreparation {
 pub(super) fn dispatch(
     id: u64,
     lane: thread_pool::Lane<()>,
-    component: Arc<rumoca_ir_solve::fmi::FmiComponent>,
+    dae: std::sync::Arc<rumoca_ir_dae::Dae>,
     work: &InitializationWork,
     pool: &ModelicaWorkerPools,
 ) -> Result<(), String> {
@@ -346,22 +359,19 @@ pub(super) fn dispatch(
     let probes = work.probes.clone();
     let state_names = source_state_names(&work.comp_res);
     let tx = pool.tx.clone();
-    let native_cache = pool.native_cache.clone();
     let queued = web_time::Instant::now();
     lane.submit(move |_| {
         let queue_wait_ns = queued.elapsed().as_nanos() as u64;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            native_cache
-                .construct(|| observe_initialization(&component, plan, &probes, &state_names))
+            observe_initialization(&dae, plan, &probes, &state_names)
         }))
         .unwrap_or_else(|_| {
             Err(rumoca_sim::SimulationDiagnosticError::Solver(
                 "initialization observation panicked".into(),
             ))
         })
-        .map(|(mut outcome, native_profile)| {
+        .map(|mut outcome| {
             outcome.construction_profile.queue_wait_ns = Some(queue_wait_ns);
-            outcome.construction_profile.native_code_cache = Some(native_profile);
             outcome
         });
         let _ = tx.send(WorkerPreparationResult::Initialization { id, result });

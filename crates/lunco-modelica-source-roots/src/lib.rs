@@ -232,9 +232,9 @@ impl SourceRoot {
             .iter()
             .flat_map(|file| &file.classes)
             .filter_map(|name| {
-                rumoca_core::qualified_name_segments(name)
+                lunco_modelica_ast::modelica_path_parts(name)
+                    .into_iter()
                     .next()
-                    .map(str::to_owned)
             })
             .collect::<Vec<_>>();
         names.sort();
@@ -699,9 +699,9 @@ fn register_indexed_library_source_root(
     let namespaces = lunco_modelica_index::visual_diagram::library_class_library()
         .iter()
         .filter_map(|class| {
-            rumoca_core::qualified_name_segments(&class.name)
+            lunco_modelica_ast::modelica_path_parts(&class.name)
+                .into_iter()
                 .next()
-                .map(str::to_owned)
         })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -1001,7 +1001,7 @@ fn refresh_document_roots(
         return;
     }
     for class in document.index().classes.values() {
-        if rumoca_core::qualified_name_segments(&class.name).count() == 1 {
+        if lunco_modelica_ast::modelica_path_parts(&class.name).len() == 1 {
             let registration = source_roots.register_open_doc_root(
                 class.name.clone(),
                 path.clone(),
@@ -1501,7 +1501,7 @@ pub fn admit_compile_roots(
 /// Classify Rumoca’s source dependency facts against the registry and log
 /// their admission state.
 pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
-    let deps = rumoca_compile::compile::source_root_dependencies(ast);
+    let deps = lunco_modelica_ast::source_dependencies::required_source_roots(ast);
     if deps.is_empty() {
         bevy::log::info!(
             "[source-roots] compile `{}`: no external library deps",
