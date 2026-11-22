@@ -29,6 +29,17 @@ pub(super) fn upsert_arg(edit: &mut Edit<'_>, group: Range<usize>, head: &str, r
     }
 }
 
+/// Append an argument to a parenthesized list without assuming its head is a
+/// single identifier. Modelica qualified modifier targets contain dots.
+pub(super) fn append_arg(edit: &mut Edit<'_>, group: Range<usize>, rendered: &str) {
+    let source = edit.source();
+    let args = text::split_args(source, group.clone());
+    match args.last() {
+        Some(last) => edit.insert(last.end, format!(", {rendered}")),
+        None => edit.insert(group.end - 1, rendered),
+    }
+}
+
 /// Append an entry to an array group `{…}`.
 pub(super) fn append_entry(edit: &mut Edit<'_>, array: Range<usize>, rendered: &str) {
     let source = edit.source();

@@ -11,11 +11,11 @@
 //! Legacy `<text>` fields can opt in with `tag:ui_input="text|number"`.
 //! Use `tag:ui_value` for labels projected from the form state,
 //! `tag:ui_status="true"` for status text, and
-//! `tag:ui_scroll_area="vertical"` on a scrollable `<node>`. A button tagged
-//! with `ui_form` receives the current form snapshot as `parameters.fields`
-//! alongside its authored action tags. Values remain strings here so each Twin
-//! can own its validation and domain rules. Input fields can set an integer
-//! `tag:ui_tab_index`; the runtime adds them to the surface's keyboard tab order.
+//! `tag:ui_scroll_area="vertical|horizontal|both"` on a scrollable `<node>`.
+//! A button tagged with `ui_form` receives its current form snapshot as
+//! `parameters.fields` alongside its authored action tags. Values remain
+//! strings here so each Twin can own its validation and domain rules. Set
+//! `tag:ui_tab_index` on an input to add it to the surface's keyboard tab order.
 //! Use `tag:class` for Flair CSS classes; the runtime maps it to Flair's
 //! `ClassList` component. A draggable window moves only when a pointer drag
 //! starts on a descendant tagged `tag:ui_drag_handle="true"`. A resizable
@@ -24,8 +24,9 @@
 mod accessibility;
 
 use bevy::ecs::entity::EntityHashSet;
+use bevy::input::mouse::MouseScrollPixelsPerLine;
 use bevy::picking::Pickable;
-use bevy::picking::events::{PointerClick, PointerDrag};
+use bevy::picking::events::{PointerClick, PointerDrag, PointerScroll};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::{ExtractSchedule, MainWorld, Render, RenderApp, RenderSystems};
@@ -115,7 +116,100 @@ struct RuntimeUiHtmlInput;
 struct RuntimeUiHtmlInputAttributesCompiled;
 
 #[derive(Component)]
-struct RuntimeUiScrollArea;
+struct RuntimeUiScrollArea {
+    horizontal: bool,
+    vertical: bool,
+}
+
+fn runtime_ui_scroll_axes(value: &str) -> Option<(bool, bool)> {
+    match value {
+        "vertical" => Some((false, true)),
+        "horizontal" => Some((true, false)),
+        "both" => Some((true, true)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod runtime_ui_scroll_axis_tests {
+    use super::runtime_ui_scroll_axes;
+    use super::{RuntimeUiScrollArea, scroll_runtime_ui_horizontal_area_with_vertical_wheel};
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::input::mouse::{MouseScrollPixelsPerLine, MouseScrollUnit};
+    use bevy::input::touch::TouchPhase;
+    use bevy::picking::backend::HitData;
+    use bevy::picking::events::{Pointer, PointerScroll};
+    use bevy::picking::pointer::{Location, PointerId};
+    use bevy::prelude::*;
+
+    #[test]
+    fn authored_scroll_area_declares_its_supported_axes() {
+        assert_eq!(runtime_ui_scroll_axes("vertical"), Some((false, true)));
+        assert_eq!(runtime_ui_scroll_axes("horizontal"), Some((true, false)));
+        assert_eq!(runtime_ui_scroll_axes("both"), Some((true, true)));
+        assert_eq!(runtime_ui_scroll_axes("diagonal"), None);
+    }
+
+    #[test]
+    fn horizontal_area_maps_vertical_wheel_to_clamped_x_scroll() {
+        let mut app = App::new();
+        app.insert_resource(MouseScrollPixelsPerLine::default())
+            .add_observer(scroll_runtime_ui_horizontal_area_with_vertical_wheel);
+        let area = app
+            .world_mut()
+            .spawn((
+                Node {
+                    overflow: Overflow {
+                        x: OverflowAxis::Scroll,
+                        y: OverflowAxis::Visible,
+                    },
+                    ..default()
+                },
+                ComputedNode {
+                    size: Vec2::new(100.0, 40.0),
+                    content_size: Vec2::new(300.0, 40.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+                ScrollPosition::default(),
+                RuntimeUiScrollArea {
+                    horizontal: true,
+                    vertical: false,
+                },
+            ))
+            .id();
+        let pointer = Pointer::new(
+            PointerId::Mouse,
+            Location {
+                target: NormalizedRenderTarget::None {
+                    width: 0,
+                    height: 0,
+                },
+                position: Vec2::ZERO,
+            },
+        );
+        let wheel = |y| PointerScroll {
+            entity: area,
+            pointer: pointer.clone(),
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y,
+            hit: HitData {
+                camera: Entity::PLACEHOLDER,
+                depth: 0.0,
+                position: None,
+                normal: None,
+                extra: None,
+            },
+            phase: TouchPhase::Moved,
+        };
+
+        app.world_mut().trigger(wheel(-3.0));
+        assert_eq!(app.world().get::<ScrollPosition>(area).unwrap().x, 200.0);
+        app.world_mut().trigger(wheel(3.0));
+        assert_eq!(app.world().get::<ScrollPosition>(area).unwrap().x, 0.0);
+    }
+}
 
 /// Set or patch a Twin-authored HTML form's current values. Values are strings
 /// at the form boundary; Twin policy owns domain parsing and validation.
@@ -958,9 +1052,13 @@ fn attach_runtime_ui_scroll_areas(
     parents: Query<&ChildOf>,
 ) {
     for (entity, tags) in &candidates {
-        if tags.tags().get("ui_scroll_area").map(String::as_str) != Some("vertical") {
+        let Some((horizontal, vertical)) = tags
+            .tags()
+            .get("ui_scroll_area")
+            .and_then(|axis| runtime_ui_scroll_axes(axis))
+        else {
             continue;
-        }
+        };
         let Some(surface_root) = runtime_ui_surface_ancestor(entity, &roots, &parents) else {
             continue;
         };
@@ -971,28 +1069,68 @@ fn attach_runtime_ui_scroll_areas(
             continue;
         }
         commands.entity(entity).insert((
-            RuntimeUiScrollArea,
+            RuntimeUiScrollArea {
+                horizontal,
+                vertical,
+            },
             bevy_ui_widgets::ScrollArea,
             Pickable::default(),
         ));
     }
 }
 
-fn enable_runtime_ui_scroll_area_overflow(mut areas: Query<&mut Node, With<RuntimeUiScrollArea>>) {
-    for mut node in &mut areas {
-        node.overflow.y = bevy::ui::OverflowAxis::Scroll;
+fn enable_runtime_ui_scroll_area_overflow(mut areas: Query<(&RuntimeUiScrollArea, &mut Node)>) {
+    for (area, mut node) in &mut areas {
+        node.overflow.x = if area.horizontal {
+            bevy::ui::OverflowAxis::Scroll
+        } else {
+            bevy::ui::OverflowAxis::Visible
+        };
+        node.overflow.y = if area.vertical {
+            bevy::ui::OverflowAxis::Scroll
+        } else {
+            bevy::ui::OverflowAxis::Visible
+        };
     }
 }
 
+/// A horizontal-only surface should remain usable with a conventional vertical
+/// mouse wheel as well as with horizontal trackpad gestures. Shift-wheel and
+/// trackpad X deltas continue through Bevy's shared ScrollArea observer.
+fn scroll_runtime_ui_horizontal_area_with_vertical_wheel(
+    mut scroll: On<PointerScroll>,
+    mut areas: Query<(&Node, &ComputedNode, &mut ScrollPosition), With<RuntimeUiScrollArea>>,
+    pixels_per_line: Res<MouseScrollPixelsPerLine>,
+) {
+    let Ok((node, computed, mut position)) = areas.get_mut(scroll.entity) else {
+        return;
+    };
+    if node.overflow.x != bevy::ui::OverflowAxis::Scroll
+        || node.overflow.y == bevy::ui::OverflowAxis::Scroll
+        || scroll.x.abs() > f32::EPSILON
+        || scroll.y.abs() <= f32::EPSILON
+    {
+        return;
+    }
+
+    scroll.propagate(false);
+    let delta = scroll.to_pixels(&pixels_per_line).y;
+    let visible = computed.size() * computed.inverse_scale_factor;
+    let content = computed.content_size() * computed.inverse_scale_factor;
+    let max_range = (content - visible).max(Vec2::ZERO);
+    position.x = (position.x - delta).clamp(0.0, max_range.x);
+}
+
 /// Collection hosts may clip and scroll themselves when their authored CSS
-/// declares vertical overflow. A non-scrolling collection host must not claim
-/// wheel events; they need to reach an enclosing authored scroll area instead.
+/// declares overflow. A non-scrolling collection host must not claim wheel
+/// events; they need to reach an enclosing authored scroll area instead.
 fn sync_runtime_ui_collection_scroll_areas(
     mut commands: Commands,
     hosts: Query<(Entity, &Node, Has<bevy_ui_widgets::ScrollArea>), With<RuntimeUiCollectionHost>>,
 ) {
     for (entity, node, has_scroll_area) in &hosts {
-        let should_scroll = node.overflow.y == bevy::ui::OverflowAxis::Scroll;
+        let should_scroll = node.overflow.x == bevy::ui::OverflowAxis::Scroll
+            || node.overflow.y == bevy::ui::OverflowAxis::Scroll;
         match (should_scroll, has_scroll_area) {
             (true, false) => {
                 commands
@@ -2069,6 +2207,7 @@ impl Plugin for RuntimeUiPlugin {
             bevy_flair::FlairPlugin,
             RuntimeUiManifestPlugin,
         ));
+        app.add_observer(scroll_runtime_ui_horizontal_area_with_vertical_wheel);
         // HUI treats unsupported HTML tags as custom elements. Bind HTML
         // `<input>` to a UI node; attach `EditableText` separately once the
         // authored form is mounted. Do not add `Text` here: Bevy's static text

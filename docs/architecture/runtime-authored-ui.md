@@ -602,6 +602,11 @@ emits its declared semantic dismiss action. The shared `lunco-ui::modal` host
 remains the owner of focus, queued rich-dialog outcomes, and typed
 `CloseModal` dispatch.
 
+Put `tag:ui_scroll_area="vertical"`, `"horizontal"`, or `"both"` on a
+scrollable `<node>`. A horizontal-only area maps an ordinary vertical mouse
+wheel to horizontal movement; trackpad and Shift-wheel horizontal deltas retain
+their native direction.
+
 ### Keyed HUI collections
 
 Declare a collection on a runtime surface with its exposure `source`, HTML

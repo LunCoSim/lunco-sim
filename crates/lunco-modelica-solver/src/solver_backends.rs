@@ -71,7 +71,6 @@ pub fn ensure_builtin_solvers() {
 }
 
 /// The ONE place a resolved [`SolverSpec`] becomes Rumoca solver options.
-/// LunCo-owned integration policies are installed by the live-session adapter.
 ///
 /// An id with no rumoca mapping is an ERROR, never a silent degradation to BDF:
 /// degrading turns a typo into a different solver with no diagnostic. A backend
@@ -86,9 +85,7 @@ pub fn rumoca_options(
     let mode = match spec.id.as_str() {
         "bdf" => M::Bdf,
         "rk45" => M::RkLike,
-        // Fixed RK4 is installed as Rumoca's public Model Exchange plugin by
-        // LunCo's live-session adapter.
-        "fixedrk4" => M::RkLike,
+        "fixedrk4" => M::FixedStep,
         _ => {
             return Err(SolverError::Incapable {
                 asked: spec.id.clone(),
@@ -199,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn fixed_rk4_selects_rumocas_me_execution_family() {
+    fn fixed_rk4_maps_to_rumocas_fixed_step_mode() {
         ensure_builtin_solvers();
         let spec = solver::resolve(&SolverRequest {
             profile: RuntimeProfile {
@@ -221,7 +218,7 @@ mod tests {
         )
         .expect("fixed-step options map to Rumoca");
 
-        assert_eq!(options.solver_mode, rumoca_sim::SimSolverMode::RkLike);
+        assert_eq!(options.solver_mode, rumoca_sim::SimSolverMode::FixedStep);
         assert_eq!(options.dt, Some(0.01));
     }
 }

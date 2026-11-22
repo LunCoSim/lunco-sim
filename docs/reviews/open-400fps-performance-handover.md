@@ -420,24 +420,27 @@ runtime behavior on latest main. No Bevy branch was pushed.
 
 ## Rumoca current-main integration — 2026-11-22
 
-LunCoSim's Rumoca family is pinned to current LunCoSim fork commit
-`e86e9a0137562fca38998524fc5ac2a4600b41f1` in `Cargo.toml` and `Cargo.lock`.
-Adaptive sessions use Rumoca's public `SimulationSession`; LunCoSim's
-`fixed-rk4` adapter installs Rumoca's public `FixedRk4Integrator` through
-Model Exchange. Requested-value selection lives in LunCoSim's
-`SelectedValuesExt`. The application retains checked compiled-DAE caching and
-uses Rumoca's default parallel Cranelift compile queue. It does not install
-Rumoca's optional native-code artifact store: that scope currently compiles
-queued native functions serially, and a second native-artifact persistence path
-would add a large owner without helping steady-state stepping.
+LunCoSim's Rumoca family is pinned to upstream commit
+`488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396` from CogniPilot in `Cargo.toml`
+and `Cargo.lock`.
+Adaptive and fixed-step sessions use Rumoca's public `SimulationSession`;
+LunCoSim selects `SimSolverMode::FixedStep` for its registered `fixed-rk4`
+capability. Requested-value selection uses Rumoca's
+`SimulationSession::selected_values`. The application retains checked
+compiled-DAE caching and uses Rumoca's default parallel Cranelift compile queue.
+It does not install Rumoca's optional native-code artifact store: that scope
+currently compiles queued native functions serially, and a second
+native-artifact persistence path would add a large owner without helping
+steady-state stepping.
 
-Focused verification passed:
+The earlier LunCoSim fork-pinned baseline
+(`e86e9a0137562fca38998524fc5ac2a4600b41f1`) had these focused checks:
 
 - `cargo test --offline --locked -p lunco-modelica-solver --test simulation_session -j 4` — 2 passed.
 - `cargo test --offline --locked -p lunco-modelica-worker --test rumoca_api_coverage -j 4` — 3 passed.
 - `cargo build --offline --locked -p lunco-luncosim --bin luncosim -j 4` — passed. Binary SHA-256: `82012370ba76eb84ba17549ece002cde347124082fed53ec96fe7e3cef7159df`.
 
-The production headless startup harness opened the exact scene
+That baseline's production headless startup harness opened the exact scene
 `/home/rod/Documents/models/lunar-base-model/twins/astrobotic-griffin-1/scenes/griffin_1_surface_ops.usda`
 from Twin commit `8efcaab022a41e1dd88be078cb94bcc06950865c`. On API port 4631,
 it reached first physics admission in 158.81 s. `/Griffin1SurfaceOps/Lander`
@@ -450,11 +453,43 @@ receipt and log are in
 At first admission, `AttitudePropulsion` reported a 1.497 s session
 construction, 15.52 ms worker step, 21.04 ms response latency, and backlog 8.
 These are first-step figures, not a settled physics or frame-time sample. The
-headless run reports no rendered FPS. A new windowed run was unavailable in
-this environment: no private X server or window manager is installed, and the
-user's display was left untouched. The earlier surface-present profile below
-is prior-build diagnostic context; it does not prove the frame bottleneck on
-this current pin.
+headless run reports no rendered FPS. This is a prior-build startup baseline,
+not validation of the upstream Rumoca pin below.
+
+### Upstream Rumoca build and Griffin startup — 2026-11-22
+
+The source-checkout debug build used Rumoca upstream commit
+`488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396`. LunCoSim application HEAD was
+`c6967cb615bdddf05cc5e6c51326f5baf2136d51` with the working diff recorded in
+the receipt; the binary SHA-256 was
+`fef8ba89d336bf6cf773ff01333bcb433f90257524ede53ce54f9c4e314de59b`.
+
+`scripts/perf/twin_startup.py --startup-only --headless` opened the exact
+`scenes/griffin_1_surface_ops.usda` scene through `OpenFile` on API port 5417.
+The Twin was still at `8efcaab022a41e1dd88be078cb94bcc06950865c`; its 594-file
+source snapshot stayed unchanged. Application bootstrap reached readiness in
+1.302 s, then the scene reached first physics admission in 38.309 s. The
+lander was ready, 13 Modelica participants were running and two were idle, and
+`RuntimeDiagnostics` reported zero errors and warnings. The process and API
+port were released after the run.
+
+The log recorded one coupled initialization for eight participants and no
+`reset=true` lifecycle result. The retained RK45 coupled-initialization
+observation profile was 20.601 s; compiling its generated DAE took 2.685 s on
+the compiler actor. This points to coupled initialization as the main
+remaining load cost. The previous 158.81 s fork-pinned startup is about 4.1×
+longer, but its receipt and workload/cache snapshot are no longer present, so
+this is not a controlled version-only comparison.
+
+Headless `EnginePerformance` had no frame samples, so this run does not provide
+rendered FPS. A clean windowed run was unavailable: this environment has no
+private Xvfb and cannot access the NVIDIA driver; the user's display was left
+untouched. The receipt and log are in
+`target/perf/rumoca-main-current/griffin-headless-20261122/`.
+
+After integrating the newer local `main`, the combined tree passed
+`cargo test --locked -p lunco-modelica-solver --test simulation_session -j 4`
+(3 passed) and `cargo build --locked -p lunco-luncosim --bin luncosim -j 4`.
 
 ## Griffin surface-present attribution — 2026-11-21
 

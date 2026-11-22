@@ -6,7 +6,5 @@
 //! model. Keeping that boundary separate prevents solver implementation
 //! changes from enlarging the compiler host's source and test target.
 
-mod fixed_step;
-
 pub mod simulation_session;
 pub mod solver_backends;

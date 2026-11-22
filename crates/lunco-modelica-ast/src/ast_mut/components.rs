@@ -4,14 +4,107 @@
 //! match. It must never re-emit a declaration that already exists in the source
 //! so comments and formatting outside the claimed spans remain unchanged.
 
-use rumoca_ir_ast::ClassDef;
+use rumoca_ir_ast::{ClassDef, Expression};
+use std::ops::Range;
 
 use super::clause;
 use super::edit::Edit;
 use super::errors::AstMutError;
-use super::parsing::{FRAGMENT_CLASS_NAME, parse_component_fragment, parse_value_fragment};
+use super::parsing::{
+    FRAGMENT_CLASS_NAME, parse_component_fragment, parse_modification_list_fragment,
+    parse_value_fragment,
+};
 use super::text;
 use crate::pretty;
+
+fn valid_parameter_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.split('.').all(|part| {
+            let mut chars = part.chars();
+            chars.next().is_some_and(|c| c == '_' || c.is_alphabetic())
+                && chars.all(|c| c == '_' || c.is_alphanumeric())
+        })
+}
+
+fn joined_modifier_path(prefix: &str, target: &str) -> String {
+    if prefix.is_empty() {
+        target.to_string()
+    } else if target.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{prefix}.{target}")
+    }
+}
+
+fn expression_range(expression: &Expression) -> Option<Range<usize>> {
+    let span = expression.span();
+    (span.end.0 > span.start.0).then_some(span.start.0..span.end.0)
+}
+
+/// Find a value expression for a full component-relative modifier path.
+/// Nested and qualified modifier syntax resolve to the same target path.
+fn modifier_value_range(
+    modifiers: &[Expression],
+    prefix: &str,
+    target_path: &str,
+) -> Option<Range<usize>> {
+    for modifier in modifiers {
+        match modifier {
+            Expression::Modification { target, value, .. } => {
+                let path = joined_modifier_path(prefix, &target.to_string());
+                if path == target_path {
+                    return expression_range(value);
+                }
+                if let Expression::ClassModification {
+                    target: nested_target,
+                    modifications,
+                    ..
+                } = value.as_ref()
+                {
+                    let nested_path = joined_modifier_path(&path, &nested_target.to_string());
+                    if let Some(range) =
+                        modifier_value_range(modifications, &nested_path, target_path)
+                    {
+                        return Some(range);
+                    }
+                }
+            }
+            Expression::ClassModification {
+                target,
+                modifications,
+                ..
+            } => {
+                let path = joined_modifier_path(prefix, &target.to_string());
+                if let Some(range) = modifier_value_range(modifications, &path, target_path) {
+                    return Some(range);
+                }
+            }
+            Expression::Binary {
+                op: rumoca_core::OpBinary::Assign,
+                lhs,
+                rhs,
+                ..
+            } => {
+                if let Expression::ClassModification {
+                    target,
+                    modifications,
+                    ..
+                } = lhs.as_ref()
+                {
+                    let path = joined_modifier_path(prefix, &target.to_string());
+                    if path == target_path {
+                        return expression_range(rhs);
+                    }
+                    if let Some(range) = modifier_value_range(modifications, &path, target_path) {
+                        return Some(range);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
 
 /// Set or replace a single parameter modification on a component.
 ///
@@ -50,46 +143,79 @@ pub fn set_parameter(
         (range.end > range.start && source.get(range.clone()).is_some()).then_some(range)
     };
 
-    match param {
-        "" => match comp.binding.as_ref() {
-            Some(binding) => {
-                let range = span_of(binding).ok_or_else(|| AstMutError::AnchorNotFound {
-                    what: format!("binding of component `{component}`"),
-                })?;
-                edit.replace(range, value_text);
-            }
-            None => {
-                // No binding yet — add one after the modifier list (or the name).
-                let at = text::component_modifier_group(source, comp)
-                    .map(|g| g.end)
-                    .unwrap_or_else(|| text::component_after_name(source, comp));
-                edit.insert(at, format!(" = {value_text}"));
-            }
-        },
-        "start" if comp.start_is_modification => {
-            let range = span_of(&comp.start).ok_or_else(|| AstMutError::AnchorNotFound {
-                what: format!("`start` modifier of component `{component}`"),
-            })?;
-            edit.replace(range, value_text);
+    if param.contains('.') {
+        if !valid_parameter_path(param) {
+            return Err(AstMutError::InvalidParameterPath(param.to_string()));
         }
-        _ => match comp.modifications.get(param) {
-            Some(value) => {
-                let range = span_of(value).ok_or_else(|| AstMutError::AnchorNotFound {
-                    what: format!("`{param}` modifier of component `{component}`"),
-                })?;
-                edit.replace(range, value_text);
-            }
-            None => {
-                let rendered = format!("{param} = {value_text}");
-                match text::component_modifier_group(source, comp) {
-                    Some(group) => clause::upsert_arg(edit, group, param, &rendered),
-                    None => {
-                        let at = text::component_after_name(source, comp);
-                        edit.insert(at, format!("({rendered})"));
-                    }
+        let modifier_group = text::component_modifier_group(source, comp);
+        let existing_value = if let Some(group) = modifier_group.clone() {
+            let modifier_text = &source[group.start + 1..group.end - 1];
+            let (modifiers, prefix_len) = parse_modification_list_fragment(modifier_text)?;
+            modifier_value_range(&modifiers, "", param).and_then(|range| {
+                let offset = group.start as isize + 1 - prefix_len as isize;
+                let start = range.start as isize + offset;
+                let end = range.end as isize + offset;
+                (start >= 0 && end >= start)
+                    .then_some(start as usize..end as usize)
+                    .filter(|range| source.get(range.clone()).is_some())
+            })
+        } else {
+            None
+        };
+        if let Some(range) = existing_value {
+            edit.replace(range, value_text);
+        } else {
+            let rendered = format!("{param} = {value_text}");
+            match modifier_group {
+                Some(group) => clause::append_arg(edit, group, &rendered),
+                None => {
+                    let at = text::component_after_name(source, comp);
+                    edit.insert(at, format!("({rendered})"));
                 }
             }
-        },
+        }
+    } else {
+        match param {
+            "" => match comp.binding.as_ref() {
+                Some(binding) => {
+                    let range = span_of(binding).ok_or_else(|| AstMutError::AnchorNotFound {
+                        what: format!("binding of component `{component}`"),
+                    })?;
+                    edit.replace(range, value_text);
+                }
+                None => {
+                    // No binding yet — add one after the modifier list (or the name).
+                    let at = text::component_modifier_group(source, comp)
+                        .map(|g| g.end)
+                        .unwrap_or_else(|| text::component_after_name(source, comp));
+                    edit.insert(at, format!(" = {value_text}"));
+                }
+            },
+            "start" if comp.start_is_modification => {
+                let range = span_of(&comp.start).ok_or_else(|| AstMutError::AnchorNotFound {
+                    what: format!("`start` modifier of component `{component}`"),
+                })?;
+                edit.replace(range, value_text);
+            }
+            _ => match comp.modifications.get(param) {
+                Some(value) => {
+                    let range = span_of(value).ok_or_else(|| AstMutError::AnchorNotFound {
+                        what: format!("`{param}` modifier of component `{component}`"),
+                    })?;
+                    edit.replace(range, value_text);
+                }
+                None => {
+                    let rendered = format!("{param} = {value_text}");
+                    match text::component_modifier_group(source, comp) {
+                        Some(group) => clause::upsert_arg(edit, group, param, &rendered),
+                        None => {
+                            let at = text::component_after_name(source, comp);
+                            edit.insert(at, format!("({rendered})"));
+                        }
+                    }
+                }
+            },
+        }
     }
 
     // Mirror into the AST clone so the document's cache and index stay current.

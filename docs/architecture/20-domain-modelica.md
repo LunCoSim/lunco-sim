@@ -766,7 +766,7 @@ cover the editing surface:
 | `AddConnection { class, eq }` | Insert a `connect(...)` equation | Diagram: wire ports |
 | `RemoveConnection { class, from, to }` | Delete a `connect(...)` equation | Diagram: disconnect wire |
 | `SetPlacement { class, name, placement }` | Set/replace the `Placement` annotation | Diagram: drag-to-move |
-| `SetParameter { class, component, param, value }` | Replace one parameter modifier | Parameter inspector |
+| `SetParameter { class, component, param, value }` | Replace one parameter modifier; `param` may be a qualified nested path such as `burner.efficiency` | Parameter inspector |
 
 `class` accepts qualified dotted paths (`Pkg.Inner`,
 `Modelica.Blocks.Continuous.Integrator`) so ops work on nested classes
@@ -798,8 +798,9 @@ text patch**:
 - `SetPlacement` → locate the component's annotation span, find the
   `Placement(...)` sub-call at paren depth 0, replace in place;
   sibling annotations (Dialog, Documentation) are preserved
-- `SetParameter` → locate the component's modifications list, parse
-  entries at depth 0, replace `name = value` or append as needed
+- `SetParameter` → locate the component's modifications list, resolve a direct
+  or qualified nested modifier path, replace its value in place or append the
+  requested qualified path while preserving surrounding source text
 
 This keeps all source mutation on one code path (uniform undo,
 uniform change emission) and means every op produces a byte-level

@@ -412,6 +412,7 @@ fn project_class_entry(
 #[cfg(test)]
 mod composite_slim_slice_tests {
     use super::*;
+    use lunco_modelica_ast::ModelicaDefinitionExt;
 
     fn project_fixture(
         ast: Arc<rumoca_compile::parsing::ast::StoredDefinition>,
