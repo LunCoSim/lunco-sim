@@ -16,7 +16,8 @@ pub fn required_source_roots(definition: &StoredDefinition) -> BTreeSet<String> 
     let mut roots = BTreeSet::new();
     for path in class_paths {
         if let Some(class) = definition.class_by_path(&path) {
-            let scope = crate::modelica_path_parts(&path);
+            let mut scope = crate::modelica_path_parts(&path);
+            scope.pop();
             collect_class_references(class, &scope, &local_classes, &mut roots);
         }
     }
@@ -125,12 +126,16 @@ fn resolves_locally(
     (0..=first_scope).rev().any(|length| {
         let mut candidate = scope[..length].to_vec();
         candidate.extend_from_slice(path);
-        let candidate = candidate.join(".");
-        local_classes.iter().any(|local| {
-            local == &candidate
-                || local.starts_with(&format!("{candidate}."))
-                || candidate.starts_with(&format!("{local}."))
-        })
+        if local_classes.contains(&candidate.join(".")) {
+            return true;
+        }
+
+        // A local package or class owns its qualified descendants even when
+        // the referenced leaf is declared in another file of that source set.
+        // A merely matching parent scope does not own arbitrary new children.
+        let mut local_root = scope[..length].to_vec();
+        local_root.push(path[0].clone());
+        local_classes.contains(&local_root.join("."))
     })
 }
 
@@ -192,6 +197,28 @@ mod tests {
                 "Missing.Type x; end M;"
             )),
             BTreeSet::from(["A", "Bare", "C", "Global", "Missing"].map(str::to_owned))
+        );
+    }
+
+    #[test]
+    fn recovered_package_model_keeps_external_base_namespace() {
+        let source = concat!(
+            "within LunCo.Propulsion;\n",
+            "model RCSJet\n",
+            "  extends LunCo.Icons.RCSJet;\n",
+            "  parameter Real exit_mach = supersonicExitMach(10.0, 1.2);\n",
+            "end RCSJet;\n",
+        );
+        let syntax = rumoca_phase_parse::parse_to_syntax(source, "RCSJet.mo");
+        assert!(
+            !syntax.has_errors(),
+            "valid package source produced parser diagnostics: {:?}",
+            syntax.parse_error()
+        );
+
+        assert_eq!(
+            required_source_roots(syntax.best_effort()),
+            BTreeSet::from(["LunCo".to_owned()])
         );
     }
 }

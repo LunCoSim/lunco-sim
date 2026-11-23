@@ -12,6 +12,7 @@ function computeFreeJetProfile
   input Real observation_length_m;
   input Real exit_lip_angle_rad;
   input Real radiative_fraction;
+  input Real profile_geometry[10];
   output Real values[35];
 protected
   constant Real pi = 3.141592653589793;
@@ -21,7 +22,6 @@ protected
   Real stagnation_temperature;
   Real total_specific_energy;
   Real pressure_exit;
-  Real area_mach_exit;
   Real radius[5];
   Real density[5];
   Real temperature[5];
@@ -29,7 +29,6 @@ protected
   Real emission[5];
   Real station_mach;
   Real area;
-  Real z;
   Real dz;
   Real dr;
   Real log_ratio;
@@ -70,19 +69,15 @@ algorithm
     /(area_exit*gas_gamma*exit_mach^2) else 0.0;
   assert(speed_exit <= 0.0 or pressure_exit >= ambient_pressure_pa,
     "FreeJetProfile supports underexpanded supersonic flow, not ambient shock compression");
-  area_mach_exit := (2.0/(gas_gamma+1.0)*(1.0+(gas_gamma-1.0)*exit_mach^2/2.0))
-    ^((gas_gamma+1.0)/(2.0*(gas_gamma-1.0)))/exit_mach;
   mass_residual := 0.0;
   energy_residual := 0.0;
   // Closure: exit transverse ideal-gas RMS spread, combined in quadrature
   // with the finite exit disk, plus the authored nozzle-lip direction. This
   // is an effective forward-streamtube closure, not a CFD/backflow solution.
   for i in 1:5 loop
-    z := observation_length_m*((i-1)/4.0)^2;
-    radius[i] := sqrt(exit_radius_m^2 + 2.0*(z/(sqrt(gas_gamma)*exit_mach))^2)
-      + z*tan(exit_lip_angle_rad);
+    radius[i] := profile_geometry[i];
+    station_mach := profile_geometry[5+i];
     area := pi*radius[i]^2;
-    station_mach := supersonicExitMach(area/area_exit*area_mach_exit,gas_gamma);
     temperature[i] := stagnation_temperature/(1.0+(gas_gamma-1.0)*station_mach^2/2.0);
     speed[i] := station_mach*sqrt(gas_gamma*gas_constant_j_kg_k*temperature[i]);
     density[i] := if speed[i] > 0.0 then mass_flow_kgs/(area*speed[i]) else 0.0;

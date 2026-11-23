@@ -76,7 +76,16 @@ model PlumePhotometry
   output Real flow_phase_cos;
   output Real transported_distance_m(start=0.0,fixed=true);
   output Real luminous_efficacy_out_lm_w;
+  Real observation_length_m;
+  discrete Real profile_geometry[10];
 equation
+  assert(geometry_capacity_m >= 0.0, "Plume observation capacity cannot be negative");
+  observation_length_m = if geometry_capacity_m > 0.0
+    then geometry_capacity_m else 20.0*nozzle_exit_radius_m;
+  when sample(0.0,1.0/60.0) then
+    profile_geometry = computeFreeJetGeometry(nozzle_exit_radius_m,nozzle_exit_mach,
+      gas_gamma,observation_length_m,exit_lip_angle_rad);
+  end when;
   luminous_efficacy_out_lm_w = luminous_efficacy_lm_w;
   {envelope_radius_m,
     envelope_length_m,
@@ -140,14 +149,15 @@ equation
     gas_gamma,
     gas_constant_j_kg_k,
     ambient_pressure_pa,
-    geometry_capacity_m,
+    observation_length_m,
     exit_lip_angle_rad,
     radiative_fraction,
     luminous_efficacy_lm_w,
     fuel_family,
     mixture_mode,
     mixture_ratio,
-    stoichiometric_mixture_ratio);
+    stoichiometric_mixture_ratio,
+    profile_geometry);
   der(transported_distance_m) = exit_speed_mps;
   flow_phase_sin = sin(transported_distance_m/(1024.0*nozzle_exit_radius_m)*6.283185307179586);
   flow_phase_cos = cos(transported_distance_m/(1024.0*nozzle_exit_radius_m)*6.283185307179586);

@@ -204,6 +204,11 @@ contains dots and admits top-level Twin Modelica files. Rumoca's
 declaration, including source-root documents. The application keeps no second
 class-to-document index or negative lookup cache.
 
+Source-root dependency extraction resolves qualified references from each
+declaration's enclosing lexical scope. The declaration itself is not a package
+scope; treating it as one can hide a required external root when its name shares
+the root's prefix.
+
 `DescribeModel` returns the canonical authored class name. Explicit names select
 an exact qualified or document-relative declaration; a bare name is admitted
 only when unique in the owning document. Inherited member facts come from

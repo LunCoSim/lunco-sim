@@ -12,5 +12,6 @@ CombustionChamber
 PressureFedCombustionChamber
 PropellantStatus
 supersonicExitMach
+computeFreeJetGeometry
 computeFreeJetProfile
 computePlumePhotometry

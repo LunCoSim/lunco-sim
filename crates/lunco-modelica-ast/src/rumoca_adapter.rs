@@ -238,13 +238,9 @@ fn resolve_type_prefixes_inner(
         });
     }
 
-    let qualified = session
-        .class_type_resolution_candidates_in_class_query(scope, raw_name)
+    let qualified = scoped_type_resolution_candidates(session, scope, raw_name)
         .into_iter()
-        .find_map(|candidate| {
-            let resolved = session.class_lookup_query(&candidate)?;
-            (resolved == candidate).then_some(resolved)
-        })?;
+        .find_map(|candidate| session.class_lookup_query(&candidate))?;
     if !visiting.insert(qualified.clone()) {
         return None;
     }
@@ -292,6 +288,41 @@ fn resolve_type_prefixes_inner(
     Some(result)
 }
 
+/// Complete Rumoca's type candidates with the package scopes that contain the
+/// declaring class. Rumoca returns a bare candidate for sibling classes in a
+/// `within Package;` source file; the session lookup resolves that bare name
+/// only when it is globally unique. Trying enclosing packages first preserves
+/// Modelica lexical scope when another package declares the same leaf name.
+fn scoped_type_resolution_candidates(
+    session: &mut Session,
+    scope: &str,
+    raw_name: &str,
+) -> Vec<String> {
+    let candidates = session.class_type_resolution_candidates_in_class_query(scope, raw_name);
+    let mut scoped = Vec::with_capacity(candidates.len() + 2);
+    let mut seen = HashSet::new();
+
+    for candidate in candidates {
+        if candidate == raw_name
+            && !raw_name.starts_with('.')
+            && rumoca_core::parent_scope(raw_name).is_none()
+        {
+            let mut parent = rumoca_core::parent_scope(scope);
+            while let Some(parent_scope) = parent {
+                let candidate = format!("{parent_scope}.{raw_name}");
+                if seen.insert(candidate.clone()) {
+                    scoped.push(candidate);
+                }
+                parent = rumoca_core::parent_scope(parent_scope);
+            }
+        }
+        if seen.insert(candidate.clone()) {
+            scoped.push(candidate);
+        }
+    }
+    scoped
+}
+
 #[cfg(test)]
 mod tests {
     use super::{component_declarations, resolve_type_prefixes};
@@ -331,5 +362,83 @@ mod tests {
             )
             .expect("fixture admission");
         assert!(resolve_type_prefixes(&mut session, "P.Root", "A").is_none());
+    }
+
+    #[test]
+    fn source_set_projection_resolves_sibling_types_in_their_within_package() {
+        use rumoca_compile::compile::{ParsedSourceDocument, SourceRootKind};
+
+        let mut session = Session::default();
+        let documents = [
+            (
+                "file:///twin/models/FactoryEquipment/package.mo",
+                "within; package FactoryEquipment end FactoryEquipment;",
+            ),
+            (
+                "file:///twin/models/FactoryEquipment/Identified.mo",
+                "within FactoryEquipment; partial model Identified parameter String assetId=\"\"; end Identified;",
+            ),
+            (
+                "file:///twin/models/FactoryEquipment/LotOut.mo",
+                "within FactoryEquipment; connector LotOut Real lotKg; end LotOut;",
+            ),
+            (
+                "file:///twin/models/FactoryEquipment/Feed.mo",
+                "within FactoryEquipment; model Feed extends Identified; LotOut outlet; end Feed;",
+            ),
+            (
+                "file:///twin/models/A/package.mo",
+                "within; package A end A;",
+            ),
+            (
+                "file:///twin/models/A/Shared.mo",
+                "within A; partial model Shared parameter Real aValue=1; end Shared;",
+            ),
+            (
+                "file:///twin/models/A/Feed.mo",
+                "within A; model Feed extends Shared; end Feed;",
+            ),
+            (
+                "file:///twin/models/B/package.mo",
+                "within; package B end B;",
+            ),
+            (
+                "file:///twin/models/B/Shared.mo",
+                "within B; partial model Shared parameter Real bValue=2; end Shared;",
+            ),
+        ]
+        .into_iter()
+        .map(|(uri, source)| ParsedSourceDocument::parse(uri, source).expect("fixture parses"))
+        .collect();
+        session.replace_in_memory_source_set(
+            "twin:1:models",
+            SourceRootKind::DurableExternal,
+            documents,
+            None,
+        );
+
+        let feed = component_declarations(&mut session, "FactoryEquipment.Feed")
+            .expect("same-package declarations resolve");
+        assert!(
+            feed.iter().any(|member| {
+                member.component.name == "assetId" && member.type_name == "String"
+            })
+        );
+        assert!(feed.iter().any(|member| {
+            member.component.name == "outlet" && member.type_name == "FactoryEquipment.LotOut"
+        }));
+
+        let scoped = component_declarations(&mut session, "A.Feed")
+            .expect("lexically scoped duplicate type resolves");
+        assert!(
+            scoped
+                .iter()
+                .any(|member| member.component.name == "aValue")
+        );
+        assert!(
+            !scoped
+                .iter()
+                .any(|member| member.component.name == "bValue")
+        );
     }
 }

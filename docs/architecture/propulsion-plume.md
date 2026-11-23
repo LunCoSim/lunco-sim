@@ -31,6 +31,19 @@ the [isentropic area-Mach relation](https://www.grc.nasa.gov/WWW/BGH/isentrop.ht
 Nozzle contour supplies the exit wall tangent. Effective Isp velocity includes
 pressure thrust; it must not be substituted for gas speed:
 
+The inverse starts from a near-sonic estimate and applies safeguarded Newton
+steps to the logarithmic area residual. It retains the supersonic Mach bracket
+and uses bisection when a Newton step would leave that bracket. The area-Mach
+relation and supersonic root are unchanged.
+
+Station radii and their Mach roots depend only on nozzle geometry. The
+`computeFreeJetGeometry` owner computes that ten-value station vector once for
+`RCSJet` parameters and at each `PlumePhotometry` 60 Hz geometry sample. The
+profile calculation consumes that vector during Modelica residual evaluation;
+current thrust, flow, temperature, density and emission still use the current
+simulation state. A changed `PlumePhotometry` geometry input therefore takes
+effect on the cached station radii and Mach values at the next sample boundary.
+
 ```
 A_e = pi*r_e^2
 u_e = (F + p_a*A_e) / (mdot*(1 + 1/(gamma*M_e^2)))
