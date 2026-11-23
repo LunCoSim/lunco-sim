@@ -459,11 +459,9 @@ and Twin lifetime validation as menu actions. Their buttons stay disabled until
 the current Rhai tool endpoint is available, then resolve and validate it again
 at selection.
 
-When no Twin is active, the application empty state also offers a Tutorials
-button. It opens the existing quick-navigation window filtered to Tutorials;
-the catalog policy supplies each result from the same typed action used by the
-Scenarios → Tutorials menu. The button stays visible but disabled until the
-application catalog has published its entries.
+When no Twin is active, the empty-state card offers the authored
+**Open Example Mission "Crater Cup"** action and **Open Twin**. Tutorials remain
+available from the Scenarios menu and the Tutorials quick-navigation category.
 
 The application-required `application.scenarios.menu` Rhai policy owns the
 complete Scenarios tree: library and Twin groups, test-scene visibility,
@@ -485,11 +483,10 @@ preference through the existing typed settings command.
 
 Tutorial catalogs use the same replaceable menu provider and live under
 Scenarios → Tutorials → track → lesson. Rhai also publishes their existing
-lesson actions as Tutorials quick-navigation entries. Catalog policy can mark
-one lesson as the empty viewport's featured action; application-scope featured
-lessons are visible only while no Twin is active. **Play Crater Cup** is
-also an authored policy action; **Open Twin** is the generic shell entry point
-when no Twin is active.
+lesson actions as Tutorials quick-navigation entries. The no-Twin welcome card
+offers the authored **Open Example Mission "Crater Cup"** action and **Open
+Twin**; tutorial entries stay in Scenarios and quick navigation. Twin catalogs
+may provide a featured action while their Twin is active.
 The shared `tutorials` Rhai tool owns tour cursors and continuation. Domain
 exercises retain their own authoritative state checks. See [classroom
 onboarding](../tutorials/06-classroom-onboarding.md) for the report/save
@@ -925,8 +922,9 @@ read it; the panel system re-renders on change.
 
 View → Find files and Ctrl/Cmd+P open quick navigation. Empty search starts with
 active-Twin files; typing or explicit scopes finds library sources, scenes and
-actions. The Tutorials category reads catalog-backed lesson entries. The
-empty-viewport Tutorials button opens quick navigation in that category;
+actions. The Tutorials category reads catalog-backed lesson entries. Tutorials
+are available through that category and the Scenarios menu; the empty-viewport
+card currently offers the Crater Cup example mission and Open Twin.
 Ctrl/Cmd+Shift+P opens panel/perspective actions. Scene results say Load and
 identify world replacement; scene menus and search read admitted indexed
 inventories. Rhai owns the Scenarios tree and supplies scene and tutorial

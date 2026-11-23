@@ -898,8 +898,14 @@ impl FlatParam {
             format!("{}.{}", self.chain.join("."), self.leaf)
         }
     }
-    fn depth(&self) -> usize {
-        self.chain.len()
+
+    fn edit_target(&self) -> (String, String) {
+        if self.chain.is_empty() {
+            return (self.leaf.clone(), String::new());
+        }
+        let mut nested_path = self.chain.iter().skip(1).cloned().collect::<Vec<_>>();
+        nested_path.push(self.leaf.clone());
+        (self.chain[0].clone(), nested_path.join("."))
     }
 }
 
@@ -1079,6 +1085,7 @@ fn flatten_class_parameters(
         owner_class: &str,
         type_path: &str,
         chain: &mut Vec<String>,
+        modifier_scopes: &mut Vec<(String, String)>,
         visited: &mut std::collections::HashSet<String>,
         out: &mut Vec<FlatParam>,
     ) {
@@ -1100,7 +1107,15 @@ fn flatten_class_parameters(
         if let Some(class_entry) = index.classes.get(type_path) {
             for base in &class_entry.extends {
                 if let Some(base_path) = resolve_class(index, type_path, base) {
-                    walk(index, owner_class, base_path, chain, visited, out);
+                    walk(
+                        index,
+                        owner_class,
+                        base_path,
+                        chain,
+                        modifier_scopes,
+                        visited,
+                        out,
+                    );
                 }
             }
         }
@@ -1121,11 +1136,21 @@ fn flatten_class_parameters(
                     // declaration shadows this class's declared default.
                     // For depth 0 (the root call) chain.last() is None,
                     // so no override applies — value is the binding text.
-                    let override_value = chain.last().and_then(|parent_comp| {
-                        index
-                            .find_component(owner_class, parent_comp)
-                            .and_then(|c| c.modifications.get(&comp.name).cloned())
-                    });
+                    // Modelica merges modifier scopes from outside inward: an
+                    // outer instance modifier overrides an inner declaration.
+                    let override_value = modifier_scopes.iter().enumerate().find_map(
+                        |(scope_index, (declaring_class, parent_comp))| {
+                            let mut nested_path = chain
+                                .iter()
+                                .skip(scope_index + 1)
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            nested_path.push(comp.name.clone());
+                            index
+                                .find_component(declaring_class, parent_comp)
+                                .and_then(|c| c.modifications.get(&nested_path.join(".")).cloned())
+                        },
+                    );
                     let value = override_value
                         .or_else(|| comp.binding.clone())
                         .unwrap_or_default();
@@ -1154,7 +1179,17 @@ fn flatten_class_parameters(
                         continue;
                     };
                     chain.push(comp.name.clone());
-                    walk(index, type_path, child_type, chain, visited, out);
+                    modifier_scopes.push((type_path.to_string(), comp.name.clone()));
+                    walk(
+                        index,
+                        type_path,
+                        child_type,
+                        chain,
+                        modifier_scopes,
+                        visited,
+                        out,
+                    );
+                    modifier_scopes.pop();
                     chain.pop();
                 }
             }
@@ -1165,8 +1200,17 @@ fn flatten_class_parameters(
 
     let mut out = Vec::new();
     let mut chain: Vec<String> = Vec::new();
+    let mut modifier_scopes: Vec<(String, String)> = Vec::new();
     let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
-    walk(index, class, class, &mut chain, &mut visited, &mut out);
+    walk(
+        index,
+        class,
+        class,
+        &mut chain,
+        &mut modifier_scopes,
+        &mut visited,
+        &mut out,
+    );
 
     // Drop sub-component rows whose value is a bare identifier matching
     // a top-level parameter — those are bindings (e.g. `airframe.g` ←
@@ -1268,12 +1312,9 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
             .id_salt("active_class_parameters")
             .default_open(true)
             .show(ui, |ui| {
-            // Editable rows are depth ≤ 1 — direct parameters of the
-            // active class (`SetParameter { component, param: "" }`)
-            // and one-level component modifications
-            // (`SetParameter { component, param }`). `ast_mut::set_parameter`
-            // doesn't yet walk dotted component paths, so deeper rows
-            // render read-only with the muted style. Two-pass: collect
+            // Every resolved parameter row can be edited for writable documents.
+            // Deep rows use qualified component-relative modifier paths.
+            // Two-pass: collect
             // edits into the outer `edits` (declared above the borrow),
             // apply after the view-model borrow is released.
             // Bound the list height so a model with dozens of parameters
@@ -1296,7 +1337,7 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
                 // Read-only docs (bundled examples) can't accept any
                 // edits — fall back to the muted display path for
                 // every row.
-                let editable = !read_only && row.depth() <= 1;
+                let editable = !read_only;
                 let path = row.path();
                 {
                     let display_value = format_param_value(&row.value);
@@ -1356,11 +1397,7 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
                             && (ui.input(|i| i.key_pressed(egui::Key::Enter))
                                 || buf != baseline);
                         if commit && buf != baseline {
-                            let (component, param) = if row.depth() == 0 {
-                                (row.leaf.clone(), String::new())
-                            } else {
-                                (row.chain[0].clone(), row.leaf.clone())
-                            };
+                            let (component, param) = row.edit_target();
                             bevy::log::info!(
                                 "[Telemetry] commit param edit: class='{}' component='{}' param='{}' value='{}' (was '{}')",
                                 active, component, param, buf, row.value
@@ -1380,9 +1417,6 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
                             }
                         }
                     } else {
-                        // Deeper than one level — read-only label. Edit
-                        // by drilling into the component's class via
-                        // the canvas, then editing there.
                         let ro_name = ui.add(
                             egui::Label::new(
                                 egui::RichText::new(path.clone())
@@ -1422,4 +1456,58 @@ fn render_active_class_parameters(ui: &mut egui::Ui, ctx: &mut PanelCtx, muted: 
         .collect();
     ctx.trigger(crate::ui::panels::canvas_diagram::ApplyOpsRequested { doc: doc_id, ops });
     ui.separator();
+}
+
+#[cfg(test)]
+mod nested_parameter_edit_target_tests {
+    use super::FlatParam;
+
+    #[test]
+    fn direct_parameter_targets_its_own_binding() {
+        let row = FlatParam {
+            chain: Vec::new(),
+            leaf: "throughput".to_string(),
+            value: "12".to_string(),
+            description: String::new(),
+        };
+        assert_eq!(row.edit_target(), ("throughput".to_string(), String::new()));
+    }
+
+    #[test]
+    fn nested_parameter_targets_the_root_component_with_qualified_path() {
+        let row = FlatParam {
+            chain: vec!["engine".to_string(), "combustor".to_string()],
+            leaf: "efficiency".to_string(),
+            value: "0.8".to_string(),
+            description: String::new(),
+        };
+        assert_eq!(
+            row.edit_target(),
+            ("engine".to_string(), "combustor.efficiency".to_string())
+        );
+    }
+
+    #[test]
+    fn nested_modifier_override_is_shown_on_the_parameter_row() {
+        let source = r#"
+model Combustor
+  parameter Real eta = 0.5;
+end Combustor;
+model Engine
+  Combustor combustor(eta = 0.65);
+end Engine;
+model Plant
+  Engine engine(combustor(eta = 0.75));
+end Plant;
+"#;
+        let ast = rumoca_phase_parse::parse_to_ast(source, "nested_telemetry.mo").unwrap();
+        let mut index = lunco_modelica_index::index::ModelicaIndex::new();
+        index.rebuild_from_ast(&ast);
+        let rows = super::flatten_class_parameters(&index, "Plant");
+        let efficiency = rows
+            .iter()
+            .find(|row| row.path() == "engine.combustor.eta")
+            .unwrap();
+        assert_eq!(efficiency.value, "0.75");
+    }
 }

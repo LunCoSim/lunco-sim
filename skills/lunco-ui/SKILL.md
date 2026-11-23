@@ -43,9 +43,10 @@ scenes, and a separate **Test Scenes** submenu. The empty-viewport welcome card
 is shown only while no live scene is mounted; a Twin with no live scene offers
 its configured default and every regular indexed scene in a scrollable list.
 Test scenes remain available from the Twin's Scenarios submenu and never appear
-in that card. Application welcome actions such as featured tutorials are
-visible only when no Twin is active. Use `SceneMountState` so an Editor preview
-cannot hide the empty live state. Verify its buttons with
+in that card. With no Twin active, the welcome card shows the Crater Cup example
+mission and Open Twin; tutorials remain in Scenarios and quick navigation.
+Use `SceneMountState` so an Editor preview cannot hide the empty live state.
+Verify its buttons with
 `scripts/api/test_scene_loading_ui.py --port <free-port>`.
 
 ## Graph readability

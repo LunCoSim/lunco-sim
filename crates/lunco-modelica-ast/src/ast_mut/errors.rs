@@ -22,6 +22,10 @@ pub enum AstMutError {
         /// The offending value text.
         value: String,
     },
+    /// A qualified parameter target contains an empty or invalid identifier.
+    InvalidParameterPath(String),
+    /// A component modifier list could not be parsed independently.
+    ModifierListParseFailed(String),
     /// `add_component` was called with a component name that already
     /// exists. Adding a duplicate would silently shadow the existing
     /// declaration in `components: IndexMap`, which is rarely the
@@ -111,6 +115,12 @@ impl std::fmt::Display for AstMutError {
                     f,
                     "could not parse value `{value}` as a Modelica expression"
                 )
+            }
+            AstMutError::InvalidParameterPath(path) => {
+                write!(f, "invalid qualified parameter path: {path}")
+            }
+            AstMutError::ModifierListParseFailed(modifiers) => {
+                write!(f, "could not parse component modifier list: {modifiers}")
             }
             AstMutError::DuplicateComponent { class, component } => write!(
                 f,

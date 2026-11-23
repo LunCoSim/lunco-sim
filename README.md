@@ -17,14 +17,12 @@ A rover's suspension, its controller, and the terrain all affect the same
 traverse. LunCoSim brings those interactions into one scene, with models you
 can inspect, parameters you can change, and telemetry you can follow.
 
-[**Download LunCoSim**](https://github.com/LunCoSim/lunco-sim/releases)
-· [**Nightly builds**](https://github.com/LunCoSim/lunco-sim-updates/releases)
-· [**Documentation**](https://luncosim.github.io/luncosim-docs/)
-· [Code-signing policy](docs/code-signing-policy.md)
-· [**Current status**](https://luncosim.github.io/luncosim-docs/#current-status)
-· [Tutorials](docs/tutorials/README.md)
-· [Watch demos](https://www.youtube.com/@LunCoSim)
-· [Join the community](https://discord.gg/A6U3GdvQum)
+## Get started
+
+1. Install LunCoSim from
+   [Nightly Builds](https://github.com/LunCoSim/lunco-sim-updates/releases).
+2. Follow the [Documentation](https://luncosim.github.io/luncosim-docs/) to
+   build your first project.
 
 ## What can you do with it?
 

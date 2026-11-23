@@ -255,7 +255,7 @@ fn on_start(me, ctx) {
     let start_menu = invoke_hook("application.scenarios.menu", [start_facts]);
     if !start_menu.ok { throw start_menu.error; }
     checks.push(t_true(start_menu.value.viewport_actions.len() == 1
-        && start_menu.value.viewport_actions[0].label == "Play Crater Cup"
+        && start_menu.value.viewport_actions[0].label == "Open Example Mission \"Crater Cup\""
         && start_menu.value.viewport_actions[0].tool == "tutorials"
         && start_menu.value.viewport_actions[0].hook == "start"
         && start_menu.value.viewport_actions[0].args.twin_asset == "lunco://scenes/luncosim/twin.toml",

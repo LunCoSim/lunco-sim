@@ -206,12 +206,14 @@ pub enum ModelicaOp {
         placement: pretty::Placement,
     },
     /// Set or replace a parameter modification on a component.
+    /// `param` may be a qualified modifier path relative to the component,
+    /// such as `combustor.efficiency`.
     SetParameter {
         /// Target class name.
         class: String,
         /// Component instance name.
         component: String,
-        /// Parameter / modifier name.
+        /// Parameter or modifier path, optionally qualified within the component.
         param: String,
         /// Replacement value expression (emitted verbatim).
         value: String,

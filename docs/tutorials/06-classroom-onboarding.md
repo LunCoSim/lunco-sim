@@ -1,7 +1,10 @@
 # Classroom onboarding: Lunar Rover Lab
 
 Lunar Rover Lab is the default first activity for a workshop participant.
-Choose **Scenarios → Start Here → Lunar Rover Lab**. The welcome screen also offers **Play Crater Cup** to watch the mine, refinery and launchpad operate together. Click a tank for live readings, drive the camera rover or try the timed jump.
+Choose **Scenarios → Start Here → Lunar Rover Lab**. The welcome screen offers
+**Open Example Mission "Crater Cup"** to watch the mine, refinery and launchpad
+operate together, or **Open Twin** to choose a project. Click a tank for live
+readings, drive the camera rover or try the timed jump.
 
 The entry point opens the bundled classroom Twin through `OpenTwinAsset`.
 Its manifest selects a document-backed scene and embeds the workshop guide.
