@@ -233,10 +233,9 @@ fn main() {}
 
 /// Process every `[*.process]` entry in a folder's `Assets.toml`.
 ///
-/// Each entry's *source* is wherever the download step put it — resolved
-/// through the same `download::entry_dest_path` (authored `dest` inside the
-/// Twin/cache, or the shared source pool), so the two steps can never
-/// disagree. `twin_root` is forwarded to `process_asset` so
+/// Each entry's *source* is selected from its declared cache destination, so
+/// download and processing cannot disagree. `twin_root` is forwarded to
+/// `process_asset` so
 /// `output_root = "twin"` writes land inside the Twin; `None` for crates.
 /// Optional `-a KEY` filter — the process-side twin of the download filter,
 /// so a single territory can be re-baked without touching every other
@@ -286,19 +285,10 @@ fn process_filtered(
             continue;
         }
         if let Some(ref proc_cfg) = entry.process {
-            let owner = twin_root
-                .map(std::path::Path::to_path_buf)
-                .map(Ok)
-                .unwrap_or_else(lunco_assets_core::assets_dir_abs)
-                .map_err(|e| e.to_string())?;
-            let source = lunco_assets_datasets::source_read_path(
-                entry,
-                &if twin_root.is_some() {
-                    lunco_assets_core::asset_read_roots(&owner)
-                } else {
-                    lunco_assets_core::engine_asset_read_roots(&owner)
-                },
-            );
+            let local_cache_root = twin_root
+                .map(lunco_assets_core::twin_cache_dir)
+                .unwrap_or_else(lunco_assets_core::cache_dir);
+            let source = lunco_assets_datasets::source_cache_path(entry, &local_cache_root);
             let source_path = match source {
                 Ok(path) => path,
                 Err(error) if only_key.is_some() => {

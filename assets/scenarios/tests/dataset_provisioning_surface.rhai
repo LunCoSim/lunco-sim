@@ -32,6 +32,8 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(surface.visible, "missing recommended data has a visible consent surface"));
         this.checks.push(t_true(surface.properties.rows.len() > 0, "policy rows remain published"));
         this.checks.push(t_true(surface.properties.actions.len() >= 2, "policy actions remain published"));
+        this.checks.push(t_true(surface.properties.rows[0].storage.contains("Download input"),
+            "dataset details disclose the selected storage owner"));
         let scoped = query("ListDatasets", #{scope: this.scope});
         this.checks.push(t_true(scoped.datasets.len() > 0,
             "the consent action scope resolves actual declared datasets"));

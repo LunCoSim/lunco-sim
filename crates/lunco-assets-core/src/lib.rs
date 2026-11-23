@@ -78,8 +78,8 @@ pub use lunco_source::{
 };
 pub use scheme_registry::{SchemeRegistry, SchemeRegistryError};
 pub use twin_source::{
-    TWIN_SCHEME, TwinReadScope, TwinRoots, TwinRootsError, TwinRootsSnapshot,
-    logical_twin_source_identity, parse_twin_root_uri, parse_twin_uri,
+    TWIN_SCHEME, TwinAssetRoute, TwinAssetStorage, TwinReadScope, TwinRoots, TwinRootsError,
+    TwinRootsSnapshot, logical_twin_source_identity, parse_twin_root_uri, parse_twin_uri,
     redact_opaque_twin_authorities, split_twin_rel, stable_source_path, twin_uri,
 };
 
@@ -253,36 +253,13 @@ fn engine_asset_read_roots_with_shared(root: &Path, shared: &Path) -> Vec<PathBu
     roots
 }
 
-/// Read roots for a Twin-owned library: authored files, its `.cache`, then the
-/// shared global cache.
-pub fn asset_read_roots(root: &Path) -> Vec<PathBuf> {
-    asset_read_roots_with_shared(root, &cache_dir())
-}
-
-pub(crate) fn asset_read_roots_with_shared(root: &Path, shared: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::with_capacity(3);
-    for root in [
-        root.to_path_buf(),
-        twin_cache_dir(root),
-        shared.to_path_buf(),
-    ] {
-        if !roots.contains(&root) {
-            roots.push(root);
-        }
-    }
-    roots
-}
-
-/// Where a **Twin's** downloaded assets live: `<twin_root>/.cache`.
+/// Where a Twin-owned download or processed artifact lives by default:
+/// `<twin_root>/.cache`.
 ///
-/// Two cache locations, one ownership rule: an asset declared by the ENGINE
-/// lands in the shared [`cache_dir`]; a Twin declaration defaults to the
-/// Twin-local cache, while `shared = true` explicitly selects the global cache.
-/// Twin reads search both locations, so a shared product is reusable without
-/// putting a machine-local cache path into authored USD.
-///
-/// This is the ONE place the layout is decided; the downloader, the
-/// `twin://` reader and the dataset registry all ask here.
+/// Twin `Assets.toml` declarations may select this local cache, the configured
+/// shared cache, or (for processed outputs) an explicit Twin-relative path.
+/// `TwinRoots` consumes those manifest routes; it does not search these cache
+/// locations implicitly.
 pub fn twin_cache_dir(twin_root: &std::path::Path) -> PathBuf {
     twin_root.join(TWIN_CACHE_DIR_NAME)
 }
@@ -879,7 +856,12 @@ pub async fn resolve_asset_directory_on_worker(
         let relative = asset_path::relative_path(relative)
             .ok_or_else(|| invalid(format!("unsafe asset directory `{reference}`")))?;
         let roots = roots.ok_or(TwinRootsError::RegistryUnavailable)?;
+        #[cfg(not(target_arch = "wasm32"))]
         let root = roots
+            .root_for(authority)?
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        #[cfg(target_arch = "wasm32")]
+        roots
             .root_for(authority)?
             .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
         #[cfg(not(target_arch = "wasm32"))]
@@ -896,24 +878,24 @@ pub async fn resolve_asset_directory_on_worker(
         #[cfg(target_arch = "wasm32")]
         {
             let storage = lunco_storage::OpfsStorage::new();
-            for base in asset_read_roots(&root) {
-                let path = lunco_storage::canonicalize_file_path(&base.join(&relative))
-                    .map_err(|error| invalid(error.to_string()))?;
-                match storage
-                    .read_directory_bounded(&lunco_storage::StorageHandle::File(path.clone()), 0)
-                    .await
-                {
-                    Ok(_) => {
-                        roots.root_for(authority)?.ok_or_else(|| {
-                            TwinRootsError::UnknownAuthority(authority.to_owned())
-                        })?;
-                        return Ok(AssetDirectory::File(path));
-                    }
-                    Err(lunco_storage::StorageError::NotFound) => {}
-                    Err(error) => return Err(invalid(error.to_string())),
+            let selected = roots
+                .mapped_asset_path(authority, &relative)?
+                .ok_or_else(missing)?;
+            let path = lunco_storage::canonicalize_file_path(&selected)
+                .map_err(|error| invalid(error.to_string()))?;
+            match storage
+                .read_directory_bounded(&lunco_storage::StorageHandle::File(path.clone()), 0)
+                .await
+            {
+                Ok(_) => {
+                    roots
+                        .root_for(authority)?
+                        .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+                    return Ok(AssetDirectory::File(path));
                 }
+                Err(lunco_storage::StorageError::NotFound) => return Err(missing()),
+                Err(error) => return Err(invalid(error.to_string())),
             }
-            return Err(missing());
         }
     }
     if let Some(relative) = parse_lunco_uri(reference) {
@@ -1099,19 +1081,6 @@ mod tests {
             ),
             vec![
                 PathBuf::from("/package/assets"),
-                PathBuf::from("/home/example/.lunco/cache"),
-            ]
-        );
-    }
-
-    #[test]
-    fn twin_roots_keep_the_twin_cache_before_global_cache() {
-        let twin = Path::new("/workspace/mission");
-        assert_eq!(
-            asset_read_roots_with_shared(twin, Path::new("/home/example/.lunco/cache")),
-            vec![
-                PathBuf::from("/workspace/mission"),
-                twin_cache_dir(twin),
                 PathBuf::from("/home/example/.lunco/cache"),
             ]
         );

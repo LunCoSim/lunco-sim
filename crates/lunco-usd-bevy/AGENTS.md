@@ -86,8 +86,10 @@ and `LuncoUsdResolver` — anchoring a *relative* reference to its referencing
 layer, which is USD composition semantics. It must not re-derive where a scheme
 points: ask `lunco_assets_core` (`has_scheme`, `local_path`, `shipped_asset_root`,
 `read_asset_bytes_in_scope`, `engine_asset_uri`/`_rel`). Native entry lookup uses
-`resolve_native_asset` with `asset_read_roots`; synchronous Twin reads capture
-identity and root together through `TwinRoots::read_scope`.
+`resolve_native_asset` with the engine root contract or a manifest-selected
+Twin route; synchronous Twin reads capture identity, root and route map together
+through `TwinRoots::read_scope`. Unlisted Twin addresses stay in the authored
+Twin tree.
 
 ## When the asset is missing
 

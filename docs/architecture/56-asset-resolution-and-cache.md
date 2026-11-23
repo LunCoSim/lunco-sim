@@ -65,7 +65,7 @@ scheme: naming the mistake legibly would make it permanent.
 |---|---|---|
 | `lunco://` | `assets/`, then the shared global cache | the shipped engine library (rovers, parts, shaders, stock textures) |
 | `twin://<source-identity>/…` | the current mount resolved from that stable source identity | authored content and canonical scene-command addresses |
-| `twin://<authority>/…` | the exact live mount's authored root, then its `.cache`, then the global cache | internal reads that carry a mount lease |
+| `twin://<authority>/…` | the exact live mount's authored root, with manifest-declared paths routed to one selected owner | internal reads that carry a mount lease |
 | (none) | no independent asset identity | derived outputs use their owning `lunco://` or `twin://` identity |
 
 Authored USD asset facts may keep the stable source identity in their composed
@@ -78,11 +78,12 @@ Dataset installation and text loading use the dataset registry's exact mounted
 artifact address. A URI returned by `ListDatasets` identifies the artifact
 independently of the runtime handle used to read it.
 
-Engine assets resolve from `assets/`, then the shared global cache. Twin assets
-resolve from the Twin's authored root, its `.cache`, then the shared global
-cache. A downloaded binary is reachable at its logical address without any
-authored file naming a cache, and authored files always win over materialized
-copies.
+Engine assets resolve from `assets/`, then the shared global cache. Twin
+addresses outside a manifest route resolve only from the authored Twin root.
+Declared source and output paths resolve from the one owner selected in
+`Assets.toml`. A downloaded binary is reachable at its logical address without
+authored file naming a cache, and copies at unselected locations do not affect
+which artifact is delivered.
 
 The same boundary resolves delivered directories. A processed dataset such as
 a DEM site may produce a directory containing several runtime products; its
@@ -102,30 +103,15 @@ There are two runtime cache owners:
 On native platforms, the shared cache defaults to `~/.lunco/cache`. Set
 `LUNCOSIM_CACHE` to select another location.
 
-`lunco-assets-core` is the only owner that constructs the global and Twin-local
-cache paths (`cache_dir()` and `twin_cache_dir()`) and their ordered reader
-roots. `lunco-assets-datasets::dataset_cache_root()` is the single selector for
-a declaration's shared or scope-local cache; the engine scope's local base is
-the global cache. Callers pass the scope's local cache base to
-`entry_dest_path()` and dataset processing; they do not construct
-`.cache` paths or choose shared storage independently.
+`lunco-assets-core` constructs the global and Twin-local cache paths (`cache_dir()` and `twin_cache_dir()`). `lunco-assets-datasets::dataset_cache_root()` selects each declaration's shared or scope-local cache; the engine scope's local base is the global cache. Twin `Assets.toml` declarations also build explicit `twin://` routes from each logical artifact path to exactly one owner. Callers pass the scope's local cache base to `entry_dest_path()` and dataset processing; they do not construct `.cache` paths or choose shared storage independently.
 
 Packaged files are ordinary files under `assets/`, not a third cache root.
 Native and web packers stage manifest-declared artifacts into that asset tree.
 When a file comes from a checksum-pinned archive, the packager stages the
 integrity marker beside it so the native registry can admit it offline.
-Engine reads use `engine_asset_read_roots()` from
-`lunco-assets-core`; Twin reads use `asset_read_roots()`. The registered
-`AssetSource`, synchronous resolver (`engine_asset_local_path`), and byte
-reader use the engine roots, so a file the loader finds is a file the validator
-finds.
+Engine reads use `engine_asset_read_roots()` from `lunco-assets-core`; engine roots retain their packaged-asset and global-cache contract. Twin reads use the admitted authored Twin root unless its `Assets.toml` declares a route for that logical path. A declared route selects exactly one owner: Twin `.cache` by default, the shared cache when `shared = true`, or the authored Twin tree when a process explicitly sets `output_root = "twin"`. Missing or invalid content at that selected owner is terminal; another copy at a different owner is never considered.
 
-Native engine and Twin readers, directory lookup, synchronous byte reads and
-dataset installation scans use `resolve_native_asset` over their respective
-engine or Twin root lists. The first existing entry owns the address. A wrong entry kind, escaped link,
-permission failure or malformed path is terminal; only absence advances to the
-next root. Dataset validity is checked after selection, so an invalid authored
-artifact cannot expose a cached artifact at the same address.
+Native engine and Twin readers, directory lookup, synchronous byte reads and dataset installation scans share `resolve_native_asset` for containment and entry validation. Twin route selection happens before that contained lookup. Unlisted Twin addresses resolve only in the authored Twin tree; `.cache` and the shared cache are not ambient Twin search roots. For USD search paths, an `Assets.toml` route for the authored dataset path wins before any layer-relative copy is checked; unlisted references keep normal USD layer-relative resolution.
 
 Registered native readers apply the shared relative-address grammar before
 lookup, including directory enumeration. Empty reader paths designate the source
@@ -272,7 +258,8 @@ re-derives that mapping:
 | "already addressable?" | `lunco-assets-path::has_scheme` / `is_anchored` |
 | Library URI ⇄ relative | `engine_asset_uri` / `engine_asset_rel` |
 | Document-root-relative asset URI | `asset_path::source_relative_uri` |
-| Native root precedence and entry selection | `asset_read_roots` / `resolve_native_asset` |
+| Engine root precedence and entry selection | `engine_asset_read_roots` / `resolve_native_asset` |
+| Twin artifact owner selection | manifest routes installed into `TwinRoots` |
 | Bounded native bytes with Twin identity | `TwinRoots::read_scope` / `read_asset_bytes_in_scope` |
 | CLI/validation native input admission | `resolve_asset_input` |
 | Any URI → local path | `local_path(reference, twins)` |
@@ -444,9 +431,12 @@ never borrows a live application's mount or adds a separate file resolver.
 Registration follows what is OPEN, not what exists: the runtime asset manifest
 describes the delivered library, and a Twin's `Assets.toml` is discovered after that
 Twin mounts. Workspace `TwinAdded` announces ownership; `TwinRoots` then emits
-the typed `TwinAssetMounted` postcondition only after the exact `twin://`
-authority is registered. Asset-consuming domains use that postcondition rather
-than depending on observer registration order. `TwinClosed` is the
+the typed `TwinAssetMounted` postcondition after its manifest routes have been
+read through platform storage and installed with the exact `twin://` authority.
+Native hosts prepare them on an I/O worker; browsers read them asynchronously
+from OPFS. Asset-consuming domains use that postcondition rather than depending
+on observer registration order; scene reads cannot race a cache-backed route
+and select an unrelated Twin-folder copy. `TwinClosed` is the
 authoritative retirement edge: it acquires the dataset attempt commit barrier,
 cancels and removes that root's dataset scopes, and only then allows a
 same-name replacement to be scanned. Download installation and processed
@@ -480,7 +470,7 @@ case-sensitive HFSX test volumes. An
 unknown case mode rejects ambiguous ownership visibly. Admission and worker
 merge compare the prepared identities without I/O, rejecting outputs that
 could replace another output or source. These snapshots do not lock out
-external filesystem changes. Read roots travel with the prepared declaration.
+external filesystem changes. Each prepared declaration retains its exact source and output paths with the owning cache or Twin identity.
 
 ### Where a download lands
 
@@ -490,24 +480,11 @@ external filesystem changes. Read roots travel with the prepared declaration.
 | authored `dest` | `<owner cache>/<dest>` |
 | neither | `<owner cache>/sources/<url-hash>/<file>` |
 
-*Owner cache* is `<cache>` for a crate manifest and **`<twin>/.cache` for a
-Twin entry by default**. A Twin always reads authored content, its local cache,
-then the global cache. `shared = true` selects the global cache as the write
-owner for a reusable product; it does not create a second logical URI or a
-second reader path.
+*Owner cache* is `<cache>` for a crate manifest and **`<twin>/.cache` for a Twin entry by default**. Twin downloads and generated artifacts select one ownership path from the manifest. Download inputs use the Twin-local cache by default; `shared = true` selects the global cache. The installed Twin asset route reads from that same owner.
 
-`dataset_cache_root` selects the cache owner and `entry_dest_path` resolves the
-manifest path under that owner. The CLI downloader, runtime registry and
-processing path use these same functions, so a file fetched from the app and
-one fetched from a terminal cannot land in different places. Raw source reads
-use the shared `lunco-assets-core` ordered roots and the same manifest-relative
-path, without resolving a second filesystem cache path.
+`dataset_cache_root` selects the cache owner and `entry_dest_path` resolves the manifest path under that owner. The CLI downloader, runtime registry and processing path use these same functions, so a file fetched from the app and one fetched from a terminal cannot land in different places. Raw source reads use `source_cache_path` with the same selected cache owner and manifest-relative path. They do not inspect the Twin tree for a competing source copy.
 
-A Twin declaration may set `shared = true` for a product deliberately reused by
-multiple Twins. That entry writes to the engine-wide cache and the Twin reader
-checks that same cache after the Twin-local cache and authored root. The shared
-choice therefore changes ownership explicitly; it does not create a second URI
-or a second resolver.
+A Twin declaration may set `shared = true` for source inputs deliberately reused by multiple Twins. Its prepared output is routed to the global cache unless `output_root = "twin"` explicitly selects the authored Twin tree. Both choices keep the same stable `twin://` identity while changing only its manifest-selected physical owner.
 
 Processing output roots are strict: `cache` requires its owning cache, `twin`
 requires the Twin root, `assets` uses the canonical packaged/development assets
@@ -647,11 +624,11 @@ the app.
 
 `lunco:body:albedoMap` is not a new mechanism — it is the same asset-reference
 pattern used by terrain data (`demSource = @terrain/apollo15@`), standard
-`UsdShade` material inputs, and HDRI assets (`UsdLuxDomeLight`). It buys: the texture becomes a normal
-USD reference inheriting cache fallback and web staging with no
-celestial-specific path; a Twin can ship its own body map; third-party tools see
-a material instead of a Rust constant; and the same logical `lunco://textures/...`
-identity reaches genuinely derived outputs.
+`UsdShade` material inputs, and HDRI assets (`UsdLuxDomeLight`). It buys: the
+texture is a normal USD reference; its `Assets.toml` declaration selects the
+cache or authored Twin path that delivers it; a Twin can share its own body map;
+third-party tools see a material instead of a Rust constant; and one logical
+asset identity reaches genuinely derived outputs.
 
 The stock maps are global-cache datasets, not release payloads. A Twin may read
 `lunco://textures/earth.png` and `lunco://textures/moon.png` from that cache
@@ -689,9 +666,10 @@ separator or platform-reserved character to become a directory or invalid
 filename; the final artifact still lands only at the `entry_dest_path` resolved
 above.
 
-The manifest keeps package selection explicit. The packaged `lunco://` reader checks authored and
-packaged assets, then the shared global cache; Twin reads additionally check
-the Twin's authored files and `.cache` before that same global cache.
+The manifest keeps package selection explicit. The packaged `lunco://` reader
+checks authored and packaged assets, then the shared global cache. Twin reads
+select the manifest-declared owner for each dataset path; unlisted Twin paths
+stay in the authored Twin folder.
 
 ## Source libraries and resource views
 

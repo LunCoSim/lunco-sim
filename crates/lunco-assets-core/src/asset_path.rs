@@ -236,8 +236,8 @@ pub enum AssetReference {
     /// A native `file:` identifier mapped into its originating Twin mount.
     Native(String),
     /// An OpenUSD search path: the layer-anchored Twin identifier and the
-    /// authored spelling that is searched from the Twin root when the anchored
-    /// location does not exist.
+    /// authored spelling used when that path has a manifest route or the
+    /// layer-anchored location does not exist.
     Search {
         identifier: String,
         authored: String,
@@ -464,12 +464,12 @@ fn prepare_native_path(
     )
 }
 
-/// Resolve an OpenUSD search path inside its Twin, as `ArDefaultResolver`
-/// does: the layer-anchored location when it exists, otherwise the authored
-/// spelling from the Twin root. Existence uses the Twin's authored-tree,
-/// Twin-cache, shared-cache order. A path found in neither place keeps its
-/// Twin-root identity, so its consumer reports the miss or offers the declared
-/// Twin dataset that delivers it.
+/// Resolve an OpenUSD search path inside its Twin. A manifest route for the
+/// authored spelling selects its owner before checking any layer-relative copy;
+/// otherwise the layer-anchored authored location wins when it exists, followed
+/// by the authored spelling. Unlisted addresses select only the authored Twin
+/// tree. A path found in neither place keeps its Twin-relative identity, so its
+/// consumer reports the miss or offers the declared dataset that delivers it.
 fn prepare_search_path(
     identifier: &str,
     authored: &str,
@@ -487,10 +487,13 @@ fn prepare_search_path(
             .ok_or_else(|| invalid_asset(format!("unsafe search candidate `{relative}`")))
     };
     let anchored = candidate(anchored)?;
-    let relative = if roots.resolve_existing(authority, &anchored)? {
+    let authored = candidate(authored)?;
+    let relative = if roots.has_asset_route(authority, &authored)? {
+        authored
+    } else if roots.resolve_existing(authority, &anchored)? {
         anchored
     } else {
-        candidate(authored)?
+        authored
     };
     Ok(
         AssetPath::from_path_buf(std::path::Path::new(authority).join(relative))
@@ -814,16 +817,31 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn search_paths_prefer_layer_then_twin_root() {
+    fn search_paths_prefer_manifest_route_then_layer_then_twin_root() {
         let folder = tempfile::tempdir().expect("Twin folder");
         let root = folder.path();
         let cached_site = crate::twin_cache_dir(root).join("terrain/site");
         lunco_storage::ensure_directory_sync(&cached_site).expect("cached dataset");
+        lunco_storage::ensure_directory_sync(&root.join("sim/scenes/terrain/site"))
+            .expect("incidental layer-local dataset copy");
         lunco_storage::write_file_sync(&root.join("textures/a.png"), b"root").expect("root file");
         lunco_storage::write_file_sync(&root.join("sim/scenes/textures/a.png"), b"layer")
             .expect("layer file");
         let roots = crate::TwinRoots::default();
         let authority = roots.register_authority("fixture", root).expect("mount");
+        roots
+            .replace_asset_routes(
+                &authority,
+                vec![
+                    crate::TwinAssetRoute::new(
+                        "terrain/site",
+                        crate::TwinAssetStorage::TwinCache,
+                        "terrain/site",
+                    )
+                    .expect("manifest-owned cache route"),
+                ],
+            )
+            .expect("install asset manifest routes");
         let search = |authored: &str| {
             let identifier = format!("twin://{authority}/sim/scenes/{authored}");
             let reference =
@@ -854,7 +872,7 @@ mod tests {
         assert_eq!(
             resolved(&site_id, "terrain/site").unwrap(),
             format!("twin://{authority}/terrain/site"),
-            "a processed Twin dataset is found from the Twin root and its cache"
+            "a manifest-routed dataset ignores an incidental layer-local copy"
         );
         assert_eq!(
             resolved(&layer_id, "textures/a.png").unwrap(),

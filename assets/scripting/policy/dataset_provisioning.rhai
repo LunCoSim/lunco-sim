@@ -53,6 +53,30 @@ fn dataset_source_summary(dataset) {
     status+=dataset.inputs.len().to_string()+" available\n"+lines;
     #{url:url,status:status,files:lines,count:verified.to_string()+" / "+dataset.inputs.len().to_string(),errors:errors}
 }
+fn storage_owner_label(owner) {
+    if owner=="twin-cache" {return "Twin .cache";}
+    if owner=="shared-cache" {return "Shared cache";}
+    if owner=="twin" {return "Twin folder";}
+    if owner=="engine-assets" {return "Assets library";}
+    throw "Unknown dataset storage owner: "+owner;
+}
+fn dataset_storage_summary(dataset) {
+    if !dataset.processed {
+        let asset="Downloaded asset · "+storage_owner_label(dataset.artifact_storage_owner);
+        if dataset.artifact_relative_path!="" {asset+=" / "+dataset.artifact_relative_path;}
+        return asset;
+    }
+    let source="";
+    for input in dataset.inputs {
+        if source!="" {source+="\n";}
+        source+="Download input · "+input.name+" · "+storage_owner_label(input.storage_owner);
+        if input.relative_path!="" {source+=" / "+input.relative_path;}
+    }
+    let output="Prepared output · "+storage_owner_label(dataset.artifact_storage_owner);
+    if dataset.artifact_relative_path!="" {output+=" / "+dataset.artifact_relative_path;}
+    if source!="" {source+="\n";}
+    source+output
+}
 fn preparation_error_detail(detail) {
     if detail.starts_with("processing failed: ") {return detail.sub_string(19);}
     detail
@@ -74,7 +98,7 @@ fn dataset_preparation_row(dataset,scope) {
         action_display:provision_choice(state=="installed","none","flex"),
         rebuild_action:"",rebuild_label:"",ready:state=="installed",
         preparation_status:provision_choice(dataset.processed,"2  Prepare artifacts · not started","2  Install · no processing required"),
-        detail:sources.errors,source_url:sources.url,
+        detail:sources.errors,source_url:sources.url,storage:dataset_storage_summary(dataset),
         action:provision_choice(can_prepare,"process","request"),
         action_label:provision_choice(can_prepare,"Prepare",provision_choice(dataset.processed,"Download & prepare","Download"))};
     if state=="missing" && sources.errors!="" {row.status="Source validation failed";row.action_label="Download again";}

@@ -11,7 +11,7 @@ resource requests. The contract is in
 | --- | --- |
 | Path and URI algebra | `lunco-assets-path`: scheme grammar/case, canonical source addresses, traversal rules and standard URI component decoding. Literal internal filenames remain distinct from encoded URI components. |
 | Native identity/storage | `lunco-storage`; `canonical_directory_root` admits shared native source roots. Standard file URIs retain native filename semantics. Unrepresentable UTF-8 source identities reject instead of narrowing. |
-| Twin/cache context | `lunco-assets-core`: contributing-source anchors, prepared paths, mount identity and authored/cache precedence. Only absence advances a search. |
+| Twin asset ownership | `lunco-assets-core`: contributing-source anchors, prepared paths, mount identity and explicit manifest routes. Each declared route selects one owner; unlisted Twin addresses remain in the authored tree. |
 | Byte access | Registered asset sources plus `registered_read::AssetReadTarget`; the common bounded reader is consumed by USD preparation, scene validation and UI. |
 | Installed source stores | `lunco-assets-runtime::library`: native/in-memory admission, containment, terminal I/O errors, immutable application identities and the registered `library://` reader. Its native mirror uses the same resolution. |
 | USD discovery | The runtime projection and prepared-path context, including nearest Twin admission. Commit `9fcfb1ecc` repairs discovery without another resolver. |
@@ -46,17 +46,11 @@ hostile filesystem replacement.
 
 ## Native resolver conformance
 
-The native entry selector is `lunco-assets-core::resolve_native_asset`, with
-root order supplied by `asset_read_roots`. Engine/Twin Bevy readers, synchronous
-reads, directory consumers and dataset scans use that owner. Entry kind is
-checked after the first existing entry is selected. Cache lookup advances only
-on absence; a file cannot become a cached directory, and an invalid authored
-dataset cannot reveal a cached product. Dataset installed state retains its
-logical URI rather than an unconsumed filesystem path.
+The native entry selector is `lunco-assets-core::resolve_native_asset`. Engine reads use the engine root contract. Twin reads first select the one physical owner declared for a logical artifact by `Assets.toml`; unlisted Twin addresses select only the authored Twin root. Entry kind and containment are then checked at that selected owner. Missing or invalid content is terminal and cannot reveal a second copy from another location. Dataset installed state retains its logical URI alongside the exact manifest-selected artifact path.
 
 `lunco-assets-path` owns the scheme constants and preserves Twin/store authority
 when anchoring relative references. Escaping `..` remains visible for admission
-to reject. `TwinReadScope` captures an admitted root and namespace together;
+to reject. `TwinReadScope` captures an admitted root, namespace and manifest routes together;
 synchronous USD/validation consumers reject foreign authorities before reading.
 Native CLI input admission is owned by `resolve_asset_input`; its bare-input
 search validates missing ancestors through storage before changing namespaces.

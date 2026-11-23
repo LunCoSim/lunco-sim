@@ -161,6 +161,19 @@ fn verify_preparation_view(scope,key,action,error) {
     t_report(checks);
 }
 
+fn verify_preparation_storage(scope,key,expected) {
+    let dataset=pipeline_dataset(scope,key);
+    let view=query("ReadExposures",#{surface:"asset-consent"}).surfaces["asset-consent"];
+    let row=();
+    for candidate in view.properties.rows {if candidate.id==dataset.id {row=candidate;}}
+    let checks=[t_true(view.visible && row!=(),"the selected storage owner is visible in dataset details")];
+    if row!=() {
+        checks.push(t_eq(row.details_display,"flex","dataset details are expanded for the owner and path"));
+        checks.push(t_true(row.storage.contains(expected),"dataset details name the manifest-selected output owner and path"));
+    }
+    t_report(checks);
+}
+
 fn certify_scene_dependencies(scope, keys, held) {
     let actual=[];
     for dataset in query("ListDatasets",#{scope:scope}).datasets {

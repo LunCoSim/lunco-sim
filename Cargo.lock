@@ -10522,6 +10522,7 @@ dependencies = [
  "lunco-api",
  "lunco-api-core",
  "lunco-assets-core",
+ "lunco-assets-datasets",
  "lunco-assets-path",
  "lunco-assets-runtime",
  "lunco-control-core",

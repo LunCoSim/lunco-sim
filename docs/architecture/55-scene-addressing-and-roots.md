@@ -307,14 +307,7 @@ Asset values in a Twin follow OpenUSD's `ArDefaultResolver` spelling rules.
 The Twin root is an explicit LunCoSim resolver context; USD does not infer a
 project root from an asset path. Native scene-test discovery admits the same
 owning Twin and uses the same composed asset preparation as runtime loading.
-`./x` and `../x` are strictly layer-relative. A search path, a relative
-spelling without a scheme or leading `./`/`../` such as `@terrain/site@`,
-resolves beside its authoring layer when that location exists, otherwise from
-the Twin root. Both candidates use the Twin's authored-tree, Twin-cache,
-shared-cache order, so a scene under `sim/scenes/` can name a processed Twin
-dataset declared as `output = "terrain/site"`. A search path found in neither
-place keeps its Twin-root identity; its consumer reports the miss or, for a
-declared dataset, offers the download. The existence check runs once in the
+`./x` and `../x` are strictly layer-relative. A search path, a relative spelling without a scheme or leading `./`/`../` such as `@terrain/site@`, resolves beside its authoring layer when that location exists. Otherwise its Twin-relative address follows the manifest route for that path; an unlisted address resolves only in the authored Twin tree. A declared download or processed output therefore reads from exactly its selected cache or Twin-folder owner, with no ambient cache fallback. A search path found in neither place keeps its Twin-relative identity; its consumer reports the miss or, for a declared dataset, offers the download. The existence check runs once in the
 stage's native preparation worker (`PreparedAssetPaths`, typed
 `AssetReference::Search`), including incremental live-change preparation;
 `asset_identifier` returns the prepared result and rejects a search path whose

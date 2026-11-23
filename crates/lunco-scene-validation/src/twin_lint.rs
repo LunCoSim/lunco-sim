@@ -372,16 +372,31 @@ fn inspect_usd_file(
             return;
         }
     };
+    let route_scope = lunco_assets_datasets::DatasetScope::Twin {
+        source_identity: lunco_assets_core::logical_twin_source_identity(twin),
+        authority: None,
+        display_name: twin.display_name(),
+        root: twin.root.clone(),
+    };
+    let routes = match lunco_assets_datasets::DatasetRegistry::read_twin_asset_routes(&route_scope)
+    {
+        Ok(routes) => routes,
+        Err(error) => {
+            read_errors.push(error);
+            return;
+        }
+    };
+    let read_scope = match lunco_assets_core::TwinReadScope::for_twin(twin, routes) {
+        Ok(scope) => scope,
+        Err(error) => {
+            read_errors.push(error.to_string());
+            return;
+        }
+    };
     let stage = match lunco_usd_compose::compose_file_to_stage_with_roots(
         &path,
         Some(engine_root.as_path()),
-        Some(&match lunco_assets_core::TwinReadScope::for_twin(twin) {
-            Ok(scope) => scope,
-            Err(error) => {
-                read_errors.push(error.to_string());
-                return;
-            }
-        }),
+        Some(&read_scope),
         lunco_usd_authoring::schema::native_registry(),
     ) {
         Ok(stage) => stage,

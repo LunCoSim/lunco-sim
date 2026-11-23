@@ -126,6 +126,7 @@ sha256="{digest}"
 kind="texture"
 target_resolution=[2,2]
 output="products/texture.png"
+output_root="twin"
 ''')
 
 
@@ -133,7 +134,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--griffin", type=Path, required=True)
+    parser.add_argument("--griffin", type=Path,
+                        help="also run the Griffin terrain integration phase against this Twin")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -197,7 +199,7 @@ def main():
             def dataset(scope, key):
                 return next((row for row in execute(session, "ListDatasets").get("datasets", []) if row["scope"] == scope and row["key"] == key), None)
 
-            def capture_view(scope,key,action,name,error=""):
+            def capture_view(scope,key,action,name,error="",storage=""):
                 row=dataset(scope,key)
                 def projected():
                     surfaces=execute(session,"ReadExposures",surface="asset-consent").get("surfaces",{})
@@ -205,6 +207,14 @@ def main():
                         if r["id"]==row["id"] and r["action"]==action),None)
                 wait_for(projected,"prepared dataset view")
                 verdict(f'verify_preparation_view({json.dumps(scope)},{json.dumps(key)},{json.dumps(action)},{json.dumps(error)});')
+                if storage:
+                    execute(session,"ToggleDatasetDetails",id=row["id"])
+                    def expanded():
+                        surfaces=execute(session,"ReadExposures",surface="asset-consent").get("surfaces",{})
+                        return next((r for r in surfaces.get("asset-consent",{}).get("properties",{}).get("rows",[])
+                            if r["id"]==row["id"] and r["details_display"]=="flex"),None)
+                    wait_for(expanded,"expanded dataset storage details")
+                    verdict(f'verify_preparation_storage({json.dumps(scope)},{json.dumps(key)},{json.dumps(storage)});')
                 for _ in range(10):
                     execute(session,"ReadExposures",surface="asset-consent")
                     time.sleep(.15)
@@ -236,7 +246,8 @@ def main():
             execute(session, "RequestDataset", id=row["id"])
             wait_for(lambda: terminal(scope, "product", "installed"), "dynamic code artifact preparation")
             verdict(f'verify_pipeline("{scope}","product","installed",3,4);')
-            capture_view(scope,"product","dismiss","prepared-data")
+            capture_view(scope,"product","dismiss","prepared-data",
+                         storage="Prepared output · Twin .cache / products/probe")
             execute(session,"ProcessDataset",id=row["id"],force=False)
             wait_for(lambda:terminal(scope,"product","installed"),"cached preparation")
             verdict("verify_force_runs("+json.dumps(requests)+",1);")
@@ -294,15 +305,21 @@ def main():
             verdict(f'verify_pipeline("{scope}","product","installed",3,4);')
             verdict("verify_source_requests("+json.dumps(requests)+");")
             retire()
+            shutil.rmtree(artifact)
             shadow = dynamic / "products/probe"
             shadow.mkdir(parents=True)
-            (shadow / "image.png").write_bytes(b"incomplete authored override")
+            decoy = b"incomplete Twin-local copy; the manifest selects .cache"
+            (shadow / "image.png").write_bytes(decoy)
             row = open_twin(dynamic,"twin:","product")
             scope = row["scope"]
+            verdict(f'verify_pipeline("{scope}","product","missing",3,4);')
+            capture_view(scope,"product","process","cache-selected-over-twin-copy",
+                         storage="Prepared output · Twin .cache / products/probe")
             execute(session,"ProcessDataset",id=row["id"])
-            wait_for(lambda: terminal(scope,"product","failed"),"consumer override validation")
-            verdict(f'verify_pipeline_failure("{scope}","product","Authored override");')
-            capture_view(scope,"product","process","invalid-override","Authored override")
+            wait_for(lambda: terminal(scope,"product","installed"),"manifest-selected cache preparation")
+            verdict(f'verify_pipeline("{scope}","product","installed",3,4);')
+            if not (artifact / "image.png").is_file() or (shadow / "image.png").read_bytes() != decoy:
+                raise RuntimeError("the declared cache route did not leave the Twin-local copy untouched")
             retire()
             shutil.rmtree(shadow)
             # The generated fixture is unmounted and has no open source buffer.
@@ -317,11 +334,14 @@ def main():
             verdict("verify_preserved_artifact(" + json.dumps(old) + "," + json.dumps((artifact / "image.png").read_bytes().hex()) + ");")
 
             retire()
+            author_asset_references(session,dynamic/"scene.usda",["products/texture.png"])
             texture = open_twin(dynamic, "twin:ArtifactPipelineProbe", "texture")
             scope = texture["scope"]
             execute(session, "RequestDataset", id=texture["id"])
             wait_for(lambda: terminal(scope, "texture", "installed"), "simple texture preparation")
             verdict(f'verify_dataset_state("{scope}","texture","installed");')
+            if not (dynamic / "products/texture.png").is_file() or (dynamic / ".cache/products/texture.png").exists():
+                raise RuntimeError("output_root=\"twin\" did not publish only into the declared Twin path")
 
             manifest_path = dynamic / "Assets.toml"
             manifest = manifest_path.read_text()
@@ -334,12 +354,21 @@ def main():
             texture = open_twin(dynamic, "twin:ArtifactPipelineProbe", "texture")
             scope = texture["scope"]
             verdict(f'verify_dataset_state("{scope}","texture","missing");')
+            capture_view(scope,"texture","process","explicit-twin-output",
+                         storage="Prepared output · Twin folder / products/texture.png")
             execute(session, "ProcessDataset", id=texture["id"], force=False)
             wait_for(lambda: terminal(scope, "texture", "installed"), "stale texture recipe rebuild")
             verdict(f'verify_dataset_state("{scope}","texture","installed");')
-            with Image.open(dynamic / ".cache/products/texture.png") as baked:
+            if not (dynamic / "products/texture.png").is_file() or (dynamic / ".cache/products/texture.png").exists():
+                raise RuntimeError("the stale recipe rebuild did not publish at the declared Twin output path")
+            with Image.open(dynamic / "products/texture.png") as baked:
                 width, height = baked.size
             verdict(f'verify_texture_dimensions({width},{height},1,1);')
+        if args.griffin is None:
+            if process.returncode!=0:raise RuntimeError(f"production session exited with {process.returncode}: {log}")
+            assert_render_log_clean(log)
+            print(f"PASS: {len(verdicts)} authored verdicts; manifest asset routing; owned session exited; evidence={output}", flush=True)
+            return
         if process.returncode!=0:raise RuntimeError(f"production session exited with {process.returncode}: {log}")
         assert_render_log_clean(log)
 
@@ -364,8 +393,10 @@ def main():
                 shutil.copy2(source_path,destination)
             source = args.griffin / ".cache/sources/nobile03"
             shutil.copytree(source, griffin / ".cache/sources/nobile03")
-            if (griffin / "terrain").exists():
-                raise RuntimeError("source archive unexpectedly contains generated authored terrain")
+            decoy = griffin / "terrain/nobile03"
+            decoy.mkdir(parents=True)
+            sentinel = decoy / "unselected-copy.txt"
+            sentinel.write_text("the manifest selects the Twin cache for NOBILE03")
             row = open_twin(griffin, "twin:", "nobile03_dem")
             scope = row["scope"]
             source_identity = execute(session, "RunRhai", code="print(twin_source_identity());")["stdout"].strip()
@@ -383,6 +414,8 @@ def main():
             execute(session, "RequestDataset", id=row["id"])
             wait_for(lambda: terminal(scope, "nobile03_dem", "installed"), "native NOBILE03 preparation")
             verdict(f'verify_pipeline("{scope}","nobile03_dem","installed",3,3);')
+            if sentinel.read_text() != "the manifest selects the Twin cache for NOBILE03":
+                raise RuntimeError("the unselected Twin-local NOBILE03 copy was modified")
             wait_for(lambda: execute(session,"TerrainHeights",points=[[0.0,0.0]])[0].get("found"), "terrain admission after artifact publication")
             verdict(f'verify_pipeline_terrain("{scope}","nobile03_dem","twin://{source_identity}/terrain/nobile03");')
             def scene_ready():

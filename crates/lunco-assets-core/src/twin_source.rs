@@ -1,5 +1,5 @@
-//! `twin://` asset source — reads each open Twin's scene and its **co-located**
-//! assets relative to that Twin's root.
+//! `twin://` asset source — reads each open Twin's authored files and its
+//! manifest-routed dataset assets.
 //!
 //! Lives here next to the other asset-source plumbing ([`crate::cache_dir`],
 //! [`crate::lunco_lib_path`], …): this crate is the home for "where assets live
@@ -49,11 +49,15 @@ pub struct TwinReadScope {
     authority: String,
     logical_identity: String,
     root: PathBuf,
+    asset_routes: Vec<TwinAssetRoute>,
 }
 
 impl TwinReadScope {
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+    pub(crate) fn asset_routes(&self) -> &[TwinAssetRoute] {
+        &self.asset_routes
     }
     pub(crate) fn accepts(&self, source_identity: &str) -> bool {
         source_identity == self.authority || source_identity == self.logical_identity
@@ -64,10 +68,73 @@ impl TwinReadScope {
         let authority = roots.register_authority(logical_identity, root)?;
         roots.read_scope(&authority)
     }
-    pub fn for_twin(twin: &lunco_twin::Twin) -> Result<Self, TwinRootsError> {
+    /// Admit a standalone Twin with its manifest-declared asset owners.
+    pub fn declared_with_routes(
+        logical_identity: &str,
+        root: &Path,
+        routes: Vec<TwinAssetRoute>,
+    ) -> Result<Self, TwinRootsError> {
+        let roots = TwinRoots::default();
+        let authority = roots.register_authority(logical_identity, root)?;
+        roots.replace_asset_routes(&authority, routes)?;
+        roots.read_scope(&authority)
+    }
+    pub fn for_twin(
+        twin: &lunco_twin::Twin,
+        routes: Vec<TwinAssetRoute>,
+    ) -> Result<Self, TwinRootsError> {
         let roots = TwinRoots::default();
         let authority = roots.register_twin(twin)?;
+        roots.replace_asset_routes(&authority, routes)?;
         roots.read_scope(&authority)
+    }
+}
+
+/// Physical owner selected by a Twin's explicit asset declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TwinAssetStorage {
+    /// The authored Twin tree.
+    Twin,
+    /// The Twin's `.cache` directory.
+    TwinCache,
+    /// The shared application cache.
+    SharedCache,
+}
+
+/// A Twin manifest's explicit mapping from a logical asset path to one storage owner.
+/// Paths beneath `logical_path` are resolved only beneath `storage_path` in that owner.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TwinAssetRoute {
+    logical_path: PathBuf,
+    storage: TwinAssetStorage,
+    storage_path: PathBuf,
+}
+
+impl TwinAssetRoute {
+    /// Create one explicit Twin asset mapping.
+    pub fn new(
+        logical_path: impl AsRef<Path>,
+        storage: TwinAssetStorage,
+        storage_path: impl AsRef<Path>,
+    ) -> Result<Self, TwinRootsError> {
+        let logical_path = logical_path.as_ref();
+        let logical = crate::asset_path::relative_path(&crate::asset_path::slashed(logical_path))
+            .filter(|path| !path.as_os_str().is_empty())
+            .ok_or_else(|| {
+                TwinRootsError::InvalidAssetRoute(crate::asset_path::slashed(logical_path))
+            })?;
+        let storage_path = storage_path.as_ref();
+        let storage_path =
+            crate::asset_path::relative_path(&crate::asset_path::slashed(storage_path))
+                .filter(|path| !path.as_os_str().is_empty())
+                .ok_or_else(|| {
+                    TwinRootsError::InvalidAssetRoute(crate::asset_path::slashed(storage_path))
+                })?;
+        Ok(Self {
+            logical_path: logical,
+            storage,
+            storage_path,
+        })
     }
 }
 
@@ -107,6 +174,10 @@ pub enum TwinRootsError {
     InvalidDisplayName,
     #[error("invalid Twin overlay path `{0}`")]
     InvalidOverlayPath(String),
+    #[error("invalid Twin asset route: {0}")]
+    InvalidAssetRoute(String),
+    #[error("Twin asset manifest routes are not ready")]
+    AssetRoutesUnavailable,
     #[error("asset resolution failed ({0:?}): {1}")]
     AssetResolution(std::io::ErrorKind, String),
     #[error("Twin root resolution failed ({0:?}): {1}")]
@@ -267,7 +338,7 @@ struct TwinRootRegistry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TwinRootsSnapshot {
     pub revision: u64,
-    logical_roots: HashMap<String, PathBuf>,
+    logical_roots: HashMap<String, (PathBuf, Option<Vec<TwinAssetRoute>>)>,
 }
 impl TwinRootsSnapshot {
     /// Resolve an authored logical Twin source identity in this admitted scope snapshot.
@@ -279,7 +350,8 @@ impl TwinRootsSnapshot {
         relative: &Path,
     ) -> Result<Option<PathBuf>, TwinRootsError> {
         match self.logical_roots.get(logical_identity) {
-            Some(root) => resolve_twin_relative_file(root, relative),
+            Some((root, Some(routes))) => resolve_twin_relative_file(root, relative, routes),
+            Some((_, None)) => Err(TwinRootsError::AssetRoutesUnavailable),
             None => Ok(None),
         }
     }
@@ -290,6 +362,7 @@ struct TwinMount {
     source_identity: String,
     display_name: String,
     admission: u64,
+    asset_routes: Option<Vec<TwinAssetRoute>>,
 }
 
 /// Convert a Bevy load address to the stable, scheme-stripped source path used
@@ -331,90 +404,112 @@ fn canonical_root(root: &Path) -> Result<PathBuf, TwinRootsError> {
     Ok(root.to_path_buf())
 }
 
-/// Resolve a Twin-relative path with the same authored-first, Twin-cache,
-/// global-cache policy used by the `twin://` reader. The global cache is an
-/// intentional final read source for every Twin; write ownership is controlled
-/// separately by the manifest's `shared` field. The AssetServer, dataset
-/// registry, and native runtime consumers must agree on which roots a logical
-/// Twin path names.
-fn resolve_twin_relative_path(
+/// Select the physical owner for one Twin address. Declared dataset routes
+/// select one exact root; every other Twin URI addresses only its authored tree.
+fn twin_asset_target(
     root: &Path,
     relative: &Path,
-) -> Result<Option<PathBuf>, TwinRootsError> {
-    resolve_twin_relative_path_with_cache(root, relative, &crate::cache_dir())
+    routes: &[TwinAssetRoute],
+) -> (PathBuf, PathBuf) {
+    routes
+        .iter()
+        .filter_map(|route| {
+            relative
+                .strip_prefix(&route.logical_path)
+                .ok()
+                .map(|suffix| (route, suffix))
+        })
+        .max_by_key(|(route, _)| route.logical_path.components().count())
+        .map(|(route, suffix)| {
+            let owner = match route.storage {
+                TwinAssetStorage::Twin => root.to_path_buf(),
+                TwinAssetStorage::TwinCache => crate::twin_cache_dir(root),
+                TwinAssetStorage::SharedCache => crate::cache_dir(),
+            };
+            let target = if suffix.as_os_str().is_empty() {
+                route.storage_path.clone()
+            } else {
+                route.storage_path.join(suffix)
+            };
+            (owner, target)
+        })
+        .unwrap_or_else(|| (root.to_path_buf(), relative.to_path_buf()))
 }
 
-fn resolve_twin_relative_path_with_cache(
-    root: &Path,
+fn native_twin_asset_path(
+    base: &Path,
     relative: &Path,
-    shared: &Path,
+    expected: Option<lunco_storage::StorageEntryKind>,
 ) -> Result<Option<PathBuf>, TwinRootsError> {
-    let roots = crate::asset_read_roots_with_shared(root, shared);
+    let (base, relative) = if relative.as_os_str().is_empty() {
+        let Some(name) = base.file_name() else {
+            return Ok(None);
+        };
+        let Some(parent) = base.parent() else {
+            return Ok(None);
+        };
+        (parent.to_path_buf(), PathBuf::from(name))
+    } else {
+        (base.to_path_buf(), relative.to_path_buf())
+    };
     #[cfg(not(target_arch = "wasm32"))]
-    return crate::lunco_source::resolve_native_asset(&roots, relative, None)
+    return crate::lunco_source::resolve_native_asset(&[base], &relative, expected)
         .map(|resolved| resolved.map(|(_, path)| path))
         .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
     #[cfg(target_arch = "wasm32")]
     {
-        if !crate::asset_path::is_safe_relative_components(relative) {
+        if !crate::asset_path::is_safe_relative_components(&relative) {
             return Err(TwinRootsError::AssetResolution(
                 std::io::ErrorKind::InvalidInput,
                 format!("unsafe relative path `{}`", relative.display()),
             ));
         }
-        for root in roots {
-            let path = root.join(relative);
-            if path.exists() {
-                return Ok(Some(path));
-            }
-        }
-        Ok(None)
+        let _ = expected;
+        Ok(Some(base.join(relative)))
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_twin_relative_path(
+    root: &Path,
+    relative: &Path,
+    routes: &[TwinAssetRoute],
+) -> Result<Option<PathBuf>, TwinRootsError> {
+    let (base, suffix) = twin_asset_target(root, relative, routes);
+    native_twin_asset_path(&base, &suffix, None)
 }
 
 pub(crate) fn resolve_twin_relative_file(
     root: &Path,
     relative: &Path,
+    routes: &[TwinAssetRoute],
 ) -> Result<Option<PathBuf>, TwinRootsError> {
-    #[cfg(not(target_arch = "wasm32"))]
-    return crate::lunco_source::resolve_native_asset(
-        &crate::asset_read_roots(root),
-        relative,
-        Some(lunco_storage::StorageEntryKind::File),
-    )
-    .map(|resolved| resolved.map(|(_, path)| path))
-    .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
-    #[cfg(target_arch = "wasm32")]
-    Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_file()))
+    let (base, suffix) = twin_asset_target(root, relative, routes);
+    native_twin_asset_path(&base, &suffix, Some(lunco_storage::StorageEntryKind::File))
 }
 
 pub(crate) fn resolve_twin_relative_directory(
     root: &Path,
     relative: &Path,
+    routes: &[TwinAssetRoute],
 ) -> Result<Option<PathBuf>, TwinRootsError> {
     // Domain manifests designate the admitted Twin directory itself with `.`.
     if relative == Path::new(".") {
         #[cfg(not(target_arch = "wasm32"))]
-        return crate::resolve_native_asset(
-            &[root.to_path_buf()],
+        return native_twin_asset_path(
+            root,
             Path::new(""),
             Some(lunco_storage::StorageEntryKind::Directory),
-        )
-        .map(|resolved| resolved.map(|(_, path)| path))
-        .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
+        );
         #[cfg(target_arch = "wasm32")]
         return Ok(Some(root.to_path_buf()));
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    return crate::lunco_source::resolve_native_asset(
-        &crate::asset_read_roots(root),
-        relative,
+    let (base, suffix) = twin_asset_target(root, relative, routes);
+    native_twin_asset_path(
+        &base,
+        &suffix,
         Some(lunco_storage::StorageEntryKind::Directory),
     )
-    .map(|resolved| resolved.map(|(_, path)| path))
-    .map_err(|error| TwinRootsError::AssetResolution(error.kind(), error.to_string()));
-    #[cfg(target_arch = "wasm32")]
-    Ok(resolve_twin_relative_path(root, relative)?.filter(|path| path.is_dir()))
 }
 
 impl TwinRoots {
@@ -433,12 +528,103 @@ impl TwinRoots {
             .logical_identities
             .get(authority)
             .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        let asset_routes = root
+            .asset_routes
+            .clone()
+            .ok_or(TwinRootsError::AssetRoutesUnavailable)?;
         Ok(TwinReadScope {
             authority: authority.to_owned(),
             logical_identity: logical_identity.clone(),
             root: root.root.clone(),
+            asset_routes,
         })
     }
+
+    /// Replace the manifest-owned physical locations for one mounted Twin.
+    /// Addresses outside these routes resolve only inside the authored Twin root.
+    pub fn replace_asset_routes(
+        &self,
+        authority: &str,
+        mut routes: Vec<TwinAssetRoute>,
+    ) -> Result<(), TwinRootsError> {
+        let mut owners = HashMap::<PathBuf, &TwinAssetRoute>::new();
+        for route in &routes {
+            if let Some(existing) = owners.insert(route.logical_path.clone(), route)
+                && existing != route
+            {
+                return Err(TwinRootsError::InvalidAssetRoute(format!(
+                    "conflicting storage owners for `{}`",
+                    route.logical_path.display()
+                )));
+            }
+        }
+        routes.sort_by(|left, right| {
+            right
+                .logical_path
+                .components()
+                .count()
+                .cmp(&left.logical_path.components().count())
+                .then_with(|| left.logical_path.cmp(&right.logical_path))
+        });
+        routes.dedup();
+        let mut registry = self
+            .registry
+            .write()
+            .map_err(|_| TwinRootsError::RegistryPoisoned)?;
+        let mount = registry
+            .roots
+            .get(authority)
+            .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.to_owned()))?;
+        if mount.asset_routes.as_ref() == Some(&routes) {
+            return Ok(());
+        }
+        let revision = registry
+            .revision
+            .checked_add(1)
+            .ok_or(TwinRootsError::RegistryExhausted)?;
+        registry.revision = revision;
+        let Some(mount) = registry.roots.get_mut(authority) else {
+            return Err(TwinRootsError::UnknownAuthority(authority.to_owned()));
+        };
+        mount.asset_routes = Some(routes);
+        Ok(())
+    }
+
+    fn mount_paths(
+        &self,
+        authority: &str,
+    ) -> Result<Option<(PathBuf, Option<Vec<TwinAssetRoute>>)>, TwinRootsError> {
+        self.registry
+            .read()
+            .map(|registry| {
+                registry
+                    .roots
+                    .get(authority)
+                    .map(|mount| (mount.root.clone(), mount.asset_routes.clone()))
+            })
+            .map_err(|_| TwinRootsError::RegistryPoisoned)
+    }
+
+    /// Return the exact physical candidate selected for a mounted Twin URI.
+    /// The caller still performs storage and containment validation.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn mapped_asset_path(
+        &self,
+        authority: &str,
+        relative: &Path,
+    ) -> Result<Option<PathBuf>, TwinRootsError> {
+        let Some((root, routes)) = self.mount_paths(authority)? else {
+            return Ok(None);
+        };
+        let routes = routes.ok_or(TwinRootsError::AssetRoutesUnavailable)?;
+        let (base, suffix) = twin_asset_target(&root, relative, &routes);
+        Ok(Some(if suffix.as_os_str().is_empty() {
+            base
+        } else {
+            base.join(suffix)
+        }))
+    }
+
     /// Capture current live logical sources without reading filesystem metadata.
     pub fn snapshot(&self) -> Result<TwinRootsSnapshot, TwinRootsError> {
         let registry = self
@@ -454,7 +640,12 @@ impl TwinRoots {
                     registry
                         .logical_identities
                         .get(authority)
-                        .map(|logical| (logical.clone(), mount.root.clone()))
+                        .map(|logical| {
+                            (
+                                logical.clone(),
+                                (mount.root.clone(), mount.asset_routes.clone()),
+                            )
+                        })
                         .ok_or_else(|| TwinRootsError::UnknownAuthority(authority.clone()))
                 })
                 .collect::<Result<_, _>>()?,
@@ -480,20 +671,18 @@ impl TwinRoots {
         });
     }
 
-    /// Register the asset authority for an opened workspace Twin.
+    /// Register an opened workspace Twin while its manifest routes are prepared.
     ///
-    /// The workspace event remains the normal lifecycle trigger, but startup
-    /// composition can admit a Twin and immediately request its default scene
-    /// in the same observer dispatch. Exposing this operation on the asset
-    /// owner lets that composition root establish the `twin://` authority
-    /// before any domain observer resolves the scene; repeated registration is
-    /// idempotent for the same root. Authored source identity and display name
+    /// The returned authority cannot read assets until `replace_asset_routes`
+    /// installs the manifest map. Repeated registration preserves the existing
+    /// route state for the same root. Authored source identity and display name
     /// remain independent.
     pub fn register_twin(&self, twin: &lunco_twin::Twin) -> Result<String, TwinRootsError> {
-        self.register_authority_with_display_name(
+        self.register_authority_with_display_name_and_routes(
             logical_twin_source_identity(twin),
             twin.display_name(),
             twin.root.clone(),
+            None,
         )
     }
 
@@ -516,15 +705,29 @@ impl TwinRoots {
         self.register_authority_with_display_name(requested_identity, display_name, root)
     }
 
-    /// Admit one source with separate provenance identity and presentation label.
-    /// Twins with an authored manifest UUID and downloaded scenario caches use
-    /// this path; the short form is for synthetic mounts whose identity is also
-    /// their label.
+    /// Admit a source with separate provenance identity and presentation label.
+    /// This creates an authored-root-only source with a ready empty route map;
+    /// use `register_twin` when a Twin's manifest routes must be prepared first.
     pub fn register_authority_with_display_name(
         &self,
         logical_identity: impl Into<String>,
         display_name: impl Into<String>,
         root: impl Into<PathBuf>,
+    ) -> Result<String, TwinRootsError> {
+        self.register_authority_with_display_name_and_routes(
+            logical_identity,
+            display_name,
+            root,
+            Some(Vec::new()),
+        )
+    }
+
+    fn register_authority_with_display_name_and_routes(
+        &self,
+        logical_identity: impl Into<String>,
+        display_name: impl Into<String>,
+        root: impl Into<PathBuf>,
+        asset_routes: Option<Vec<TwinAssetRoute>>,
     ) -> Result<String, TwinRootsError> {
         let requested_identity = logical_identity.into();
         let display_name = display_name.into();
@@ -580,6 +783,7 @@ impl TwinRoots {
                 source_identity: requested_identity.clone(),
                 display_name,
                 admission,
+                asset_routes,
             },
         );
         registry
@@ -900,24 +1104,23 @@ impl TwinRoots {
             .map_err(|_| TwinRootsError::RegistryPoisoned)
     }
 
-    /// Resolve a Twin-relative file using the same authored-first, Twin-cache,
-    /// shared-cache
-    /// policy as the `twin://` AssetReader. Native consumers that need a concrete
-    /// filesystem path must use this boundary rather than joining a Twin root
-    /// themselves, because downloaded Twin assets live in `.cache`.
+    /// Resolve a Twin-relative file using its explicit manifest route, or the
+    /// authored Twin root when no dataset route declares the address. A Twin
+    /// awaiting manifest admission returns `AssetRoutesUnavailable`.
     pub fn resolve_file(
         &self,
         authority: &str,
         relative: &Path,
     ) -> Result<Option<PathBuf>, TwinRootsError> {
-        let Some(root) = self.root_for(authority)? else {
+        let Some((root, routes)) = self.mount_paths(authority)? else {
             return Ok(None);
         };
-        resolve_twin_relative_file(&root, relative)
+        let routes = routes.ok_or(TwinRootsError::AssetRoutesUnavailable)?;
+        resolve_twin_relative_file(&root, relative, &routes)
     }
 
-    /// Resolve a Twin-relative directory using the same authored-first,
-    /// cache-second policy as the `twin://` AssetReader.
+    /// Resolve a Twin-relative directory using its explicit manifest route, or
+    /// the authored Twin root when no dataset route declares the address.
     ///
     /// Processed datasets such as DEM sites deliver a directory containing
     /// their runtime products. Directory consumers use this boundary instead
@@ -928,21 +1131,25 @@ impl TwinRoots {
         authority: &str,
         relative: &Path,
     ) -> Result<Option<PathBuf>, TwinRootsError> {
-        let Some(root) = self.root_for(authority)? else {
+        let Some((root, routes)) = self.mount_paths(authority)? else {
             return Ok(None);
         };
-        resolve_twin_relative_directory(&root, relative)
+        let routes = routes.ok_or(TwinRootsError::AssetRoutesUnavailable)?;
+        resolve_twin_relative_directory(&root, relative, &routes)
     }
 
-    /// Whether a Twin-relative file or directory exists in the Twin's
-    /// authored-tree, Twin-cache, shared-cache order, including a composed
-    /// document overlay. Native readers only: on wasm the mounted OPFS tree
-    /// cannot be probed synchronously and every candidate is reported present.
+    /// Whether a Twin-relative file or directory exists at its selected storage
+    /// owner, including a composed document overlay. Native readers only: on
+    /// wasm the mounted OPFS tree cannot be probed synchronously.
     pub fn resolve_existing(
         &self,
         authority: &str,
         relative: &Path,
     ) -> Result<bool, TwinRootsError> {
+        let Some((root, routes)) = self.mount_paths(authority)? else {
+            return Err(TwinRootsError::UnknownAuthority(authority.to_owned()));
+        };
+        let routes = routes.ok_or(TwinRootsError::AssetRoutesUnavailable)?;
         if self
             .overlay_for(&overlay_key(
                 authority,
@@ -952,16 +1159,30 @@ impl TwinRoots {
         {
             return Ok(true);
         }
-        let Some(root) = self.root_for(authority)? else {
-            return Err(TwinRootsError::UnknownAuthority(authority.to_owned()));
-        };
         #[cfg(not(target_arch = "wasm32"))]
-        return Ok(resolve_twin_relative_path(&root, relative)?.is_some());
+        return Ok(resolve_twin_relative_path(&root, relative, &routes)?.is_some());
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = root;
+            let _ = (root, routes);
             Ok(true)
         }
+    }
+
+    /// Whether this logical Twin path is owned by a manifest-declared route.
+    /// This lets USD search-path preparation prefer an explicit dataset owner
+    /// over an incidental layer-relative copy.
+    pub(crate) fn has_asset_route(
+        &self,
+        authority: &str,
+        relative: &Path,
+    ) -> Result<bool, TwinRootsError> {
+        let Some((_, routes)) = self.mount_paths(authority)? else {
+            return Err(TwinRootsError::UnknownAuthority(authority.to_owned()));
+        };
+        let routes = routes.ok_or(TwinRootsError::AssetRoutesUnavailable)?;
+        Ok(routes
+            .iter()
+            .any(|route| relative.starts_with(&route.logical_path)))
     }
 
     /// The "primary" open Twin as `(authority, root)` — the Twin with the
@@ -1138,15 +1359,15 @@ pub fn twin_asset_source(roots: &TwinRoots) -> AssetSourceBuilder {
     })
 }
 
-/// `AssetReader` that splits `<name>/<rel>`, looks the Twin root up by name, and
-/// streams `<root>/<rel>` through storage. Consumer budgets apply before any
+/// `AssetReader` that splits `<name>/<rel>`, looks up the Twin's manifest route,
+/// and streams from its selected owner through storage. Consumer budgets apply before any
 /// full-payload allocation on either native files or browser OPFS snapshots.
 struct TwinReader {
     roots: TwinRoots,
 }
 
 impl TwinReader {
-    /// Resolve `twin://`-relative `<name>/<rel>` to an absolute filesystem path.
+    /// Resolve `twin://`-relative `<name>/<rel>` to its explicitly selected path.
     ///
     /// Rejects path traversal: only `Normal` components are joined, so a scene can
     /// never reach outside its Twin root. That guard is not optional — a Twin root
@@ -1155,13 +1376,9 @@ impl TwinReader {
     /// local files. Shipped assets are addressed by scheme (`@lunco://…@`), so no
     /// authored ref needs to climb out (verified across the shipped tree and the
     /// twins: zero `@../…@` refs).
-    /// A Twin's DOWNLOADED assets live in its own `.cache/` (see
-    /// [`crate::twin_cache_dir`]), so a Twin-relative path resolves whether the
-    /// file is committed in the Twin or was fetched from that Twin's
-    /// `Assets.toml`. Search-path selection happens before this reader, in
-    /// native preparation. Authored files
-    /// win: the cache is a materialisation of a declaration, never an override
-    /// of something the author checked in.
+    /// `Assets.toml` routes declared inputs and outputs to one owner. Unlisted
+    /// Twin addresses resolve only in the authored Twin tree. Search-path
+    /// selection happens before this reader, in native preparation.
     fn resolve(&self, path: &Path) -> Result<Option<PathBuf>, TwinRootsError> {
         let mut comps = path.components();
         let Some(name) = comps
@@ -1237,12 +1454,13 @@ impl AssetReader for TwinReader {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let Some(root) = self.roots.root_for(name).map_err(asset_reader_error)? else {
-                return Ok(false);
-            };
             return Ok(
-                match resolve_twin_relative_path(&root, &relative).map_err(asset_reader_error)? {
-                    Some(path) => std::fs::metadata(path)?.is_dir(),
+                match self
+                    .roots
+                    .resolve_directory(name, &relative)
+                    .map_err(asset_reader_error)?
+                {
+                    Some(_) => true,
                     None => false,
                 },
             );
@@ -1377,8 +1595,8 @@ mod tests {
         assert!(!retired.logical_roots.contains_key("generic"));
         assert_eq!(
             admitted.logical_roots.get("generic"),
-            Some(&canonical_root(root.path()).unwrap()),
-            "immutable preparation retains only its admitted path snapshot"
+            Some(&(canonical_root(root.path()).unwrap(), Some(Vec::new()))),
+            "immutable preparation retains its admitted root and route snapshot"
         );
         let reopened = roots.register_authority("generic", root.path()).unwrap();
         assert_ne!(reopened, authority);
@@ -2022,7 +2240,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_file_finds_downloaded_twin_assets_without_exposing_cache_in_authored_paths() {
+    fn dataset_routes_select_the_declared_twin_or_cache_owner() {
         let twin = tempfile::tempdir().expect("temporary Twin root");
         let cached = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
         lunco_storage::ensure_directory_sync(cached.parent().expect("cached parent"))
@@ -2035,27 +2253,71 @@ mod tests {
 
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
-            Ok(Some(
-                lunco_storage::canonicalize_file_path(&cached).unwrap()
-            )),
-            "logical Twin paths must resolve downloaded assets through the cache"
+            Ok(None),
+            "unlisted cache content is not an implicit Twin asset"
         );
+        assert!(matches!(
+            roots.replace_asset_routes(
+                &name,
+                vec![
+                    TwinAssetRoute::new(
+                        "terrain/luna2",
+                        TwinAssetStorage::TwinCache,
+                        "terrain/luna2",
+                    )
+                    .expect("cache route"),
+                    TwinAssetRoute::new("terrain/luna2", TwinAssetStorage::Twin, "terrain/luna2",)
+                        .expect("Twin route"),
+                ],
+            ),
+            Err(TwinRootsError::InvalidAssetRoute(_))
+        ));
 
         let authored = twin.path().join("terrain/luna2");
         lunco_storage::ensure_directory_sync(authored.parent().expect("authored parent"))
             .expect("authored directory");
-        lunco_storage::write_file_sync(&authored, b"authored terrain").expect("authored asset");
+        lunco_storage::write_file_sync(&authored, b"stale local copy").expect("authored asset");
+        roots
+            .replace_asset_routes(
+                &name,
+                vec![
+                    TwinAssetRoute::new(
+                        "terrain/luna2",
+                        TwinAssetStorage::TwinCache,
+                        "terrain/luna2",
+                    )
+                    .expect("cache route"),
+                ],
+            )
+            .expect("install manifest route");
+        assert_eq!(
+            roots.resolve_file(&name, Path::new("terrain/luna2")),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(&cached).unwrap()
+            )),
+            "the selected cache remains authoritative when a local copy exists"
+        );
+
+        roots
+            .replace_asset_routes(
+                &name,
+                vec![
+                    TwinAssetRoute::new("terrain/luna2", TwinAssetStorage::Twin, "terrain/luna2")
+                        .expect("Twin route"),
+                ],
+            )
+            .expect("select explicit Twin path");
         assert_eq!(
             roots.resolve_file(&name, Path::new("terrain/luna2")),
             Ok(Some(
                 lunco_storage::canonicalize_file_path(&authored).unwrap()
             )),
-            "authored Twin files take precedence over materialized cache files"
+            "an explicit Twin output route uses the shared Twin path"
         );
     }
 
     #[test]
-    fn resolve_directory_finds_processed_twin_assets_without_reconstructing_cache_paths() {
+    fn declared_cache_directory_ignores_an_incomplete_twin_local_directory() {
         let twin = tempfile::tempdir().expect("temporary Twin root");
         let cached = crate::twin_cache_dir(twin.path()).join("terrain/luna2");
         lunco_storage::ensure_directory_sync(&cached.join("materials/textures"))
@@ -2069,13 +2331,35 @@ mod tests {
         let name = roots
             .register_authority("luna2", twin.path())
             .expect("register root");
+        let authored = twin.path().join("terrain/luna2");
+        lunco_storage::ensure_directory_sync(&authored).expect("stale Twin-local directory");
 
+        assert_eq!(
+            roots.resolve_directory(&name, Path::new("terrain/luna2")),
+            Ok(Some(
+                lunco_storage::canonicalize_file_path(&authored).unwrap()
+            )),
+            "undeclared Twin paths address the authored tree only"
+        );
+        roots
+            .replace_asset_routes(
+                &name,
+                vec![
+                    TwinAssetRoute::new(
+                        "terrain/luna2",
+                        TwinAssetStorage::TwinCache,
+                        "terrain/luna2",
+                    )
+                    .expect("cache route"),
+                ],
+            )
+            .expect("install manifest route");
         assert_eq!(
             roots.resolve_directory(&name, Path::new("terrain/luna2")),
             Ok(Some(
                 lunco_storage::canonicalize_file_path(&cached).unwrap()
             )),
-            "processed Twin directories must resolve through the asset boundary"
+            "a declared cache dataset does not inspect the incomplete Twin directory"
         );
     }
 
@@ -2101,25 +2385,6 @@ mod tests {
         assert_eq!(
             roots.resolve_directory(&name, Path::new(".")).unwrap(),
             None
-        );
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn twin_resolution_reads_a_shared_cache_without_a_twin_local_copy() {
-        let twin = tempfile::tempdir().expect("temporary Twin root");
-        let shared = tempfile::tempdir().expect("temporary global cache");
-        let relative = Path::new("terrain/shared/heightmap.tif");
-        let shared_file = shared.path().join(relative);
-        lunco_storage::ensure_directory_sync(shared_file.parent().expect("shared parent"))
-            .expect("shared directory");
-        lunco_storage::write_file_sync(&shared_file, b"shared terrain").expect("shared asset");
-
-        assert_eq!(
-            resolve_twin_relative_path_with_cache(twin.path(), relative, shared.path())
-                .expect("resolve shared Twin asset"),
-            Some(lunco_storage::canonicalize_file_path(&shared_file).unwrap()),
-            "a Twin must consume a shared logical asset without materialising a local copy"
         );
     }
 

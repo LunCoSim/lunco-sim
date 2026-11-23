@@ -128,8 +128,10 @@ All worktrees and Twins share the global cache returned by `cache_dir()`:
 └── processed/              (reproducible generated outputs)
 ```
 
-Twin-owned downloads and derived products live under `<twin>/.cache`; engine
-datasets and explicit `shared = true` Twin datasets live in the shared cache.
+Twin downloads and derived products use `<twin>/.cache` by default; setting
+`shared = true` selects the global cache. A processed output can explicitly
+select a Twin-relative authored path with `output_root = "twin"`. The manifest
+route controls reads too, so other copies are not searched.
 
 The user configuration path is owned by `lunco-settings`; it is not another
 asset-cache path. `settings.json` contains the shared `DownloadSettings`
