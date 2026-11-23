@@ -286,23 +286,24 @@ pub fn read_asset_bytes_in_scope(
                 format!("Twin asset `{id}` escapes its root"),
             )
         })?;
-        let path = crate::twin_source::resolve_twin_relative_file(root, &relative)
-            .map_err(|error| {
-                let kind = match &error {
-                    crate::twin_source::TwinRootsError::AssetResolution(kind, _) => *kind,
-                    _ => std::io::ErrorKind::Other,
-                };
-                std::io::Error::new(
-                    kind,
-                    format!("could not resolve Twin asset `{id}`: {error}"),
-                )
-            })?
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("Twin asset `{id}` was not found in its authored tree or cache"),
-                )
-            })?;
+        let path =
+            crate::twin_source::resolve_twin_relative_file(root, &relative, scope.asset_routes())
+                .map_err(|error| {
+                    let kind = match &error {
+                        crate::twin_source::TwinRootsError::AssetResolution(kind, _) => *kind,
+                        _ => std::io::ErrorKind::Other,
+                    };
+                    std::io::Error::new(
+                        kind,
+                        format!("could not resolve Twin asset `{id}`: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("Twin asset `{id}` was not found at its selected storage location"),
+                    )
+                })?;
         return read_native_asset(path, Some(max_bytes));
     }
     read_asset_bytes_inner(id, assets_root, Some(max_bytes), twin)
@@ -476,31 +477,6 @@ mod tests {
             1024,
         )
         .expect_err("Twin symlink must not escape its root");
-        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn an_unsafe_authored_twin_entry_cannot_fall_through_to_cache() {
-        let root = tempfile::tempdir().expect("temporary Twin root");
-        let outside = tempfile::tempdir().expect("temporary outside root");
-        let secret = outside.path().join("secret.txt");
-        lunco_storage::write_file_sync(&secret, b"must not be read").expect("secret");
-        lunco_storage::create_file_symlink_sync(&secret, &root.path().join("linked.txt"))
-            .expect("symlink");
-
-        let cache = crate::twin_cache_dir(root.path());
-        lunco_storage::ensure_directory_sync(&cache).expect("cache root");
-        lunco_storage::write_file_sync(&cache.join("linked.txt"), b"cache shadow")
-            .expect("cache file");
-
-        let error = read_asset_bytes_in_scope(
-            "twin://example/linked.txt",
-            None,
-            Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
-            1024,
-        )
-        .expect_err("an unsafe authored path must block cache fallback");
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }

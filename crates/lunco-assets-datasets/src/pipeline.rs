@@ -263,17 +263,20 @@ pub fn input_paths(
 ) -> std::io::Result<BTreeMap<String, PathBuf>> {
     config.validate()?;
     let mut paths = BTreeMap::from([("source".to_owned(), source.to_path_buf())]);
-    let root = owner
+    let code_root = owner
         .map(Path::to_path_buf)
         .map(Ok)
         .unwrap_or_else(lunco_assets_core::assets_dir_abs)?;
+    let local_cache_root = owner
+        .map(lunco_assets_core::twin_cache_dir)
+        .unwrap_or_else(lunco_assets_core::cache_dir);
     let roots = if owner.is_some() {
-        lunco_assets_core::asset_read_roots(&root)
+        vec![code_root.clone()]
     } else {
-        lunco_assets_core::engine_asset_read_roots(&root)
+        lunco_assets_core::engine_asset_read_roots(&code_root)
     };
     for (id, input) in &config.sources {
-        let path = crate::source_read_path(input, &roots)?;
+        let path = crate::source_cache_path(input, &local_cache_root)?;
         if !path.is_file() {
             return Err(invalid(format!(
                 "pipeline input '{id}' must be an individual file; declare its data files explicitly"
@@ -290,9 +293,10 @@ pub fn input_paths(
                 }
                 None => roots.clone(),
             };
+            let code_relative = engine_relative.unwrap_or(relative);
             let path = lunco_assets_core::resolve_native_asset(
                 &code_roots,
-                Path::new(engine_relative.unwrap_or(relative)),
+                Path::new(code_relative),
                 Some(lunco_storage::StorageEntryKind::File),
             )?
             .ok_or_else(|| invalid(format!("pipeline code input '{relative}' is missing")))?

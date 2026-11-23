@@ -1730,6 +1730,10 @@ fn render_download_asset_row(
                 );
                 ui.colored_label(error_color, &row.detail);
             }
+            if !row.storage.is_empty() {
+                ui.label(egui::RichText::new("Storage").strong());
+                ui.label(&row.storage);
+            }
             ui.label(egui::RichText::new("Source files").strong());
             ui.label(&row.source_files);
             ui.horizontal_wrapped(|ui| {

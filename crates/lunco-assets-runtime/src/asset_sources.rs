@@ -8,6 +8,12 @@
 //! `.add_plugins(DefaultPlugins)`.
 
 use bevy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+#[cfg(target_arch = "wasm32")]
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::VecDeque;
 
 use lunco_assets_core::lunco_source::lunco_asset_source;
 use lunco_assets_core::twin_source::{TwinRoots, twin_asset_source};
@@ -22,13 +28,13 @@ const TWIN_ASSET_UNMOUNT_FAILED: &str = "twin-asset-unmount-failed";
 /// must not depend on a particular scene domain to keep the source mounted.
 pub struct TwinRootsPlugin;
 
-/// A workspace Twin has an addressable `twin://` authority and its exact
-/// assigned authority is ready for consumers that must load through that source.
+/// A workspace Twin has an addressable `twin://` authority and its manifest
+/// routes are installed before consumers load through that source.
 ///
 /// [`lunco_workspace::TwinAdded`] announces workspace ownership, while this
 /// event announces the asset boundary's stronger postcondition. Consumers must
-/// use this event when their work requires a mounted Twin source; relying on
-/// observer registration order would race the mount.
+/// use this event when their work requires a mounted Twin source; it is emitted
+/// only after declared asset owners are ready, so scene reads cannot race routes.
 #[derive(Event, Clone, Debug)]
 pub struct TwinAssetMounted {
     /// Workspace identity of the mounted Twin.
@@ -45,7 +51,56 @@ impl Plugin for TwinRootsPlugin {
         app.init_resource::<TwinRoots>()
             .add_observer(register_twin_root)
             .add_observer(unregister_twin_root);
+        app.init_resource::<PendingTwinAssetMounts>();
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(Update, publish_ready_twin_asset_mounts);
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(Update, publish_ready_twin_asset_mounts);
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct PendingTwinAssetMounts(VecDeque<PendingTwinAssetMount>);
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource)]
+struct PendingTwinAssetMounts {
+    pending: HashMap<lunco_workspace::TwinId, String>,
+    sender: crossbeam_channel::Sender<PendingTwinAssetMountResult>,
+    receiver: crossbeam_channel::Receiver<PendingTwinAssetMountResult>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Default for PendingTwinAssetMounts {
+    fn default() -> Self {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        Self {
+            pending: HashMap::new(),
+            sender,
+            receiver,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct PendingTwinAssetMountResult {
+    twin_id: lunco_workspace::TwinId,
+    authority: String,
+    display_name: String,
+    root: std::path::PathBuf,
+    admitted_root: std::path::PathBuf,
+    result: Result<Vec<lunco_assets_core::TwinAssetRoute>, String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct PendingTwinAssetMount {
+    twin_id: lunco_workspace::TwinId,
+    authority: String,
+    display_name: String,
+    root: std::path::PathBuf,
+    admitted_root: std::path::PathBuf,
+    task: Task<Result<Vec<lunco_assets_core::TwinAssetRoute>, String>>,
 }
 
 fn register_twin_root(
@@ -53,6 +108,7 @@ fn register_twin_root(
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
     roots: Res<TwinRoots>,
+    mut pending_mounts: ResMut<PendingTwinAssetMounts>,
     mut commands: Commands,
 ) {
     let Some(workspace) = workspace else {
@@ -84,22 +140,273 @@ fn register_twin_root(
         twin.display_name(),
         twin.root.display()
     );
-    commands.trigger(TwinAssetMounted {
-        twin: twin_id,
-        authority: assigned,
-        display_name: twin.display_name(),
-    });
+    let admitted_root = match roots.root_for(&assigned) {
+        Ok(Some(root)) => root,
+        Ok(None) => {
+            if let Some(pending_opens) = pending_opens.as_mut() {
+                pending_opens.finish_replacement_for_twin(twin_id);
+            }
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                TWIN_ASSET_MOUNT_FAILED,
+                format!("Twin asset authority `{assigned}` disappeared during admission"),
+            );
+            return;
+        }
+        Err(error) => {
+            if let Some(pending_opens) = pending_opens.as_mut() {
+                pending_opens.finish_replacement_for_twin(twin_id);
+            }
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                TWIN_ASSET_MOUNT_FAILED,
+                format!("could not verify admitted Twin asset root: {error}"),
+            );
+            return;
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if pending_mounts
+            .0
+            .iter()
+            .any(|pending| pending.twin_id == twin_id)
+        {
+            return;
+        }
+        let Some(pool) = AsyncComputeTaskPool::try_get() else {
+            if let Some(pending_opens) = pending_opens.as_mut() {
+                pending_opens.finish_replacement_for_twin(twin_id);
+            }
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                TWIN_ASSET_MOUNT_FAILED,
+                "cannot prepare the Twin asset route map because the I/O task pool is unavailable",
+            );
+            return;
+        };
+        let scope = lunco_assets_datasets::DatasetScope::Twin {
+            source_identity: lunco_assets_core::logical_twin_source_identity(twin),
+            authority: Some(assigned.clone()),
+            display_name: twin.display_name(),
+            root: twin.root.clone(),
+        };
+        let route_scope = scope.clone();
+        pending_mounts.0.push_back(PendingTwinAssetMount {
+            twin_id,
+            authority: assigned,
+            display_name: twin.display_name(),
+            root: twin.root.clone(),
+            admitted_root,
+            task: pool.spawn(async move {
+                lunco_assets_datasets::DatasetRegistry::read_twin_asset_routes(&route_scope)
+            }),
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        if pending_mounts.pending.get(&twin_id) == Some(&assigned) {
+            return;
+        }
+        pending_mounts.pending.insert(twin_id, assigned.clone());
+        let scope = lunco_assets_datasets::DatasetScope::Twin {
+            source_identity: lunco_assets_core::logical_twin_source_identity(twin),
+            authority: Some(assigned.clone()),
+            display_name: twin.display_name(),
+            root: twin.root.clone(),
+        };
+        let sender = pending_mounts.sender.clone();
+        let authority = assigned;
+        let display_name = twin.display_name();
+        let root = twin.root.clone();
+        let admitted_root = admitted_root;
+        wasm_bindgen_futures::spawn_local(async move {
+            let result =
+                lunco_assets_datasets::DatasetRegistry::read_twin_asset_routes(&scope).await;
+            let _ = sender.send(PendingTwinAssetMountResult {
+                twin_id,
+                authority,
+                display_name,
+                root,
+                admitted_root,
+                result,
+            });
+        });
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_ready_twin_asset_mounts(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Res<TwinRoots>,
+    mut pending: ResMut<PendingTwinAssetMounts>,
+    mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
+    mut commands: Commands,
+) {
+    let Some(workspace) = workspace else {
+        return;
+    };
+    let mut remaining = VecDeque::new();
+    while let Some(mut mount) = pending.0.pop_front() {
+        let Some(result) = future::block_on(future::poll_once(&mut mount.task)) else {
+            remaining.push_back(mount);
+            continue;
+        };
+        let current_root = workspace
+            .twin(mount.twin_id)
+            .map(|twin| twin.root.as_path());
+        let live_root = match roots.root_for(&mount.authority) {
+            Ok(root) => root,
+            Err(error) => {
+                if let Some(pending_opens) = pending_opens.as_mut() {
+                    pending_opens.finish_replacement_for_twin(mount.twin_id);
+                }
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    TWIN_ASSET_MOUNT_FAILED,
+                    format!("could not verify live Twin asset authority: {error}"),
+                );
+                continue;
+            }
+        };
+        let still_open = current_root == Some(mount.root.as_path())
+            && live_root.as_deref() == Some(mount.admitted_root.as_path());
+        if !still_open {
+            continue;
+        }
+        let routes = match result {
+            Ok(routes) => routes,
+            Err(error) => {
+                if let Some(pending_opens) = pending_opens.as_mut() {
+                    pending_opens.finish_replacement_for_twin(mount.twin_id);
+                }
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    TWIN_ASSET_MOUNT_FAILED,
+                    format!(
+                        "could not prepare Twin asset routes for {}: {error}",
+                        mount.root.display()
+                    ),
+                );
+                continue;
+            }
+        };
+        if let Err(error) = roots.replace_asset_routes(&mount.authority, routes) {
+            if let Some(pending_opens) = pending_opens.as_mut() {
+                pending_opens.finish_replacement_for_twin(mount.twin_id);
+            }
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                TWIN_ASSET_MOUNT_FAILED,
+                format!(
+                    "could not publish Twin asset routes for {}: {error}",
+                    mount.root.display()
+                ),
+            );
+            continue;
+        }
+        commands.trigger(TwinAssetMounted {
+            twin: mount.twin_id,
+            authority: mount.authority,
+            display_name: mount.display_name,
+        });
+    }
+    pending.0 = remaining;
+}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_ready_twin_asset_mounts(
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    roots: Res<TwinRoots>,
+    mut pending: ResMut<PendingTwinAssetMounts>,
+    mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
+    mut commands: Commands,
+) {
+    let Some(workspace) = workspace else {
+        return;
+    };
+    while let Ok(mount) = pending.receiver.try_recv() {
+        if pending.pending.get(&mount.twin_id) != Some(&mount.authority) {
+            continue;
+        }
+        pending.pending.remove(&mount.twin_id);
+        let current_root = workspace
+            .twin(mount.twin_id)
+            .map(|twin| twin.root.as_path());
+        let live_root = match roots.root_for(&mount.authority) {
+            Ok(root) => root,
+            Err(error) => {
+                if let Some(pending_opens) = pending_opens.as_mut() {
+                    pending_opens.finish_replacement_for_twin(mount.twin_id);
+                }
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    TWIN_ASSET_MOUNT_FAILED,
+                    format!("could not verify live Twin asset authority: {error}"),
+                );
+                continue;
+            }
+        };
+        let still_open = current_root == Some(mount.root.as_path())
+            && live_root.as_deref() == Some(mount.admitted_root.as_path());
+        if !still_open {
+            continue;
+        }
+        let routes = match mount.result {
+            Ok(routes) => routes,
+            Err(error) => {
+                if let Some(pending_opens) = pending_opens.as_mut() {
+                    pending_opens.finish_replacement_for_twin(mount.twin_id);
+                }
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    TWIN_ASSET_MOUNT_FAILED,
+                    format!(
+                        "could not prepare Twin asset routes for {}: {error}",
+                        mount.root.display()
+                    ),
+                );
+                continue;
+            }
+        };
+        if let Err(error) = roots.replace_asset_routes(&mount.authority, routes) {
+            if let Some(pending_opens) = pending_opens.as_mut() {
+                pending_opens.finish_replacement_for_twin(mount.twin_id);
+            }
+            lunco_core::trigger_runtime_error(
+                &mut commands,
+                TWIN_ASSET_MOUNT_FAILED,
+                format!(
+                    "could not publish Twin asset routes for {}: {error}",
+                    mount.root.display()
+                ),
+            );
+            continue;
+        }
+        commands.trigger(TwinAssetMounted {
+            twin: mount.twin_id,
+            authority: mount.authority,
+            display_name: mount.display_name,
+        });
+    }
 }
 
 fn unregister_twin_root(
     trigger: On<lunco_workspace::TwinClosed>,
     mut pending_opens: Option<ResMut<lunco_workspace::open::PendingTwinOpens>>,
     roots: Res<TwinRoots>,
+    mut pending_mounts: ResMut<PendingTwinAssetMounts>,
     mut commands: Commands,
 ) {
     if let Some(pending_opens) = pending_opens.as_mut() {
         pending_opens.finish_replacement_for_twin(trigger.event().twin);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    pending_mounts
+        .0
+        .retain(|pending| pending.twin_id != trigger.event().twin);
+    #[cfg(target_arch = "wasm32")]
+    pending_mounts.pending.remove(&trigger.event().twin);
     if let Err(error) = roots.unregister_root(&trigger.event().root) {
         lunco_core::trigger_runtime_error(
             &mut commands,
@@ -117,7 +424,7 @@ fn unregister_twin_root(
 /// |---|---|---|
 /// | `lunco://` | the runtime `assets/` root, then the shared global cache | the engine asset *library* (rovers, parts, downloaded binaries, cached textures) |
 /// | `twin://<source-identity>/…` | the currently mounted Twin source resolved at admission | stable user-facing scene and asset addresses |
-/// | `twin://<authority>/…` | one exact live mount | internal asset reads only |
+/// | `twin://<authority>/…` | one exact live mount; Twin `Assets.toml` routes declared paths to one owner | internal asset reads only |
 ///
 /// `lunco://` is path-derived and stateless; `twin://` is separate only because
 /// its reader is stateful (it shares [`TwinRoots`] with the resource).
@@ -339,6 +646,21 @@ mod tests {
     #[test]
     fn twin_root_follows_workspace_lifecycle_without_usd() {
         let dir = tempfile::tempdir().expect("temporary Twin root");
+        std::fs::write(
+            dir.path().join("Assets.toml"),
+            "[sample]\nname = \"Sample\"\nurl = \"https://example.invalid/sample.bin\"\ndest = \"terrain/sample.bin\"\n",
+        )
+        .expect("write Twin asset manifest");
+        std::fs::create_dir_all(dir.path().join("terrain")).expect("create authored directory");
+        std::fs::write(
+            dir.path().join("terrain/sample.bin"),
+            b"stale authored copy",
+        )
+        .expect("write stale authored copy");
+        let cached = lunco_assets_core::twin_cache_dir(dir.path()).join("terrain/sample.bin");
+        std::fs::create_dir_all(cached.parent().expect("cache parent"))
+            .expect("create Twin cache directory");
+        std::fs::write(&cached, b"manifest-selected cache copy").expect("write cache artifact");
         let twin = match lunco_twin::TwinMode::open(dir.path()).expect("open Twin folder") {
             lunco_twin::TwinMode::Folder(twin) | lunco_twin::TwinMode::Twin(twin) => twin,
             lunco_twin::TwinMode::Orphan(_) => panic!("a directory must open as a Twin folder"),
@@ -364,7 +686,26 @@ mod tests {
             .resource_mut::<WorkspaceResource>()
             .add_twin(twin);
         app.world_mut().trigger(TwinAdded { twin: twin_id });
-        app.update();
+        let roots = app.world().resource::<TwinRoots>();
+        let pending_authority = roots
+            .authority_for_root(&root)
+            .expect("read pending Twin registry")
+            .expect("workspace Twin root is mounted before route preparation");
+        assert_eq!(
+            roots.resolve_file(
+                &pending_authority,
+                std::path::Path::new("terrain/sample.bin"),
+            ),
+            Err(lunco_assets_core::TwinRootsError::AssetRoutesUnavailable),
+            "Twin content remains unreadable until its manifest owner map is ready"
+        );
+        for _ in 0..100 {
+            app.update();
+            if !app.world().resource::<MountedAuthorities>().0.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         let roots = app.world().resource::<TwinRoots>();
         let assigned = roots
@@ -374,7 +715,12 @@ mod tests {
         assert_eq!(roots.root_for(&assigned), Ok(Some(root.clone())));
         assert_eq!(
             app.world().resource::<MountedAuthorities>().0,
-            vec![(twin_id, assigned)]
+            vec![(twin_id, assigned.clone())]
+        );
+        assert_eq!(
+            roots.resolve_file(&assigned, std::path::Path::new("terrain/sample.bin")),
+            Ok(Some(std::fs::canonicalize(cached).unwrap())),
+            "the mount event waits until manifest routes select cache ownership"
         );
 
         let was_active = app.world().resource::<WorkspaceResource>().active_twin == Some(twin_id);

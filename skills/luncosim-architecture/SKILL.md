@@ -25,7 +25,7 @@ or compatibility shim because the first search was incomplete.
 | Rigid-body collision, contacts, forces, torques, joints | Avian through USD-authored physics | Rust exposes the engine's generic mechanics and executes them |
 | Mission sequencing, events, policy, objectives | Rhai or behaviour trees | Task/event orchestration in production; `on_tick` is test-only for sampled verdicts |
 | Asset URI algebra | `lunco-assets-path` | Logical addresses preserve scheme authority and reject root escape at admission |
-| Native asset resolution and bytes | `lunco-assets-core` and `lunco-storage` | One root order and first-entry selection; adapters supply source context, never another cache search |
+| Native asset resolution and bytes | `lunco-assets-core` and `lunco-storage` | Engine root contract; Twin paths select an explicit manifest owner or the authored Twin folder; adapters supply source context |
 | Engine mechanisms, projection, scheduling, hot paths | Rust | Generic implementation; no vehicle- or sensor-name special cases |
 
 For numerical co-simulation, resolve authored names at interface/connection

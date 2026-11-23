@@ -35,7 +35,8 @@ let provisioning = invoke_hook("assets.provision", [#{
         name: "Texture",
         required_for_scene: true, recommended: false,
         processed: false,
-        inputs_ready: false,inputs:[#{id:"source",name:"Texture",url:"https://example.invalid/texture.png",state:"missing",error:()}],
+        artifact_storage_owner: "twin-cache", artifact_relative_path: "sources/texture.png",
+        inputs_ready: false,inputs:[#{id:"source",name:"Texture",url:"https://example.invalid/texture.png",storage_owner:"twin-cache",relative_path:"sources/texture.png",state:"missing",error:()}],
         state: #{ kind: "missing", detail: () },
     }],
 }]);
@@ -46,6 +47,9 @@ checks.push(t_true(provisioning.ok == true
         && provisioning.value.actions.len() == 1
         && provisioning.value.actions[0].action == "dismiss",
     "Rhai owns consent visibility, rows, and semantic actions"));
+checks.push(t_eq(provisioning.value.rows[0].storage,
+    "Downloaded asset · Twin .cache / sources/texture.png",
+    "download-only details identify the delivered cache owner and relative path"));
 
 let facts = #{
     scope: "twin", scope_id: "twin:test", owner: "test", interactive: true,
@@ -61,7 +65,8 @@ for state in [
 ] {
     facts.datasets = [#{id: "twin/test/data", key: "data", name: "Terrain",
         required_for_scene: true, recommended: false, selected_for_startup: false,
-        processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",state:"missing",error:()}], state: state}];
+        artifact_storage_owner: "twin", artifact_relative_path: "terrain/site",
+        processed: true, inputs_ready:false,inputs:[#{id:"source",name:"Terrain",url:"https://example.invalid/terrain.tif",storage_owner:"twin-cache",relative_path:"sources/terrain.tif",state:"missing",error:()}], state: state}];
     let view = provisioned_view(facts);
     checks.push(t_true(view.visible && view.rows.len() == 1,
         "consent retains " + state.kind + " work without another missing row"));
@@ -87,6 +92,9 @@ facts.datasets[0].state = #{kind: "missing", detail: ()};
 let pending=provisioned_view(facts).rows[0];
 checks.push(t_true(pending.status.contains("Downloaded") && pending.action=="process" && pending.action_label=="Prepare" && pending.rebuild_action=="", "stale or missing output offers preparation without a duplicate rebuild action"));
 checks.push(t_eq(pending.source_url,"https://example.invalid/terrain.tif","the source link preserves the authored address"));
+checks.push(t_true(pending.storage.contains("Terrain · Twin .cache / sources/terrain.tif")
+    && pending.storage.contains("Twin folder / terrain/site"),
+    "details show the download cache and explicit shared Twin output separately"));
 facts.datasets[0].state = #{kind: "installed", detail: ()};
 let complete = provisioned_view(facts);
 checks.push(t_true(complete.visible && complete.rows.len() == 1

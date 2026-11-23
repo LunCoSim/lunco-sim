@@ -63,6 +63,7 @@ pub(super) struct ProvisioningRow {
     pub(super) detail: String,
     pub(super) source_url: String,
     pub(super) source_files: String,
+    pub(super) storage: String,
     details_display: String,
     pub(super) details_label: String,
     min_height: String,
@@ -282,6 +283,7 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                     "detail",
                     "source_url",
                     "source_files",
+                    "storage",
                     "details_display",
                     "details_label",
                     "min_height",
@@ -307,6 +309,7 @@ fn parse_view(value: HookValue) -> Result<ProvisioningView, String> {
                 detail: string_field(fields, "detail", &context)?,
                 source_url: string_field(fields, "source_url", &context)?,
                 source_files: string_field(fields, "source_files", &context)?,
+                storage: string_field(fields, "storage", &context)?,
                 details_display: string_field(fields, "details_display", &context)?,
                 details_label: string_field(fields, "details_label", &context)?,
                 min_height: string_field(fields, "min_height", &context)?,
@@ -461,7 +464,7 @@ fn invoke_policy(
             ViewMode::Startup { ids, .. } => ids.contains(&entry.id),
         })
         .map(|entry| {
-            HookValue::map([
+            Ok(HookValue::map([
                 ("id", HookValue::str(entry.id.clone())),
                 ("key", HookValue::str(entry.key.clone())),
                 ("name", HookValue::str(entry.name.clone())),
@@ -478,6 +481,14 @@ fn invoke_policy(
                     ),
                 ),
                 ("processed", HookValue::Bool(entry.spec.process.is_some())),
+                (
+                    "artifact_storage_owner",
+                    HookValue::str(entry.artifact_storage_owner()?),
+                ),
+                (
+                    "artifact_relative_path",
+                    HookValue::str(entry.artifact_rel.clone()),
+                ),
                 ("state", state_value(&entry.state)),
                 (
                     "expanded",
@@ -495,6 +506,8 @@ fn invoke_policy(
                                     ("id", HookValue::str(input.id.clone())),
                                     ("name", HookValue::str(input.name.clone())),
                                     ("url", HookValue::str(input.url.clone())),
+                                    ("storage_owner", HookValue::str(input.storage_owner)),
+                                    ("relative_path", HookValue::str(input.relative_path.clone())),
                                     ("state", HookValue::str(input.state.kind())),
                                     (
                                         "error",
@@ -509,9 +522,9 @@ fn invoke_policy(
                             .collect(),
                     ),
                 ),
-            ])
+            ]))
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     let facts = HookValue::map([
         ("scope", HookValue::str(scope_kind(scope))),
         ("scope_id", HookValue::str(scope.id())),
@@ -586,6 +599,7 @@ fn exposure_map(view: &ProvisioningView) -> ExposureValue {
                             ("detail".to_owned(), row.detail.clone().into()),
                             ("source_url".to_owned(), row.source_url.clone().into()),
                             ("source_files".to_owned(), row.source_files.clone().into()),
+                            ("storage".to_owned(), row.storage.clone().into()),
                             (
                                 "details_display".to_owned(),
                                 row.details_display.clone().into(),

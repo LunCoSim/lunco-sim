@@ -121,23 +121,29 @@ set, otherwise executable/package ancestry before current-directory ancestry.
 An invalid override or unresolved library stops admission with an error;
 callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
-Engine reads use `lunco_assets_core::engine_asset_read_roots()` and Twin reads
-use `lunco_assets_core::asset_read_roots()` in `crates/lunco-assets-core/src/lib.rs`.
+Engine reads use `lunco_assets_core::engine_asset_read_roots()`.
+Twin reads use the manifest routes admitted into `TwinRoots`; unlisted Twin
+paths resolve only in the authored Twin folder.
 `twin://<source-identity>/<rel>` is the canonical Twin source address used by
 scene commands and persisted source identity. UI labels resolve it to the
 mounted Twin's display name and relative path. For legacy sources without a
 UUID, the source identity is the encoded display name and changes if that name
 changes.
 `LoadScene` resolves it to the current mount; only internal asset reads use the
-mount authority. The current mount reads from the Twin's authored root, its
-`.cache`, then the global cache. This lets Twins reuse a global downloaded
-product without putting a machine path or temporary cache address in USD or
-user-facing scene paths.
+mount authority. Each Twin `Assets.toml` declaration maps a logical asset path
+to one physical owner: the Twin cache by default, the global cache when
+`shared = true`, or the authored Twin folder when a processed output sets
+`output_root = "twin"`. Missing content at that owner fails there; another copy
+is not searched. Unlisted Twin paths read only from the authored Twin folder.
+`TwinAssetMounted` is published only after the manifest routes are read through
+platform storage and installed. Native hosts use an I/O worker; browsers read
+from OPFS asynchronously. Consumers must wait for that event before loading
+Twin assets.
 Runtime code gets the Twin cache path from `lunco-assets-core::twin_cache_dir`
 and manifest cache ownership from `lunco-assets-datasets`; do not join
 `.cache` or choose shared versus local storage at call sites. See the
 [cache ownership contract](../../docs/architecture/56-asset-resolution-and-cache.md#engine-and-twin-caches).
-Authored bytes always win over materialised ones. Schemes are registered in
+A manifest-selected owner controls each dataset artifact path. Schemes are registered in
 `crates/lunco-assets-runtime/src/asset_sources.rs`; `twin://` is stateful, it is not a
 second texture scheme. Use the existing logical `lunco://` or `twin://` identity
 for every delivered artifact. Canonical URI construction, separator normalization,
@@ -158,8 +164,9 @@ Verify a valid native filename with URI characters and a rejected foreign or
 retired mount through the production consumer; do not register an unrestricted
 `file:` source or enable unapproved paths to make a fixture load.
 
-Anything the cache fallback can serve is DECLARED in an `Assets.toml`. Runtime
-downloads begin only on explicit request (Settings ▸ Data & libraries, the
+Every Twin cache-backed download or processed artifact is declared in its
+`Assets.toml`, which selects the artifact owner. Runtime downloads begin only
+on explicit request (Settings ▸ Data & libraries, the
 Twin Browser Files section's Twin assets rows, or the `lunco-assets` CLI).
 Bundle targets declare build-time delivery for packaged runtime dependencies.
 The browser rows are only a view of
@@ -467,12 +474,13 @@ error. Save commits facts, close removes only the unsaved overlay, and Twin
 retirement removes the owner. Verify edits, sibling-file membership, save/close,
 and invalid-parse recovery with `scripts/api/test_asset_resources.py`.
 
-Native readers and dataset probes share `lunco-assets-core::asset_read_roots`
-and `resolve_native_asset`: the first existing entry wins, including its kind.
-Only absence advances to a cache; invalid authored artifacts and I/O errors
-must not expose cached replacements. Use `resolve_asset_input` at native
-CLI/validation boundaries. Synchronous Twin bytes require `TwinReadScope`
-captured from `TwinRoots`, never a directory without source identity.
+Engine readers and dataset probes use the engine root contract and
+`resolve_native_asset`. Twin readers first select the manifest-declared owner,
+then validate containment and entry kind there. They do not search another
+Twin or cache location when the selected artifact is absent or invalid. Use
+`resolve_asset_input` at native CLI/validation boundaries. Synchronous Twin
+bytes require `TwinReadScope` captured from `TwinRoots`, including the admitted
+manifest routes.
 
 `file_uri_to_path` returns verbatim native paths on Windows so URI filenames
 retain literal trailing dots/spaces. Keep those `PathBuf` values intact; compare

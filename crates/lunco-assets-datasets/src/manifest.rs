@@ -236,12 +236,13 @@ pub fn entry_dest_path(
     Ok(root.join(entry_relative_path(entry)?))
 }
 
-/// Select and verify the same raw input that the registered asset reader owns.
+/// Select and verify one declared download from its owning cache.
 /// Call on the existing preparation worker; checksum verification can read large files.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn source_read_path(entry: &AssetEntry, roots: &[PathBuf]) -> std::io::Result<PathBuf> {
+pub fn source_cache_path(entry: &AssetEntry, local_cache_root: &Path) -> std::io::Result<PathBuf> {
     let relative = entry_relative_path(entry)?;
-    let path = lunco_assets_core::resolve_native_asset(roots, &relative, None)?
+    let cache_root = dataset_cache_root(local_cache_root, entry.shared);
+    let path = lunco_assets_core::resolve_native_asset(&[cache_root], &relative, None)?
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -327,7 +328,7 @@ fn is_archive_url(url: &str) -> bool {
     archive_extension(url).is_some()
 }
 
-fn entry_relative_path(entry: &AssetEntry) -> std::io::Result<PathBuf> {
+pub(crate) fn entry_relative_path(entry: &AssetEntry) -> std::io::Result<PathBuf> {
     match entry.dest.as_deref() {
         Some(destination) if lunco_assets_path::is_portable_relative_path(destination) => {
             Ok(PathBuf::from(destination))

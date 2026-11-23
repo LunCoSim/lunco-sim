@@ -559,6 +559,35 @@ fn commit_pending_twin_manifest_scans(
             None => false,
         };
         if still_open {
+            let routes = match prepared.twin_asset_routes(&scope) {
+                Ok(routes) => routes,
+                Err(error) => {
+                    lunco_core::trigger_runtime_error(
+                        &mut commands,
+                        "twin-dataset-asset-routes-invalid",
+                        error,
+                    );
+                    continue;
+                }
+            };
+            let route_result = match (&roots, &scope) {
+                (
+                    Some(roots),
+                    DatasetScope::Twin {
+                        authority: Some(authority),
+                        ..
+                    },
+                ) => roots.replace_asset_routes(authority, routes),
+                _ => Err(lunco_assets_core::TwinRootsError::RegistryUnavailable),
+            };
+            if let Err(error) = route_result {
+                lunco_core::trigger_runtime_error(
+                    &mut commands,
+                    "twin-dataset-asset-routes-unavailable",
+                    error.to_string(),
+                );
+                continue;
+            }
             registry.merge_prepared(prepared);
             commands.trigger(DatasetScopeReady { scope });
         }

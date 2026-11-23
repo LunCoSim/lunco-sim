@@ -194,6 +194,15 @@ fn discover_scene_test(
                 roots.register_twin(&twin)?
             }
         };
+        let route_scope = lunco_assets_datasets::DatasetScope::Twin {
+            source_identity: roots.logical_identity_for_authority(&authority)?,
+            authority: Some(authority.clone()),
+            display_name: roots.display_name_for_authority(&authority)?,
+            root: twin_root.clone(),
+        };
+        let routes = lunco_assets_datasets::DatasetRegistry::read_twin_asset_routes(&route_scope)
+            .map_err(anyhow::Error::msg)?;
+        roots.replace_asset_routes(&authority, routes)?;
         let origin = bevy::asset::AssetPath::from_path_buf(
             Path::new(&authority).join(absolute.strip_prefix(&twin_root)?),
         )

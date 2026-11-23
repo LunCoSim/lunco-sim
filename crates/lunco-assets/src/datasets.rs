@@ -501,7 +501,7 @@ fn spawn_processing(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn source_path(entry: &DatasetEntry) -> std::io::Result<std::path::PathBuf> {
-    lunco_assets_datasets::source_read_path(&entry.spec, entry.read_roots())
+    lunco_assets_datasets::source_cache_path(&entry.spec, &entry.scope.local_cache_root())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -515,7 +515,7 @@ fn verify_delivery(entry: &DatasetEntry) -> std::io::Result<()> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn publish_inputs(entry: &DatasetEntry, status: &StatusSlot) -> Result<(), String> {
-    let inputs = entry.inspect_inputs();
+    let inputs = entry.inspect_inputs()?;
     status
         .lock()
         .map_err(|_| "dataset status channel poisoned".to_owned())?

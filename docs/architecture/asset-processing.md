@@ -7,6 +7,12 @@ and delivered artifacts. `lunco-assets` composes downloads and workers;
 `lunco-assets-processing` executes operations. CLI and application commands use
 the same processors and publication transaction. No processing view is required.
 
+On Twin admission, route declarations are read through the platform storage
+backend and installed before `TwinAssetMounted` is published. Native hosts read
+them on an I/O worker; browsers read them asynchronously from OPFS. Scene
+consumers therefore resolve every declared output through its selected owner
+from their first read.
+
 ## Ownership
 
 | Concern | Owner |
@@ -64,6 +70,13 @@ input = "source"
 kind = "dem"
 output = "height"
 ```
+
+The Twin's `Assets.toml` keeps download inputs in `.cache` by default; set
+`shared = true` on an entry to use the configured global cache. A processed
+output also defaults to that selected cache. Set `output_root = "twin"` to
+publish the prepared artifact at the explicit Twin-relative `output` path, so
+the Twin carries it as authored content. The runtime follows that same route
+for the artifact's `twin://` address and does not inspect other copies.
 
 `source` is the entry's primary download. `pipeline.sources.<id>` declares
 additional raw `AssetEntry` downloads with their own URL, checksum, destination
@@ -323,8 +336,11 @@ are captured on admission/download/processing workers and committed with the
 operation's existing progress channel. UI/query reads never hash files. Rhai
 chooses Download, Prepare, Cancel and retry wording from those typed facts;
 HTML/CSS shows the source URL, verification count, active operation and full
-failure detail. A prepared cache hidden by an invalid authored override names
-both physical paths and requires explicit correction. No override is skipped.
+failure detail. Dataset details show each input's selected cache and
+manifest-relative path, plus the prepared output owner and path. `Twin folder`
+identifies a deliberately shareable non-cache artifact. The diagnostic names
+the single manifest-selected output path; a file at another Twin or cache
+location does not override that selection.
 The shared `OpenWebUrl` shell command validates absolute HTTP(S) addresses and
 uses the existing egui browser adapter; runtime UI forwards a typed URL action.
 

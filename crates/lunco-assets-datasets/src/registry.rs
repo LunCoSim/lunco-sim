@@ -1,5 +1,6 @@
 //! Shared dataset identity, state, and Bevy-facing lifecycle events.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -191,16 +192,6 @@ impl DatasetScope {
         dataset_cache_root(&self.local_cache_root(), shared)
     }
 
-    /// Roots searched for a delivered artifact, in precedence order.
-    pub fn read_roots(&self) -> std::io::Result<Vec<PathBuf>> {
-        Ok(match self {
-            Self::Engine => {
-                lunco_assets_core::engine_asset_read_roots(&lunco_assets_core::assets_dir_abs()?)
-            }
-            Self::Twin { root, .. } => lunco_assets_core::asset_read_roots(root),
-        })
-    }
-
     /// Human-readable grouping label.
     pub fn label(&self) -> &str {
         match self {
@@ -248,6 +239,10 @@ pub struct DatasetInput {
     pub name: String,
     /// Authored download URL.
     pub url: String,
+    /// Stable storage-owner token selected by this input's manifest entry.
+    pub storage_owner: &'static str,
+    /// Path relative to `storage_owner` selected by this manifest entry.
+    pub relative_path: String,
     /// Last verified source availability.
     pub state: DatasetInputState,
 }
@@ -271,13 +266,14 @@ pub struct DatasetEntry {
     pub path: PathBuf,
     /// Scope-relative delivered artifact path.
     pub artifact_rel: String,
+    /// Exact physical artifact path selected by the manifest's storage owner.
+    pub artifact_path: PathBuf,
     /// Live lifecycle state.
     pub state: DatasetState,
     /// Source facts captured at admission and preparation boundaries.
     pub inputs: Vec<DatasetInput>,
     /// Full declaration, including domain metadata.
     pub spec: AssetEntry,
-    read_roots: Vec<PathBuf>,
     sources: Vec<(PathBuf, lunco_storage::FilePathIdentity)>,
     output: Option<(PathBuf, lunco_storage::FilePathIdentity)>,
 }
@@ -297,6 +293,14 @@ fn artifact_present(spec: &AssetEntry, path: &Path, source_path: Option<&Path>) 
     }
 }
 
+fn cache_storage_owner(scope: &DatasetScope, shared: bool) -> &'static str {
+    if matches!(scope, DatasetScope::Twin { .. }) && !shared {
+        "twin-cache"
+    } else {
+        "shared-cache"
+    }
+}
+
 impl DatasetEntry {
     /// Whether every declared download has passed integrity verification.
     pub fn inputs_ready(&self) -> bool {
@@ -306,8 +310,25 @@ impl DatasetEntry {
                 .iter()
                 .all(|input| input.state == DatasetInputState::Ready)
     }
+
+    /// Stable storage-owner token for the delivered artifact.
+    pub fn artifact_storage_owner(&self) -> Result<&'static str, String> {
+        let Some(process) = &self.spec.process else {
+            return Ok(cache_storage_owner(&self.scope, self.spec.shared));
+        };
+        match process.output_root.as_str() {
+            "assets" => Ok("engine-assets"),
+            "twin" => Ok("twin"),
+            "cache" => Ok(cache_storage_owner(&self.scope, self.spec.shared)),
+            other => Err(format!(
+                "dataset '{}' has invalid artifact owner '{other}'",
+                self.key
+            )),
+        }
+    }
+
     /// Inspect all declared downloads on the owning I/O worker.
-    pub fn inspect_inputs(&self) -> Vec<DatasetInput> {
+    pub fn inspect_inputs(&self) -> Result<Vec<DatasetInput>, String> {
         let mut declarations = vec![("source", &self.spec)];
         if let Some(pipeline) = self.spec.process.as_ref().and_then(|p| p.pipeline.as_ref()) {
             declarations.extend(
@@ -320,8 +341,10 @@ impl DatasetEntry {
         declarations
             .into_iter()
             .map(|(id, spec)| {
+                let relative_path = crate::manifest::entry_relative_path(spec)
+                    .map_err(|error| error.to_string())?;
                 #[cfg(not(target_arch = "wasm32"))]
-                let state = match crate::source_read_path(spec, &self.read_roots) {
+                let state = match crate::source_cache_path(spec, &self.scope.local_cache_root()) {
                     Ok(_) => DatasetInputState::Ready,
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                         DatasetInputState::Missing
@@ -330,58 +353,83 @@ impl DatasetEntry {
                 };
                 #[cfg(target_arch = "wasm32")]
                 let state = DatasetInputState::Missing;
-                DatasetInput {
+                Ok(DatasetInput {
                     id: id.to_owned(),
                     name: spec.name.clone(),
                     url: spec.url.clone(),
+                    storage_owner: cache_storage_owner(&self.scope, spec.shared),
+                    relative_path: lunco_assets_path::slashed(relative_path),
                     state,
-                }
+                })
             })
             .collect()
     }
 
-    /// Explain why the selected artifact cannot be consumed after preparation.
+    /// Explain why the manifest-selected artifact cannot be consumed.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn delivery_error(&self) -> String {
-        let selected = lunco_assets_core::resolve_native_asset(
-            &self.read_roots,
-            Path::new(&self.artifact_rel),
-            None,
-        );
-        if let Ok(Some((root, path))) = selected {
-            if let Some(process) = &self.spec.process {
-                let owner = match &self.scope {
-                    DatasetScope::Twin { root, .. } => Some(root.as_path()),
-                    DatasetScope::Engine => None,
-                };
-                if let Ok(output) = process_output_path(
-                    process,
-                    Some(&self.scope.cache_root(self.spec.shared)),
-                    owner,
-                ) {
-                    if path != output && root == 0 {
-                        return format!(
-                            "Authored override '{}' is incomplete and takes precedence over prepared output '{}'. Remove or replace the override, then retry.",
-                            path.display(),
-                            output.display()
-                        );
-                    }
-                }
-            }
-            return format!(
-                "Prepared artifact '{}' is incomplete, invalid, or out of date. Check the declared artifacts and input integrity, then prepare again.",
-                path.display()
-            );
+        let artifact = if self.spec.process.is_some() {
+            "Prepared artifact"
+        } else {
+            "Downloaded asset"
+        };
+        let action = if self.spec.process.is_some() {
+            "prepare"
+        } else {
+            "download"
+        };
+        match std::fs::symlink_metadata(&self.artifact_path) {
+            Ok(_) => format!(
+                "{artifact} '{}' is incomplete, invalid, or out of date. Check the declared artifacts and input integrity, then {action} again.",
+                self.artifact_path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => format!(
+                "{artifact} '{}' is missing. {action} this dataset before loading it.",
+                self.artifact_path.display()
+            ),
+            Err(error) => format!(
+                "Could not inspect {artifact} '{}': {error}",
+                self.artifact_path.display()
+            ),
         }
-        let location = self
-            .artifact_uri()
-            .unwrap_or_else(|| format!("{} in Twin {}", self.artifact_rel, self.scope.label()));
-        format!("Prepared artifact {location} is missing. Prepare this dataset before loading it.")
     }
 
-    /// Exact read roots validated with this declaration on its scan worker.
-    pub fn read_roots(&self) -> &[PathBuf] {
-        &self.read_roots
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_artifact_path(&self) -> Result<Option<PathBuf>, String> {
+        let (root, relative) = match &self.spec.process {
+            Some(process) => {
+                let root = match process.output_root.as_str() {
+                    "assets" => {
+                        lunco_assets_core::assets_dir_abs().map_err(|error| error.to_string())?
+                    }
+                    "twin" => match &self.scope {
+                        DatasetScope::Twin { root, .. } => root.clone(),
+                        DatasetScope::Engine => {
+                            return Err(format!(
+                                "dataset '{}' selects a Twin output without a Twin scope",
+                                self.key
+                            ));
+                        }
+                    },
+                    "cache" => self.scope.cache_root(self.spec.shared),
+                    other => {
+                        return Err(format!(
+                            "dataset '{}' has invalid artifact owner '{other}'",
+                            self.key
+                        ));
+                    }
+                };
+                (root, PathBuf::from(&process.output))
+            }
+            None => (
+                self.scope.cache_root(self.spec.shared),
+                crate::manifest::entry_relative_path(&self.spec)
+                    .map_err(|error| error.to_string())?,
+            ),
+        };
+        lunco_assets_core::resolve_native_asset(&[root], &relative, None)
+            .map(|resolved| resolved.map(|(_, path)| path))
+            .map_err(|error| error.to_string())
     }
 
     /// Validate the first artifact selected by the runtime reader, including
@@ -389,12 +437,7 @@ impl DatasetEntry {
     pub fn installed_artifact(&self) -> Result<Option<PathBuf>, String> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let relative = lunco_assets_path::relative_path(&self.artifact_rel)
-                .ok_or_else(|| format!("unsafe artifact path `{}`", self.artifact_rel))?;
-            let Some((_, path)) =
-                lunco_assets_core::resolve_native_asset(&self.read_roots, &relative, None)
-                    .map_err(|error| error.to_string())?
-            else {
+            let Some(path) = self.resolve_artifact_path()? else {
                 return Ok(None);
             };
             let process = self.spec.process.as_ref();
@@ -403,18 +446,20 @@ impl DatasetEntry {
                 DatasetScope::Engine => None,
             };
             let source = match process {
-                Some(_) => match crate::source_read_path(&self.spec, &self.read_roots) {
-                    Ok(source) => Some(source),
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
-                        ) =>
-                    {
-                        None
+                Some(_) => {
+                    match crate::source_cache_path(&self.spec, &self.scope.local_cache_root()) {
+                        Ok(source) => Some(source),
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+                            ) =>
+                        {
+                            None
+                        }
+                        Err(error) => return Err(error.to_string()),
                     }
-                    Err(error) => return Err(error.to_string()),
-                },
+                }
                 None => None,
             };
             if process.is_some_and(|process| process.pipeline.is_some()) && source.is_none() {
@@ -581,6 +626,7 @@ pub fn dataset_state_changed(
 pub struct DatasetRegistry {
     entries: Vec<DatasetEntry>,
     scanned_scopes: Vec<DatasetScope>,
+    twin_routes: HashMap<DatasetScope, Result<Vec<lunco_assets_core::TwinAssetRoute>, String>>,
     pending_failures: Vec<String>,
 }
 
@@ -601,10 +647,26 @@ impl DatasetRegistry {
         let manifest: AssetManifest = match assets_toml.parse() {
             Ok(manifest) => manifest,
             Err(error) => {
+                if matches!(&scope, DatasetScope::Twin { .. }) {
+                    self.twin_routes.insert(scope, Err(error.to_string()));
+                }
                 self.record_failure(format!("{group}: Assets.toml parse failed: {error}"));
                 return 0;
             }
         };
+        if matches!(&scope, DatasetScope::Twin { .. }) {
+            let routes = Self::manifest_asset_routes(&manifest, &scope);
+            self.twin_routes.insert(scope.clone(), routes);
+        }
+        self.register_manifest_scoped(manifest, group, scope)
+    }
+
+    fn register_manifest_scoped(
+        &mut self,
+        manifest: AssetManifest,
+        group: &str,
+        scope: DatasetScope,
+    ) -> usize {
         let mut added = 0;
         for (key, spec) in manifest.assets {
             if spec.package_only {
@@ -699,17 +761,14 @@ impl DatasetRegistry {
                     continue;
                 }
             };
+            let artifact_path = output
+                .as_ref()
+                .map(|(path, _)| path.clone())
+                .unwrap_or_else(|| path.clone());
             if let Err(conflict) = self.process_output_conflict(&key, &sources, output.as_ref()) {
                 self.record_failure(conflict);
                 continue;
             }
-            let read_roots = match scope.read_roots() {
-                Ok(roots) => roots,
-                Err(error) => {
-                    self.record_failure(format!("dataset '{key}' read root failed: {error}"));
-                    continue;
-                }
-            };
             let mut entry = DatasetEntry {
                 id,
                 key: key.clone(),
@@ -719,14 +778,22 @@ impl DatasetRegistry {
                 recommended: spec.recommended,
                 path,
                 artifact_rel,
+                artifact_path,
                 state: DatasetState::Missing,
                 inputs: Vec::new(),
                 spec,
-                read_roots,
                 sources,
                 output,
             };
-            entry.inputs = entry.inspect_inputs();
+            entry.inputs = match entry.inspect_inputs() {
+                Ok(inputs) => inputs,
+                Err(error) => {
+                    self.record_failure(format!(
+                        "dataset '{key}' source destination is invalid: {error}"
+                    ));
+                    continue;
+                }
+            };
             entry.state = match entry.installed_artifact() {
                 Ok(Some(_)) => DatasetState::Installed,
                 Ok(None) => DatasetState::Missing,
@@ -743,6 +810,7 @@ impl DatasetRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn merge_prepared(&mut self, mut prepared: Self) -> usize {
         self.pending_failures.append(&mut prepared.pending_failures);
+        self.twin_routes.extend(prepared.twin_routes.drain());
         for scope in prepared.scanned_scopes.drain(..) {
             if !self.is_scope_scanned(&scope) {
                 self.scanned_scopes.push(scope);
@@ -852,8 +920,18 @@ impl DatasetRegistry {
         let path = root.join("Assets.toml");
         let text = match std::fs::read_to_string(&path) {
             Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return 0,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.twin_routes.insert(scope, Ok(Vec::new()));
+                return 0;
+            }
             Err(error) => {
+                self.twin_routes.insert(
+                    scope,
+                    Err(format!(
+                        "cannot read Twin manifest {}: {error}",
+                        path.display()
+                    )),
+                );
                 self.record_failure(format!(
                     "cannot read Twin manifest {}: {error}",
                     path.display()
@@ -861,7 +939,17 @@ impl DatasetRegistry {
                 return 0;
             }
         };
-        self.register_scoped(&text, display_name, scope)
+        let manifest = match text.parse::<AssetManifest>() {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.twin_routes.insert(scope, Err(error.to_string()));
+                self.record_failure(format!("{display_name}: Assets.toml parse failed: {error}"));
+                return 0;
+            }
+        };
+        let routes = Self::manifest_asset_routes(&manifest, &scope);
+        self.twin_routes.insert(scope.clone(), routes);
+        self.register_manifest_scoped(manifest, display_name, scope)
     }
 
     /// Record a registry-owned failure for the runtime telemetry drain.
@@ -878,6 +966,7 @@ impl DatasetRegistry {
     pub fn forget_scope(&mut self, scope: &DatasetScope) {
         self.entries.retain(|entry| &entry.scope != scope);
         self.scanned_scopes.retain(|known| known != scope);
+        self.twin_routes.remove(scope);
     }
 
     /// Find all Twin scopes backed by one root, including empty scanned scopes.
@@ -967,6 +1056,205 @@ impl DatasetRegistry {
             }
             entry.spec.process.is_none() && crate::archive_extension(&entry.spec.url).is_some()
         })
+    }
+
+    /// Build the explicit Twin URI routes owned by this scope's asset manifest.
+    /// Undeclared Twin addresses remain rooted in the authored Twin directory.
+    pub fn twin_asset_routes(
+        &self,
+        scope: &DatasetScope,
+    ) -> Result<Vec<lunco_assets_core::TwinAssetRoute>, String> {
+        if !matches!(scope, DatasetScope::Twin { .. }) {
+            return Ok(Vec::new());
+        }
+        if let Some(routes) = self.twin_routes.get(scope) {
+            return routes.clone();
+        }
+        let mut routes = std::collections::BTreeMap::new();
+        for entry in self
+            .entries
+            .iter()
+            .filter(|entry| entry.scope.same_storage(scope))
+        {
+            Self::add_spec_asset_routes(
+                &mut routes,
+                &entry.key,
+                &entry.spec,
+                Path::new(&entry.artifact_rel),
+            )?;
+        }
+        Ok(routes.into_values().collect())
+    }
+
+    /// Read only a Twin's lightweight route declarations on a worker, before
+    /// consumers receive the `TwinAssetMounted` event. Artifact integrity and
+    /// dataset state are prepared separately by the registry scan.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_twin_asset_routes(
+        scope: &DatasetScope,
+    ) -> Result<Vec<lunco_assets_core::TwinAssetRoute>, String> {
+        let DatasetScope::Twin { root, .. } = scope else {
+            return Err("Twin asset routes require a Twin dataset scope".into());
+        };
+        let path = root.join("Assets.toml");
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(format!(
+                    "cannot read Twin manifest {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        let manifest = text
+            .parse::<AssetManifest>()
+            .map_err(|error| format!("Twin manifest {} is invalid: {error}", path.display()))?;
+        Self::manifest_asset_routes(&manifest, scope)
+    }
+
+    /// Read a Twin's route declarations from OPFS before its web asset source
+    /// becomes available. Dataset discovery and provisioning remain disabled
+    /// on wasm; this lightweight read is required for authored Twin assets.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn read_twin_asset_routes(
+        scope: &DatasetScope,
+    ) -> Result<Vec<lunco_assets_core::TwinAssetRoute>, String> {
+        let DatasetScope::Twin { root, .. } = scope else {
+            return Err("Twin asset routes require a Twin dataset scope".into());
+        };
+        let path = root.join("Assets.toml");
+        let bytes = match lunco_storage::OpfsStorage::new()
+            .read(&lunco_storage::StorageHandle::File(path.clone()))
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(lunco_storage::StorageError::NotFound) => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(format!(
+                    "cannot read Twin manifest {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        let text = String::from_utf8(bytes)
+            .map_err(|error| format!("Twin manifest {} is not UTF-8: {error}", path.display()))?;
+        let manifest = text
+            .parse::<AssetManifest>()
+            .map_err(|error| format!("Twin manifest {} is invalid: {error}", path.display()))?;
+        Self::manifest_asset_routes(&manifest, scope)
+    }
+
+    fn manifest_asset_routes(
+        manifest: &AssetManifest,
+        scope: &DatasetScope,
+    ) -> Result<Vec<lunco_assets_core::TwinAssetRoute>, String> {
+        let DatasetScope::Twin { .. } = scope else {
+            return Ok(Vec::new());
+        };
+        let local_cache_root = scope.local_cache_root();
+        let mut routes = std::collections::BTreeMap::new();
+        for (key, spec) in &manifest.assets {
+            if spec.package_only {
+                continue;
+            }
+            let destination = entry_dest_path(spec, Some(&local_cache_root))
+                .map_err(|error| format!("dataset '{key}' has an invalid destination: {error}"))?;
+            let artifact_rel = artifact_rel_of(spec, scope, &destination)
+                .map_err(|error| format!("dataset '{key}' has an invalid output: {error}"))?;
+            Self::add_spec_asset_routes(&mut routes, key, spec, Path::new(&artifact_rel))?;
+        }
+        Ok(routes.into_values().collect())
+    }
+
+    fn add_spec_asset_routes(
+        routes: &mut std::collections::BTreeMap<PathBuf, lunco_assets_core::TwinAssetRoute>,
+        key: &str,
+        spec: &AssetEntry,
+        artifact_rel: &Path,
+    ) -> Result<(), String> {
+        let source_path = crate::manifest::entry_relative_path(spec)
+            .map_err(|error| format!("dataset '{key}' has an invalid source path: {error}"))?;
+        Self::insert_asset_route(
+            routes,
+            source_path.clone(),
+            if spec.shared {
+                lunco_assets_core::TwinAssetStorage::SharedCache
+            } else {
+                lunco_assets_core::TwinAssetStorage::TwinCache
+            },
+            source_path,
+        )?;
+        if let Some(pipeline) = spec
+            .process
+            .as_ref()
+            .and_then(|process| process.pipeline.as_ref())
+        {
+            for source in pipeline.sources.values() {
+                let path = crate::manifest::entry_relative_path(source).map_err(|error| {
+                    format!("dataset '{key}' has an invalid pipeline source: {error}")
+                })?;
+                Self::insert_asset_route(
+                    routes,
+                    path.clone(),
+                    if source.shared {
+                        lunco_assets_core::TwinAssetStorage::SharedCache
+                    } else {
+                        lunco_assets_core::TwinAssetStorage::TwinCache
+                    },
+                    path,
+                )?;
+            }
+        }
+        if let Some(process) = &spec.process {
+            let (storage, storage_path) = match process.output_root.as_str() {
+                "twin" => (
+                    lunco_assets_core::TwinAssetStorage::Twin,
+                    PathBuf::from(&process.output),
+                ),
+                "cache" if spec.shared => (
+                    lunco_assets_core::TwinAssetStorage::SharedCache,
+                    PathBuf::from(&process.output),
+                ),
+                "cache" => (
+                    lunco_assets_core::TwinAssetStorage::TwinCache,
+                    PathBuf::from(&process.output),
+                ),
+                "assets" => {
+                    return Err(format!(
+                        "Twin dataset '{key}' cannot route an engine-owned asset output"
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "Twin dataset '{key}' has unsupported output owner '{other}'"
+                    ));
+                }
+            };
+            Self::insert_asset_route(routes, artifact_rel.to_path_buf(), storage, storage_path)?;
+        }
+        Ok(())
+    }
+
+    fn insert_asset_route(
+        routes: &mut std::collections::BTreeMap<PathBuf, lunco_assets_core::TwinAssetRoute>,
+        logical_path: PathBuf,
+        storage: lunco_assets_core::TwinAssetStorage,
+        storage_path: PathBuf,
+    ) -> Result<(), String> {
+        let route = lunco_assets_core::TwinAssetRoute::new(&logical_path, storage, &storage_path)
+            .map_err(|error| error.to_string())?;
+        if let Some(existing) = routes.get(&logical_path) {
+            if existing != &route {
+                return Err(format!(
+                    "Twin asset path '{}' has conflicting manifest storage owners",
+                    logical_path.display()
+                ));
+            }
+            return Ok(());
+        }
+        routes.insert(logical_path, route);
+        Ok(())
     }
 
     /// Look up one dataset's state.
@@ -1217,37 +1505,113 @@ dest = "data/demo.csv"
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_resolution_contract_keeps_dataset_and_reader_precedence_equal() {
+    fn default_dataset_uses_only_its_declared_cache_artifact() {
         let root = tempfile::tempdir().unwrap();
         let authored = root.path().join("data/demo.csv");
         let cached = lunco_assets_core::twin_cache_dir(root.path()).join("data/demo.csv");
         std::fs::create_dir_all(authored.parent().unwrap()).unwrap();
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
-        std::fs::write(&authored, b"").unwrap();
+        std::fs::write(&authored, b"stale Twin copy").unwrap();
         std::fs::write(&cached, b"valid cached artifact").unwrap();
+        std::fs::write(root.path().join("Assets.toml"), MANIFEST).unwrap();
+        let roots = lunco_assets_core::TwinRoots::default();
+        let authority = roots
+            .register_authority("fixture", root.path())
+            .expect("mount Twin");
         let scope = DatasetScope::Twin {
             source_identity: "fixture".into(),
-            authority: Some("opaque-authority".into()),
+            authority: Some(authority.clone()),
             display_name: "fixture".into(),
             root: root.path().to_path_buf(),
         };
-        let mut invalid = DatasetRegistry::default();
+        let mut registry = DatasetRegistry::default();
         assert_eq!(
-            invalid.register_scoped(MANIFEST, "fixture", scope.clone()),
+            registry.register_scoped(MANIFEST, "fixture", scope.clone()),
             1
         );
         assert_eq!(
-            invalid.entries()[0].state,
-            DatasetState::Missing,
-            "an invalid authored artifact must not select a different cache copy"
+            registry.entries()[0].state,
+            DatasetState::Installed,
+            "an unselected Twin-local file cannot hide the declared cache artifact"
         );
-        std::fs::write(&authored, b"valid authored artifact").unwrap();
-        let mut valid = DatasetRegistry::default();
-        assert_eq!(valid.register_scoped(MANIFEST, "fixture", scope), 1);
-        assert_eq!(valid.entries()[0].state, DatasetState::Installed);
         assert_eq!(
-            valid.entries()[0].installed_artifact().unwrap(),
-            Some(std::fs::canonicalize(authored).unwrap())
+            registry.entries()[0].installed_artifact().unwrap(),
+            Some(std::fs::canonicalize(&cached).unwrap())
+        );
+        let routes = DatasetRegistry::read_twin_asset_routes(&scope).unwrap();
+        assert_eq!(routes, registry.twin_asset_routes(&scope).unwrap());
+        roots
+            .replace_asset_routes(&authority, routes)
+            .expect("install manifest asset routes");
+        assert_eq!(
+            roots.resolve_file(&authority, Path::new("data/demo.csv")),
+            Ok(Some(std::fs::canonicalize(cached).unwrap())),
+            "runtime Twin reads use the same exact cache owner as dataset validation"
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn explicit_twin_output_route_uses_the_authored_path() {
+        const MANIFEST: &str = r#"
+[prepared]
+name = "Prepared file"
+url = "https://example.invalid/source.csv"
+dest = "sources/source.csv"
+
+[prepared.process]
+kind = "map"
+output = "terrain/prepared.png"
+output_root = "twin"
+"#;
+        let root = tempfile::tempdir().unwrap();
+        let cache = lunco_assets_core::twin_cache_dir(root.path());
+        let source = cache.join("sources/source.csv");
+        let output = root.path().join("terrain/prepared.png");
+        let cache_copy = cache.join("terrain/prepared.png");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(cache_copy.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"source bytes").unwrap();
+        std::fs::write(&output, b"Twin-shared artifact").unwrap();
+        std::fs::write(&cache_copy, b"different cache artifact").unwrap();
+        std::fs::write(root.path().join("Assets.toml"), MANIFEST).unwrap();
+        let process = MANIFEST.parse::<AssetManifest>().unwrap().assets["prepared"]
+            .process
+            .clone()
+            .unwrap();
+        std::fs::write(
+            crate::bake_stamp_path(&output, &process),
+            crate::bake_key(&source, &process).unwrap(),
+        )
+        .unwrap();
+
+        let roots = lunco_assets_core::TwinRoots::default();
+        let authority = roots
+            .register_authority("fixture", root.path())
+            .expect("mount Twin");
+        let scope = DatasetScope::Twin {
+            source_identity: "fixture".into(),
+            authority: Some(authority.clone()),
+            display_name: "fixture".into(),
+            root: root.path().to_path_buf(),
+        };
+        let mut registry = DatasetRegistry::default();
+        assert_eq!(
+            registry.register_scoped(MANIFEST, "fixture", scope.clone()),
+            1
+        );
+        assert_eq!(registry.entries()[0].state, DatasetState::Installed);
+        assert_eq!(registry.entries()[0].artifact_path, output);
+        let routes = DatasetRegistry::read_twin_asset_routes(&scope).unwrap();
+        assert_eq!(routes, registry.twin_asset_routes(&scope).unwrap());
+        roots
+            .replace_asset_routes(&authority, routes)
+            .expect("install manifest asset routes");
+        assert_eq!(
+            roots.resolve_file(&authority, Path::new("terrain/prepared.png")),
+            Ok(Some(std::fs::canonicalize(output).unwrap())),
+            "output_root = twin explicitly selects the Twin-owned artifact"
         );
     }
 

@@ -1260,9 +1260,18 @@ async fn prepare_twin_sources(
                                         .as_path(),
                                 ),
                                 Some(
-                                    &lunco_assets_core::TwinReadScope::declared(
+                                    &lunco_assets_core::TwinReadScope::declared_with_routes(
                                         &input.source_name,
                                         &input.root,
+                                        lunco_assets_datasets::DatasetRegistry::read_twin_asset_routes(
+                                            &lunco_assets_datasets::DatasetScope::Twin {
+                                                source_identity: input.source_name.clone(),
+                                                authority: None,
+                                                display_name: input.source_name.clone(),
+                                                root: input.root.clone(),
+                                            },
+                                        )
+                                        .map_err(|error| error.to_string())?,
                                     )
                                     .map_err(|error| error.to_string())?,
                                 ),
