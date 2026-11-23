@@ -98,6 +98,7 @@ impl Plugin for ModelicaSourceAssetPlugin {
 #[cfg(test)]
 mod tests {
     use super::ModelicaSource;
+    use std::collections::BTreeSet;
 
     #[test]
     fn prepared_source_keeps_text_and_derives_interface_once() {
@@ -124,5 +125,26 @@ mod tests {
         assert_eq!(source.interface.input_defaults.get("gain"), Some(&2.5));
         assert!(!source.interface.input_defaults.contains_key("drive"));
         assert!(source.interface.outputs.contains("speed"));
+    }
+
+    #[test]
+    fn prepared_package_model_requires_its_external_source_root() {
+        let source = ModelicaSource::prepare(
+            concat!(
+                "within LunCo.Propulsion;\n",
+                "model RCSJet\n",
+                "  extends LunCo.Icons.RCSJet;\n",
+                "  parameter Real exit_mach = supersonicExitMach(10.0, 1.2);\n",
+                "end RCSJet;\n",
+            )
+            .to_string(),
+        );
+
+        let expected = BTreeSet::from(["LunCo".to_owned()]);
+        assert_eq!(
+            source.interface.required_source_roots, expected,
+            "asset interface lost roots from its recovered AST: {:#?}",
+            source.interface
+        );
     }
 }

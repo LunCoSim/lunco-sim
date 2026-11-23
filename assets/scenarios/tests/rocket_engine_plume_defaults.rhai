@@ -11,6 +11,10 @@ fn write(engine,writes) {
 }
 fn value(engine,name) {get(engine,name)}
 fn station(engine,kind,i) {value(engine,"profile_"+kind+"_"+i)}
+fn area_mach_ratio(mach,gamma) {
+    let base=(2.0/(gamma+1.0))*(1.0+(gamma-1.0)*mach*mach/2.0);
+    exp((gamma+1.0)/(2.0*(gamma-1.0))*ln(base))/mach
+}
 fn conservation(engine,mdot,doc) {
     let checks=[];
     let light_prim=query("QueryUsdPrim",#{doc_id:doc,path:"/World/Engine/Exhaust/PlumeLight",attrs:[]});
@@ -24,9 +28,15 @@ fn conservation(engine,mdot,doc) {
         "plume local-light proxy stays at the nozzle exit as the envelope changes"));
     let h=value(engine,"total_specific_energy_j_kg");
     let gamma=value(engine,"gas_gamma");let gas_r=value(engine,"gas_constant_j_kg_k");
+    let exit_radius=value(engine,"nozzle_exit_radius_m");
+    let exit_mach=value(engine,"nozzle_exit_mach");
     for i in 0..5 {
         let r=station(engine,"radius_m",i);let rho=station(engine,"density_kg_m3",i);
         let u=station(engine,"speed_mps",i);let temp=station(engine,"temperature_k",i);
+        let station_mach=u/sqrt(gamma*gas_r*temp);
+        let expected_area_ratio=r*r/(exit_radius*exit_radius)*area_mach_ratio(exit_mach,gamma);
+        checks.push(t_true((area_mach_ratio(station_mach,gamma)/expected_area_ratio-1.0).abs()<1.0e-10,
+            "station "+i+" solves the supersonic area-Mach relation"));
         checks.push(t_true((rho*u*PI()*r*r-mdot).abs()<1.0e-8,"station "+i+" conserves mass"));
         checks.push(t_true((u*u/2.0+gamma*gas_r/(gamma-1.0)*temp-h).abs()<1.0e-5,
             "station "+i+" conserves total specific energy"));

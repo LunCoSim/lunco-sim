@@ -13,7 +13,7 @@ function computePlumePhotometry
   input Real gas_gamma;
   input Real gas_constant_j_kg_k;
   input Real ambient_pressure_pa;
-  input Real geometry_capacity_m;
+  input Real observation_length_m;
   input Real exit_lip_angle_rad;
   input Real radiative_fraction;
   input Real luminous_efficacy_lm_w;
@@ -21,6 +21,7 @@ function computePlumePhotometry
   input Real mixture_mode;
   input Real mixture_ratio;
   input Real stoichiometric_mixture_ratio;
+  input Real profile_geometry[10];
   output Real values[51];
 protected
   Real envelope_radius_m;
@@ -92,18 +93,18 @@ algorithm
     "Positive plume thrust requires a positive effective Isp velocity");
   assert(luminous_efficacy_lm_w >= 0.0 and luminous_efficacy_lm_w <= 683.0,
     "Plume luminous efficacy must be in [0,683] lm/W");
-  assert(geometry_capacity_m >= 0.0, "Plume observation capacity cannot be negative");
+  assert(observation_length_m > 0.0, "Plume observation horizon must be positive");
   assert(thrust_n >= 0.0 and propellant_flow_kgs >= 0.0, "Plume inputs are delivered nonnegative magnitudes");
   area_exit := if nozzle_exit_area_m2 > 0.0 then nozzle_exit_area_m2 else pi*nozzle_exit_radius_m^2;
   assert(abs(area_exit-pi*nozzle_exit_radius_m^2) <= 1.0e-5*area_exit,
     "Plume exit area and radius disagree");
   delivered_flow := propellant_flow_kgs/engine_count;
   delivered_thrust := thrust_n/engine_count;
-  envelope_length_m := if geometry_capacity_m > 0.0 then geometry_capacity_m else 20.0*nozzle_exit_radius_m;
+  envelope_length_m := observation_length_m;
   envelope_center_y_m := -0.5*envelope_length_m;
   p := computeFreeJetProfile(delivered_flow,delivered_thrust,nozzle_exit_radius_m,
     nozzle_exit_mach,gas_gamma,gas_constant_j_kg_k,ambient_pressure_pa,envelope_length_m,
-    exit_lip_angle_rad,radiative_fraction);
+    exit_lip_angle_rad,radiative_fraction,profile_geometry);
   profile_radius_m_0 := p[1];
   profile_radius_m_1 := p[2];
   profile_radius_m_2 := p[3];

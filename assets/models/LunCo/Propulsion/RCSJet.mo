@@ -17,9 +17,17 @@ model RCSJet
   parameter Real gas_constant_j_kg_k = 300.0;
   parameter Real nozzle_length_m = 0.5;
   parameter Real nozzle_contour = 0.55;
+  parameter Real nozzle_exit_mach = supersonicExitMach(
+    (plume_width_m/nozzle_throat_radius_m)^2,gas_gamma);
+  parameter Real exit_lip_angle_rad =
+    atan((plume_width_m-nozzle_throat_radius_m)*nozzle_contour/nozzle_length_m);
   parameter Real radiative_fraction = 0.00005;
   parameter Real luminous_efficacy_lm_w = 200.0;
   parameter Real geometry_capacity_m = 0.0;
+  parameter Real observation_length_m = if geometry_capacity_m > 0.0
+    then geometry_capacity_m else 20.0*plume_width_m;
+  parameter Real profile_geometry[10] = computeFreeJetGeometry(
+    plume_width_m,nozzle_exit_mach,gas_gamma,observation_length_m,exit_lip_angle_rad);
 
   input Real valve_opening "RCS valve opening, 0..1";
   output Real thrust_n "Nozzle thrust magnitude (N)";
@@ -165,18 +173,19 @@ equation
     exhaust_velocity_mps=exhaust_velocity_mps,
     nozzle_exit_radius_m=plume_width_m,
     nozzle_exit_area_m2=0.0,
-    nozzle_exit_mach=supersonicExitMach((plume_width_m/nozzle_throat_radius_m)^2,gas_gamma),
+    nozzle_exit_mach=nozzle_exit_mach,
     gas_gamma=gas_gamma,
     gas_constant_j_kg_k=gas_constant_j_kg_k,
     ambient_pressure_pa=ambient_pressure_pa,
-    geometry_capacity_m=geometry_capacity_m,
-    exit_lip_angle_rad=atan((plume_width_m-nozzle_throat_radius_m)*nozzle_contour/nozzle_length_m),
+    observation_length_m=observation_length_m,
+    exit_lip_angle_rad=exit_lip_angle_rad,
     radiative_fraction=radiative_fraction,
     luminous_efficacy_lm_w=luminous_efficacy_lm_w,
     fuel_family=fuel_family,
     mixture_mode=0.0,
     mixture_ratio=mixture_ratio,
-    stoichiometric_mixture_ratio=stoichiometric_mixture_ratio);
+    stoichiometric_mixture_ratio=stoichiometric_mixture_ratio,
+    profile_geometry=profile_geometry);
   der(transported_distance_m) = exit_speed_mps;
   flow_phase_sin = sin(transported_distance_m/(1024.0*plume_width_m)*6.283185307179586);
   flow_phase_cos = cos(transported_distance_m/(1024.0*plume_width_m)*6.283185307179586);
