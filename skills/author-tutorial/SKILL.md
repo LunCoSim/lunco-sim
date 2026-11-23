@@ -12,9 +12,10 @@ description: >
 A lesson is a file-backed Rhai scenario with optional standard USD scene
 content. The application Rhai policy reads generic JSON asset snapshots,
 selects the tutorial catalog, and builds the workbench menu, quick-navigation
-entries, and optional empty-viewport quick-start action. The empty-viewport
-Tutorials button opens the existing quick-navigation surface filtered to those
-catalog entries. The shell provides that category launcher; shared asset and
+entries, and optional empty-viewport quick-start action. The shipped no-Twin
+welcome card offers the Crater Cup example mission and Open Twin; tutorials
+remain available from Scenarios and quick navigation. Catalogs can publish an
+optional featured quick-start action in their active scope. Shared asset and
 workbench layers carry typed generic menu and navigation actions. The lesson
 catalog and selection logic remain in Rhai.
 The lesson does not need a Rust type, registry, lifecycle owner, or custom USD

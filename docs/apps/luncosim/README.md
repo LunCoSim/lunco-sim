@@ -106,8 +106,8 @@ files in the Editor. Project and shared Twin settings do not apply to this
 workspace; LunCoSim does not look for Twins inside the folder.
 
 To use the Editor with no default scene, select **Editor** in the title bar.
-Open a USD file from the Twin browser or **File → Open File…**, or create one
-with **File → New → USD Stage**. The document opens in an isolated preview;
+Open a USD file from the Twin browser, or create one with
+**File → New → USD Stage**. The document opens in an isolated preview;
 edit and save it normally. Opening a document inside the active Twin does not
 load it into the live simulation or change the Twin's authored default scene.
 

@@ -177,19 +177,6 @@ pub(crate) fn register_navigation(world: &mut World) {
     registry.register(&["Scenes", "Tutorials"], scripted_navigation_entries);
 }
 
-pub(crate) fn has_application_navigation_category(
-    providers: &ScriptedMenuBindings,
-    category: &str,
-) -> bool {
-    providers.0.values().any(|provider| {
-        provider.twin_id.is_none()
-            && provider
-                .navigation_entries
-                .iter()
-                .any(|entry| entry.category == category)
-    })
-}
-
 fn scripted_navigation_entries(
     world: &World,
 ) -> Result<Vec<lunco_workbench_core::navigation::NavigationEntry>, String> {

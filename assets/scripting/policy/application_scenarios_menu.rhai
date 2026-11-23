@@ -3,7 +3,7 @@
 
 fn scenario_menu(menus) {
     #{ menus: menus, viewport_actions: [], navigation_entries: [],
-        viewport_guidance: "Choose a scene from Scenarios, explore the demo, start a tutorial, or open a Twin." }
+        viewport_guidance: "Open the Crater Cup example mission to explore LunCoSim." }
 }
 
 fn divider() {
@@ -135,7 +135,7 @@ fn active_viewport_actions(ctx) {
 
 fn viewport_guidance(ctx) {
     if ctx.active_twin == () {
-        return "Choose a scene from Scenarios, explore the demo, start a tutorial, or open a Twin.";
+        return "Open the Crater Cup example mission to explore LunCoSim.";
     }
     let twin = ctx.active_twin;
     let name = twin_label(twin);
@@ -304,10 +304,10 @@ fn application_scenarios_menu(ctx) {
     if ctx.active_twin == () {
         let demo_args = #{ twin_asset: "lunco://scenes/luncosim/twin.toml" };
         result.viewport_actions.push(#{
-            label: "Play Crater Cup",
+            label: "Open Example Mission \"Crater Cup\"",
             description: "Watch three haulers supply a lunar refinery and refuel Kestrel. Explore in Scout or race Comet.",
             enabled: true,
-            primary: false,
+            primary: true,
             tool: "tutorials",
             hook: "start",
             args: demo_args

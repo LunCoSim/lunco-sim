@@ -300,11 +300,6 @@ pub(super) fn render_layout(
                 });
                 ui.separator();
 
-                // -- Open ---------------------------------------------
-                if menu_item(ui, true, "Open File…", &configured_command_shortcut(world, "editor.open-file"), "").clicked() {
-                    trigger_or_defer(world, lunco_workbench_file_ops::ShowOpenFilePicker {});
-                    ui.close();
-                }
                 // Open Folder + Recents are native-only for now.
                 //
                 // TODO(wasm): the browser has no folder picker that
