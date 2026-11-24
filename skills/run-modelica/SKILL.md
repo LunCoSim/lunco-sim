@@ -1417,10 +1417,13 @@ replacement draft compiles while earlier runs retain their checked facts.
 For Modelica execution acceptance, run `modelica_execution_smoke.rhai` through the production scene runner. It checks inline equation execution, a dynamic trajectory, output units, and terminal rejection of an unresolved class without requiring an optional library. Test an installed library through its indexed source and normal compile/run path; do not make the generic execution gate depend on one library being present.
 
 An authored `within` clause sets the compiler namespace; it does not itself
-request an external source library. Use Rumoca’s
-`compile::source_root_dependencies` for lexical/import-aware dependency facts,
-then admit those namespaces through the shared source-root registry. Do not
-scan type strings or special-case import aliases such as `SI`.
+request an external source library. The Modelica AST adapter derives external
+root names from Rumoca's parsed `StoredDefinition` and `Name` facts through
+`lunco-modelica-ast::source_dependencies::required_source_roots`; the pinned
+Rumoca revision does not expose a source-root dependency query. The same
+stateless result feeds compile admission and diagram projection, then the shared
+source-root registry loads missing roots before compilation. Do not infer roots
+from type strings or make root selection depend on previously loaded scenes.
 
 For documentation/Bitmap resources, use the admitted package URI and the shared
 asset resource path. Scheme matching is case-insensitive; percent-encode standard

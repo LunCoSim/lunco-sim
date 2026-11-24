@@ -10,6 +10,8 @@ use rumoca_ir_ast::{ClassDef, Import, Name, StoredDefinition};
 /// Rumoca owns full name resolution. This source-level inventory only decides
 /// which registered roots to admit before the compile session resolves those
 /// names. Local declarations and import aliases are interpreted from the AST.
+/// The sorted result depends only on `definition`, never on registry or scene
+/// state, so cold and warm loads request the same roots.
 pub fn required_source_roots(definition: &StoredDefinition) -> BTreeSet<String> {
     let class_paths = definition.class_paths();
     let local_classes = class_paths.iter().cloned().collect::<BTreeSet<_>>();
@@ -173,6 +175,18 @@ mod tests {
                 "LunCo".to_owned(),
                 "SampleLibrary".to_owned(),
             ])
+        );
+    }
+
+    #[test]
+    fn top_level_model_keeps_external_component_type_root() {
+        assert_eq!(
+            roots(concat!(
+                "model RoadsterVehicle ",
+                "LunCo.Mobility.RoverAckermannDrivetrain steering; ",
+                "end RoadsterVehicle;"
+            )),
+            BTreeSet::from(["LunCo".to_owned()])
         );
     }
 

@@ -26,5 +26,8 @@ rumoca-core.workspace = true
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_info"] }
 web-time.workspace = true
 
+[dev-dependencies]
+crossbeam-channel.workspace = true
+
 [lints]
 workspace = true

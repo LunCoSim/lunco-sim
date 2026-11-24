@@ -260,8 +260,8 @@ pub enum SourceRootOwner {
 /// only when a compile or class lookup actually references it.
 #[derive(Resource, Debug, Clone)]
 pub struct SourceRootRegistry {
-    /// Map of root id → entry. The dep-scanner looks up qualified-
-    /// path roots here; the gate transitions state on each entry.
+    /// Map of root id → entry. The AST source-root collector's qualified
+    /// namespace results resolve here; the gate transitions state per entry.
     pub roots: HashMap<String, SourceRoot>,
     next_operation_id: u64,
 }
@@ -285,8 +285,8 @@ impl SourceRootRegistry {
 
         // Bundled examples — keyed by filename stem (the convention
         // every bundled `.mo` follows: `<Root>.mo` contains `package <Root>`
-        // or `model <Root>`). The dep-scanner extracts the root from a
-        // `Foo.X` reference and looks it up here.
+        // or `model <Root>`). External namespace roots extracted from AST names
+        // resolve against this inventory.
         let bundled_models = match lunco_assets_runtime::models::model_filenames() {
             Ok(filenames) => filenames,
             Err(error) => {
@@ -1498,7 +1498,7 @@ pub fn admit_compile_roots(
     Ok(roots.into_iter().collect())
 }
 
-/// Classify Rumoca’s source dependency facts against the registry and log
+/// Classify AST-derived external namespace roots against the registry and log
 /// their admission state.
 pub fn log_compile_deps(registry: &SourceRootRegistry, model_name: &str, ast: &StoredDefinition) {
     let deps = lunco_modelica_ast::source_dependencies::required_source_roots(ast);
@@ -1643,6 +1643,60 @@ mod tests {
         registry.take_twin_roots(twin).unwrap();
         assert!(registry.resolve_source_root("Shared").is_err());
         assert!(!registry.complete_load(first, 1, vec!["Shared".into()], Vec::new(), None));
+    }
+
+    #[test]
+    fn compile_root_admission_loads_cold_root_and_reuses_ready_root() {
+        let mut registry = SourceRootRegistry::default();
+        registry.roots.insert(
+            "LunCo".into(),
+            SourceRoot {
+                id: "LunCo".into(),
+                namespaces: Vec::new(),
+                source_files: Vec::new(),
+                document_sources: HashMap::new(),
+                pending_saved_sources: HashMap::new(),
+                origin_document: None,
+                kind: SourceRootKind::BundledPackage {
+                    root: "LunCo".into(),
+                },
+                owner: SourceRootOwner::Application,
+                operation_id: 0,
+                state: LoadState::NotLoaded,
+            },
+        );
+        let (tx, commands) = crossbeam_channel::unbounded();
+        let (_results, rx) = crossbeam_channel::unbounded();
+        let channels = ModelicaChannels {
+            tx,
+            rx,
+            preparation_rx: crossbeam_channel::never(),
+        };
+
+        let admitted = admit_compile_roots(&mut registry, ["LunCo".into()], &channels)
+            .expect("a registered cold root should be admitted");
+        assert_eq!(admitted, vec!["LunCo"]);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ModelicaCommand::LoadSourceRoot {
+                id,
+                payload: LoadSourceRootPayload::BundledPackage { root },
+                ..
+            }) if id == "LunCo" && root == "LunCo"
+        ));
+        assert!(matches!(
+            registry.state("LunCo"),
+            Some(LoadState::Loading { .. })
+        ));
+
+        registry.roots.get_mut("LunCo").unwrap().state = LoadState::Ready;
+        let admitted = admit_compile_roots(&mut registry, ["LunCo".into()], &channels)
+            .expect("a registered ready root should be admitted");
+        assert_eq!(admitted, vec!["LunCo"]);
+        assert!(
+            commands.try_recv().is_err(),
+            "a ready root is not loaded twice"
+        );
     }
 
     #[test]

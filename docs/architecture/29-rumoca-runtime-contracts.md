@@ -415,19 +415,22 @@ numerical-kernel cancellation hook.
 | Co-simulation and lifecycle | LunCoSim cosim/worker owners | Admit causal samples in stable wire order, retain typed execution identity, and retire Twin-owned work. |
 
 `within` places declarations in their native Rumoca namespace; it does not
-require a separately registered source library. Source-root admission consumes Rumoca’s
-`compile::source_root_dependencies` query. Rumoca resolves lexical scopes and
-imports, including aliases in nested classes; LunCoSim only maps the resulting
-external namespaces to its library registry. Structural component edits reparse
+require a separately registered source library. The pinned Rumoca revision
+exposes parsed `StoredDefinition`, `Name`, and class queries, but no
+source-root dependency query. `lunco-modelica-ast::source_dependencies::required_source_roots`
+uses those AST facts to project external namespace roots before compilation.
+This collector is stateless for a parsed definition and returns a sorted set;
+Rumoca remains the owner of full name resolution and reports unresolved members
+after the required roots are admitted. Structural component edits reparse
 through the document owner; projection and compilation consume that admitted
 source without a per-component file loader. The production
 `modelica_class_compile.rhai` gate covers qualified and default run targets
 inside an authored `within` namespace and an imported unit alias.
 
-Diagram projection uses the same Rumoca dependency query. Missing roots are
-resolved and admitted through `lunco-modelica-source-roots`, which owns their
-registration, operation ordering, and worker dispatch. The canvas keeps its
-last committed scene and waits for the authoring engine's typed source-root
+Diagram projection uses the same `required_source_roots` result. Missing roots
+are resolved and admitted through `lunco-modelica-source-roots`, which owns
+their registration, operation ordering, and worker dispatch. The canvas keeps
+its last committed scene and waits for the authoring engine's typed source-root
 lifecycle event. A ready root starts projection from the current document
 snapshot, and a worker-load or authoring-mirror failure is shown as a projection
 diagnostic. The projection path does not rediscover files or load a second copy

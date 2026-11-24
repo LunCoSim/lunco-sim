@@ -825,8 +825,10 @@ validates and publishes its result through `SimulationCompletions`. A shared
 preparation queue must not reorder stateful calls or let worker completion
 advance `SimTick`.
 
-Modelica diagram projection asks Rumoca for unresolved source roots after its
-immutable snapshot reports missing declarations. `lunco-modelica-source-roots`
+Modelica diagram projection derives external namespace roots from its immutable
+Rumoca AST snapshot through `lunco-modelica-ast::source_dependencies::required_source_roots`.
+The collector is stateless for a parsed definition, so root selection does not
+depend on which scene or library was loaded earlier. `lunco-modelica-source-roots`
 resolves each namespace to its registered source-set owner and dispatches the
 load through the Modelica worker's ordered channel. The worker owns file
 preparation and compiler-session installation, then returns the exact parsed
