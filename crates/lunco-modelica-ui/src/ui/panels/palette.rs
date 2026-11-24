@@ -72,8 +72,8 @@ pub(crate) fn on_place_component_requested(
 /// Per-frame UI state for the palette. Holds the search query and
 /// library/package filter selection.
 ///
-/// Everything else (the component catalog) is static, owned by
-/// `library_class_library()`; we just filter over its slice.
+/// The component catalog and its library/package groups are immutable for the
+/// session and cached once in [`PaletteCatalog`].
 #[derive(Resource, Default)]
 pub struct PaletteState {
     /// Current search query — normalized on compare (lowercase).
@@ -109,9 +109,9 @@ pub(crate) fn is_instantiable(c: &lunco_modelica_index::index::ClassEntry) -> bo
     )
 }
 
-/// Memoized instantiable classes and their library/package counts. The
-/// installed class index is immutable during a session, so these counts are
-/// built once. Query-filtered counts are calculated only while searching.
+/// Memoized instantiable classes and their library/package groups. The
+/// installed class index is immutable during a session, so the default browse
+/// view can render the cached groups without rescanning or resorting the index.
 struct PaletteCatalog {
     /// Instantiable classes (connectors/partials dropped), in library order.
     lib: Vec<&'static lunco_modelica_index::index::ClassEntry>,
@@ -123,6 +123,11 @@ struct PaletteCatalog {
     packages: std::collections::HashMap<String, Vec<String>>,
     /// Per-package counts, keyed by root and package.
     package_counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>>,
+    /// Stable alphabetical browse groups, keyed by installed root and package.
+    groups: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, Vec<&'static lunco_modelica_index::index::ClassEntry>>,
+    >,
     /// `lib.len()` — total instantiable component count.
     total: usize,
 }
@@ -137,6 +142,7 @@ fn palette_catalog() -> &'static PaletteCatalog {
             library_counts: std::collections::HashMap::new(),
             packages: std::collections::HashMap::new(),
             package_counts: std::collections::HashMap::new(),
+            groups: std::collections::BTreeMap::new(),
             total: 0,
         })
     };
@@ -159,6 +165,7 @@ fn palette_catalog() -> &'static PaletteCatalog {
         String,
         std::collections::HashMap<String, usize>,
     > = std::collections::HashMap::new();
+    let mut groups = std::collections::BTreeMap::new();
     for c in &lib {
         let library = library_of(c.name.as_str());
         let package = category_of(c.name.as_str());
@@ -168,13 +175,27 @@ fn palette_catalog() -> &'static PaletteCatalog {
             .or_insert_with(std::collections::HashMap::new)
             .entry(package.clone())
             .or_insert(0) += 1;
-        packages.entry(library).or_default().push(package);
+        packages
+            .entry(library.clone())
+            .or_default()
+            .push(package.clone());
+        groups
+            .entry(library)
+            .or_insert_with(std::collections::BTreeMap::new)
+            .entry(package)
+            .or_insert_with(Vec::new)
+            .push(*c);
     }
     let mut libraries = library_counts.keys().cloned().collect::<Vec<_>>();
     libraries.sort();
     for package_names in packages.values_mut() {
         package_names.sort_unstable();
         package_names.dedup();
+    }
+    for package_groups in groups.values_mut() {
+        for components in package_groups.values_mut() {
+            components.sort_unstable_by(|a, b| a.short_name().cmp(b.short_name()));
+        }
     }
     let total = lib.len();
     let _ = CACHE.set(PaletteCatalog {
@@ -183,6 +204,7 @@ fn palette_catalog() -> &'static PaletteCatalog {
         library_counts,
         packages,
         package_counts,
+        groups,
         total,
     });
     CACHE.get().unwrap_or_else(|| empty())
@@ -283,12 +305,10 @@ impl Panel for ComponentPalettePanel {
         let catalog = palette_catalog();
         let lib = &catalog.lib;
         let pre_filter_total = catalog.total;
-        let mut library_counts = catalog.library_counts.clone();
-        let mut package_counts = catalog.package_counts.clone();
+        let mut query_library_counts = std::collections::HashMap::new();
+        let mut query_package_counts = std::collections::HashMap::new();
         let mut query_matches = pre_filter_total;
         if !query_lc.is_empty() {
-            library_counts.clear();
-            package_counts.clear();
             query_matches = 0;
             for c in lib.iter() {
                 if score_component(c, &query_lc) <= 0.0 {
@@ -297,14 +317,24 @@ impl Panel for ComponentPalettePanel {
                 query_matches += 1;
                 let library = library_of(c.name.as_str());
                 let category = category_of(c.name.as_str());
-                *library_counts.entry(library.clone()).or_insert(0) += 1;
-                *package_counts
+                *query_library_counts.entry(library.clone()).or_insert(0) += 1;
+                *query_package_counts
                     .entry(library)
                     .or_insert_with(std::collections::HashMap::new)
                     .entry(category)
                     .or_insert(0) += 1;
             }
         }
+        let library_counts = if query_lc.is_empty() {
+            &catalog.library_counts
+        } else {
+            &query_library_counts
+        };
+        let package_counts = if query_lc.is_empty() {
+            &catalog.package_counts
+        } else {
+            &query_package_counts
+        };
 
         // Installed roots are the first filter level. A dropdown keeps every
         // root reachable in the narrow sidebar without relying on hidden
@@ -471,37 +501,35 @@ impl Panel for ComponentPalettePanel {
         //   +1 category contains query
         //   +0.5 description contains query
         // Library and package selections act as hard gates.
-        let mut scored: Vec<(&lunco_modelica_index::index::ClassEntry, f32)> = lib
-            .iter()
-            .filter_map(|c| {
-                if let Some(library) = selected_library {
-                    if library_of(c.name.as_str()) != library {
-                        return None;
+        let is_searching = !query_lc.is_empty();
+        let mut scored: Vec<(&lunco_modelica_index::index::ClassEntry, f32)> = if is_searching {
+            lib.iter()
+                .filter_map(|c| {
+                    if let Some(library) = selected_library {
+                        if library_of(c.name.as_str()) != library {
+                            return None;
+                        }
                     }
-                }
-                if let Some(cat) = selected_category {
-                    if category_of(c.name.as_str()) != cat {
-                        return None;
+                    if let Some(cat) = selected_category {
+                        if category_of(c.name.as_str()) != cat {
+                            return None;
+                        }
                     }
-                }
-                let score = if query_lc.is_empty() {
-                    0.0
-                } else {
-                    score_component(c, &query_lc)
-                };
-                if query_lc.is_empty() || score > 0.0 {
-                    Some((*c, score))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        // Sort: higher score first, then by name for stable ordering.
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.short_name().cmp(b.0.short_name()))
-        });
+                    let score = score_component(c, &query_lc);
+                    (score > 0.0).then_some((*c, score))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if is_searching {
+            // Higher-ranked matches come first, with stable alphabetical ties.
+            scored.sort_by(|a, b| {
+                b.1.partial_cmp(&a.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.0.short_name().cmp(b.0.short_name()))
+            });
+        }
 
         let shown_cap = 100;
         let shown = scored.len().min(shown_cap);
@@ -517,7 +545,27 @@ impl Panel for ComponentPalettePanel {
         let dragging_path: Option<String> = ctx
             .resource::<ComponentDragPayload>()
             .and_then(|p| p.def.as_ref().map(|d| d.name.clone()));
-        let is_searching = !query_lc.is_empty() || selected_category.is_some();
+        let selected_package =
+            selected_library
+                .zip(selected_category)
+                .and_then(|(library, category)| {
+                    catalog
+                        .groups
+                        .get(library)
+                        .and_then(|packages| packages.get(category))
+                });
+        let has_matches = if is_searching {
+            !scored.is_empty()
+        } else if selected_category.is_some() {
+            selected_package.is_some_and(|components| !components.is_empty())
+        } else if let Some(library) = selected_library {
+            catalog
+                .groups
+                .get(library)
+                .is_some_and(|packages| !packages.is_empty())
+        } else {
+            !catalog.groups.is_empty()
+        };
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
@@ -538,7 +586,7 @@ impl Panel for ComponentPalettePanel {
                             .color(muted_text),
                         );
                     }
-                } else if scored.is_empty() {
+                } else if !has_matches {
                     ui.label(
                         egui::RichText::new("No components match the current search and filters.")
                             .color(muted_text),
@@ -572,31 +620,42 @@ impl Panel for ComponentPalettePanel {
                             .color(muted_text),
                         );
                     }
-                } else {
-                    let mut groups: std::collections::BTreeMap<
-                        String,
-                        std::collections::BTreeMap<
-                            String,
-                            Vec<&lunco_modelica_index::index::ClassEntry>,
-                        >,
-                    > = std::collections::BTreeMap::new();
-                    for (comp, _score) in scored.iter() {
-                        groups
-                            .entry(library_of(comp.name.as_str()))
-                            .or_default()
-                            .entry(category_of(comp.name.as_str()))
-                            .or_default()
-                            .push(*comp);
+                } else if let Some(components) = selected_package {
+                    for comp in components.iter().take(shown_cap) {
+                        let being_dragged = dragging_path
+                            .as_deref()
+                            .is_some_and(|path| path == comp.name.as_str());
+                        let action = ui
+                            .add_enabled_ui(can_insert, |ui| {
+                                render_component_row(ui, comp, &theme, being_dragged)
+                            })
+                            .inner;
+                        if action.clicked {
+                            clicked = Some((*comp).clone());
+                        }
+                        if action.drag_started {
+                            drag_started_def = Some((*comp).clone());
+                        }
                     }
-
-                    if selected_library.is_some() {
-                        for (library, packages) in groups {
+                    if components.len() > shown_cap {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "+ {} more — refine the search",
+                                components.len() - shown_cap
+                            ))
+                            .italics()
+                            .color(muted_text),
+                        );
+                    }
+                } else {
+                    if let Some(library) = selected_library {
+                        if let Some(packages) = catalog.groups.get(library) {
                             for (category, list) in packages {
                                 render_palette_package(
                                     ui,
-                                    &library,
-                                    &category,
-                                    &list,
+                                    library,
+                                    category,
+                                    list,
                                     &theme,
                                     can_insert,
                                     dragging_path.as_deref(),
@@ -606,8 +665,8 @@ impl Panel for ComponentPalettePanel {
                             }
                         }
                     } else {
-                        for (library, packages) in groups {
-                            let count: usize = packages.values().map(Vec::len).sum();
+                        for (library, packages) in &catalog.groups {
+                            let count = catalog.library_counts.get(library).copied().unwrap_or(0);
                             egui::CollapsingHeader::new(
                                 egui::RichText::new(format!("{library} ({count})"))
                                     .color(theme.tokens.text_subdued)
@@ -619,9 +678,9 @@ impl Panel for ComponentPalettePanel {
                                 for (category, list) in packages {
                                     render_palette_package(
                                         ui,
-                                    &library,
-                                    &category,
-                                        &list,
+                                        library,
+                                        category,
+                                        list,
                                         &theme,
                                         can_insert,
                                         dragging_path.as_deref(),
