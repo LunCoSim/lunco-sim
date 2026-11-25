@@ -220,12 +220,12 @@ var<uniform> mat: Material;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2)
 var albedo_tex: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3)
-var albedo_smp: sampler;
+var layer_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(5)
+var globe_sampler: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(23)
 var displacement_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(24)
-var displacement_smp: sampler;
 
 @if((LUNCO_GLOBE_DIRECTION)) fn spherical_basis(d: vec3<f32>) -> mat2x3<f32> {
     var east = vec3(d.z, 0.0, -d.x);
@@ -335,12 +335,8 @@ var displacement_smp: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(12)
 var continuation_albedo_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(13)
-var continuation_albedo_smp: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(14)
 var continuation_surface_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(15)
-var continuation_surface_smp: sampler;
 
 @if((LUNCO_GLOBE_DIRECTION)) fn equirectangular_uv(@if((LUNCO_GLOBE_DIRECTION)) d: vec3<f32>) -> vec2<f32> {
     return vec2(
@@ -384,7 +380,7 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>, surface_n
         // --- Lat/Long grid (spherical bodies). Direction is interpolated in 3D
         // and normalised BEFORE projection, so this mapping is independent of
         // tile tessellation and quadtree level.
-        @if((LUNCO_GLOBE_DIRECTION)) let img = textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
+        @if((LUNCO_GLOBE_DIRECTION)) let img = textureSampleGrad(albedo_tex, globe_sampler, globe_uv, globe_dx, globe_dy).rgb;
         @if((LUNCO_GLOBE_DIRECTION)) base *= img;
         @if((LUNCO_GLOBE_DIRECTION)) let ll_coords = globe_uv * mat.subdivisions;
         @if((LUNCO_GLOBE_DIRECTION)) let ll_f = abs(fract(ll_coords - 0.5) - 0.5) / fwidth(ll_coords);
@@ -399,8 +395,8 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>, surface_n
             * smoothstep(0.05, 0.45, mat.transition);
     } else {
         // --- Blueprint grid (Cartesian XZ, flat ground).
-        @if((LUNCO_GLOBE_DIRECTION)) base *= textureSampleGrad(albedo_tex, albedo_smp, globe_uv, globe_dx, globe_dy).rgb;
-        @if((!(LUNCO_GLOBE_DIRECTION)) && (VERTEX_UVS_A)) base *= textureSample(albedo_tex, albedo_smp, in.uv).rgb;
+        @if((LUNCO_GLOBE_DIRECTION)) base *= textureSampleGrad(albedo_tex, globe_sampler, globe_uv, globe_dx, globe_dy).rgb;
+        @if((!(LUNCO_GLOBE_DIRECTION)) && (VERTEX_UVS_A)) base *= textureSample(albedo_tex, layer_sampler, in.uv).rgb;
         // `world_position` is the floating-origin render frame. First restore
         // the stable WorldGrid position, then map it into the authored active
         // terrain frame before evaluating its XZ pattern. For a site-mounted
@@ -449,13 +445,13 @@ fn shade(in: VertexOutput, is_front: bool, globe_direction: vec3<f32>, surface_n
     @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
     @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
         let site_albedo = textureSampleGrad(
-            continuation_albedo_tex, continuation_albedo_smp, site_uv, site_grad[0], site_grad[1]).rgb;
+            continuation_albedo_tex, layer_sampler, site_uv, site_grad[0], site_grad[1]).rgb;
         continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
     @if((VERTEX_UVS_A)) albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_weight);
     @if((VERTEX_UVS_A)) if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
         let site_surface = textureSampleGrad(
-            continuation_surface_tex, continuation_surface_smp, site_uv, site_grad[0], site_grad[1]);
+            continuation_surface_tex, layer_sampler, site_uv, site_grad[0], site_grad[1]);
         roughness = mix(
             roughness,
             site_surface.r,
