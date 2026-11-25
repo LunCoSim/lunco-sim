@@ -229,8 +229,11 @@ impl SessionHandle {
 impl Drop for SessionHandle {
     fn drop(&mut self) {
         let id = self.id;
+        // Keep the affinity reservation until the owner finishes retirement.
+        let reservation = self.lane.clone();
         let _ = self.lane.submit(move |sessions| {
             sessions.remove(&id);
+            drop(reservation);
         });
     }
 }

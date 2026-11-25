@@ -37,7 +37,7 @@ use lunco_core::{AppSceneExt, SceneResource};
 /// view-space depth, and supplies a normal of length at most one (or reads no shadows).
 const SURFACE_RECEIVER: &str = "lunco.shadow-receiver.surface.v1";
 
-#[derive(Resource, Default, Clone, ExtractResource)]
+#[derive(Resource, Default, Clone, PartialEq, ExtractResource)]
 #[extract_app(RenderApp)]
 struct ReceiverCropInputs(HashMap<(Entity, Entity, usize), (UVec4, u32)>);
 impl SceneResource for ReceiverCropInputs {}
@@ -65,6 +65,60 @@ struct ReceiverMaterials {
     source_contracts: HashMap<AssetId<Shader>, bool>,
 }
 
+/// Union of layers with at least one visible receiver whose material cannot
+/// prove a surface-bounded shadow sample. The proof does not depend on pose,
+/// cascade matrices, or on the number of cameras.
+#[derive(Resource, Default)]
+struct ReceiverDomainProof(Option<RenderLayers>);
+impl SceneResource for ReceiverDomainProof {}
+
+type ReceiverQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static InheritedVisibility,
+        Option<&'static RenderLayers>,
+        Option<&'static MeshMaterial3d<StandardMaterial>>,
+        Option<&'static MeshMaterial3d<ShaderMaterial>>,
+    ),
+    With<Mesh3d>,
+>;
+
+#[derive(bevy::ecs::system::SystemParam)]
+struct ReceiverDomainChanges<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Mesh3d>,
+            Or<(
+                Added<Mesh3d>,
+                Changed<InheritedVisibility>,
+                Changed<RenderLayers>,
+                Changed<MeshMaterial3d<StandardMaterial>>,
+                Changed<MeshMaterial3d<ShaderMaterial>>,
+            )>,
+        ),
+    >,
+    disabled: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Mesh3d>,
+            Added<bevy::ecs::entity_disabling::Disabled>,
+            bevy::ecs::query::Allow<bevy::ecs::entity_disabling::Disabled>,
+        ),
+    >,
+    removed_meshes: RemovedComponents<'w, 's, Mesh3d>,
+    removed_visibility: RemovedComponents<'w, 's, InheritedVisibility>,
+    removed_layers: RemovedComponents<'w, 's, RenderLayers>,
+    removed_standard: RemovedComponents<'w, 's, MeshMaterial3d<StandardMaterial>>,
+    removed_custom: RemovedComponents<'w, 's, MeshMaterial3d<ShaderMaterial>>,
+    enabled: RemovedComponents<'w, 's, bevy::ecs::entity_disabling::Disabled>,
+}
+
 #[derive(Resource, Default)]
 struct WrappedShadowDraws(usize);
 
@@ -73,13 +127,17 @@ pub(super) fn build(app: &mut App) {
         .register_type::<TemporalJitter>()
         .init_resource::<ReceiverMaterials>()
         .init_scene_resource::<ReceiverCropInputs>()
+        .init_scene_resource::<ReceiverDomainProof>()
         .add_plugins(ExtractResourcePlugin::<ReceiverCropInputs>::default())
         .add_systems(
             PostUpdate,
             (
                 admit_materials.after(bevy::asset::AssetEventSystems),
-                project_receiver_bounds
+                update_receiver_domain
                     .after(admit_materials)
+                    .after(VisibilitySystems::CheckVisibility),
+                project_receiver_bounds
+                    .after(update_receiver_domain)
                     .after(SimulationLightSystems::UpdateDirectionalLightCascades)
                     .after(VisibilitySystems::CheckVisibility),
             ),
@@ -97,6 +155,47 @@ pub(super) fn build(app: &mut App) {
                         .after(prepare_lights),
                 ),
             );
+    }
+}
+
+fn update_receiver_domain(
+    mut proof: ResMut<ReceiverDomainProof>,
+    admission: Res<ReceiverMaterials>,
+    receivers: ReceiverQuery,
+    mut changes: ReceiverDomainChanges,
+) {
+    // Consume all removal events even if another input already invalidated
+    // this proof; a later update must not repeat an already admitted change.
+    let removed = changes.removed_meshes.read().count()
+        + changes.removed_visibility.read().count()
+        + changes.removed_layers.read().count()
+        + changes.removed_standard.read().count()
+        + changes.removed_custom.read().count()
+        + changes.enabled.read().count();
+    if proof.0.is_some()
+        && !admission.is_changed()
+        && removed == 0
+        && changes.changed.is_empty()
+        && changes.disabled.is_empty()
+    {
+        return;
+    }
+    let mut unbounded = RenderLayers::none();
+    for (visibility, layers, standard, custom) in &receivers {
+        if !visibility.get() {
+            continue;
+        }
+        let bounded = match (standard, custom) {
+            (Some(material), None) => admission.standard.get(&material.id()) == Some(&true),
+            (None, Some(material)) => admission.custom.get(&material.id()) == Some(&true),
+            _ => false,
+        };
+        if !bounded {
+            unbounded = unbounded.union(layers.unwrap_or_default());
+        }
+    }
+    if proof.0.as_ref() != Some(&unbounded) {
+        proof.0 = Some(unbounded);
     }
 }
 
@@ -170,7 +269,7 @@ fn admit_materials(
 fn project_receiver_bounds(
     mut commands: Commands,
     mut output: ResMut<ReceiverCropInputs>,
-    admission: Res<ReceiverMaterials>,
+    domain: Res<ReceiverDomainProof>,
     size: Res<DirectionalLightShadowMap>,
     lights: Query<(
         &RenderEntity,
@@ -192,17 +291,9 @@ fn project_receiver_bounds(
         ),
         With<Camera3d>,
     >,
-    receivers: Query<
-        (
-            &InheritedVisibility,
-            Option<&RenderLayers>,
-            Option<&MeshMaterial3d<StandardMaterial>>,
-            Option<&MeshMaterial3d<ShaderMaterial>>,
-        ),
-        With<Mesh3d>,
-    >,
+    mut next: Local<HashMap<(Entity, Entity, usize), (UVec4, u32)>>,
 ) {
-    output.0.clear();
+    next.clear();
     let size = size.size as u32;
     for (
         camera_id,
@@ -236,23 +327,10 @@ fn project_receiver_bounds(
             && camera.sub_camera_view.is_none()
             && near.is_some()
             && radius.is_some()
-            && receivers
-                .iter()
-                .all(|(visibility, receiver_layers, standard, custom)| {
-                    if !visibility.get()
-                        || !layers
-                            .cloned()
-                            .unwrap_or_default()
-                            .intersects(&receiver_layers.cloned().unwrap_or_default())
-                    {
-                        return true;
-                    }
-                    match (standard, custom) {
-                        (Some(m), None) => admission.standard.get(&m.id()) == Some(&true),
-                        (None, Some(m)) => admission.custom.get(&m.id()) == Some(&true),
-                        _ => false,
-                    }
-                });
+            && domain
+                .0
+                .as_ref()
+                .is_some_and(|unbounded| !layers.unwrap_or_default().intersects(unbounded));
         let reason = if !camera.is_active {
             "inactive-camera"
         } else if jitter {
@@ -302,9 +380,7 @@ fn project_receiver_bounds(
                 if let Some(rect) = rect {
                     status.cropped_cascades += 1;
                     status.rasterized_texels += u64::from(rect.z) * u64::from(rect.w);
-                    output
-                        .0
-                        .insert((light_entity.id(), camera_entity.id(), index), (rect, size));
+                    next.insert((light_entity.id(), camera_entity.id(), index), (rect, size));
                 } else {
                     status.rasterized_texels += full_texels;
                 }
@@ -317,6 +393,9 @@ fn project_receiver_bounds(
         } else {
             commands.entity(camera_id).insert(status);
         }
+    }
+    if output.0 != *next {
+        std::mem::swap(&mut output.0, &mut *next);
     }
 }
 
@@ -475,6 +554,68 @@ fn wrap_shadow_draws(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn receiver_domain_proof_tracks_material_layers_and_lifecycle() {
+        let mut app = App::new();
+        app.init_resource::<ReceiverMaterials>()
+            .init_resource::<ReceiverDomainProof>()
+            .add_systems(Update, update_receiver_domain);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Mesh3d(Handle::default()),
+                InheritedVisibility::VISIBLE,
+                RenderLayers::layer(2),
+            ))
+            .id();
+        let layers = |app: &App| {
+            app.world()
+                .resource::<ReceiverDomainProof>()
+                .0
+                .clone()
+                .unwrap()
+        };
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::layer(2));
+        let material = Handle::<StandardMaterial>::default();
+        app.world_mut()
+            .resource_mut::<ReceiverMaterials>()
+            .standard
+            .insert(material.id(), true);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(MeshMaterial3d(material.clone()));
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::none());
+        app.world_mut()
+            .resource_mut::<ReceiverMaterials>()
+            .standard
+            .insert(material.id(), false);
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::layer(2));
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(RenderLayers::layer(3));
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::layer(3));
+        app.world_mut().entity_mut(entity).remove::<RenderLayers>();
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::default());
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(bevy::ecs::entity_disabling::Disabled);
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::none());
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<bevy::ecs::entity_disabling::Disabled>();
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::default());
+        app.world_mut().entity_mut(entity).despawn();
+        app.update();
+        assert_eq!(layers(&app), RenderLayers::none());
+    }
 
     #[test]
     fn rectangle_contains_native_bias_and_filter_support() {

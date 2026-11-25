@@ -360,14 +360,13 @@ fn build_live_stepper(
         .collect()
     };
     let metadata_collected = web_time::Instant::now();
-    let mut symbols = {
+    let symbols = {
         let _span = bevy::log::info_span!("modelica_initial_observation").entered();
         collect_stepper_observables(&stepper)?
             .into_iter()
             .map(|(name, value)| (name.to_string(), value))
             .collect::<Vec<_>>()
     };
-    symbols.extend(stepper.parameter_values().iter().cloned());
     if let Some(expected) = &plan.initial_state_values {
         for (name, expected) in expected {
             let actual = stepper.get(name)?.ok_or_else(|| {
@@ -875,14 +874,30 @@ fn send_compile_artifact_error(
 fn construction_lane(work: &PreparationWork, pool: &mut ModelicaWorkerPools) -> ConstructionLane {
     match work {
         PreparationWork::Participant(work) => {
-            ConstructionLane::Participant(match work.execution_domain {
+            // Use checked structural size as an affinity-cost estimate, not
+            // recent wall-clock timing (which depends on other host work).
+            let weight = work.comp_res.compiled.dae.inspect(|view| {
+                view.variables()
+                    .map(|(_, variable)| variable.scalar_count())
+                    .sum()
+            });
+            let lane = match work.execution_domain {
                 lunco_modelica_runtime::ModelicaExecutionDomain::Scene => {
-                    pool.live_pool.next_lane()
+                    pool.live_pool.reserve_lane(weight)
                 }
                 lunco_modelica_runtime::ModelicaExecutionDomain::Document => {
-                    pool.document_pool.next_lane()
+                    pool.document_pool.reserve_lane(weight)
                 }
-            })
+            };
+            bevy::log::info!(
+                "[modelica-runtime] live affinity model={} entity={:?} domain={:?} lane={} scalar_weight={}",
+                work.model_name,
+                work.entity,
+                work.execution_domain,
+                lane.index(),
+                weight.max(1),
+            );
+            ConstructionLane::Participant(lane)
         }
         PreparationWork::Initialization(_) => {
             ConstructionLane::Initialization(pool.pool.next_lane())
@@ -2427,20 +2442,22 @@ fn advance_checked_step(
 fn capture_initial_inputs(
     stepper: &LiveStepper,
 ) -> Result<Vec<(String, f64)>, rumoca_sim::SimulationDiagnosticError> {
-    let values = stepper.observables()?;
+    let values = stepper.selected_values(stepper.input_names())?;
+    if values.len() != stepper.input_names().len() {
+        return Err(rumoca_sim::SimulationDiagnosticError::Solver(
+            "solver input observation cardinality differs from its declared inputs".into(),
+        ));
+    }
     stepper
         .input_names()
         .iter()
-        .map(|name| {
-            let value = values
-                .iter()
-                .find(|(candidate, _)| candidate.as_str() == name.as_str())
-                .map(|(_, value)| *value)
-                .ok_or_else(|| {
-                    rumoca_sim::SimulationDiagnosticError::Solver(format!(
-                        "admitted input '{name}' has no runtime observation"
-                    ))
-                })?;
+        .zip(values)
+        .map(|(name, value)| {
+            let value = value.ok_or_else(|| {
+                rumoca_sim::SimulationDiagnosticError::Solver(format!(
+                    "admitted input '{name}' has no runtime observation"
+                ))
+            })?;
             if !value.is_finite() {
                 return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
                     "admitted input '{name}' is not finite"

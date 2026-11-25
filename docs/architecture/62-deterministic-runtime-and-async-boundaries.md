@@ -1779,7 +1779,11 @@ The whole-simulation guarantee remains open because:
     before physical presentation sampling. Render readiness ends admission
     between complete cycles. When queued work or its allowance runs out,
     main-world presentation can overlap the preceding render and extraction
-    receives the render world. While waiting, extraction can admit clock-free
+    receives the render world after the render schedule, not after native
+    surface present. Presentation retains its exact window/surface leases and
+    finishes on the same rendering thread before it accepts the next render
+    world; the main thread can overlap its next update with this bounded batch.
+    While waiting, extraction can admit clock-free
     receipts. Fixed cycles stay before presentation sampling. The timing profile
     records both fixed service phases and the final accumulator, with render
     handoff and clock-free admission outside the fixed service timer.
@@ -1965,7 +1969,9 @@ sub-app schedule polls admitted `PipelineCache` compilation tasks until they
 finish, retaining the window handles and render world throughout. Closing hides
 the windows and sends native wake events while pending, allowing the native
 runner to advance without another presented frame. The main schedule
-publishes the held exit only after render idle is observed; an error exit takes
+publishes the held exit only after render idle is observed; Bevy closes render
+admission and joins any remaining native presentation batch when channels retire.
+An error exit takes
 precedence over success. This boundary does not block the UI thread, change
 pipeline compilation mode, or let GPU completion choose simulation ticks.
 The production follow-up UI driver exercises immediate scene-load/exit cycles;

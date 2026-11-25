@@ -484,7 +484,11 @@ Each native shape appears once per probe and uses its physical pose. A probe
 can include a standard USD collection published by a referenced assembly. The fixed-step sampler retains admitted membership across ticks. Changed wiring,
 authored membership, USD stage identity and collider eligibility invalidate it.
 The physics owner rebuilds its f64 Parry BVH on membership changes and refits
-changed leaves on pose or shape changes. Scene teardown releases both caches.
+changed leaves on pose or shape changes. The sampler admits a new geometry
+snapshot only for changed membership, live native geometry or pose, or an
+invalidated lease; stationary occluders reuse the settled BVH without cloning
+shape inventories. Missing admitted geometry still fails visibly. Scene
+teardown releases both caches.
 Omitting the collection selects no equipment proxies. Authors must select
 geometry that represents their optical occluders; collision geometry does not
 imply opacity. Each sampling ray tests the union of terrain and its selected

@@ -12,6 +12,12 @@
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct DirectionSourceId(String);
 
+impl std::borrow::Borrow<str> for DirectionSourceId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
 impl DirectionSourceId {
     /// Parse lower-case ASCII ids beginning with a letter and containing only
     /// letters, digits, and underscores. A trailing underscore is forbidden.

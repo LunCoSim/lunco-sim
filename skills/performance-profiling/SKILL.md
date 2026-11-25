@@ -517,7 +517,13 @@ without a wait. Full presentation isolation remains a separate requirement.
 Native hosts share `SimulationCompletionSources` for participant and preparation
 receipts. Its worker leases control registration lifetime. A window waiting for
 render extraction admits ready receipts through the clock-free schedule, with
-fixed work staying before presentation sampling.
+fixed work staying before presentation sampling. The pinned Bevy renderer hands
+back the render world before native presentation; one presentation batch on the
+same rendering thread retains its surface/window leases and blocks only the next
+render update, not immediate main-world extraction. The actual selected mode is
+logged when the surface is configured. Attribute `surface_acquire`,
+`surface_present`, and render-world handoff separately; a requested Mailbox mode
+is not proof that it was supported or that the GUI clock is fully isolated.
 Complete-cycle continuation checks both coupling and generic progress holds.
 For runtime UI policy work, compare actual immutable input snapshots as well as
 producer change ticks. Equal facts must not schedule another projection merely
@@ -583,6 +589,22 @@ boundaries. Profile named discovery separately from bound appends, and confirm
 deferred admission remains quiescent until recorder membership, settings or
 source layout changes. Preserve rate, archives, lease rejection and paused-reset
 wake behavior when changing those owners.
+Native live affinity reservations use compiled scalar inventory and survive
+construction/queued retirement. Compare participant and per-lane work, not
+only aggregate worker time; a heavier lane is not itself authority to reorder
+receipts. Full observation merging uses Rumoca's existing ordered value map,
+not repeated scans for initialized parameter names.
+Retain the live session's canonical observation-name handles and validate the
+exact ordered inventory before reusing them; do not re-intern names each tick.
+For solar visibility, keep the per-probe physical sample fresh while reusing
+the admitted collision geometry index until membership, shape, or native pose
+changes. A missing or disabled admitted collider must invalidate reuse.
+Terrain mesh eviction plans are only collected and sorted when the resident
+cache actually exceeds an entry or byte budget.
+Directional receiver-domain admission retains the union of unbounded layers;
+the per-view crop tests that proof and publishes only changed rectangles.
+Check material/source reload, layer changes and disabled/retired receivers in
+addition to matching native shadow and opaque images.
 Wait for ready surfaces and inspect preparation failures before taking a UI
 performance cohort. This boundary does not isolate the entire fixed runner
 from the presentation thread. Keep

@@ -387,9 +387,10 @@ that consumer and its negative cases.
 
 ## Ownership review
 
-All Rumoca dependencies pin upstream commit
-`488d6d5f239fcae2bf4ce5a1b729a23d2cc6c396` from
-[CogniPilot/rumoca](https://github.com/CogniPilot/rumoca). LunCoSim stores
+All Rumoca dependencies pin commit
+`9763caab5014875da353663df14c75fe0cd8e990` from
+[LunCoSim/rumoca](https://github.com/LunCoSim/rumoca), with prepared exact
+assignment certificates and indexed projection diagnostics. LunCoSim stores
 checked DAE artifacts; each adaptive live or batch solver uses Rumoca's public
 `SimulationSession` API. Predicted models use Rumoca's public Model Exchange
 session and fixed RK4 integrator. Parsed AST fields are consumed by LunCoSim

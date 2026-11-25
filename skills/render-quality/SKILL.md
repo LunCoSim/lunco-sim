@@ -60,6 +60,9 @@ It checks available electrical power for DEM shade and a moving compound blocker
 
 Directional shadow raster bounds are owned by `lunco-render-bevy`; see
 [the receiver contract](../../docs/architecture/render-decoupling.md#directional-shadow-receiver-raster-bounds).
+Use the scene-scoped proof of unbounded receiver layers; invalidate it for
+material, visibility, mask and receiver lifecycle changes without rescanning
+the inventory on every camera movement.
 Only sources satisfying that complete contract declare
 `//!@capability lunco.shadow-receiver.surface.v1`. Unknown consumers keep native
 full-map rendering. Source reload retires the proof for the Shader asset's
@@ -343,6 +346,10 @@ sky ray into world space. Camera movement cannot mutate the shared sky or
 another camera's Sun position. `SunState` supplies irradiance only; do not add
 a second ephemeris calculation for sky materials. Continuous renderer data
 stays in Rust; author the background and material binding in USD.
+The scene-light gate observes exact light rotation, illuminance and parent values
+(not equal-value component writes), and keys calibrated lux and the exact `sun` ray separately
+from physical irradiance and unrelated named directions; preserve spatial
+ancestry, source membership and scene retirement invalidation.
 
 The globe's resident mesh cap defaults to 72 MiB. A Twin can override it in
 `twin.toml` with the positive integer byte setting

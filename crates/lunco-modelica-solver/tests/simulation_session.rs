@@ -41,6 +41,41 @@ fn luncosim_live_adapter_uses_rumoca_session_for_inputs_steps_and_observations()
 }
 
 #[test]
+fn full_observation_preserves_parameter_values_and_coordinate_order() {
+    let source = r#"model ObservationCoordinates
+        parameter Real gain = 2;
+        final parameter Real derived = 3 * gain;
+        input Real u = 1;
+        Real x(start=0, fixed=true);
+        output Real y;
+    equation
+        der(x) = u;
+        y = derived * x;
+    end ObservationCoordinates;"#;
+    let mut compiler = rumoca_compile::Session::default();
+    compiler.add_document("observation.mo", source).unwrap();
+    let compiled = compiler
+        .compile_model_dae_strict_reachable_uncached_with_recovery("ObservationCoordinates")
+        .unwrap();
+    let mut live = simulation_session::live(&compiled.dae, SimOptions::default()).unwrap();
+    let initial = live.observables().unwrap();
+    live.set_inputs(&[("u", 2.0)]).unwrap();
+    live.advance_to(0.1).unwrap();
+    let stepped = live.observables().unwrap();
+    assert_eq!(
+        initial.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        stepped.iter().map(|(name, _)| name).collect::<Vec<_>>()
+    );
+    for (parameter, expected) in [("gain", 2.0), ("derived", 6.0)] {
+        let mut matching = stepped
+            .iter()
+            .filter(|(name, _)| name.as_str() == parameter);
+        assert_eq!(matching.next().map(|(_, value)| *value), Some(expected));
+        assert!(matching.next().is_none());
+    }
+}
+
+#[test]
 fn fixed_rk4_capability_uses_rumocas_fixed_step_session() {
     let compiled = compiled_ramp();
     lunco_modelica_solver::solver_backends::ensure_builtin_solvers();

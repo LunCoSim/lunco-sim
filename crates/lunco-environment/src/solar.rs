@@ -169,11 +169,53 @@ pub struct SunProjectionCache {
     scene_sun: Option<Entity>,
     sun_parent: Option<Entity>,
     source_frame: Option<Entity>,
-    sun_revision: Option<u64>,
-    direction_revision: Option<u64>,
+    render_inputs: SunRenderInputs,
     frame_rotation: Option<DQuat>,
     parent_rotation: Option<DQuat>,
     initialized: bool,
+}
+
+/// Only the calibrated illuminance and exact named ray feed this render
+/// projection. Physical irradiance and other direction sources have separate
+/// consumers and must not invalidate the scene light.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+struct SunRenderInputs {
+    illuminance_bits: Option<u32>,
+    ray: Option<crate::FramedDirection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceMembership {
+    Missing,
+    One(Entity),
+    Multiple,
+}
+
+fn source_membership(mut entities: impl Iterator<Item = Entity>) -> SourceMembership {
+    match entities.next() {
+        None => SourceMembership::Missing,
+        Some(entity) if entities.next().is_none() => SourceMembership::One(entity),
+        Some(_) => SourceMembership::Multiple,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SunProjectionGateInputs {
+    render: SunRenderInputs,
+    scene: Option<Entity>,
+    frame: Option<Entity>,
+    light: SourceMembership,
+    light_values: Option<(Option<Entity>, Quat, u32)>,
+    target: SourceMembership,
+}
+
+impl SunRenderInputs {
+    fn capture(sun: Option<&SunState>, directions: Option<&crate::EnvironmentDirections>) -> Self {
+        Self {
+            illuminance_bits: sun.and_then(|state| state.irradiance_lux).map(f32::to_bits),
+            ray: directions.and_then(|state| state.get_named(crate::SUN_DIRECTION_SOURCE)),
+        }
+    }
 }
 
 fn spatial_rotation(
@@ -334,8 +376,7 @@ pub fn project_environment_sun_to_light(
         return;
     }
     let sun_parent = parent.map(ChildOf::parent);
-    let sun_revision = sun.as_deref().map(|state| state.revision);
-    let direction_revision = directions.as_deref().map(|state| state.revision());
+    let render_inputs = SunRenderInputs::capture(sun.as_deref(), directions.as_deref());
     let frame_changed = !projection_cache.initialized
         || projection_cache.source_frame != Some(source_frame)
         || lunco_spatial::coords::world_pose_changed(source_frame, &q_parents, &q_changed);
@@ -346,8 +387,7 @@ pub fn project_environment_sun_to_light(
         });
     let sun_changed = !projection_cache.initialized
         || projection_cache.scene_sun != Some(scene_sun)
-        || projection_cache.sun_revision != sun_revision
-        || projection_cache.direction_revision != direction_revision
+        || projection_cache.render_inputs != render_inputs
         || transform.is_changed()
         || light.is_changed()
         || q_targets.iter().any(|(entity, id)| {
@@ -452,8 +492,7 @@ pub fn project_environment_sun_to_light(
         scene_sun: Some(scene_sun),
         sun_parent,
         source_frame: Some(source_frame),
-        sun_revision,
-        direction_revision,
+        render_inputs,
         frame_rotation: Some(frame_rotation),
         parent_rotation,
         initialized: true,
@@ -476,38 +515,18 @@ fn sun_light_projection_needed(
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
     q_sun: Query<
-        (Entity, Option<&ChildOf>),
         (
-            With<bevy::light::DirectionalLight>,
+            Entity,
+            &Transform,
+            &bevy::light::DirectionalLight,
+            Option<&ChildOf>,
+        ),
+        (
             Without<Earthshine>,
             Without<bevy::camera::visibility::RenderLayers>,
         ),
     >,
     q_targets: Query<(Entity, &crate::DirectionTargetId)>,
-    changed_targets: Query<
-        (),
-        (
-            With<crate::DirectionTargetId>,
-            Or<(
-                Added<crate::DirectionTargetId>,
-                Changed<crate::DirectionTargetId>,
-            )>,
-        ),
-    >,
-    changed_suns: Query<
-        (),
-        (
-            With<bevy::light::DirectionalLight>,
-            Without<Earthshine>,
-            Without<bevy::camera::visibility::RenderLayers>,
-            Or<(
-                Added<bevy::light::DirectionalLight>,
-                Added<ChildOf>,
-                Changed<ChildOf>,
-                Changed<big_space::prelude::CellCoord>,
-            )>,
-        ),
-    >,
     q_parents: Query<&ChildOf>,
     changed_spatial: Query<
         (),
@@ -522,18 +541,29 @@ fn sun_light_projection_needed(
             )>,
         ),
     >,
+    mut previous_inputs: Local<Option<SunProjectionGateInputs>>,
 ) -> bool {
-    if sun.is_some_and(|state| state.is_changed())
-        || directions
-            .as_ref()
-            .is_some_and(|directions| directions.is_changed())
-        || mount.is_some_and(|state| state.is_changed())
-        || active_frame
-            .as_ref()
-            .is_some_and(|state| state.is_changed())
-        || !changed_suns.is_empty()
-        || !changed_targets.is_empty()
-    {
+    // Bevy may mark a component changed even when a writer stores the same
+    // value. Only the exact fields read by the sun projection are inputs;
+    // its own writes must not sustain a self-invalidating condition.
+    let inputs = SunProjectionGateInputs {
+        render: SunRenderInputs::capture(sun.as_deref(), directions.as_deref()),
+        scene: mount.as_deref().and_then(|state| state.active_root()),
+        frame: active_frame.as_deref().map(|frame| frame.0),
+        light: source_membership(q_sun.iter().map(|(entity, _, _, _)| entity)),
+        light_values: q_sun.single().ok().map(|(_, transform, light, parent)| {
+            (
+                parent.map(ChildOf::parent),
+                transform.rotation,
+                light.illuminance.to_bits(),
+            )
+        }),
+        target: source_membership(q_targets.iter().filter_map(|(entity, target)| {
+            (target.as_str() == crate::SUN_DIRECTION_SOURCE).then_some(entity)
+        })),
+    };
+    let inputs_changed = previous_inputs.replace(inputs) != Some(inputs);
+    if inputs_changed {
         return true;
     }
 
@@ -551,7 +581,7 @@ fn sun_light_projection_needed(
         })
         || q_sun
             .iter()
-            .any(|(_, parent)| parent.is_some_and(|parent| changed_pose(parent.parent())))
+            .any(|(_, _, _, parent)| parent.is_some_and(|parent| changed_pose(parent.parent())))
 }
 
 /// Keep the last committed render-sun sample while a scene transaction is
@@ -658,17 +688,114 @@ pub fn finalize_sun_render_state(
 
 /// Admit the finalized-light projection only when its semantic source or the
 /// propagated scene-sun transform changes.
-pub fn sun_render_finalize_needed(
+pub(crate) fn sun_render_finalize_needed(
     directions: Option<Res<crate::EnvironmentDirections>>,
     q_sun: Query<
-        (),
+        (Entity, Ref<GlobalTransform>),
         (
             With<bevy::light::DirectionalLight>,
             Without<Earthshine>,
             Without<bevy::camera::visibility::RenderLayers>,
-            Or<(Added<GlobalTransform>, Changed<GlobalTransform>)>,
         ),
     >,
+    mut previous: Local<Option<(Option<crate::FramedDirection>, SourceMembership)>>,
 ) -> bool {
-    directions.is_some_and(|state| state.is_changed()) || !q_sun.is_empty()
+    let ray = directions
+        .as_deref()
+        .and_then(|state| state.get_named(crate::SUN_DIRECTION_SOURCE));
+    let key = (
+        ray,
+        source_membership(q_sun.iter().map(|(entity, _)| entity)),
+    );
+    previous.replace(key) != Some(key) || q_sun.iter().any(|(_, transform)| transform.is_changed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct ProjectionRuns(usize);
+
+    #[test]
+    fn projection_gate_checks_light_values_not_equal_value_change_ticks() {
+        let mut app = App::new();
+        app.init_resource::<ProjectionRuns>().add_systems(
+            Update,
+            (|mut runs: ResMut<ProjectionRuns>| runs.0 += 1).run_if(sun_light_projection_needed),
+        );
+        let light = app
+            .world_mut()
+            .spawn((
+                Transform::IDENTITY,
+                bevy::light::DirectionalLight::default(),
+            ))
+            .id();
+        app.update();
+        assert_eq!(app.world().resource::<ProjectionRuns>().0, 1);
+        let original = app
+            .world()
+            .get::<bevy::light::DirectionalLight>(light)
+            .unwrap()
+            .illuminance;
+        app.world_mut()
+            .get_mut::<bevy::light::DirectionalLight>(light)
+            .unwrap()
+            .illuminance = original;
+        app.world_mut()
+            .get_mut::<Transform>(light)
+            .unwrap()
+            .rotation = Quat::IDENTITY;
+        app.update();
+        assert_eq!(app.world().resource::<ProjectionRuns>().0, 1);
+        app.world_mut()
+            .get_mut::<Transform>(light)
+            .unwrap()
+            .rotation = Quat::from_rotation_x(0.2);
+        app.update();
+        assert_eq!(app.world().resource::<ProjectionRuns>().0, 2);
+        app.update();
+        assert_eq!(app.world().resource::<ProjectionRuns>().0, 2);
+        app.world_mut().despawn(light);
+        app.update();
+        assert_eq!(app.world().resource::<ProjectionRuns>().0, 3);
+    }
+
+    #[test]
+    fn render_projection_key_ignores_physical_irradiance_and_unrelated_rays() {
+        let mut sun = SunState::default();
+        let mut directions = crate::EnvironmentDirections::default();
+        let before = SunRenderInputs::capture(Some(&sun), Some(&directions));
+        sun.publish_physical(Some(1361.0)).unwrap();
+        let ray = crate::FramedDirection {
+            frame: Entity::PLACEHOLDER,
+            direction: lunco_spatial::coords::UnitDirection3::from_unit(bevy::math::DVec3::X)
+                .unwrap(),
+        };
+        directions.set_named(crate::EARTH_DIRECTION_SOURCE, Some(ray));
+        assert_eq!(
+            before,
+            SunRenderInputs::capture(Some(&sun), Some(&directions))
+        );
+        directions.set_named(crate::SUN_DIRECTION_SOURCE, Some(ray));
+        let after_ray = SunRenderInputs::capture(Some(&sun), Some(&directions));
+        assert_ne!(before, after_ray);
+        assert!(sun.publish(Some(100_000.0)));
+        assert_ne!(
+            after_ray,
+            SunRenderInputs::capture(Some(&sun), Some(&directions))
+        );
+        assert_eq!(
+            source_membership(std::iter::empty()),
+            SourceMembership::Missing
+        );
+        assert_eq!(
+            source_membership(std::iter::once(ray.frame)),
+            SourceMembership::One(ray.frame)
+        );
+        assert_eq!(
+            source_membership([ray.frame, ray.frame].into_iter()),
+            SourceMembership::Multiple
+        );
+    }
 }

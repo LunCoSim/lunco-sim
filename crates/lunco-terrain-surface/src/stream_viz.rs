@@ -2662,6 +2662,11 @@ impl LodMeshCache {
     /// Retire only unused cache handles. Actual global residents and handles
     /// published through deferred commands this frame always retain coverage.
     fn trim(&mut self, entry_cap: usize, byte_cap: u64) {
+        // A settled cover normally fits both budgets. Do not collect/sort an
+        // eviction plan unless a budget actually requires eviction.
+        if self.map.len() <= entry_cap && self.accounted_bytes() <= byte_cap {
+            return;
+        }
         let mut victims: Vec<(u64, MeshCacheKey)> = self
             .map
             .iter()
@@ -10891,6 +10896,12 @@ mod draw_partition_tests {
             cache.insert(key(x), handle, 0.0, None, tile_mesh_bytes(tile_res));
         }
         cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.trim(4, u64::MAX);
+        assert_eq!(
+            cache.map.len(),
+            4,
+            "a settled cover within both budgets stays resident"
+        );
         // Touch 0 so 1 becomes the oldest unprotected entry.
         assert!(cache.get(&key(0)).is_some());
         // Trim to 2 entries; 3 stands in for the current frame's cover.

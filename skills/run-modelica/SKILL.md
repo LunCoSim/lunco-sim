@@ -57,7 +57,10 @@ workbench. Build the named binary in the current worktree, then invoke it
 directly. The API server only exists when you pass `--api`. Default port is
 **4101** (`lunco_api_contracts::DEFAULT_API_PORT`).
 
-Native execution uses the existing thread-affine worker pools. The pinned
+Native execution uses the existing thread-affine worker pools. Constructed
+live sessions reserve affinity by compiled scalar inventory; the reservation is
+released on owner retirement, not on the first dropped mailbox clone. Keep the
+ordered receipt barrier and separate preparation pool. The pinned
 Rumoca JIT enables inline stack probes, including on fresh Windows worker
 stacks. Do not substitute larger stacks, stack pre-touching, or simpler
 physical models for correct native code generation. Check `GetReadiness` and

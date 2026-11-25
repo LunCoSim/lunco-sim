@@ -537,3 +537,55 @@ physics. Acceptance requires an uncontended production run at the authored
 quality, complete scene readiness, unchanged source cohort, a settled frame
 window, and separate physics/service timings. Profiling runs are diagnostic and
 do not supply the product FPS number.
+
+
+## Griffin follow-up — 2026-11-25
+
+The pinned official-fork changes prepare Rumoca exact assignment certificates
+and indexed projection diagnostics (`9763caab5014875da353663df14c75fe0cd8e990`),
+and return Bevy's render world before its bounded native presentation batch
+(`33c9a2d62c5381b2e4ae72f8ebe189928b3127f2`). Both commits are published and
+locked. Application changes balance persistent solver lanes by admitted scalar
+weight, reuse ordered observation names and parameter lookups, retain optical
+geometry and receiver-domain proofs, avoid equal-value sun light invalidation
+and skip under-budget terrain eviction sorting. The complete runtime observation
+contract, 60 Hz fixed quantum and High rendering quality remain unchanged.
+
+The first non-Tracy 1600×1000 private-X11 release comparison was 11.13 versus
+11.28 FPS, p95 117.63 versus 98.30 ms. A second back-to-back preserved-binary
+replay on the same private surface measured:
+
+| Metric | Baseline | Candidate |
+|---|---:|---:|
+| Running mean FPS | 9.66 | 12.51 |
+| Running p95 frame ms | 164.91 | 91.96 |
+| Paused mean FPS | 12.69 | 12.85 |
+| Observed fixed ticks/wall s | 12.90 | 11.94 |
+| MainPropulsion mean worker ms | 82.45 | 83.44 |
+
+Both replayed the Griffin touchdown/handoff at 22.516667 simulation seconds,
+with identical 597-file source inventories, 193/193 terrain tiles and zero
+final runtime diagnostic findings. Pause held the authoritative tick for the
+whole sample. Host contention differed (the baseline overlapped a large
+linker job), so the observed delta is not an isolated performance claim. The
+private surface selected Immediate for the Mailbox request; only FIFO and
+Immediate were supported. Native desktop and 2K acceptance remain open.
+
+Focused fork tests, ordered observation and affinity tests, receiver-domain
+and exact light-value regressions passed. Production terrain visibility
+(including negative admission), initialization/receipt, negative Modelica
+observation and UI preparation/scene-contract verdicts passed. The headless
+dependency gate confirmed absence of the GPU stack but found the existing
+input-focus dependency from `lunco-control-core`.
+
+The paused FPS ceiling and unchanged MainPropulsion mean establish that the
+performance objective is not achieved. A bounded render-world handoff does
+not isolate the authoritative clock; independent immutable presentation and
+reliable render extraction lifecycle are still required. Remaining solver
+work is batched execution of the actual hot scalar blocks with exact replay
+evidence, subscriber-specific observation admission, static UI policy versus
+continuous binding publication, active-viewport picking invalidation and
+static/dynamic caster indexing. The precise sun gate still admitted 300/300
+live Griffin evaluations; its regression is a correctness improvement, not
+proof of a scene-level reduction. Do not relax simulation or render fidelity
+to reach the target.

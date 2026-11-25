@@ -186,10 +186,12 @@ fn runtime_ui_surface(facts) {
     result.coordinate_frame = coordinates.coordinate_frame;
     result.angular_velocity = angular_speed_text(facts.angular_velocity);
     result.telemetry_summary = telemetry_text(facts.telemetry);
-    // Index only statuses; copying participant maps also copies their model values.
+    // Read the participant collection once. Repeated access through the outer
+    // facts map can clone the complete nested model-value inventory.
+    let participants = facts.participants;
     let participant_counts = #{};
-    for index in 0..facts.participants.len() {
-        let label = status_label(facts.participants[index].status);
+    for index in 0..participants.len() {
+        let label = status_label(participants[index].status);
         participant_counts[label] = if participant_counts[label] == () {
             1
         } else {

@@ -75,7 +75,9 @@ impl EnvironmentDirections {
     }
 
     pub fn get_named(&self, source: &str) -> Option<FramedDirection> {
-        self.rays.get(&DirectionSourceId::parse(source)?).copied()
+        // Keys were validated when admitted. A borrowed lookup cannot match
+        // an invalid name and does not allocate a fresh identifier.
+        self.rays.get(source).copied()
     }
 
     fn ray(&self, source: &DirectionSourceId) -> Option<FramedDirection> {

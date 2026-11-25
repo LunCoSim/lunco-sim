@@ -3,12 +3,14 @@
 use rumoca_core::VarName;
 use rumoca_ir_dae::{Dae, ScalarType, VariableRole};
 use rumoca_sim::{SimOptions, SimSolverMode, SimulationDiagnosticError, SimulationSession};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 /// Live Modelica session selected by LunCo's registered solver capability.
 pub struct LiveStepper {
     session: SimulationSession,
     parameter_values: Vec<(String, f64)>,
+    observation_names: RefCell<Vec<VarName>>,
 }
 
 impl LiveStepper {
@@ -30,25 +32,36 @@ impl LiveStepper {
                 "observation time is not finite: {time}"
             )));
         }
-        let mut values = self.visible_values()?;
+        // Rumoca already returns the canonical, insertion-ordered value map.
+        // Merge initialized parameter coordinates into that map before turning
+        // it into the observation vector. Existing keys keep their position;
+        // parameters absent from the solver state append in declaration order.
+        let mut values = self.session.state()?.values;
         for (name, value) in &self.parameter_values {
-            if let Some((_, current)) = values.iter_mut().find(|(current, _)| current == name) {
+            if let Some(current) = values.get_mut(name) {
                 *current = *value;
             } else {
-                values.push((name.clone(), *value));
+                values.insert(name.clone(), *value);
             }
         }
-        values
-            .into_iter()
-            .map(|(name, value)| {
-                if !value.is_finite() {
-                    return Err(SimulationDiagnosticError::Solver(format!(
-                        "observation '{name}' is not finite ({value}) at t={time}"
-                    )));
-                }
-                Ok((VarName::from(name), value))
-            })
-            .collect()
+        if let Some((name, value)) = values.iter().find(|(_, value)| !value.is_finite()) {
+            return Err(SimulationDiagnosticError::Solver(format!(
+                "observation '{name}' is not finite ({value}) at t={time}"
+            )));
+        }
+        // A session's ordered inventory normally stays fixed. Validate the
+        // exact name layout, then retain canonical handles instead of entering
+        // the process-wide VarName interner once per variable on every step.
+        let mut names = self.observation_names.borrow_mut();
+        if names.len() != values.len()
+            || !names
+                .iter()
+                .zip(values.keys())
+                .all(|(cached, live)| cached.as_str() == live.as_str())
+        {
+            *names = values.keys().map(|name| VarName::intern(name)).collect();
+        }
+        Ok(names.iter().cloned().zip(values.into_values()).collect())
     }
 
     pub fn time(&self) -> f64 {
@@ -99,6 +112,7 @@ pub fn live(dae: &Dae, options: SimOptions) -> Result<LiveStepper, SimulationDia
     Ok(LiveStepper {
         session,
         parameter_values,
+        observation_names: RefCell::new(Vec::new()),
     })
 }
 
@@ -127,12 +141,6 @@ pub fn live_for_solver(
             "registered solver '{}' has no live session adapter",
             spec.id
         ))),
-    }
-}
-
-impl LiveStepper {
-    fn visible_values(&self) -> Result<Vec<(String, f64)>, SimulationDiagnosticError> {
-        Ok(self.session.state()?.values.into_iter().collect())
     }
 }
 

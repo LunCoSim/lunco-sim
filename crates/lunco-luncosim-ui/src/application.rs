@@ -732,13 +732,9 @@ fn default_plugins_with_profile(
             Some(p) => format!("LunCoSim — Listening on {p}"),
             None => "LunCoSim".to_string(),
         };
-        // Let the backend select the fastest available non-vsync mode. Wayland
-        // commonly rejects `Immediate`, while `AutoNoVsync` can still select
-        // Mailbox; hard-coding Immediate silently falls back to FIFO and caps
-        // the production window at the compositor refresh rate.
-        let present = if no_vsync {
-            bevy::window::PresentMode::AutoNoVsync
-        } else if networked {
+        // Prefer mailbox for interactive rendering: the backend selects the
+        // supported mode, falling back to Immediate and then FIFO.
+        let present = if no_vsync || networked {
             bevy::window::PresentMode::Mailbox
         } else {
             bevy::window::PresentMode::Fifo

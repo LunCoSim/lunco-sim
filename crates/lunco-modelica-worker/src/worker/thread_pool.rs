@@ -2,6 +2,7 @@
 
 use crossbeam_channel::{Sender, unbounded};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 
 type Job<C> = Box<dyn FnOnce(&mut C) + Send + 'static>;
@@ -14,17 +15,38 @@ enum Request<C> {
 /// A mailbox for one persistent owner; its context never crosses threads.
 pub(super) struct Lane<C> {
     tx: Sender<Request<C>>,
+    index: usize,
+    reservation: Option<Arc<LaneReservation>>,
+}
+
+/// A live session's affinity load follows its handle, including construction
+/// in flight. Failed construction and retired sessions release the same lease.
+struct LaneReservation {
+    load: Arc<AtomicUsize>,
+    weight: usize,
+}
+
+impl Drop for LaneReservation {
+    fn drop(&mut self) {
+        self.load.fetch_sub(self.weight, Ordering::Relaxed);
+    }
 }
 
 impl<C> Clone for Lane<C> {
     fn clone(&self) -> Self {
         Self {
             tx: self.tx.clone(),
+            index: self.index,
+            reservation: self.reservation.clone(),
         }
     }
 }
 
 impl<C> Lane<C> {
+    pub(super) fn index(&self) -> usize {
+        self.index
+    }
+
     pub(super) fn submit(&self, job: impl FnOnce(&mut C) + Send + 'static) -> Result<(), String> {
         self.tx
             .send(Request::Run(Box::new(job)))
@@ -36,6 +58,7 @@ impl<C> Lane<C> {
 /// Shutdown is explicit, so retained mailbox handles cannot keep workers alive.
 pub(super) struct ThreadAffinePool<C> {
     lanes: Vec<Lane<C>>,
+    reserved_loads: Vec<Arc<AtomicUsize>>,
     threads: Vec<JoinHandle<()>>,
     next_lane: usize,
     failure: Arc<dyn Fn(String) + Send + Sync>,
@@ -55,6 +78,7 @@ impl<C: 'static> ThreadAffinePool<C> {
         let failure: Arc<dyn Fn(String) + Send + Sync> = Arc::new(failure);
         let mut pool = Self {
             lanes: Vec::with_capacity(count),
+            reserved_loads: Vec::with_capacity(count),
             threads: Vec::with_capacity(count),
             next_lane: 0,
             failure,
@@ -86,7 +110,12 @@ impl<C: 'static> ThreadAffinePool<C> {
                     }
                 })
                 .map_err(|error| format!("cannot start {name} owner {index}: {error}"))?;
-            pool.lanes.push(Lane { tx });
+            pool.lanes.push(Lane {
+                tx,
+                index,
+                reservation: None,
+            });
+            pool.reserved_loads.push(Arc::new(AtomicUsize::new(0)));
             pool.threads.push(thread);
         }
         Ok(pool)
@@ -108,6 +137,25 @@ impl<C: 'static> ThreadAffinePool<C> {
     pub(super) fn next_lane(&mut self) -> Lane<C> {
         let lane = self.lanes[self.next_lane].clone();
         self.next_lane = (self.next_lane + 1) % self.lanes.len();
+        lane
+    }
+
+    /// Choose the least-loaded persistent owner using admitted model size.
+    /// Resolve ties by lane index; timing and OS scheduling do not change the
+    /// authoritative receipt order or migrate an existing solver session.
+    pub(super) fn reserve_lane(&mut self, weight: usize) -> Lane<C> {
+        let weight = weight.max(1);
+        let index = self
+            .reserved_loads
+            .iter()
+            .enumerate()
+            .min_by_key(|(index, load)| (load.load(Ordering::Relaxed), *index))
+            .expect("a constructed worker pool has at least one lane")
+            .0;
+        let load = Arc::clone(&self.reserved_loads[index]);
+        load.fetch_add(weight, Ordering::Relaxed);
+        let mut lane = self.lanes[index].clone();
+        lane.reservation = Some(Arc::new(LaneReservation { load, weight }));
         lane
     }
 
@@ -135,6 +183,32 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn affinity_load_is_balanced_and_owned_by_the_complete_lease() {
+        let mut pool = ThreadAffinePool::new("weighted", 2, || (), |e| panic!("{e}")).unwrap();
+        let heavy = pool.reserve_lane(10);
+        let retained = heavy.clone();
+        let small = pool.reserve_lane(1);
+        let next = pool.reserve_lane(2);
+        assert_eq!((heavy.index(), small.index(), next.index()), (0, 1, 1));
+        let read_loads = |pool: &ThreadAffinePool<()>| {
+            pool.reserved_loads
+                .iter()
+                .map(|load| load.load(Ordering::Relaxed))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(read_loads(&pool), vec![10, 3]);
+        drop(heavy);
+        assert_eq!(read_loads(&pool), vec![10, 3]);
+        drop(retained);
+        assert_eq!(read_loads(&pool), vec![0, 3]);
+        let replacement = pool.reserve_lane(2);
+        assert_eq!(replacement.index(), 0);
+        assert_eq!(read_loads(&pool), vec![2, 3]);
+        drop((small, next, replacement));
+        assert_eq!(read_loads(&pool), vec![0, 0]);
+    }
 
     #[test]
     fn preparation_wait_does_not_block_a_live_owner() {

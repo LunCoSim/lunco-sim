@@ -35,6 +35,24 @@ wgpu, naga, or `bevy_render` — achieved **without a single `#[cfg(feature = "r
 code.** The gate is *which plugins you add*, not conditional compilation sprinkled through the
 simulation.
 
+## Native presentation handoff
+
+The pinned Bevy renderer returns its render world after submission and render
+schedule finalization, before native swapchain presentation. The same render
+thread retains the acquired texture, queue, surface and native window leases
+until that frame is presented. A single bounded batch prevents a subsequent
+acquire or surface reconfiguration from overtaking presentation. Non-pipelined
+rendering consumes the same batch synchronously; shutdown closes admission and
+joins the presentation owner. Main-world extraction and application work can
+therefore overlap the outgoing native present without dropping frames, changing
+simulation admission or accessing simulation state from the render thread.
+
+The interactive `--no-vsync` request prefers Mailbox, with supported Immediate
+then FIFO selection by Bevy. The actual configured mode and supported modes are
+logged at surface configuration; Tracy `surface_acquire` and `surface_present`
+measure their separate costs. Surface throughput can still bound interactive
+frame cadence; this is not a separate simulation clock.
+
 ## Initial scene presentation
 
 The interactive application keeps the main scene camera inactive during scene
@@ -875,7 +893,12 @@ selection and transmitted back-surface reads do not satisfy the contract.
 Fragment sources without the capability remain fully supported with native
 full-map rasterization. The owner caches admission by material and Shader
 asset identity, updates on asset/schema changes, and uses typed asset IDs in
-the render loop. It does not parse sources or hash shader paths per frame.
+the render loop. The scene-scoped receiver-domain proof is the union of render
+layers containing a visible receiver with an unbounded material. It updates on
+material admission, receiver membership, visibility, layers, and enable/disable
+lifecycle changes. Each camera tests its own mask against that proof rather
+than scanning the entire receiver inventory again. It does not parse sources
+or hash shader paths per frame.
 
 A Shader source modification retires all current custom-source proofs before
 extraction, including consumers of imported or embedded libraries without a
@@ -884,7 +907,8 @@ asset's lifetime: an earlier compiled pipeline
 can remain in use while a replacement compiles. Asset removal retires the
 source record. This application asset lifetime differs from the scene lifetime
 of projected rectangles. `ReceiverCropInputs` is a registered SceneResource;
-every main/render frame clears its projected maps, and camera-owned reflected
+the main world computes the exact rectangle map in reusable scratch and
+publishes only changed entries or removals. Camera-owned reflected
 `DirectionalShadowRaster` facts retire with the camera. These facts report
 main-world projected work, not proof that the GPU accepted a rectangle.
 

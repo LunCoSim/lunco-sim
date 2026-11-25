@@ -180,7 +180,12 @@ invariant, not a Modelica complexity limit or an application stack-size setting.
 All native emitters use that builder. Rumoca's fresh-thread regression executes
 a 768 KiB frame and checks both frame edges across a native helper call.
 The application retains its thread-affine solver pools, typed channels and
-ordered completion admission. Compilation and solver errors use their existing
+ordered completion admission. A new live session reserves the least-loaded
+owner in its execution-domain pool using the compiled DAE's scalar inventory;
+ties use lane index. The reservation covers construction and the entire live
+session, including queued retirement, so failed or retired sessions release
+their load without migrating existing solver state. Preparation jobs retain
+their independent pool. Compilation and solver errors use their existing
 terminal result paths; Rust unwind handling does not contain native access
 violations or exhausted stacks.
 
@@ -189,6 +194,13 @@ results in both native and browser workers. Only a complete finite observation
 can publish runtime values or a presentation stream. See the
 [checked Rumoca runtime contract](29-rumoca-runtime-contracts.md) for ownership
 and its production negative gate.
+Initialized parameter values merge into Rumoca's insertion-ordered state map
+by canonical name before one observation-vector conversion; existing keys keep
+their positions and absent coordinates append in declaration order. The live
+session validates that ordered name inventory and retains the interned handles
+until it changes, avoiding repeated process-wide interner access. Reset and
+parameter-update input capture requests only the declared input coordinates,
+and rejects missing or non-finite values.
 
 The response bridge changes document diagnostics only when their contents or
 compile lifecycle change. Successful live steps with no diagnostics do not mark

@@ -65,9 +65,10 @@ pub use lighting::{FULL_EARTH_EARTHSHINE_LUX, LunarSun, drive_earthshine_from_ph
 
 /// Solar render projection over the generic direction source system.
 pub mod solar;
+use solar::sun_render_finalize_needed;
 pub use solar::{
     SunRenderState, SunState, finalize_sun_render_state, project_environment_sun_to_light,
-    sun_render_finalize_needed, tracked_sun_light_projection,
+    tracked_sun_light_projection,
 };
 
 /// Universal framed direction sources, coordinate conversion, and direct

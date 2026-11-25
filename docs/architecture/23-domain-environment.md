@@ -202,6 +202,14 @@ communication boundary; static scenes get their fixed direction
 from one authored `DistantLight`. Neither choice adds another coordinate or
 time-conversion path.
 
+The scene-light change gate observes the exact calibrated render illuminance,
+named `sun` ray, scene/frame and light/target membership, plus relevant spatial
+ancestry changes. It observes the light's exact rotation, illuminance and parent
+rather than raw change ticks; equal-value stores and the projection's own
+unchanged output do not perpetuate admission. Other named rays and physical
+W/m² revisions do not by themselves invalidate the render-light projection. Finite target motion still
+updates the light; removal or duplication of either source is observable.
+
 `lunco-celestial-ephemeris` owns exact-epoch analytical reuse. Its provider cache
 retains final ecliptic body results, native heliocentric ICRF f64 operands and
 the native geocentric Moon sample. VSOP2013 EMB and ELP/MPP02 Moon each evaluate

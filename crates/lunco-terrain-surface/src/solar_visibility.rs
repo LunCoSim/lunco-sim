@@ -31,6 +31,7 @@ struct SampleKey {
 #[derive(Resource, Default)]
 pub(crate) struct VisibilityMemo {
     geometry_index: lunco_physics::occlusion::CollisionOcclusionIndex,
+    geometry_valid: bool,
     terrain_bounds: std::collections::HashMap<Entity, crate::SurfaceOcclusionCache>,
     samples: std::collections::HashMap<
         Entity,
@@ -93,6 +94,8 @@ pub(crate) struct SolarGeometry<'w, 's> {
     changed: Query<'w, 's, (), Or<(Changed<SimConnection>, Changed<ProbeOccluderPaths>)>>,
     changed_sources:
         Query<'w, 's, Entity, Or<(Changed<RigidBodyColliders>, Changed<SourceColliders>)>>,
+    changed_colliders:
+        Query<'w, 's, (), Or<(Changed<Collider>, Changed<Position>, Changed<Rotation>)>>,
     prims: Res<'w, lunco_usd_bevy_scene::prim_index::UsdPrimIndex>,
     sources: Query<
         'w,
@@ -209,14 +212,14 @@ pub(crate) fn publish_sun_visibility(
     for cache in memo.terrain_bounds.values_mut() {
         cache.begin_batch();
     }
-    if !geometry.membership.valid
+    let membership_changed = !geometry.membership.valid
         || geometry.prims.is_changed()
         || !geometry.changed.is_empty()
         || geometry
             .changed_sources
             .iter()
-            .any(|source| geometry.membership.candidates.contains(&source))
-    {
+            .any(|source| geometry.membership.candidates.contains(&source));
+    if membership_changed {
         geometry.membership.valid = false;
         let mut ordered = std::collections::BTreeMap::new();
         let demanded_probes: HashSet<_> = connections.iter().filter_map(solar_wire_probe).collect();
@@ -295,24 +298,40 @@ pub(crate) fn publish_sun_visibility(
             probe_order: ordered.into_values().collect(),
         };
     }
-    let shapes = geometry
-        .membership
-        .colliders
-        .iter()
-        .map(|&id| {
-            let (entity, collider, position, rotation) = geometry
-                .colliders
-                .get(id)
-                .map_err(|_| format!("optical collider {id:?} lost its admitted shape or pose"))?;
-            Ok(lunco_physics::occlusion::CollisionOccluder {
-                entity,
-                position: position.0,
-                rotation: rotation.0.as_dquat(),
-                shape: collider.shape_scaled().clone(),
+    // The admitted membership already owns canonical collider identities.
+    // Only build a new shape snapshot when that membership or an admitted
+    // collider's native geometry/pose changes. Stale/invalid snapshots are
+    // never reused; eligibility is independent of light/probe motion.
+    let refresh_geometry =
+        !memo.geometry_valid
+            || membership_changed
+            || geometry.membership.colliders.iter().any(|&id| {
+                !geometry.colliders.contains(id) || geometry.changed_colliders.contains(id)
+            });
+    let geometry_sample = if refresh_geometry {
+        let shapes = geometry
+            .membership
+            .colliders
+            .iter()
+            .map(|&id| {
+                let (entity, collider, position, rotation) =
+                    geometry.colliders.get(id).map_err(|_| {
+                        format!("optical collider {id:?} lost its admitted shape or pose")
+                    })?;
+                Ok(lunco_physics::occlusion::CollisionOccluder {
+                    entity,
+                    position: position.0,
+                    rotation: rotation.0.as_dquat(),
+                    shape: collider.shape_scaled().clone(),
+                })
             })
-        })
-        .collect::<Result<Vec<_>, String>>();
-    let geometry_sample = shapes.and_then(|shapes| memo.geometry_index.update(shapes));
+            .collect::<Result<Vec<_>, String>>();
+        let result = shapes.and_then(|shapes| memo.geometry_index.update(shapes));
+        memo.geometry_valid = result.is_ok();
+        result
+    } else {
+        Ok(())
+    };
     for &entity in &geometry.membership.probe_order {
         let Ok((probe, sampling, _, mut sim)) = probes.get_mut(entity) else {
             continue;
