@@ -12,7 +12,10 @@ use openusd::sdf::Value;
 
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
-use lunco_usd_bevy_scene::{UsdAnimated, UsdPrimPath};
+use lunco_usd_bevy_scene::{
+    UsdAnimated, UsdPrimPath, UsdSampledVisibility, UsdVisualVisibility,
+    visibility::{UsdVisibilityReconcileSet, VisibilityProjectionChanged},
+};
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
 use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_primvar_vec3_at, read_token_at, read_vec3_f64_at,
@@ -58,6 +61,7 @@ impl Plugin for UsdAnimationPlugin {
             (sample_usd_animation, sample_usd_material_animation)
                 .chain()
                 .run_if(lunco_time::scene_time_ready)
+                .before(UsdVisibilityReconcileSet)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
     }
@@ -276,10 +280,12 @@ pub fn sample_usd_animation(
     canonical: NonSend<CanonicalStages>,
     mut q: Query<
         (
+            Entity,
             &UsdPrimPath,
             &AnimationPlan,
             &mut Transform,
-            &mut Visibility,
+            Option<&UsdVisualVisibility>,
+            Option<&UsdSampledVisibility>,
             Option<&mut CellCoord>,
             Option<&ChildOf>,
             Option<&lunco_time::TimeBinding>,
@@ -287,8 +293,10 @@ pub fn sample_usd_animation(
         With<UsdAnimated>,
     >,
     grids: Query<&Grid>,
+    mut commands: Commands,
+    mut visibility_changes: MessageWriter<VisibilityProjectionChanged>,
 ) {
-    for (prim, plan, mut transform, mut visibility, cell, parent, binding) in &mut q {
+    for (entity, prim, plan, mut transform, visibility, sampled, cell, parent, binding) in &mut q {
         let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
@@ -353,16 +361,25 @@ pub fn sample_usd_animation(
                 }
             }
         }
-        if plan.visibility {
-            if let Some(token) = read_token_at(reader, &plan.path, "visibility", time) {
-                let wanted = if token == "invisible" {
-                    Visibility::Hidden
-                } else {
-                    Visibility::Inherited
-                };
-                if *visibility != wanted {
-                    *visibility = wanted;
+        if plan.visibility
+            && visibility.is_some_and(|state| state.animated && state.failure.is_none())
+        {
+            let next = match read_token_at(reader, &plan.path, "visibility", time).as_deref() {
+                Some("inherited") => true,
+                Some("invisible") => false,
+                _ => {
+                    error_once!(
+                        "[usd-animation] invalid sampled ordinary visibility at {}",
+                        plan.path
+                    );
+                    false
                 }
+            };
+            if sampled.is_none_or(|sample| sample.0 != next) {
+                commands
+                    .entity(entity)
+                    .try_insert(UsdSampledVisibility(next));
+                visibility_changes.write(VisibilityProjectionChanged(entity));
             }
         }
     }

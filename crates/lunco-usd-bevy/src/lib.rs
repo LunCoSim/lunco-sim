@@ -3499,7 +3499,11 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
                 .filter(|entity| world.get::<UsdVisualVisibility>(*entity).is_some())
                 .collect();
             if !entities.is_empty() {
-                facts.push((UsdRead::effective_visibility(&view, &path), entities));
+                facts.push((
+                    UsdRead::effective_visibility(&view, &path),
+                    attr_has_time_samples(&view, &path, "visibility"),
+                    entities,
+                ));
             }
         }
         facts
@@ -3511,7 +3515,7 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
             .flat_map(|path| index.in_stage(stage_id, path.as_str()).iter().copied())
             .collect::<Vec<_>>()
     };
-    for (result, entities) in facts {
+    for (result, animated, entities) in facts {
         for entity in entities {
             let Ok(mut target) = world.get_entity_mut(entity) else {
                 continue;
@@ -3529,6 +3533,10 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
                     };
                     let previous_failure = state.failure.take();
                     state.authored = authored;
+                    state.animated = animated;
+                    if !animated {
+                        target.remove::<lunco_usd_bevy_scene::UsdSampledVisibility>();
+                    }
                     if previous_failure.as_ref().is_some_and(|message| {
                         target
                             .get::<UsdSceneProjectionFailed>()
@@ -3624,14 +3632,28 @@ fn refresh_standard_surface_material_intents(
             continue;
         };
         let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
-        for path in &change.info_prim_paths {
-            if change.transform_only_prim_paths.contains(path) {
+        for info in &change.info_paths {
+            let (path, property) = info
+                .split_once('.')
+                .map_or((info.as_str(), None), |(path, attr)| (path, Some(attr)));
+            if change
+                .transform_only_prim_paths
+                .iter()
+                .any(|prim| prim == path)
+            {
                 continue;
             }
             let Ok(prim) = SdfPath::new(path) else {
                 continue;
             };
             match UsdRead::type_name(&reader, &prim).as_deref() {
+                Some("Shader" | "NodeGraph" | "Material")
+                    if property.is_some_and(|name| {
+                        !lunco_usd_bevy_stage::is_shading_network_property(name)
+                    }) =>
+                {
+                    continue;
+                }
                 Some("Shader")
                     if matches!(
                         UsdRead::text(&reader, &prim, "info:id").as_deref(),
@@ -3650,7 +3672,7 @@ fn refresh_standard_surface_material_intents(
                     edited_prims
                         .entry(change.stage_id)
                         .or_insert_with(std::collections::HashSet::new)
-                        .insert(path.clone());
+                        .insert(path.to_owned());
                 }
             }
         }

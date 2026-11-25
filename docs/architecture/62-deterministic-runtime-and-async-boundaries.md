@@ -768,7 +768,7 @@ run while simulation time is running. A pause leaves admitted inputs queued for
 the next running fixed tick. The controller applies semantic actions at that
 boundary. The held-state commit publishes `intent.hold`; edge delivery also
 records its `CausalTrace`.
-Raw-file runtime `SpawnEntity` requests use the same queue and order allocator.
+Live `SpawnEntity` requests use the same queue and order allocator.
 Their records retain producer provenance, correlation, stable scene-root and
 active-frame identities, original f64 pose, and a reserved root identity. The
 scene-command owner revalidates those facts and commits the spawn at its
@@ -777,7 +777,7 @@ Spawn identity collision checks query the lifecycle-maintained
 `ApiEntityRegistry` and a hash index of queued runtime roots, so admission does
 not walk all live entities or scan the pending input queue. The API registry
 updates on `GlobalEntityId` component insertion, replacement, and removal.
-Document-backed spawns remain `ApplyUsdOps` entries in the Twin journal and do
+Explicit Persistent spawns remain `ApplyUsdOps` entries in the Twin journal and do
 not also enter the session stream. Physical-frame snapshots are sampled and
 captured at their consuming fixed tick with the same per-tick allocator after
 queued session events. Simulation-clock Rhai actions stay in their derived
@@ -1444,7 +1444,7 @@ or model included in a cross-peer/replay guarantee needs its stable
 `GlobalEntityId` or another source-owned, replicated identity.
 
 External held-input changes, discrete edges, live `SetModelInput` changes,
-lifecycle input-hold releases, and raw-file runtime spawns share the bounded
+lifecycle input-hold releases, and live runtime spawns share the bounded
 session-owned ingress queue and assigned per-tick sequence. `SetModelInput`
 identifies live participants by
 stable `target_gid`; editor-only documents keep their document selector. When
@@ -1458,7 +1458,7 @@ root, active frame, catalog entry, exact `f64` pose, and reserved spawned-root
 `GlobalEntityId`. API and direct typed commands require a nonzero
 `producer_id`; actorless Rhai requires one, while Twin Rhai retains its route
 and actor identity. Modelica records retain the declared input name, exact
-`f64` value, and command correlation. Document-backed spawns remain
+`f64` value, and command correlation. Explicit Persistent spawns remain
 `ApplyUsdOps` in the Twin journal. A `ControlInputsReleased` record identifies
 its endpoint and `runtime_lifecycle` producer, joins the shared ordered queue
 for the next fixed tick, and clears local input holds after previously admitted

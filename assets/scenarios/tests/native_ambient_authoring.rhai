@@ -75,7 +75,7 @@ fn on_tick(me, ctx) {
         return;
     }
     if this.phase == 1 {
-        cmd("SetEnvironmentLight", #{ambient_brightness: 32.0});
+        cmd("SetEnvironmentLight", #{intent:"Persistent", ambient_brightness: 32.0});
         this.wait_until = sim_tick() + 30;
         this.phase = 2;
         return;
@@ -83,7 +83,16 @@ fn on_tick(me, ctx) {
     if this.phase == 2 {
         this.checks.push(t_true(fill_intensity(this.doc) == 14.0,
             "native references, schema defaults, exposure and inactive filtering contribute eighteen"));
-        cmd("SetEnvironmentLight", #{ambient_brightness: 32.0});
+        this.before = usd_document_generation(this.doc);
+        cmd("SetEnvironmentLight", #{ambient_brightness: 34.0});
+        this.wait_until = sim_tick() + 30;
+        this.phase = 7;
+        return;
+    }
+    if this.phase == 7 {
+        this.checks.push(t_true(usd_document_generation(this.doc) == this.before && fill_intensity(this.doc) == 14.0,
+            "default environment lighting changes live state without authoring USD"));
+        cmd("SetEnvironmentLight", #{intent:"Persistent", ambient_brightness: 32.0});
         this.wait_until = sim_tick() + 30;
         this.phase = 3;
         return;
@@ -91,7 +100,7 @@ fn on_tick(me, ctx) {
     if this.phase == 3 {
         this.checks.push(t_true(fill_intensity(this.doc) == 14.0,
             "repeated authoring excludes the current native runtime fill"));
-        cmd("SetEnvironmentLight", #{ambient_brightness: 10.0});
+        cmd("SetEnvironmentLight", #{intent:"Persistent", ambient_brightness: 10.0});
         this.wait_until = sim_tick() + 30;
         this.phase = 4;
         return;
@@ -110,7 +119,7 @@ fn on_tick(me, ctx) {
     }
     if this.phase == 5 {
         this.before = usd_document_generation(this.doc);
-        cmd("SetEnvironmentLight", #{ambient_brightness: 40.0, illuminance: 7.0});
+        cmd("SetEnvironmentLight", #{intent:"Persistent", ambient_brightness: 40.0, illuminance: 7.0});
         this.wait_until = sim_tick() + 30;
         this.phase = 6;
         return;

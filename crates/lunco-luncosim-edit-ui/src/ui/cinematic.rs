@@ -22,7 +22,6 @@
 //! one docked surface in Build mode rather than a floating pill.
 
 use bevy::camera::RenderTarget;
-use bevy::math::{DQuat, EulerRot};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use big_space::prelude::{CellCoord, Grid};
@@ -389,14 +388,13 @@ fn on_add_camera_here(
             value: [pos.x, pos.y, pos.z],
         },
     });
-    let (rx, ry, rz) = euler_degrees(rot);
     commands.trigger(ApplyUsdOp {
         doc_id: doc,
         parent_gen: None,
         op: UsdOp::SetRotate {
             edit_target: LayerId::root(),
             path: path.clone(),
-            value: [rx, ry, rz],
+            value: lunco_usd_document::document::usd_rotate_xyz_degrees(rot),
         },
     });
 
@@ -404,12 +402,6 @@ fn on_add_camera_here(
 }
 
 register_commands!(on_add_camera_here);
-
-/// `xformOp:rotateXYZ` is Euler XYZ in **degrees** (matching `UsdOp::SetRotate`).
-fn euler_degrees(rot: DQuat) -> (f64, f64, f64) {
-    let (x, y, z) = rot.to_euler(EulerRot::XYZ);
-    (x.to_degrees(), y.to_degrees(), z.to_degrees())
-}
 
 /// Cinematic palette — capture views, list the scene's cameras.
 pub struct CinematicPanel;

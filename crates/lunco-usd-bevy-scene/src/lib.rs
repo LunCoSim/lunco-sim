@@ -39,16 +39,17 @@ impl Plugin for UsdScenePlugin {
             app.add_plugins(prim_index::UsdPrimIndexPlugin);
         }
         app.register_type::<UsdSceneProjectionFailed>();
-        app.add_message::<visibility::VisibilityProjectionAdmitted>()
+        app.add_message::<visibility::VisibilityProjectionChanged>()
             .add_observer(visibility::queue_visibility_projection)
             .add_systems(
                 PostUpdate,
                 visibility::reconcile_new_visibility_projections
                     .run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
-                            visibility::VisibilityProjectionAdmitted,
+                            visibility::VisibilityProjectionChanged,
                         >,
                     )
+                    .in_set(visibility::UsdVisibilityReconcileSet)
                     .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
             );
         app.register_type::<billboard::UsdBillboard>();
@@ -226,6 +227,8 @@ pub struct UsdSceneChangeBatch {
     pub stage_generation: u64,
     /// Structurally resynced prim paths, including composed dependents.
     pub resynced_prim_paths: Vec<String>,
+    /// Exact property or prim paths from the coalesced non-structural notices.
+    pub info_paths: Vec<String>,
     /// Owning prim paths for authored, non-structural property changes.
     pub info_prim_paths: Vec<String>,
     /// Info-only prim paths whose changed properties are exclusively USD
@@ -281,6 +284,11 @@ pub struct RuntimeVisibilityOverride {
     pub visible: bool,
     pub script: Option<lunco_core::GlobalEntityId>,
 }
+
+/// Current sampled ordinary visibility; animation publishes this fact, never
+/// writes Bevy Visibility directly. The namespace visibility owner consumes it.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsdSampledVisibility(pub bool);
 
 /// Marks a render target whose appearance is owned by a custom shader.
 ///

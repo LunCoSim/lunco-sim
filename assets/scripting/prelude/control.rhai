@@ -107,9 +107,8 @@ fn set_world_pos(id, p)        { cmd("MoveEntity", #{ entity_id: id, translation
 /// same form `world_rotation(id)` returns. A degenerate quaternion is refused.
 fn set_world_rotation(id, q)   { cmd("RotateEntity", #{ entity_id: id, rotation: q }) }
 
-/// Write both halves of a pose as one scene edit. The runtime converts the
-/// complete active-frame pose to the entity's actual parent/cell storage and
-/// journals one compound USD change set.
+/// Write both halves of a live pose. The runtime converts the complete
+/// active-frame pose to the entity's actual parent/cell storage without authoring USD.
 fn set_world_pose(id, p, q) {
     cmd("TransformEntity", #{ entity_id: id, translation: p, rotation: q })
 }

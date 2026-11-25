@@ -8,7 +8,7 @@
 `#[Command]` dispatch is not journaled as a general session input. A bounded
 in-memory `SessionInputStream` captures physical intent frames, admitted
 external `SimulateIntent`/`SimulateIntentEdge` payloads, live external and
-local-UI `SetModelInput` changes, and raw-file runtime spawns, but it is not a
+local-UI `SetModelInput` changes, and live runtime spawns, but it is not a
 complete session log.
 Modelica input changes retain their name, exact `f64` value, correlation,
 producer, target, generation, fixed tick, and shared sequence; the Modelica
@@ -19,8 +19,8 @@ Twin Rhai retains its actor identity. Twin Lifecycle and Simulation Rhai
 setpoints retain authored-program hold ownership; Simulation-clock Rhai writes
 remain derived behavior in their deterministic evaluation pass.
 Some command owners translate
-actions into authored document operations: document-backed `SpawnEntity` uses
-`ApplyUsdOps` and the Twin journal, while a raw-file scene admits a fixed-tick
+actions into authored document operations: explicit Persistent `SpawnEntity` uses
+`ApplyUsdOps` and the Twin journal, while default live spawning admits a fixed-tick
 `RuntimeSpawn` and preserves its reserved root identity for `NetSpawn`
 replication.
 `AcquireControl`, `SetPorts`, terrain spawning, time control, and other
@@ -111,7 +111,7 @@ render pass. `CommandOccurred` does not retain typed
 parameters, target identity, scene generation, effective tick, or per-tick
 input order. The bounded session-input owner records those
 facts for admitted semantic controls, live Modelica input changes, identified
-live `SetPorts` writes and release commands, and raw-file spawns. Rhai scenario origins also
+live `SetPorts` writes and release commands, and live spawns. Rhai scenario origins also
 carry the executing actor's stable `GlobalEntityId` and source execution
 sequence; application-level Rhai calls may have no actor. Direct typed triggers
 remain outside the API dispatcher.
@@ -176,7 +176,7 @@ and fixed-tick order at their controller boundary. Missing identity or committed
 scene state holds the input visibly, and duplicate target/session order keys do
 not use process-local entity bits to break ties. While active,
 `SessionInputStream` captures physical frames, admitted `SimulateIntent` /
-`SimulateIntentEdge` payloads, live `SetModelInput` changes, and raw-file
+`SimulateIntentEdge` payloads, live `SetModelInput` changes, and live
 runtime spawns in bounded memory. Modelica records retain the declared input
 name, exact `f64` value, correlation, and producer. Semantic records retain the
 producer class and stable producer ID (or Rhai route and actor), target,
@@ -184,13 +184,13 @@ committed generation, tick, sequence, and command correlation id. The typed
 commands reject missing or zero IDs for API, direct typed, and actorless Rhai
 producers; Twin Rhai commands use their stable actor identity. Physical records
 retain the local input session and canonical intent ids. Capacity/order
-failures stop capture without evicting admitted records. Raw-file `SpawnEntity`
+failures stop capture without evicting admitted records. Live `SpawnEntity`
 uses that external ingress queue and capture stream. Its typed record retains
 the producer, scene-root and active-frame identities, catalog entry, exact
 `f64` pose, correlation id, assigned tick and sequence, and reserved root
 `GlobalEntityId`; commit applies the reserved identity before ordinary entity
 admission and network replication. The canonical `WorldGrid` has deterministic
-content provenance for stable active-frame identity. Document-backed spawning
+content provenance for stable active-frame identity. Explicit Persistent spawning
 continues through `ApplyUsdOps` and the Twin journal, without a duplicate
 session-input record. `SessionInputCaptureArchive` checks the record contract
 and encodes version 7 archives bounded to 65,536 records and 16 MiB. The reader
@@ -215,7 +215,7 @@ payloads also remain open.
 
 The current session-input slice covers external `SimulateIntentEdge`
 submissions, held/released `SimulateIntent` changes, live external and local
-UI `SetModelInput` changes, raw-file runtime spawns, and physical semantic
+UI `SetModelInput` changes, live runtime spawns, and physical semantic
 frames while explicit capture is active. Physical frames
 are admitted at their consuming controller boundary and are not deferred
 through the external queue. A complete session-input
@@ -517,14 +517,14 @@ contracts:
 |---|---|---|
 | Dig / raise authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
 | Flatten pad authored into a Twin | USD document operation in the Twin journal | `EntryId` and merged journal order |
-| Spawn a rover during a session | Document-backed scene: resulting `ApplyUsdOps` in the Twin journal; raw-file scene: `RuntimeSpawn` admitted through `PendingSessionInputs`, then committed by the scene-command owner with `NetSpawn` | document operation uses `EntryId` and merged order; raw-file record retains producer, scene generation, scene-root and active-frame identities, original `f64` pose, correlation, reserved root id, `SimTick`, and shared sequence |
+| Spawn a rover during a session | Default live: `RuntimeSpawn` admitted through `PendingSessionInputs`, then committed by the scene-command owner with `NetSpawn`; explicit Persistent: resulting `ApplyUsdOps` in the Twin journal | document operation uses `EntryId` and merged order; runtime record retains producer, scene generation, scene-root and active-frame identities, original `f64` pose, correlation, reserved root id, `SimTick`, and shared sequence |
 | Submit a live Modelica input with `SetModelInput` | API/direct/Rhai command or local Modelica canvas input → `ModelicaInputChange` in `PendingSessionInputs` → shared layered-input commit with original provenance | producer, target, scene generation, exact `f64` value, correlation, effective tick, and shared sequence |
 | Possess during a session | semantic user intent; whole-session capture is not implemented | scene generation, controlled target, `SimTick`, stable sequence |
 | USD prim edit | USD document operation in the Twin journal | `EntryId` and merged journal order |
 
-### Raw-file runtime-spawn input
+### Live runtime-spawn input
 
-The raw-file `SpawnEntity` path is a transient simulation input. It enters the
+The default live `SpawnEntity` path is a transient simulation input. It enters the
 session-owned typed commit coordinator alongside external held intents and
 discrete edges. `lunco-core-session` drains admitted records, validates their
 stable targets, related frame identities, and scene stamps, captures each
@@ -547,7 +547,7 @@ catalog, or identity state raises a structured runtime error.
 The persistent canonical `WorldGrid` has deterministic content provenance, so
 even a scene using the default world frame has a stable active-frame identity.
 
-The document-backed path stays outside this session-input record: it authors
+The explicit Persistent path stays outside this session-input record: it authors
 `ApplyUsdOps`, whose Twin-journal entry already owns its identity and order.
 Recording it again as a runtime spawn would duplicate the authored mutation.
 

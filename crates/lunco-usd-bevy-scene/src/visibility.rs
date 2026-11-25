@@ -4,8 +4,8 @@
 //! own authored pruning opinions and native purpose visibility.
 
 use crate::{
-    RuntimeVisibilityOverride, UsdPrimPath, UsdSceneProjectionFailed, UsdVisualVisibility,
-    prim_index::UsdPrimIndex, scene_root_in_world,
+    RuntimeVisibilityOverride, UsdPrimPath, UsdSampledVisibility, UsdSceneProjectionFailed,
+    UsdVisualVisibility, prim_index::UsdPrimIndex, scene_root_in_world,
 };
 use bevy::prelude::*;
 use lunco_usd_bevy_stage::{UsdInstanceMember, UsdInstanceRoot, canonical::CanonicalStages};
@@ -231,10 +231,7 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
             let Some(state) = world.get::<UsdVisualVisibility>(entity) else {
                 continue;
             };
-            if state.animated
-                || state.failure.is_some()
-                || world.get::<UsdSceneProjectionFailed>(entity).is_some()
-            {
+            if state.failure.is_some() || world.get::<UsdSceneProjectionFailed>(entity).is_some() {
                 continue;
             }
             let Some(prim) = world.get::<UsdPrimPath>(entity) else {
@@ -258,10 +255,21 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
                             .in_stage(prim.stage_handle.id(), ancestor.as_str())
                             .iter()
                             .find_map(|&candidate| {
-                                (cached_scope(candidate) == Some(target_scope))
-                                    .then(|| world.get::<RuntimeVisibilityOverride>(candidate))
-                                    .flatten()
-                                    .map(|value| value.visible)
+                                if cached_scope(candidate) != Some(target_scope) {
+                                    return None;
+                                }
+                                if world
+                                    .get::<UsdVisualVisibility>(candidate)
+                                    .is_some_and(|state| state.animated)
+                                {
+                                    world
+                                        .get::<UsdSampledVisibility>(candidate)
+                                        .map(|sample| sample.0)
+                                } else {
+                                    world
+                                        .get::<RuntimeVisibilityOverride>(candidate)
+                                        .map(|value| value.visible)
+                                }
                             })
                     });
                 if let Some(value) = value {
@@ -303,25 +311,29 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
     }
 }
 
+/// Visibility reconciliation consumes animation samples before render propagation.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsdVisibilityReconcileSet;
+
 /// One native visual projection was added or replaced while a runtime
 /// namespace opinion was active. Coalesce these before visibility propagation.
 #[derive(Message, Clone, Copy)]
-pub(crate) struct VisibilityProjectionAdmitted(Entity);
+pub struct VisibilityProjectionChanged(pub Entity);
 
 pub(crate) fn queue_visibility_projection(
     inserted: On<Insert<UsdVisualVisibility>>,
-    active: Query<(), With<RuntimeVisibilityOverride>>,
-    mut messages: MessageWriter<VisibilityProjectionAdmitted>,
+    active: Query<(), Or<(With<RuntimeVisibilityOverride>, With<UsdSampledVisibility>)>>,
+    mut messages: MessageWriter<VisibilityProjectionChanged>,
 ) {
     if !active.is_empty() {
-        messages.write(VisibilityProjectionAdmitted(inserted.entity));
+        messages.write(VisibilityProjectionChanged(inserted.entity));
     }
 }
 
 /// Newly admitted descendants inherit any live ancestor opinion; initial
 /// projection pays no native walk when none is active.
 pub(crate) fn reconcile_new_visibility_projections(
-    mut messages: MessageReader<VisibilityProjectionAdmitted>,
+    mut messages: MessageReader<VisibilityProjectionChanged>,
     mut commands: Commands,
 ) {
     let roots: Vec<_> = messages.read().map(|message| message.0).collect();

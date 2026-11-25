@@ -68,6 +68,9 @@ fn on_tick(me, ctx) {
             add("/World", "NativeVisibility", "Xform"), add(ROOT, "Ordinary", "Cube"),
             add(ROOT, "Hidden", "Xform"), attr(ROOT + "/Hidden", "visibility", "invisible"),
             add(ROOT + "/Hidden", "Child", "Cube"), attr(ROOT + "/Hidden/Child", "visibility", "inherited"),
+            add(ROOT, "Animated", "Xform"), attr(ROOT+"/Animated", "visibility", "invisible"),
+            #{SetTimeSample:#{edit_target:"@root@",path:ROOT+"/Animated",name:"visibility",type_name:"token",time:0.0,value:"\"inherited\""}},
+            add(ROOT+"/Animated", "Child", "Cube"),
             add(ROOT + "/Hidden", "LocallyHidden", "Cube"), attr(ROOT + "/Hidden/LocallyHidden", "visibility", "invisible"),
             add(ROOT + "/Hidden", "SuppressedGuide", "Cube"), attr(ROOT + "/Hidden/SuppressedGuide", "purpose", "guide"),
             add(ROOT, "Guide", "Xform"), attr(ROOT + "/Guide", "purpose", "guide"),
@@ -94,6 +97,12 @@ fn on_tick(me, ctx) {
         this.child = find(ROOT + "/Hidden/Child");
         this.child_mesh = mesh(ROOT + "/Hidden/Child").to_string();
         this.unrelated = find(ROOT + "/Ordinary");
+        let scope=find(ROOT); track_entity_write(scope);
+        this.checks.push(t_true(!hidden(ROOT+"/Animated/Child"), "sampled ancestor visibility reveals its initially hidden child"));
+        let hide_animated_branch = cmd("SetSceneView",#{batches:[visibility_write(scope,#{Bool:#{value:false}})]});
+        this.checks.push(t_true(hide_animated_branch.ok && hidden(ROOT+"/Animated/Child"), "live ancestor hide prunes an independently animated descendant"));
+        let clear_animated_branch = cmd("SetSceneView",#{batches:[visibility_write(scope,"Clear")]});
+        this.checks.push(t_true(clear_animated_branch.ok && !hidden(ROOT+"/Animated/Child"), "clear restores the current sampled visibility instead of the authored default"));
         this.hidden_root = find(ROOT + "/Hidden");
         track_entity_write(this.hidden_root);
         track_entity_write(this.child);
@@ -136,8 +145,8 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(cleared.ok && !hidden(ROOT + "/Hidden/Child") &&
             assembly_edit::describe(this.doc).generation == generation,
             "clearing runtime visibility restores the authored value without editing USD"));
-        let generic_hide = cmd("SetObjectProperty", #{entity_id:this.hidden_root,property:"visible",value:"false",intent:"Interactive"});
-        let invalid_value = cmd("SetObjectProperty", #{entity_id:this.hidden_root,property:"visible",value:"maybe",intent:"Interactive"});
+        let generic_hide = cmd("SetObjectProperty", #{entity_id:this.hidden_root,property:"visible",value:"false"});
+        let invalid_value = cmd("SetObjectProperty", #{entity_id:this.hidden_root,property:"visible",value:"maybe"});
         this.checks.push(t_true(generic_hide.ok && !invalid_value.ok && hidden(ROOT + "/Hidden/Child"),
             "generic visibility uses the same root owner and rejects invalid boolean values"));
         let clear_root = cmd("SetSceneView", #{batches:[visibility_write(this.hidden_root,"Clear")]});

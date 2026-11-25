@@ -24,24 +24,16 @@ pub struct ApiCommandMarker;
 /// synced → persisted) or a **transient interactive one** (live change only, not
 /// journaled).
 ///
-/// The default is [`Persistent`](Self::Persistent), so API / MCP / scripted
-/// callers durably record by default ("journaled by default"). An interactive UI
-/// opts into [`Interactive`](Self::Interactive) for a throwaway edit (a test /
-/// preview) and sends `Persistent` only on commit.
-///
-/// This is the explicit form of the interactive/persistent split for **discrete**
-/// dual-meaning actions (e.g. `DetachJoint`: interactively pop a joint to test vs.
-/// author the scene to have it removed). *Continuous* manipulation (gizmo drag,
-/// slider scrub) doesn't need this flag — it uses the `persist_*_to_runtime_layer`
-/// observer pattern: the live edit is the interactive form, and a deferred
-/// observer journals the committed result.
+/// Runtime interaction is the default. An authoring tool must explicitly
+/// request [`Persistent`](Self::Persistent); saving the document is a separate
+/// operation. The UI's mode never changes the meaning of an API/Rhai command.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub enum EditIntent {
     /// Live change only — NOT journaled / synced / persisted. Real-time
-    /// manipulation and previews.
-    Interactive,
-    /// The committed authored edit — journaled, synced, persisted. **Default.**
+    /// manipulation and previews. **Default.**
     #[default]
+    Interactive,
+    /// The committed authored edit — journaled and synced; save is explicit.
     Persistent,
 }
 
@@ -338,10 +330,13 @@ pub struct SpawnEntity {
     /// [`bevy::prelude::Quat`] is a render/local-transform representation, not a
     /// simulation-frame interchange type.
     pub rotation: Option<[f64; 4]>,
-    /// Stable producer identity required for raw-file runtime admission from
+    /// Stable producer identity required for live runtime admission from
     /// API, direct typed, and actorless Rhai callers. Twin Rhai uses its actor
     /// identity and omits this field.
     pub producer_id: Option<u64>,
+    /// Interactive admits a runtime instance; Persistent authors a USD reference.
+    #[serde(default)]
+    pub intent: EditIntent,
 }
 
 impl Default for SpawnEntity {
@@ -351,6 +346,7 @@ impl Default for SpawnEntity {
             position: [0.0; 3],
             rotation: None,
             producer_id: None,
+            intent: EditIntent::Interactive,
         }
     }
 }

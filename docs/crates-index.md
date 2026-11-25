@@ -378,7 +378,7 @@ Owns the BigSpace-specific boundary: arbitrary-grid f64 pose composition/convers
 The session/authority layer above `lunco-core`. It owns network role and status,
 session registries and profiles, possession/RBAC policy, `ControlPathRegistry`, prediction markers and
 input watermarks, the bounded `PendingSessionInputs` queue for fixed-tick
-semantic controls and raw-file runtime spawns, stable command-producer
+semantic controls and live runtime spawns, stable command-producer
 classification, reserved spawn-root identity allocation, and identity
 admission that needs the current authority role. The queue assigns order
 through the shared `lunco-control-core::SimulationInputOrderAllocator`. Its
@@ -797,7 +797,7 @@ projection and all preview roots through one indexed projector; subtree refresh
 updates every stage/path instance. These are engine ownership invariants, not
 changeable selection policy. Installs scene admission, Twin-backed
 stage loading, live document-to-stage projection, coalesced stage-change
-path/generation publication, authored control/program projection, scene
+path/generation publication, stage- and subtree-scoped visual completion, authored control/program projection, scene
 commands, and the stage terminal-outcome contract.
 The scene runtime supplies the host's USD file-open route for mounted
 documents, external Twin selection, and asset scene addresses.

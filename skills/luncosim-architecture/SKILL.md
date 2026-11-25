@@ -195,14 +195,14 @@ scene teardown. Its fixed-step coordinator validates and captures due records,
 then publishes typed commit events in shared sequence order while simulation
 time is running; a pause leaves inputs queued for the next running tick. The
 controller applies semantic payloads before physical input sampling.
-Raw-file runtime spawns also enter this commit boundary; the scene-command
+Live runtime spawns also enter this commit boundary; the scene-command
 owner checks the current frame and catalog and inserts the reserved root
 identity before identity admission. Physical frames remain sampled at their
 consuming fixed tick through the same per-tick allocator. Missing facts or
 duplicate target/session order keys hold input with a structured runtime
 error; ordering does not fall back to Bevy `Entity` bits. An active
 `SessionInputStream` captures sorted canonical intent ids, admitted controls,
-lifecycle input-hold releases, and raw-file spawn records.
+lifecycle input-hold releases, and live spawn records.
 `ControlAuthorityChanged` queues `ReleaseControlInputs` for the next fixed
 tick. At its ordered commit, the co-simulation owner clears controller-owned
 port holds and the controller clears held semantic intents; authored program
@@ -213,8 +213,8 @@ Missing target, generation, tick, or order facts produce a runtime error and
 leave existing holds intact. Spawn records retain producer,
 correlation, stable scene-root and active-frame identities, original f64 pose,
 admission stamp, and reserved root id; acknowledgements expose that stamp.
-Document-backed `SpawnEntity` still authors only `ApplyUsdOps` into the Twin
-journal. Capture remains bounded and in-memory; baseline manifests, playback,
+Live `SpawnEntity` uses this admission boundary even in a document-backed
+scene. Explicit `intent: "Persistent"` authors `ApplyUsdOps` into the Twin journal. Capture remains bounded and in-memory; baseline manifests, playback,
 and other typed commands remain open.
 The persistent canonical `WorldGrid` has deterministic content provenance, so
 the default active physics frame also has a stable `GlobalEntityId`.

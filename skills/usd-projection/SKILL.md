@@ -42,9 +42,9 @@ preserving metadata, samples, and namespace-dependent connections. Inspect the
 exact source document and property authorship before editing; composed values
 can originate in a different layer.
 
-**USD is the source of truth. The ECS is a projection of it.** Every entity you
-see is a rendering of a prim. Nothing is authoritative because it is in the
-world; it is in the world because it is in the document.
+**USD is the source of truth for authored scene facts.** ECS owns live
+simulation and view state, including runtime-only entities. An authored prim
+is projected into ECS; live changes do not write back implicitly.
 
 Apply that rule to authored facts. The current simulation and presentation
 values belong to their runtime owners. For example, use `SetSceneView` for a
@@ -52,7 +52,7 @@ billboard's computed text and `SetPortsBatch` for named simulation inputs.
 Use `ApplyUsdTransientOps` when an actual composed `@view@` prim or opinion
 is required.
 For moving interactive elements, use `TransformEntity` with
-`intent: "Interactive"` for discrete live poses, declared joint inputs for
+live intent (the default) for discrete live poses, declared joint inputs for
 continuous physical motion, `SetColliderEnabled` for a prepared collider,
 and `SetSceneView` with `property: "visibility"` and a `Bool` value for
 already admitted presentation geometry. Target the namespace root for a
@@ -61,6 +61,13 @@ purpose opinions. Store the current interaction state
 in the runtime owner, not `@runtime@` or `@view@`. The live commands do not
 publish a USD notice or advance document generation. See the
 [live update routes](../../docs/architecture/50-usd-driven-visuals.md#live-values-and-saved-settings).
+
+An annotation on a Material, Shader or NodeGraph should preserve unrelated live state.
+Exercise the annotation and broken-terminal cases in `test_native_material_terminals.py`.
+For an authored rotation use `usd_rotate_xyz_degrees` and exercise the multi-axis
+round trip in `transform_entity.usda`. Use `usd.document.projected` for composed
+reads and `usd.projection.visuals_ready` or `usd.projection.visuals_failed` for
+the outcome of a subtree or stage visual rebuild.
 
 For live physical mount edits, follow the notice-driven owner in
 [USD Domain](../../docs/architecture/21-domain-usd.md). Check both native mount

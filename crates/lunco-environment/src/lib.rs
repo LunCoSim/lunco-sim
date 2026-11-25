@@ -615,6 +615,10 @@ pub struct SetEnvironmentLight {
     /// writes the render intent, whose binder owns the concrete post-process
     /// component.
     pub bloom_intensity: Option<f32>,
+    /// Live by default; Persistent explicitly authors supported USD light settings.
+    #[serde(default)]
+    #[reflect(default)]
+    pub intent: lunco_core::EditIntent,
 }
 
 /// Marks the optional earthshine `DirectionalLight`.

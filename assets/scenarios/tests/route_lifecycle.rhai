@@ -1591,7 +1591,7 @@ fn route_step_generic_point_delete_action(me) {
     let target = find_path(delete_path);
     if target < 0 { return; }
     this.generic_delete_path = delete_path;
-    let deleted = cmd("DeleteEntity", #{ target: target });
+    let deleted = cmd("DeleteEntity", #{ target: target, intent:"Persistent" });
     if deleted == () || deleted.ok == false {
         this.checks.push(t_true(false,
             "generic DeleteEntity accepted a selected authored route point"));

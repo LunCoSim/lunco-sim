@@ -5,7 +5,7 @@ const CHILD = TARGET + "/Child";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [find_path(TARGET), find_path(CHILD)],
-       entity_writes: [find_path(CHILD)],
+       entity_writes: [find_path(CHILD), find_path(TARGET)],
        query_reads: ["QueryUsdPrim"], required_inputs: [] }
 }
 
@@ -65,6 +65,21 @@ fn on_tick(me, ctx) {
             this.done = true;
             finish([t_true(false, "the live billboard component must consume its authored text")]); return;
         }
+        let generation = usd_document_generation(this.doc);
+        for i in 0..100 {
+            let value = #{Text:#{value:"Live " + i}};
+            let write = #{property:"billboard.text",value:value};
+            let result = cmd("SetSceneView", #{batches:[#{target:node,writes:[write]}]});
+            if !result.ok { this.done=true; finish([t_true(false,result.error)]); return; }
+        }
+        let updated = get(node,"BillboardViewText.template")=="Live 99";
+        let preserved = usd_document_generation(this.doc)==generation && find_path(CHILD)==this.child && get(child,"Transform.translation.x")==7.0;
+        this.label_checks=[t_true(updated, "repeated live billboard updates reach the view owner"),
+            t_true(preserved, "one hundred label changes preserve authored generation, identity and live state")];
+        let clear_write = #{property:"billboard.text", value:"Clear"};
+        let cleared=cmd("SetSceneView",#{batches:[#{target:node,writes:[clear_write]}]});
+        let restored = cleared.ok && get(node,"BillboardViewText.template")==();
+        this.label_checks.push(t_true(restored,"clearing the live label restores authored text"));
         let applied = cmd("ApplyUsdTransientOps", #{doc_id: this.doc, ops: [
             #{SetAttribute: #{edit_target: "@view@", path: TARGET,
                 name: "lunco:billboard", type_name: "bool", value: "false"}},
@@ -79,7 +94,7 @@ fn on_tick(me, ctx) {
             name: "lunco:billboard", type_name: "bool", value: "invalid"}},
     ]});
     this.done = true;
-    finish([
+    finish(this.label_checks + [
         t_true(child == this.child, "label changes preserve live child identities"),
         t_true(label == (), "disabling the label retires its component"),
         t_true(prim.attrs["lunco:billboard:text"] == "Updated",

@@ -560,7 +560,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  Entity to detach. Joint state, when present, is retired through the  physics lifecycle; ordinary entities use normal removal. |
-| `intent` | `lunco_core :: EditIntent` |  Persistent (default) authors the joint's removal into the scene's runtime  layer — removing runtime-only prims and deactivating base/composed prims  — so it journals, syncs, and survives reload. Interactive is a throwaway  live operation with no journal. See [`lunco_core::EditIntent`]. Omitted  by API callers → `Persistent`. |
+| `intent` | `lunco_core :: EditIntent` |  Interactive (default) detaches only the live joint; Persistent explicitly  authors the removal into the owning USD document's runtime layer. |
 
 #### `RotateEntity`
 
@@ -595,6 +595,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`, resolved to the live  Bevy entity by `ApiEntityRegistry`. |
 | `rotation` | `[f64 ; 4]` |  Target world orientation as `[x, y, z, w]`. Normalised on arrival — a  quaternion that has been interpolated or sampled is unit only to float  tolerance, and refusing it would make this fail for poses that are  perfectly usable. A degenerate (near-zero) quaternion IS refused: it  names no orientation, and silently substituting identity would spin the  body to an attitude the caller never asked for. |
+| `intent` | `lunco_core :: EditIntent` |  Live by default; Persistent explicitly authors the accepted rotation. |
 
 #### `SelectSceneEntity`
 
@@ -1765,6 +1766,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `exposure_ev100` | `Option < f32 >` |  Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).  Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current. |
 | `earthshine_color` | `Option < [f32 ; 3] >` |  [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).  `None` keeps current. |
 | `bloom_intensity` | `Option < f32 >` |  Bloom intensity on the scene cameras. `None` keeps current; zero disables  bloom and a non-zero value enables the HDR target required by the effect.   **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is  `bevy_post_process`, and this crate must not name it. That observer  writes the render intent, whose binder owns the concrete post-process  component. |
+| `intent` | `lunco_core :: EditIntent` |  Live by default; Persistent explicitly authors supported USD light settings. |
 
 ## Terrain
 
@@ -2027,7 +2029,8 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entry_id` | `String` |  The independent catalog entry ID (e.g. "ball_dynamic", "skid_rover"). |
 | `position` | `[f64 ; 3]` |  Position in the active physics frame, in metres. Kept as f64 through  command transport and frame conversion; narrowing occurs only at the  final scene-root-local Bevy `Transform` boundary. |
 | `rotation` | `Option < [f64 ; 4] >` |  Rotation in the active physics frame as an `(x, y, z, w)` unit  quaternion (optional; omitted → identity). Kept as f64 across the  command boundary for the same reason as `position`; Bevy's f32  [`bevy::prelude::Quat`] is a render/local-transform representation, not a  simulation-frame interchange type. |
-| `producer_id` | `Option < u64 >` |  Stable producer identity required for raw-file runtime admission from  API, direct typed, and actorless Rhai callers. Twin Rhai uses its actor  identity and omits this field. |
+| `producer_id` | `Option < u64 >` |  Stable producer identity required for live runtime admission from  API, direct typed, and actorless Rhai callers. Twin Rhai uses its actor  identity and omits this field. |
+| `intent` | `EditIntent` |  Interactive admits a runtime instance; Persistent authors a USD reference. |
 
 ## Other (source location unknown)
 
@@ -3158,7 +3161,7 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SetObjectProperty`
 
  Set a property on a scene object through its component owner. Use
- `Interactive` for continuous preview and `Persistent` to commit a
+ `Interactive` (default) for live state and `Persistent` to explicitly author a
  document-backed setting.
 
  ```jsonc
@@ -3278,14 +3281,14 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `target` | `Entity` |  Entity to remove. |
-| `intent` | `EditIntent` |  `Persistent` (the default) authors the edit; `Interactive` is live-only. |
+| `intent` | `EditIntent` |  `Interactive` (default) is live-only; `Persistent` authors the edit. |
 
 #### `MoveEntity`
 
  Move a scene entity to a translation in the active physics frame.
 
  The runtime resolves the stable API entity id and applies this as an
- authoritative scene edit. Physics bodies use the scene handler's bounded
+ authoritative live update or explicit authored edit. Physics bodies use the scene handler's bounded
  kinematic move contract; the translation remains f64 across this boundary.
 
 - *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
@@ -3294,6 +3297,7 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame, in f64 precision. |
+| `intent` | `EditIntent` |  Live by default; Persistent explicitly authors the accepted translation. |
 
 #### `SetColliderEnabled`
 
@@ -3334,7 +3338,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
 | `rotation` | `[f64 ; 4]` |  Target orientation in the active physics frame, `[x, y, z, w]`. |
-| `intent` | `EditIntent` |  Persistent commits an authored edit; Interactive changes only the live pose. |
+| `intent` | `EditIntent` |  Interactive (default) changes only the live pose; Persistent authors the accepted pose. |
 
 ### `lunco-scene-validation` <a id="lunco-scene-validation"></a>
 

@@ -248,8 +248,10 @@ The viewport offsets the subject's current render origin along active-scene
 up transformed through BigSpace. The offset uses neither render-world Y nor
 the subject's own attitude. Rotated lunar sites and overturned vehicles retain
 the same above-surface label semantics.
-The `usd_billboard_live` production scene checks live child state, actual label
-updates, disable, and invalid-input rejection. Owners can also promote a local reset to a full-stage reset
+The `usd_billboard_live` production scene checks 100 live text updates
+without advancing document generation or changing the child identity/state,
+withdrawal of the view override, authored enable/disable and invalid-input
+rejection. Owners can also promote a local reset to a full-stage reset
 when their derived topology crosses the edited subtree, and retire their state
 before the generic projector replaces entities. Failed preparation aborts the
 replacement and faults the mounted simulation. Ordinary transforms, lights,

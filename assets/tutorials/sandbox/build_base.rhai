@@ -143,7 +143,7 @@ fn on_event(me, evt, ctx) {
 // every objective WITHOUT a click. With a window
 // open it returns () and a human builds the base.
 fn spawn_part(id, x, y, z) {
-    let result = cmd("SpawnEntity", #{ entry_id: id, position: [x, y, z] });
+    let result = cmd("SpawnEntity", #{ entry_id: id, position: [x, y, z], intent:"Persistent" });
     if !result.ok { throw "Cannot place " + id + ": " + result.error; }
     notify_kind(`[debug] placed ${id}`, "info");
 }
