@@ -47,9 +47,7 @@ use lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight;
 use lunco_usd_bevy_scene::{UsdPreviewOnly, UsdPrimPath, UsdSceneProjectionReset};
 use lunco_usd_bevy_stage::read::UsdReadObject;
 use lunco_usd_bevy_stage::read::read_authored_bool_strict;
-use lunco_usd_bevy_stage::{
-    UsdInstanceRoot, UsdStageAsset, UsdWiringDirty, canonical::CanonicalStages,
-};
+use lunco_usd_bevy_stage::{UsdInstanceRoot, UsdStageAsset, canonical::CanonicalStages};
 use openusd::sdf::{Path as SdfPath, Value};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -67,6 +65,10 @@ use interfaces::ResolvedUsdModelicaInterface;
 pub mod readiness;
 pub mod sync;
 mod wiring;
+
+/// Co-simulation wiring must reconcile admitted endpoints on the next update.
+#[derive(Resource, Default)]
+pub struct UsdWiringDirty(pub bool);
 
 pub use wiring::{BindingEpochWait, install_wiring_system, modelica_models_terminal};
 use wiring::{

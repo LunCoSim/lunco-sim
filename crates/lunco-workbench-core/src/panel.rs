@@ -179,6 +179,11 @@ impl<'w> PanelCtx<'w> {
         self.world.get_resource::<T>()
     }
 
+    /// Borrow a main-thread resource for read-only presentation.
+    pub fn non_send<T: 'static>(&self) -> Option<&T> {
+        self.world.get_non_send::<T>()
+    }
+
     /// Read a required resource, failing visibly when the owner did not install it.
     pub fn resource_expect<T: Resource>(&self) -> &T {
         self.world.resource::<T>()

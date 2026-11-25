@@ -633,12 +633,21 @@ impl ConventionTransform {
         if self.is_identity() {
             return matrix;
         }
-        let basis = DMat4::from_scale_rotation_translation(
-            DVec3::splat(self.scale),
-            self.rot_d,
-            DVec3::ZERO,
-        );
+        let basis = self.coordinate_basis();
         basis * matrix * basis.inverse()
+    }
+
+    /// Re-express a canonical local matrix in authored stage units and axes.
+    pub fn stage_local_matrix_d(&self, matrix: DMat4) -> DMat4 {
+        if self.is_identity() {
+            return matrix;
+        }
+        let basis = self.coordinate_basis();
+        basis.inverse() * matrix * basis
+    }
+
+    fn coordinate_basis(&self) -> DMat4 {
+        DMat4::from_scale_rotation_translation(DVec3::splat(self.scale), self.rot_d, DVec3::ZERO)
     }
 
     /// A **geometry orientation** authored in stage-local coordinates (e.g. the

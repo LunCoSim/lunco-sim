@@ -65,7 +65,7 @@ publish a USD notice or advance document generation. See the
 An unclaimed annotation on any prim preserves live state. Exercise annotations,
 terminal reconnection, and broken graphs in `test_native_material_terminals.py`.
 For absolute pose commits, plan the complete ordered stack with
-`UsdDocument::local_pose_ops`. Exercise the compound quaternion, mixed-stack
+`lunco_scene_authoring::local_pose::local_pose_ops` on the admitted composed reader at the entity’s displayed pose time. Exercise the compound quaternion, mixed-stack
 hinge, repeat edit and undo in `transform_entity.usda`. Use `usd.document.projected` for composed
 reads and `usd.projection.visuals_ready` or `usd.projection.visuals_failed` for
 the outcome of a subtree or stage visual rebuild.
@@ -143,7 +143,7 @@ their transforms or define an unconsumed clip-range policy.
 Use fallible `UsdRead::transform_might_be_time_varying` for transform admission.
 The worker plan captures the native ordered-stack result, including suffixed
 operations. Samples outside `xformOpOrder` do not admit transform animation;
-live order edits must remove `UsdAnimated` when no consumed channel remains.
+A prim retains `UsdAnimated` while any consumed channel has samples. Only `UsdAnimatedTransform` gives the sampler motion authority.
 The animation owner claims order edits through `UsdLiveEditRegistry`, classifies
 the committed native stage, and reconciles its marker and cached plan in place.
 Retiring and restoring the order must preserve the projected entity and geometry.

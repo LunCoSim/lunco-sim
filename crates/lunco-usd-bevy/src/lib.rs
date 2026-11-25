@@ -66,9 +66,9 @@ use lunco_usd_bevy_scene::{
     GlbPlaceholder, PlaceholderAssetUri, UsdAnimated, UsdPointInstance, UsdPointInstancer,
     UsdPreviewOnly, UsdPrimPath, UsdSceneAwaitingStage, UsdSceneChangeBatch,
     UsdSceneGeometryPending, UsdScenePlugin, UsdSceneProjected, UsdSceneProjectionFailed,
-    UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet, UsdVisualMeshTarget,
-    UsdVisualProjectionSet, UsdVisualVisibility, is_preview_only, read_primitive_axis,
-    read_shape_dims, scene_root_ancestor, usd_axis_to_quat,
+    UsdSceneProjectionQueued, UsdSceneRoot, UsdSceneSyncSet, UsdSurfaceDependencies,
+    UsdVisualMeshTarget, UsdVisualProjectionSet, UsdVisualVisibility, is_preview_only,
+    read_primitive_axis, read_shape_dims, scene_root_ancestor, usd_axis_to_quat,
 };
 use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_authored_bool_strict, read_primvar_f32_strict,
@@ -1538,7 +1538,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
         // Unbound scene animation samples the interpolated physical timeline; an
         // explicit TimeBinding remains available to editor-owned playback.
         if animated {
-            commands.entity(entity).try_insert(UsdAnimated);
+            commands.entity(entity).try_insert(UsdAnimated::default());
         } else {
             commands.entity(entity).remove::<UsdAnimated>();
         }
@@ -2965,7 +2965,7 @@ fn read_material_real(
     if !reader.connections(path, attribute).is_empty() {
         return Err(MaterialReadError::new(attribute));
     }
-    match reader.real_f32(path, attribute) {
+    match reader.real_f32_at(path, attribute, 0.0) {
         Some(value) if value.is_finite() => Ok(Some(value)),
         Some(_) => Err(MaterialReadError::new(attribute)),
         None if reader.has_authored_attribute(path, attribute) => {
@@ -2987,17 +2987,19 @@ fn read_material_vec3(
     if !reader.connections(path, attribute).is_empty() {
         return Err(MaterialReadError::new(attribute));
     }
-    let value = reader.attr_value(path, attribute).and_then(|value| {
-        value
-            .clone()
-            .get::<[f32; 3]>()
-            .map(|v| Vec3::new(v[0], v[1], v[2]))
-            .or_else(|| {
-                value
-                    .get::<[f64; 3]>()
-                    .map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
-            })
-    });
+    let value = reader
+        .attr_value_at(path, attribute, 0.0)
+        .and_then(|value| {
+            value
+                .clone()
+                .get::<[f32; 3]>()
+                .map(|v| Vec3::new(v[0], v[1], v[2]))
+                .or_else(|| {
+                    value
+                        .get::<[f64; 3]>()
+                        .map(|v| Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32))
+                })
+        });
     match value {
         Some(value) if value.is_finite() => Ok(Some(value)),
         Some(_) => Err(MaterialReadError::new(attribute)),
@@ -3034,40 +3036,34 @@ fn material_unit_interval(
     }
 }
 
-/// Exact producer prims consumed by the standard appearance reader.
-#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
-struct StandardSurfaceDependencies(std::collections::BTreeSet<SdfPath>);
-
-impl StandardSurfaceDependencies {
-    /// Record the forwarding path as well as its endpoint. UsdShade owns terminal
-    /// resolution; this walk identifies which edits can invalidate its answer,
-    /// including repairs to a broken or cyclic connection.
-    fn terminal(
-        reader: &dyn read::UsdReadObject,
-        prim: &SdfPath,
-    ) -> Result<Self, MaterialReadError> {
-        let mut deps = Self::default();
-        if let Some(material) = reader
-            .bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Render)
-            .map_err(|_| MaterialReadError::new("material:binding"))?
-        {
-            let mut pending = vec![format!("{material}.outputs:surface")];
-            let mut visited = std::collections::HashSet::new();
-            while let Some(property) = pending.pop() {
-                if !visited.insert(property.clone()) {
-                    continue;
-                }
-                let (owner, name) = property
-                    .split_once('.')
-                    .ok_or(MaterialReadError::new("outputs:surface"))?;
-                let path =
-                    SdfPath::new(owner).map_err(|_| MaterialReadError::new("outputs:surface"))?;
-                pending.extend(reader.connections(&path, name));
-                deps.0.insert(path);
+/// Record the forwarding path as well as its endpoint. UsdShade owns terminal
+/// resolution; this walk identifies which edits can invalidate its answer,
+/// including repairs to a broken or cyclic connection.
+fn surface_dependencies(
+    reader: &dyn read::UsdReadObject,
+    prim: &SdfPath,
+) -> Result<UsdSurfaceDependencies, MaterialReadError> {
+    let mut deps = UsdSurfaceDependencies::default();
+    if let Some(material) = reader
+        .bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Render)
+        .map_err(|_| MaterialReadError::new("material:binding"))?
+    {
+        let mut pending = vec![format!("{material}.outputs:surface")];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(property) = pending.pop() {
+            if !visited.insert(property.clone()) {
+                continue;
             }
+            let (owner, name) = property
+                .split_once('.')
+                .ok_or(MaterialReadError::new("outputs:surface"))?;
+            let path =
+                SdfPath::new(owner).map_err(|_| MaterialReadError::new("outputs:surface"))?;
+            pending.extend(reader.connections(&path, name));
+            deps.0.insert(path);
         }
-        Ok(deps)
     }
+    Ok(deps)
 }
 
 /// A live standard-surface read withheld an already admitted appearance. The
@@ -3116,7 +3112,7 @@ fn read_standard_material(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
-    dependencies: &mut StandardSurfaceDependencies,
+    dependencies: &mut UsdSurfaceDependencies,
 ) -> Result<PbrLook, MaterialReadError> {
     let mut base_color_texture = None;
     let mut emissive_texture = None;
@@ -3634,7 +3630,7 @@ fn apply_standard_material_intent(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<(), MaterialReadError> {
-    let mut dependencies = StandardSurfaceDependencies::terminal(reader, sdf_path)?;
+    let mut dependencies = surface_dependencies(reader, sdf_path)?;
     let look = read_standard_material(
         reader,
         sdf_path,
@@ -3662,7 +3658,7 @@ fn refresh_standard_surface_material_intents(
         Entity,
         &UsdPrimPath,
         Option<&UsdVisualMeshTarget>,
-        Option<&StandardSurfaceDependencies>,
+        Option<&UsdSurfaceDependencies>,
         Has<LiveSurfaceProjectionFailure>,
     )>,
     looks: Query<&PbrLook>,
@@ -3670,12 +3666,23 @@ fn refresh_standard_surface_material_intents(
     mut commands: Commands,
 ) {
     let mut edited_prims = std::collections::HashMap::new();
+    let mut changed_bindings = std::collections::HashMap::new();
+    let mut resynced = std::collections::HashMap::new();
     let mut edited_producers = std::collections::HashMap::new();
     for change in changes.read() {
         let Some(stage_asset) = stages.get(change.stage_id) else {
             continue;
         };
         let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
+        resynced
+            .entry(change.stage_id)
+            .or_insert_with(std::collections::BTreeSet::new)
+            .extend(
+                change
+                    .resynced_prim_paths
+                    .iter()
+                    .filter_map(|p| SdfPath::new(p).ok()),
+            );
         for info in &change.info_paths {
             let Some((path, property)) = info.split_once('.') else {
                 continue;
@@ -3683,6 +3690,13 @@ fn refresh_standard_surface_material_intents(
             let Ok(prim) = SdfPath::new(path) else {
                 continue;
             };
+            if property == "material:binding" || property == "apiSchemas" {
+                changed_bindings
+                    .entry(change.stage_id)
+                    .or_insert_with(std::collections::BTreeSet::new)
+                    .insert(prim);
+                continue;
+            }
             match UsdRead::type_name(&reader, &prim).as_deref() {
                 Some("Shader" | "NodeGraph" | "Material") => {
                     if lunco_usd_bevy_stage::is_shading_network_property(property) {
@@ -3692,8 +3706,7 @@ fn refresh_standard_surface_material_intents(
                             .insert(prim);
                     }
                 }
-                _ if property == "material:binding"
-                    || property == "doubleSided"
+                _ if property == "doubleSided"
                     || matches!(
                         property,
                         "primvars:displayColor"
@@ -3711,7 +3724,11 @@ fn refresh_standard_surface_material_intents(
             }
         }
     }
-    if edited_prims.is_empty() && edited_producers.is_empty() {
+    if edited_prims.is_empty()
+        && edited_producers.is_empty()
+        && changed_bindings.is_empty()
+        && resynced.values().all(|paths| paths.is_empty())
+    {
         return;
     }
 
@@ -3720,29 +3737,43 @@ fn refresh_standard_surface_material_intents(
     // recorded by the same reader that resolved the material.
     for (entity, prim_path, visual_target, dependencies, was_failed) in &prims {
         let stage_id = prim_path.stage_handle.id();
-        if !edited_prims
-            .get(&stage_id)
-            .is_some_and(|paths| paths.contains(&prim_path.path))
-            && !edited_producers.get(&stage_id).is_some_and(|paths| {
-                dependencies.is_some_and(|dependencies| !dependencies.0.is_disjoint(paths))
-            })
-        {
-            continue;
-        }
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
         };
         let Ok(sdf_path) = SdfPath::new(&prim_path.path) else {
             continue;
         };
+        let changed_binding = changed_bindings
+            .get(&stage_id)
+            .is_some_and(|roots| roots.iter().any(|root| sdf_path.has_prefix(root)))
+            || resynced
+                .get(&stage_id)
+                .is_some_and(|roots| roots.iter().any(|root| sdf_path.has_prefix(root)));
+        let changed_network = dependencies.is_some_and(|deps| {
+            edited_producers
+                .get(&stage_id)
+                .is_some_and(|paths| !deps.0.is_disjoint(paths))
+                || resynced.get(&stage_id).is_some_and(|roots| {
+                    roots
+                        .iter()
+                        .any(|root| deps.0.iter().any(|producer| producer.has_prefix(root)))
+                })
+        });
+        if !changed_binding
+            && !changed_network
+            && !edited_prims
+                .get(&stage_id)
+                .is_some_and(|paths| paths.contains(&prim_path.path))
+        {
+            continue;
+        }
         let (reader, _) = canonical.reader_for(stage_id, stage_asset);
         let target = visual_target.map_or(entity, |target| target.0);
         let was_custom = custom_shaders.contains(target);
         if dependencies.is_none() && !was_custom && !looks.contains(target) {
             continue;
         }
-        let mut next_dependencies = match StandardSurfaceDependencies::terminal(&reader, &sdf_path)
-        {
+        let mut next_dependencies = match surface_dependencies(&reader, &sdf_path) {
             Ok(deps) => deps,
             Err(error) => {
                 withhold_live_surface(

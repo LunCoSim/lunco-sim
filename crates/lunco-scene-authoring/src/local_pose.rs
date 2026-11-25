@@ -1,34 +1,18 @@
-use super::{
-    ConventionTransform, LayerId, SdfPath, Stage, StageMetrics, UsdDocument, UsdOp,
-    usd_rotate_xyz_degrees,
-};
+//! Absolute pose authoring against the admitted composed reader.
 use bevy::math::{DMat4, DQuat, DVec3};
+use lunco_usd_bevy_stage::UsdReadObject;
+use lunco_usd_document::document::{LayerId, UsdOp, usd_rotate_xyz_degrees};
+use openusd::sdf::Path as SdfPath;
 use openusd::sdf::Value;
-use openusd_schemas::geom::{Xformable, XformableExt, XformableSchema};
-
-impl UsdDocument {
-    /// Plan a pose edit against this document's current authored layers.
-    pub fn local_pose_ops(
-        &self,
-        target: &LayerId,
-        path: &str,
-        translation: Option<DVec3>,
-        rotation: Option<DQuat>,
-        scale: Option<DVec3>,
-    ) -> Result<Vec<UsdOp>, String> {
-        let stage = self.open_composed_stage().map_err(|e| e.to_string())?;
-        local_pose_ops(&stage, target, path, translation, rotation, scale)
-    }
-}
-
 /// Lower absolute parent-local pose channels to a single journal group. Simple
 /// TRS stacks retain editable channels. A mixed stack retains its axes, pivots
 /// and animation under one parent-space adjustment, evaluated at the same
 /// reference time as the live authored-transform projector.
 pub fn local_pose_ops(
-    stage: &Stage,
+    reader: &dyn UsdReadObject,
     target: &LayerId,
     path: &str,
+    time_code: f64,
     translation: Option<DVec3>,
     rotation: Option<DQuat>,
     scale: Option<DVec3>,
@@ -37,26 +21,22 @@ pub fn local_pose_ops(
         return Ok(Vec::new());
     }
     let err = |msg: &str| format!("cannot author local pose at {path}: {msg}");
-    if translation.is_some_and(|v| !v.is_finite())
+    if !time_code.is_finite()
+        || translation.is_some_and(|v| !v.is_finite())
         || scale.is_some_and(|v| !v.is_finite() || v.abs().min_element() == 0.0)
         || rotation.is_some_and(|q| !q.is_finite() || !q.is_normalized())
     {
         return Err(err("invalid pose channels"));
     }
-    let prim = stage
-        .prim(SdfPath::new(path).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    if !prim.is_valid().map_err(|e| e.to_string())? {
+    let prim = SdfPath::new(path).map_err(|e| e.to_string())?;
+    if !reader.has_prim(&prim) {
         return Err(err("prim is missing"));
     }
-    let xform = Xformable::from_prim_unchecked(prim.clone());
-    let mut order: Vec<String> = xform
-        .xform_op_order()
-        .map_err(|e| e.to_string())?
-        .unwrap_or_default()
-        .into_iter()
-        .map(Into::into)
-        .collect();
+    let mut order = match reader.attr_value(&prim, "xformOpOrder") {
+        None => Vec::new(),
+        Some(Value::TokenVec(order)) => order.into_iter().map(|t| t.to_string()).collect(),
+        _ => return Err(err("xformOpOrder must be a token array")),
+    };
     let common = [
         "!resetXformStack!",
         "xformOp:translate",
@@ -71,11 +51,8 @@ pub fn local_pose_ops(
         ("xformOp:scale", scale.is_some()),
     ] {
         if changed {
-            if let Some(kind) = prim
-                .attribute(name)
-                .type_name()
-                .map_err(|e| e.to_string())?
-            {
+            simple &= !reader.has_time_samples(&prim, name);
+            if let Some(kind) = reader.attr_type_name(&prim, name) {
                 simple &= kind.as_str() == "double3";
             }
         }
@@ -116,17 +93,20 @@ pub fn local_pose_ops(
         .iter()
         .filter(|t| t.trim_start_matches("!invert!") == ADJUSTMENT)
         .count();
-    let attribute = prim.attribute(ADJUSTMENT);
+    if existing && reader.has_time_samples(&prim, ADJUSTMENT) {
+        return Err(err("the pose adjustment is animated"));
+    }
     if count != usize::from(existing)
-        || (!existing && attribute.type_name().map_err(|e| e.to_string())?.is_some())
+        || (!existing && reader.attr_type_name(&prim, ADJUSTMENT).is_some())
     {
         return Err(err(
             "poseEdit is already used elsewhere in the authored stack",
         ));
     }
-    let time = openusd::usd::TimeCode::new(0.);
-    let current =
-        DMat4::from_cols_array(&xform.local_transform(time).map_err(|e| e.to_string())?.0);
+    let convention = lunco_usd_bevy_stage::stage_convention(reader).map_err(|e| e.to_string())?;
+    let current = convention.stage_local_matrix_d(lunco_usd_bevy_stage::local_pose_matrix(
+        reader, path, time_code,
+    )?);
     if !current.is_finite() || current.determinant() == 0.0 {
         return Err(err("singular or non-finite transform stack"));
     }
@@ -137,9 +117,6 @@ pub fn local_pose_ops(
     {
         return Err(err("the composed transform contains shear or perspective"));
     }
-    let convention = ConventionTransform::from_stage_metrics(
-        &StageMetrics::from_stage(stage).map_err(|e| e.to_string())?,
-    );
     let desired = DMat4::from_scale_rotation_translation(
         scale.map_or(s, |v| convention.stage_scale_vec_d(v)),
         rotation.map_or(r, |q| convention.stage_rotation_d(q)),
@@ -147,9 +124,9 @@ pub fn local_pose_ops(
     );
     let mut adjustment = desired * current.inverse();
     if existing {
-        let old = attribute
-            .get_at::<openusd::gf::Mat4d>(time)
-            .map_err(|e| e.to_string())?
+        let old = reader
+            .attr_value_at(&prim, ADJUSTMENT, time_code)
+            .and_then(|v| v.get::<openusd::gf::Mat4d>())
             .ok_or_else(|| err("pose adjustment has no matrix value"))?;
         adjustment *= DMat4::from_cols_array(&old.0);
     }

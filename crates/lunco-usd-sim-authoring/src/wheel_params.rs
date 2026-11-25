@@ -383,6 +383,19 @@ pub struct WheelParams {
     pub suspension: Option<SuspensionParams>,
 }
 
+/// SI units per authored unit for editable wheel and tire parameters.
+pub fn wheel_parameter_unit_scale(attribute: &str, meters_per_unit: f64) -> f64 {
+    match attribute {
+        "physxVehicleWheel:radius"
+        | "physxVehicleWheel:width"
+        | "physxVehicleTire:longitudinalStiffness" => meters_per_unit,
+        "physxVehicleWheel:moi"
+        | "physxVehicleWheel:dampingRate"
+        | "physxVehicleWheel:maxBrakeTorque" => meters_per_unit * meters_per_unit,
+        _ => 1.0,
+    }
+}
+
 impl WheelParams {
     /// Read wheel, tire, and suspension attributes from their standard composed
     /// prims, collecting ALL missing required names into the error.
@@ -476,12 +489,13 @@ impl WheelParams {
         // Standard PhysX quantities use the stage's length unit. Mass units
         // have already been admitted as kilograms by the stage convention.
         // The LunCo rest length and validated-speed extensions declare SI.
-        let radius = convention.length(radius);
-        let width = convention.length(width);
-        let moment_of_inertia = convention.length(convention.length(moment_of_inertia));
-        let bearing_damping = convention.length(convention.length(bearing_damping));
-        let brake_torque_max = convention.length(convention.length(brake_torque_max));
-        let slip_stiffness = convention.length(slip_stiffness);
+        let unit = |name| wheel_parameter_unit_scale(name, convention.length(1.0));
+        let radius = radius * unit("physxVehicleWheel:radius");
+        let width = width * unit("physxVehicleWheel:width");
+        let moment_of_inertia = moment_of_inertia * unit("physxVehicleWheel:moi");
+        let bearing_damping = bearing_damping * unit("physxVehicleWheel:dampingRate");
+        let brake_torque_max = brake_torque_max * unit("physxVehicleWheel:maxBrakeTorque");
+        let slip_stiffness = slip_stiffness * unit("physxVehicleTire:longitudinalStiffness");
         let rest_load = convention.length(rest_load);
         lateral_stiffness_graph.max_stiffness =
             convention.length(lateral_stiffness_graph.max_stiffness);

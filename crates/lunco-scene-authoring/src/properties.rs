@@ -7,23 +7,13 @@
 
 use bevy::prelude::*;
 use lunco_core::{Command, EditIntent, on_command};
-use lunco_doc_bevy::DocumentRegistry;
 use lunco_materials::{ParamSchema, ParamValue, ShaderLook};
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
-use lunco_usd_document::document::{LayerId, UsdDocument, UsdOp};
+use lunco_usd_core::commands::ApplyUsdOps;
+use lunco_usd_document::document::{LayerId, UsdOp};
 
-/// One wheel-dynamics parameter — **the** single source of truth for it.
-///
-/// A wheel param has exactly three facets and they must never drift apart:
-/// the names `SetObjectProperty` accepts for it, the live `WheelRaycast` field
-/// it sets, and the USD attribute `lunco_usd_sim` reads back onto that field on
-/// load. Two hand-synced tables (a `name → setter` match and a separate
-/// `name → attr` match) had already drifted — `slip_stiffness` / `friction_mu`
-/// were settable but not persistable, so tuning them was silently lost on
-/// reload. One row per param makes that structurally impossible: a field cannot
-/// exist in one table and not the other, because there is only one table.
+/// Public wheel parameter, live setter, and authored USD property.
 pub(crate) struct WheelParam {
     /// The single public `SetObjectProperty` name for this parameter.
     pub name: &'static str,
@@ -81,82 +71,100 @@ pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
     WHEEL_PARAMS.iter().find(|p| p.name == name)
 }
 
-/// Persist wheel-dynamics and suspension parameters through their USD owner.
-/// Appearance and visibility use their validated command-handler transaction.
-pub fn persist_wheel_to_runtime_layer(
-    trigger: On<SetObjectProperty>,
-    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    if !cmd.intent.is_persistent() {
-        return;
+/// Validate the target and value before routing a suspension or wheel edit to
+/// the live component or to the USD document that projects its persisted value.
+fn set_vehicle_property(
+    world: &mut World,
+    target: Entity,
+    key: &str,
+    text: &str,
+    intent: EditIntent,
+) -> Result<Option<ApplyUsdOps>, String> {
+    let value: f64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("{key} requires a number"))?;
+    if !value.is_finite() {
+        return Err(format!("{key} requires a finite number"));
     }
-
-    // Route the property to a USD attribute the loader reads back.
-    let authored: Option<(String, &str, String)> = if let Some(param) = wheel_param(&cmd.property) {
-        // Wheel dynamics → the single `WHEEL_PARAMS` row's USD attribute.
-        cmd.value
-            .trim()
-            .parse::<f32>()
-            .ok()
-            .map(|v| (param.usd_attr.to_string(), "float", v.to_string()))
-    } else if matches!(
-        cmd.property.as_str(),
-        "rest_length" | "spring_k" | "damping_c"
-    ) {
-        // `springStrength` / `springDamperRate` are NVIDIA's canonical
-        // PhysxVehicleSuspensionAPI names; `restLength` has no PhysX
-        // equivalent, so it lives under the lunco: namespace.
-        let usd_attr = match cmd.property.as_str() {
-            "rest_length" => "lunco:suspension:restLength",
-            "spring_k" => "physxVehicleSuspension:springStrength",
-            "damping_c" => "physxVehicleSuspension:springDamperRate",
-            _ => unreachable!(),
-        };
-        cmd.value
-            .trim()
-            .parse::<f32>()
-            .ok()
-            .map(|v| (usd_attr.to_string(), "float", v.to_string()))
+    if value < 0.0 || (value == 0.0 && matches!(key, "wheel_radius" | "mass")) {
+        return Err(format!("{value} is outside the physical range for {key}"));
+    }
+    let (attribute, attachment) = if let Some(param) = wheel_param(key) {
+        let mut wheel = world
+            .get_mut::<lunco_mobility::WheelRaycast>(target)
+            .ok_or_else(|| format!("{key} requires a wheel target"))?;
+        if !intent.is_persistent() {
+            (param.set)(&mut wheel, value);
+            return Ok(None);
+        }
+        (
+            param.usd_attr,
+            matches!(key, "slip_stiffness" | "friction_mu"),
+        )
     } else {
-        None
+        let mut suspension = world
+            .get_mut::<lunco_mobility::Suspension>(target)
+            .ok_or_else(|| format!("{key} requires a suspension target"))?;
+        let (attribute, set): (&str, fn(&mut lunco_mobility::Suspension, f64)) = match key {
+            "rest_length" => ("lunco:suspension:restLength", |s, v| s.rest_length = v),
+            "spring_k" => ("physxVehicleSuspension:springStrength", |s, v| {
+                s.spring_k = v
+            }),
+            "damping_c" => ("physxVehicleSuspension:springDamperRate", |s, v| {
+                s.damping_c = v
+            }),
+            _ => return Err(format!("unknown suspension property {key}")),
+        };
+        if !intent.is_persistent() {
+            set(&mut suspension, value);
+            return Ok(None);
+        }
+        (attribute, true)
     };
-    let Some((name, type_name, value)) = authored else {
-        return;
-    };
-
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else {
-        return;
-    };
-    let Some((doc, path)) = crate::doc_resolve::authorable_prim(
-        target,
-        &q_prim,
-        &usd_registry,
-        backed.as_deref(),
-        canonical.as_deref(),
-        usd_assets.as_deref(),
-    ) else {
-        return;
-    };
-
-    commands.trigger(ApplyUsdOp {
+    let (doc, mut path) = crate::doc_resolve::authorable_entity(world, target)
+        .ok_or("persistent vehicle property requires an authored USD target")?;
+    let prim = world
+        .get::<UsdPrimPath>(target)
+        .ok_or("vehicle target has no USD identity")?;
+    let reader = crate::doc_resolve::composed_reader(world, prim)?;
+    if attachment {
+        let topology = lunco_usd_sim_authoring::collect_wheel_attachment_topology(&reader);
+        let binding = topology
+            .binding_for(&path)
+            .ok_or("wheel attachment does not resolve its tire and suspension")?;
+        path = if wheel_param(key).is_some() {
+            binding.tire.clone()
+        } else {
+            binding.suspension.clone()
+        };
+    }
+    let sdf = openusd::sdf::Path::new(&path).map_err(|error| error.to_string())?;
+    let convention = lunco_usd_bevy_stage::stage_convention(&reader).map_err(|e| e.to_string())?;
+    let value = value
+        / lunco_usd_sim_authoring::wheel_params::wheel_parameter_unit_scale(
+            attribute,
+            convention.length(1.0),
+        );
+    let kind = lunco_usd_bevy_stage::UsdRead::attr_type_name(&reader, &sdf, attribute)
+        .ok_or_else(|| format!("{path}.{attribute} has no declared type"))?;
+    match kind.as_str() {
+        "double" if value.is_finite() => (),
+        "float" if (value as f32).is_finite() => (),
+        _ => return Err(format!("{key} cannot be represented as USD {kind}")),
+    }
+    Ok(Some(ApplyUsdOps {
         doc_id: doc,
         parent_gen: None,
-        op: UsdOp::SetAttribute {
+        label: format!("Edit {key}"),
+        ops: vec![UsdOp::SetAttribute {
             edit_target: LayerId::runtime(),
             path,
-            name,
-            type_name: type_name.to_string(),
-            value,
-        },
-    });
+            name: attribute.into(),
+            type_name: kind,
+            value: value.to_string(),
+        }],
+    }))
 }
 
 /// Set a property on a scene object through its component owner. Use
@@ -245,24 +253,24 @@ const PBR_LOOK_KEYS: &[&str] = &[
 /// on the geom prim instead. `unlit` is likewise a gprim property, registered by
 /// `LunCoSurfaceAPI`, because `UsdPreviewSurface` has no standard input for the
 /// render intent.
-fn author_look_to_usd(
+fn appearance_edit(
     world: &mut World,
     target: Entity,
     key: &str,
     look: &PbrLook,
-) -> Result<(), String> {
+) -> Result<ApplyUsdOps, String> {
     let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
-        return Ok(());
+        return Err("appearance has no authored destination".into());
     };
     let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
-        return Ok(());
+        return Err("appearance has no authored destination".into());
     };
 
     // Geometry-level appearance intents live on the gprim, not the surface.
     if key == "double_sided" || key == "unlit" {
         let mut ops = Vec::new();
         if key == "unlit" {
-            let mut schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
+            let mut schemas = crate::doc_resolve::geom_api_schemas(world, &prim)?;
             if !schemas.iter().any(|schema| schema == "LunCoSurfaceAPI") {
                 schemas.push("LunCoSurfaceAPI".into());
                 ops.push(UsdOp::SetApiSchemas {
@@ -284,16 +292,15 @@ fn author_look_to_usd(
             type_name: "bool".into(),
             value: value.to_string(),
         });
-        world.trigger(ApplyUsdOps {
+        return Ok(ApplyUsdOps {
             doc_id: doc,
             parent_gen: None,
             label: "Update geometry appearance intent".into(),
             ops,
         });
-        return Ok(());
     }
     if lunco_usd_core::material::preview_surface_input(key).is_none() {
-        return Ok(());
+        return Err("appearance has no authored destination".into());
     }
 
     // An existing bound shader, else create the material.
@@ -301,14 +308,14 @@ fn author_look_to_usd(
     let (mut ops, shader, fresh) = match existing {
         Some(sp) => (Vec::new(), sp, false),
         None => {
-            let schemas = crate::doc_resolve::geom_api_schemas(world, &prim);
+            let schemas = crate::doc_resolve::geom_api_schemas(world, &prim)?;
             match lunco_usd_core::material::ensure_preview_surface_ops(
                 LayerId::root(),
                 &prim.path,
                 &schemas,
             ) {
                 Some((ops, shader)) => (ops, shader, true),
-                None => return Ok(()),
+                None => return Err("cannot create USD material at this prim".into()),
             }
         }
     };
@@ -340,13 +347,12 @@ fn author_look_to_usd(
             set(attr, ty, v);
         }
     }
-    world.trigger(ApplyUsdOps {
+    Ok(ApplyUsdOps {
         doc_id: doc,
         parent_gen: None,
         label: "Update material appearance".into(),
         ops,
-    });
-    Ok(())
+    })
 }
 
 /// Whether the edited look key names the same `UsdPreviewSurface` input as `slot`
@@ -357,23 +363,39 @@ fn key_matches(key: &str, slot: &str) -> bool {
 }
 
 fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
-    let f: Vec<f32> = value
+    if matches!(key, "unlit" | "double_sided") {
+        let enabled = match value.trim() {
+            "true" | "1" | "yes" | "on" => true,
+            "false" | "0" | "no" | "off" => false,
+            _ => return false,
+        };
+        if key == "unlit" {
+            look.unlit = enabled;
+        } else {
+            look.double_sided = enabled;
+        }
+        return true;
+    }
+    let Some(f) = value
         .split(',')
-        .filter_map(|s| s.trim().parse::<f32>().ok())
-        .collect();
-    let parse_bool = |v: &str| matches!(v.trim(), "true" | "1" | "yes" | "on");
+        .map(|v| v.trim().parse::<f32>().ok().filter(|v| v.is_finite()))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    if matches!(key, "base_color" | "emissive") {
+        if !(3..=4).contains(&f.len()) {
+            return false;
+        }
+    } else if f.len() != 1 {
+        return false;
+    }
     match key {
         "base_color" => {
-            if f.len() < 3 {
-                return false;
-            }
             let a = f.get(3).copied().unwrap_or(look.base_color.alpha);
             look.base_color = LinearRgba::new(f[0], f[1], f[2], a);
         }
         "emissive" => {
-            if f.len() < 3 {
-                return false;
-            }
             look.emissive = LinearRgba::new(f[0], f[1], f[2], f.get(3).copied().unwrap_or(1.0));
         }
         "metallic" => {
@@ -401,8 +423,6 @@ fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
                 SurfaceAlpha::Blend
             };
         }
-        "unlit" => look.unlit = parse_bool(value),
-        "double_sided" => look.double_sided = parse_bool(value),
         _ => return false,
     }
     true
@@ -448,52 +468,6 @@ fn shader_param_value(schema: Option<&ParamSchema>, key: &str, value: &str) -> O
         return None;
     }
     ParamValue::parse_authoring(field.ty, value)
-}
-
-/// Queue the authored leg of a reflected shader-parameter edit.
-///
-/// `SetObjectProperty` owns the public command and immediate intent update;
-/// this deferred leg resolves the entity's explicit USD document and bound
-/// Shader, then submits the same typed USD operation used by the Inspector.
-/// Entities without a document remain session-only because they have no USD
-/// owner for persistence.
-fn author_shader_parameter_to_usd(
-    commands: &mut Commands,
-    target: Entity,
-    name: String,
-    value: ParamValue,
-) {
-    commands.queue(move |world: &mut World| {
-        let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
-            return;
-        };
-        let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
-            return;
-        };
-        let target = match crate::doc_resolve::resolve_shader_parameter_usd_target(
-            world, &prim, &name, &value,
-        ) {
-            Ok(target) => target,
-            Err(error) => {
-                warn!(
-                    "SET_PROPERTY: shader parameter '{}' was not authored: {error}",
-                    name
-                );
-                return;
-            }
-        };
-        world.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: UsdOp::SetAttribute {
-                edit_target: LayerId::runtime(),
-                path: target.shader_path,
-                name: target.attribute_name,
-                type_name: target.type_name,
-                value: target.literal,
-            },
-        });
-    });
 }
 
 /// Give `target` a [`ShaderLook`] for `shader_path`, carrying over any parameters
@@ -545,253 +519,174 @@ pub fn drop_bound_pbr_material(world: &mut World, e: Entity) {
 #[on_command(SetObjectProperty)]
 pub fn on_set_object_property(
     trigger: On<SetObjectProperty>,
-    registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    asset_server: Res<AssetServer>,
-    shaders: Res<Assets<bevy::shader::Shader>>,
-    active_command: Res<lunco_core::ActiveCommandId>,
-    roots: Option<Res<lunco_assets_core::TwinRoots>>,
-    mut q_shader_look: Query<&mut ShaderLook>,
-    mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
-    mut q_susp: Query<&mut lunco_mobility::Suspension>,
+    active: Res<lunco_core::ActiveCommandId>,
+    pending: Res<lunco_api::executor::PendingApiRequest>,
     mut commands: Commands,
 ) {
-    let cmd = trigger.event();
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = registry.resolve(&global_id) else {
-        let message = format!("SET_PROPERTY: no api_id={} in registry", cmd.entity_id);
-        warn!("{message}");
-        let command_id = active_command.get();
-        commands.queue(move |world: &mut World| {
-            lunco_api::executor::finish_command_result(
-                world,
-                command_id,
-                None,
-                Err::<lunco_command_contracts::Ack, _>(message),
-                lunco_api_core::ApiErrorCode::CommandRejected,
-            );
-        });
-        return;
-    };
-
-    // Per-wheel suspension tuning (both joint-based and raycast).
-    match cmd.property.as_str() {
-        "rest_length" | "spring_k" | "damping_c" => {
-            let Ok(value) = cmd.value.trim().parse::<f64>() else {
-                warn!(
-                    "SET_PROPERTY: '{}' expects a number, got '{}'",
-                    cmd.property, cmd.value
-                );
+    let cmd = trigger.event().clone();
+    let active = active.clone();
+    let correlation = (pending.correlation_id != 0).then_some(pending.correlation_id);
+    commands.queue(move |world: &mut World| {
+        let result = match apply_object_property(world, &cmd, active.origin()) {
+            Ok(Some(edit)) => {
+                lunco_api::executor::trigger_command_with_context(world, edit, active, correlation);
                 return;
-            };
-            let Ok(mut susp) = q_susp.get_mut(target) else {
-                warn!(
-                    "SET_PROPERTY: entity {} has no Suspension component",
-                    cmd.entity_id
-                );
-                return;
-            };
-            match cmd.property.as_str() {
-                "rest_length" => {
-                    susp.rest_length = value;
-                }
-                "spring_k" => {
-                    susp.spring_k = value;
-                }
-                "damping_c" => {
-                    susp.damping_c = value;
-                }
-                _ => {}
             }
-            info!(
-                "SET_PROPERTY: suspension {} {} = {}",
-                cmd.entity_id, cmd.property, value
-            );
-            return;
-        }
-        _ => {}
-    }
-
-    // Per-wheel tire-spin dynamics. Each wheel is its own entity, so addressing
-    // a single `api_id` sets the field on just that wheel — independent control.
-    if let Some(param) = wheel_param(&cmd.property) {
-        let Ok(value) = cmd.value.trim().parse::<f64>() else {
-            warn!(
-                "SET_PROPERTY: '{}' expects a number, got '{}'",
-                cmd.property, cmd.value
-            );
-            return;
+            Ok(None) => Ok(lunco_command_contracts::Ack::default()),
+            Err(message) => {
+                warn!("SetObjectProperty: {message}");
+                Err(message)
+            }
         };
-        let Ok(mut wheel) = q_wheel.get_mut(target) else {
-            warn!("SET_PROPERTY: entity {} has no WheelRaycast", cmd.entity_id);
-            return;
-        };
-        (param.set)(&mut wheel, value);
-        info!(
-            "SET_PROPERTY: wheel {} {} = {}",
-            cmd.entity_id, cmd.property, value
+        lunco_api::executor::finish_command_result(
+            world,
+            active.get(),
+            correlation,
+            result,
+            lunco_api_core::ApiErrorCode::CommandRejected,
         );
-        return;
-    }
+    });
+}
 
-    match cmd.property.as_str() {
-        "shader" => {
-            // Preserve existing uniforms if the object already has a shader look,
-            // so swapping the .wesl keeps tuned params.
-            let existing = q_shader_look.get(target).ok().cloned();
-            let path = match lunco_assets_core::asset_path::load_source_uri(
-                &cmd.value,
-                roots.as_deref(),
-            ) {
-                Ok(path) => path.to_string(),
-                Err(error) => {
-                    let command_id = active_command.get();
-                    let message = error.to_string();
-                    warn!("SET_PROPERTY: {message}");
-                    commands.queue(move |world: &mut World| {
-                        lunco_api::executor::finish_command_result(
-                            world,
-                            command_id,
-                            None,
-                            Err::<lunco_command_contracts::Ack, _>(message),
-                            lunco_api_core::ApiErrorCode::CommandRejected,
-                        );
-                    });
-                    return;
-                }
-            };
-            author_shader_look(&mut commands, target, existing.as_ref(), &path);
-            info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
-        }
+fn apply_object_property(
+    world: &mut World,
+    cmd: &SetObjectProperty,
+    origin: Option<lunco_core::CommandOrigin>,
+) -> Result<Option<ApplyUsdOps>, String> {
+    use lunco_usd_bevy_scene::visibility::{
+        presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
+        write_runtime_visibility,
+    };
+    let target = world
+        .resource::<lunco_api::registry::ApiEntityRegistry>()
+        .resolve(&lunco_core::GlobalEntityId::from_raw(cmd.entity_id))
+        .ok_or_else(|| format!("no entity with API id {}", cmd.entity_id))?;
+    let key = cmd.property.as_str();
+    if wheel_param(key).is_some() || matches!(key, "rest_length" | "spring_k" | "damping_c") {
+        return set_vehicle_property(world, target, key, &cmd.value, cmd.intent);
+    }
+    let persistent = cmd.intent.is_persistent();
+    let destination = if persistent {
+        Some(
+            crate::doc_resolve::authorable_entity(world, target)
+                .ok_or("persistent property requires an authored USD target")?,
+        )
+    } else {
+        None
+    };
+    let mut ops = Vec::new();
+    match key {
         "visible" => {
-            let command_id = active_command.get();
-            let origin = active_command.origin();
-            let intent = cmd.intent;
-            let value = cmd.value.trim().parse::<bool>();
-            commands.queue(move |world: &mut World| {
-                use lunco_usd_bevy_scene::visibility::{
-                    presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
-                    write_runtime_visibility,
-                };
-                let result: Result<lunco_command_contracts::Ack, String> = (|| {
-                    let visible = value.map_err(|_| "visible requires true or false".to_owned())?;
-                    validate_runtime_visibility(world, target)?;
-                    if intent.is_persistent() {
-                        let doc = crate::doc_resolve::resolve_doc_for_entity(world, target)
-                            .ok_or("persistent visibility requires a USD document")?;
-                        let path = world
-                            .get::<UsdPrimPath>(target)
-                            .ok_or("visibility target has no USD identity")?
-                            .path
-                            .clone();
-                        let token = if visible { "inherited" } else { "invisible" };
-                        world.trigger(ApplyUsdOp {
-                            doc_id: doc,
-                            parent_gen: None,
-                            op: UsdOp::SetAttribute {
-                                edit_target: LayerId::runtime(),
-                                path,
-                                name: "visibility".into(),
-                                type_name: "token".into(),
-                                value: format!("\"{token}\""),
-                            },
-                        });
-                    } else {
-                        let script = presentation_actor(world, origin)?;
-                        if write_runtime_visibility(world, target, Some(visible), script) {
-                            reconcile_runtime_visibility(world, &[target]);
-                        }
-                    }
-                    Ok(lunco_command_contracts::Ack::default())
-                })();
-                if let Err(message) = &result {
-                    warn!("SET_PROPERTY: {message}");
+            let visible = cmd
+                .value
+                .trim()
+                .parse::<bool>()
+                .map_err(|_| "visible requires true or false")?;
+            validate_runtime_visibility(world, target)?;
+            if let Some((_, path)) = &destination {
+                let token = if visible { "inherited" } else { "invisible" };
+                ops.push(UsdOp::SetAttribute {
+                    edit_target: LayerId::runtime(),
+                    path: path.clone(),
+                    name: "visibility".into(),
+                    type_name: "token".into(),
+                    value: format!("\"{token}\""),
+                });
+            } else {
+                let actor = presentation_actor(world, origin)?;
+                if write_runtime_visibility(world, target, Some(visible), actor) {
+                    reconcile_runtime_visibility(world, &[target]);
                 }
-                lunco_api::executor::finish_command_result(
-                    world,
-                    command_id,
-                    None,
-                    result,
-                    lunco_api_core::ApiErrorCode::CommandRejected,
-                );
-            });
+            }
         }
-        // PBR properties — for props/rovers on a plain surface rather than a custom
-        // shader. Explicit arm ([`PBR_LOOK_KEYS`]) so these names never get stolen by
-        // the shader-param fallback below.
-        //
-        // The edit is a mutation of the entity's `PbrLook` *intent* component: the
-        // render binder's `Changed<PbrLook>` system re-materialises it, so "edit the
-        // material" is just "mutate a component" — no asset handles, and it works
-        // headless (the intent is in the world; nothing binds it). A mesh with no
-        // intent yet (a glTF import that brought its own material) is ADOPTED into an
-        // intent, which is the only render-free way to keep this command working on
-        // it; note that adoption starts from `PbrLook::default()`, so the import's own
-        // textures are not carried over.
-        key if PBR_LOOK_KEYS.contains(&key) => {
-            let key = key.to_string();
-            let value = cmd.value.clone();
-            let intent = cmd.intent;
-            let command_id = active_command.get();
-            commands.queue(move |world: &mut World| {
-                let result = (|| {
-                    if let Some(failure) =
-                        world.get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(target)
-                    {
-                        return Err(failure.0.clone());
-                    }
-                    let mut look = match world.get::<PbrLook>(target) {
-                        Some(look) => look.clone(),
-                        None if world.get::<Mesh3d>(target).is_some() => PbrLook::default(),
-                        None => return Err("entity has no PbrLook / mesh".to_string()),
-                    };
-                    if !apply_pbr_look(&mut look, &key, &value) {
-                        return Err(format!("bad value '{value}' for pbr '{key}'"));
-                    }
-                    if intent.is_persistent() {
-                        author_look_to_usd(world, target, &key, &look)?;
-                    }
-                    if world.get::<PbrLook>(target) != Some(&look) {
-                        world.entity_mut(target).insert(look);
-                    }
-                    Ok(lunco_command_contracts::Ack::default())
-                })();
-                if let Err(message) = &result {
-                    warn!("SET_PROPERTY: {message}");
+        "shader" => {
+            let path =
+                lunco_assets_core::asset_path::load_source_uri(&cmd.value, world.get_resource())
+                    .map_err(|error| error.to_string())?
+                    .to_string();
+            if persistent {
+                let prim = world
+                    .get::<UsdPrimPath>(target)
+                    .cloned()
+                    .ok_or("missing USD prim")?;
+                let shader = crate::doc_resolve::bound_shader_prim(world, &prim)?
+                    .ok_or("shader assignment requires a bound USD shader")?;
+                for (name, kind, value) in [
+                    (
+                        "info:implementationSource",
+                        "token",
+                        "\"sourceAsset\"".to_owned(),
+                    ),
+                    ("info:wesl:sourceAsset", "asset", format!("@{path}@")),
+                ] {
+                    ops.push(UsdOp::SetAttribute {
+                        edit_target: LayerId::runtime(),
+                        path: shader.clone(),
+                        name: name.into(),
+                        type_name: kind.into(),
+                        value,
+                    });
                 }
-                lunco_api::executor::finish_command_result(
-                    world,
-                    command_id,
-                    None,
-                    result,
-                    lunco_api_core::ApiErrorCode::CommandRejected,
-                );
-            });
+            } else {
+                let existing = world.get::<ShaderLook>(target).cloned();
+                author_shader_look(&mut world.commands(), target, existing.as_ref(), &path);
+            }
+        }
+        key if PBR_LOOK_KEYS.contains(&key) => {
+            if let Some(failure) =
+                world.get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(target)
+            {
+                return Err(failure.0.clone());
+            }
+            let mut look = match world.get::<PbrLook>(target) {
+                Some(look) => look.clone(),
+                None if world.get::<Mesh3d>(target).is_some() => PbrLook::default(),
+                None => return Err("entity has no PbrLook / mesh".into()),
+            };
+            if !apply_pbr_look(&mut look, key, &cmd.value) {
+                return Err(format!("invalid {key} value '{}'", cmd.value));
+            }
+            if persistent {
+                return appearance_edit(world, target, key, &look).map(Some);
+            }
+            if world.get::<PbrLook>(target) != Some(&look) {
+                world.entity_mut(target).insert(look);
+            }
         }
         key => {
-            // param/color → set the named value on the entity's shader look. The
-            // binder swaps in the material for the new look (`Changed<ShaderLook>`).
-            let Ok(mut look) = q_shader_look.get_mut(target) else {
-                warn!(
-                    "SET_PROPERTY: entity {} has no shader look — set 'shader' first",
-                    cmd.entity_id
-                );
-                return;
-            };
-            // USD authors params camelCase, WESL declares them snake_case.
+            let look = world
+                .get::<ShaderLook>(target)
+                .ok_or("target has no shader look")?;
+            let schema = shader_schema(&look.shader, world.resource(), world.resource());
             let name = lunco_materials::to_snake_case(key);
-            let schema = shader_schema(&look.shader, &asset_server, &shaders);
-            match shader_param_value(schema.as_ref(), &name, &cmd.value) {
-                Some(v) => {
-                    look.set_value(&name, v);
-                    drop(look);
-                    if cmd.intent.is_persistent() {
-                        author_shader_parameter_to_usd(&mut commands, target, name.into_owned(), v);
-                    }
-                }
-                None => warn!("SET_PROPERTY: unknown property '{}'", key),
+            let value = shader_param_value(schema.as_ref(), &name, &cmd.value)
+                .ok_or_else(|| format!("invalid or unavailable shader parameter {key}"))?;
+            if persistent {
+                let prim = world
+                    .get::<UsdPrimPath>(target)
+                    .cloned()
+                    .ok_or("missing USD prim")?;
+                let param = crate::doc_resolve::resolve_shader_parameter_usd_target(
+                    world, &prim, &name, &value,
+                )?;
+                ops.push(UsdOp::SetAttribute {
+                    edit_target: LayerId::runtime(),
+                    path: param.shader_path,
+                    name: param.attribute_name,
+                    type_name: param.type_name,
+                    value: param.literal,
+                });
+            } else if let Some(mut look) = world.get_mut::<ShaderLook>(target) {
+                look.set_value(&name, value);
             }
         }
     }
+    Ok(destination.map(|(doc_id, _)| ApplyUsdOps {
+        doc_id,
+        parent_gen: None,
+        label: format!("Edit {key}"),
+        ops,
+    }))
 }
 
 /// Whether `path` is a standalone WESL asset path accepted by the shader

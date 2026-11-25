@@ -835,6 +835,7 @@ pub trait UsdReadObject {
     }
     fn real(&self, prim: &SdfPath, name: &str) -> Option<f64>;
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32>;
+    fn real_f32_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f32>;
     fn integer(&self, prim: &SdfPath, name: &str) -> Option<i32>;
     fn boolean(&self, prim: &SdfPath, name: &str) -> Option<bool>;
     fn has_authored_attribute(&self, prim: &SdfPath, name: &str) -> bool;
@@ -1009,7 +1010,7 @@ pub fn read_primvar_vec3_strict(
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<[f64; 3]>, StrictAttributeError> {
-    match reader.attr_value(path, attr) {
+    match reader.attr_value_at(path, attr, 0.0) {
         Some(value) => primvar_vec3_from(value)
             .filter(|values| values.iter().all(|value| value.is_finite()))
             .map(Some)
@@ -1060,7 +1061,7 @@ pub fn read_primvar_f32_strict(
     path: &SdfPath,
     attr: &str,
 ) -> Result<Option<f32>, StrictAttributeError> {
-    match reader.attr_value(path, attr) {
+    match reader.attr_value_at(path, attr, 0.0) {
         Some(value) => primvar_f32_from(value)
             .filter(|value| value.is_finite())
             .map(Some)
@@ -1417,6 +1418,10 @@ impl<T: UsdRead + ?Sized> UsdReadObject for T {
 
     fn real_f32(&self, prim: &SdfPath, name: &str) -> Option<f32> {
         UsdRead::real_f32(self, prim, name)
+    }
+
+    fn real_f32_at(&self, prim: &SdfPath, name: &str, time: f64) -> Option<f32> {
+        UsdRead::real_f32_at(self, prim, name, time)
     }
 
     fn integer(&self, prim: &SdfPath, name: &str) -> Option<i32> {

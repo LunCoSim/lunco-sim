@@ -74,8 +74,6 @@ use lunco_usd_authoring::author::{
     self, extract_edit_layer_data, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
-mod local_pose;
-pub use local_pose::local_pose_ops;
 use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
 pub use lunco_usd_data::units::{usd_rotate_xyz_degrees, usd_rotate_xyz_quaternion};
 use lunco_usd_data::usd_data::UsdDataExt;

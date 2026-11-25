@@ -9,8 +9,9 @@ use bevy::asset::AssetApp;
 use bevy::prelude::*;
 use lunco_cosim_core::{ConnectionBinding, SimConnection};
 use lunco_usd_bevy_scene::UsdPrimPath;
-use lunco_usd_bevy_stage::{UsdStageAsset, UsdWiringDirty, canonical::CanonicalStages};
+use lunco_usd_bevy_stage::{UsdStageAsset, canonical::CanonicalStages};
 use lunco_usd_compose::recipe::StageRecipe;
+use lunco_usd_sim_cosim::UsdWiringDirty;
 use lunco_usd_sim_cosim::install_wiring_system;
 use openusd::sdf::Path as SdfPath;
 

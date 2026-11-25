@@ -58,7 +58,7 @@ use lunco_usd_avian_core::report_physics_runtime_fault;
 use lunco_usd_avian_filters::collision_groups::{CollisionGroupTable, CollisionGroupTables};
 use lunco_usd_avian_filters::filtered_pairs as collision_filters;
 use lunco_usd_bevy_scene::{
-    UsdAnimated, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot,
+    UsdAnimatedTransform, UsdPreviewOnly, UsdPrimPath, UsdSceneProjected, UsdSceneRoot,
     UsdVisualProjectionSet, instance_key, is_preview_only,
 };
 use lunco_usd_bevy_stage::{
@@ -601,6 +601,7 @@ impl Plugin for UsdAvianPlugin {
         if !app.is_plugin_added::<avian3d::diagnostics::PhysicsTotalDiagnosticsPlugin>() {
             app.add_plugins(avian3d::diagnostics::PhysicsTotalDiagnosticsPlugin);
         }
+        app.add_observer(update_bound_contact_material);
         app.init_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>();
         app.world_mut()
             .resource_mut::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
@@ -773,34 +774,41 @@ mod mobility_tests {
     }
 }
 
-/// An animated USD body must be `Kinematic`, never `Dynamic`: the per-frame
-/// The USD animation sampler writes its `Transform`
-/// directly, and a `Dynamic` body would fight Avian's integrator each step
-/// (the authored pose and the solved pose disagree → jitter / launch). When a
-/// prim carries both a rigid body and authored animation, the visual sampler is
-/// the motion authority, so demote it — a `Kinematic` body still collides and
-/// still drives its joints, it just isn't integrated from forces.
-///
-/// `Or<(Added<RigidBody>, Added<UsdAnimated>)>` makes this fire once when either
-/// marker lands (the two arrive on different frames via separate observers), so
-/// it catches both insertion orders and then idles (empty query).
+/// Only a sampled transform can take motion authority from a dynamic body.
+#[derive(Component)]
+struct AnimationHeldDynamicBody;
+
 fn enforce_kinematic_on_animated(
     mut commands: Commands,
-    q: Query<
+    driven: Query<
         (Entity, &RigidBody),
         (
-            With<UsdAnimated>,
-            Or<(Added<RigidBody>, Added<UsdAnimated>)>,
+            With<UsdAnimatedTransform>,
+            Or<(Changed<RigidBody>, Added<UsdAnimatedTransform>)>,
         ),
     >,
+    mut released: RemovedComponents<UsdAnimatedTransform>,
+    held: Query<(&RigidBody, Has<UsdAnimatedTransform>), With<AnimationHeldDynamicBody>>,
 ) {
-    for (entity, body) in &q {
-        if matches!(body, RigidBody::Dynamic) {
-            // Animation is the motion authority → the declared mobility is now
-            // Kinematic, matching the demoted body type.
+    for (entity, body) in &driven {
+        if *body == RigidBody::Dynamic {
+            commands.entity(entity).try_insert((
+                RigidBody::Kinematic,
+                lunco_core::Mobility::Kinematic,
+                AnimationHeldDynamicBody,
+            ));
+        }
+    }
+    for entity in released.read() {
+        if let Ok((body, false)) = held.get(entity) {
+            if *body == RigidBody::Kinematic {
+                commands
+                    .entity(entity)
+                    .try_insert((RigidBody::Dynamic, lunco_core::Mobility::Dynamic));
+            }
             commands
                 .entity(entity)
-                .try_insert((RigidBody::Kinematic, lunco_core::Mobility::Kinematic));
+                .try_remove::<AnimationHeldDynamicBody>();
         }
     }
 }
@@ -1527,6 +1535,10 @@ fn extract_avian_prim(
                 return;
             }
         };
+        // Fresh body admission owns the declared motion state.
+        commands
+            .entity(entity)
+            .try_remove::<AnimationHeldDynamicBody>();
         let kinematic = match read_authored_bool_or_default(
             reader,
             sdf_path,
@@ -2614,6 +2626,68 @@ fn apply_physics_material(
     })?;
     insert_physics_material(commands, entity, material);
     Ok(())
+}
+
+/// Apply a changed binding to the existing body and its exact cooked shape sources.
+fn update_bound_contact_material(
+    event: On<lunco_usd_bevy_scene::UsdContactMaterialChanged>,
+    prims: Query<(
+        &UsdPrimPath,
+        Option<&RigidBodyColliders>,
+        Option<&lunco_physics::SourceColliders>,
+        Has<RigidBody>,
+    )>,
+    colliders: Query<&lunco_usd_avian_contracts::UsdColliderSource, With<Collider>>,
+    stages: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    parents: Query<&ChildOf>,
+    previews: Query<(), With<UsdPreviewOnly>>,
+    mut faults: Option<ResMut<lunco_core::RuntimeFaults>>,
+    mut holds: Option<ResMut<lunco_physics::PhysicsHolds>>,
+    mut commands: Commands,
+) {
+    let entity = event.0;
+    if is_preview_only(entity, &parents, &previews) {
+        return;
+    }
+    let Ok((prim, body_shapes, source_shapes, body)) = prims.get(entity) else {
+        return;
+    };
+    let Some(stage) = stages.get(prim.stage_handle.id()) else {
+        return;
+    };
+    let Ok(path) = SdfPath::new(&prim.path) else {
+        return;
+    };
+    let material = match read_physics_material(&stage.view(), &path) {
+        Ok(material) => material,
+        Err(detail) => {
+            reject_collider_projection(
+                &mut commands,
+                entity,
+                &path,
+                faults.as_deref_mut(),
+                holds.as_deref_mut(),
+                ColliderProjectionError::Backend {
+                    prim: prim.path.clone(),
+                    detail,
+                },
+            );
+            return;
+        }
+    };
+    for candidate in lunco_physics::collider_candidates(entity, body_shapes, source_shapes) {
+        if (candidate == entity && body)
+            || colliders
+                .get(candidate)
+                .is_ok_and(|source| source.0 == prim.path)
+        {
+            // Clear fields that the new effective material leaves unauthored.
+            commands
+                .entity(candidate)
+                .try_remove::<(Friction, Restitution)>();
+            insert_physics_material(&mut commands, candidate, material.clone());
+        }
+    }
 }
 
 /// Realize already validated material values before the next native physics step.

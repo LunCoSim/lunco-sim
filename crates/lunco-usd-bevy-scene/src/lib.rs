@@ -213,6 +213,14 @@ pub struct UsdSceneProjectionReset {
     pub entity: Entity,
 }
 
+/// Composed material producers read by this surface, including unresolved terminal targets.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsdSurfaceDependencies(pub std::collections::BTreeSet<openusd::sdf::Path>);
+
+/// A projected prim's effective contact material changed without altering its mass or geometry.
+#[derive(Event)]
+pub struct UsdContactMaterialChanged(pub Entity);
+
 /// Publishes one coalesced live-stage change batch after its ECS projection.
 ///
 /// Consumers use the owning prim paths to invalidate only derived facts that
@@ -227,6 +235,10 @@ pub struct UsdSceneChangeBatch {
     pub stage_generation: u64,
     /// Structurally resynced prim paths, including composed dependents.
     pub resynced_prim_paths: Vec<String>,
+    /// Properties whose authored connection targets changed.
+    pub connection_paths: std::collections::BTreeSet<String>,
+    /// Properties whose sample topology may need to be re-planned.
+    pub sample_paths: std::collections::BTreeSet<String>,
     /// Exact property or prim paths from the coalesced non-structural notices.
     pub info_paths: Vec<String>,
     /// Owning prim paths for authored, non-structural property changes.
@@ -403,7 +415,14 @@ pub struct PlaceholderAssetUri(pub String);
 /// scene state without depending on the visual crate.
 #[derive(Component, Reflect, Debug, Clone, Copy, Default)]
 #[reflect(Component)]
-pub struct UsdAnimated;
+pub struct UsdAnimated {
+    /// USD time code of the last transform admitted to the presentation.
+    pub pose_time_code: f64,
+}
+
+/// The native sampler currently drives this prim's ordered transform stack.
+#[derive(Component)]
+pub struct UsdAnimatedTransform;
 
 /// Root of a live, scene-owned USD mount.
 #[derive(Component, Debug, Clone, Copy)]

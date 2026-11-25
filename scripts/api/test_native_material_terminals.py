@@ -49,6 +49,15 @@ def main():
                 ("material_edit", "material_edited", 3),
                 ("material_cycle", "material_invalid", 5),
                 ("material_repair_cycle", "material_restored_graph", 2),
+                ("material_remove_producer", "material_invalid", 5),
+                ("material_undo_edit", "material_restored_graph", 2),
+                ("material_bind_parent", "material_inherited", 3),
+                ("material_physical_setup", "material_contact_visual", 1),
+                ("material_physical_bind", "material_contact_physical", 1),
+                ("material_undo_edit", "material_contact_visual", 1),
+                ("material_color_body", "material_dynamic_body", 1),
+                ("material_pose_body", "material_kinematic_body", 1),
+                ("material_release_body", "material_dynamic_body", 1),
             ]:
                 if prepare:
                     apply_fixture(session, source, prepare, doc)

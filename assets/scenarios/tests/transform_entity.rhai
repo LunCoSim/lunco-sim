@@ -223,9 +223,23 @@ fn verify_mixed_stack(me) {
         let undo = cmd("UndoDocument",#{doc_id:me.doc});
         if !undo.ok {fail(me,undo.to_string());return me;}
         me.stack_phase = 4;
-    } else {
+    } else if me.stack_phase == 4 {
         me.runtime_checks.push(t_true(quat_abs_dot(world_rotation(id),[0.0,0.0,0.0,1.0])>1.0-MAX_ROTATION_ERROR,
             "undo restores the prior composed hinge pose"));
+        let keys=[];
+        for key in [[0.0,"10"],[0.001,"70"]] {
+            keys.push(#{SetTimeSample:#{edit_target:"@runtime@",path:TARGET_PATH,name:"xformOp:rotateY",type_name:"double",time:key[0],value:key[1]}});
+        }
+        let edit=cmd("ApplyUsdOps",#{doc_id:me.doc,label:"Animate hinge",ops:keys});
+        if !edit.ok {fail(me,edit.to_string());return me;}
+        me.stack_phase=5;
+    } else if me.stack_phase==5 {
+        let commit=cmd("RotateEntity",#{entity_id:id,rotation:TARGET_ROTATION,intent:"Persistent"});
+        if !commit.ok {fail(me,commit.to_string());return me;}
+        me.stack_phase=6;
+    } else {
+        me.runtime_checks.push(t_true(quat_abs_dot(world_rotation(id),TARGET_ROTATION)>1.0-MAX_ROTATION_ERROR,
+            "an absolute edit of a sampled hinge lands at the displayed time"));
         report_verdict(me.runtime_checks,"TRANSFORM ENTITY","TRANSFORM_ENTITY");
         me.done = true;
     }

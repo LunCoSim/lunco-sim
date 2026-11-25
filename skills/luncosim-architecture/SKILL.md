@@ -1211,7 +1211,7 @@ USD connection projection caches immutable endpoint facts by composed-stage
 generation and runtime-instance identity. Reconciliation retains unchanged
 `SimConnection` entities and bindings; edited edges use the normal add/remove
 lifecycle. Endpoint lifecycle observers, USD edits, and authority changes feed
-the shared `UsdWiringDirty` latch, so stable updates do not scan endpoint
+the co-simulation owner’s `UsdWiringDirty` latch, so stable updates do not scan endpoint
 populations for `Added<T>` filters. Domain source-class completion invalidates
 only roots that use that source. A root is not synthesized until every
 referenced member class has a terminal verdict, avoiding repeated graph

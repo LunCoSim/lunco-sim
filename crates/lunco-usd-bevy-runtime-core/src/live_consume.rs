@@ -162,6 +162,7 @@ pub(crate) fn settle_projection_visuals(
     failures: Query<(
         &UsdPrimPath,
         &lunco_usd_bevy_scene::UsdSceneProjectionFailed,
+        Option<&lunco_usd_bevy_scene::UsdSurfaceDependencies>,
     )>,
     mut commands: Commands,
 ) {
@@ -199,16 +200,24 @@ pub(crate) fn settle_projection_visuals(
                 TelemetryValue::String(revision.scope.work.name().into()),
             ),
         ]);
-        let (name, severity) =
-            if let Some((prim, failure)) = failures.iter().find(|(prim, _)| affected(prim)) {
-                data.insert(
-                    "detail".into(),
-                    TelemetryValue::String(format!("{}: {}", prim.path, failure.0)),
-                );
-                ("usd.projection.visuals_failed", Severity::Error)
-            } else {
-                ("usd.projection.visuals_ready", Severity::Info)
-            };
+        let (name, severity) = if let Some((prim, failure, _)) =
+            failures.iter().find(|(prim, _, deps)| {
+                affected(prim)
+                    || (prim.stage_handle.id() == *stage
+                        && deps.is_some_and(|deps| {
+                            deps.0
+                                .iter()
+                                .any(|path| revision.scope.contains(path.as_str()))
+                        }))
+            }) {
+            data.insert(
+                "detail".into(),
+                TelemetryValue::String(format!("{}: {}", prim.path, failure.0)),
+            );
+            ("usd.projection.visuals_failed", Severity::Error)
+        } else {
+            ("usd.projection.visuals_ready", Severity::Info)
+        };
         commands.trigger(TelemetryEvent {
             name: name.into(),
             source: 0,
@@ -346,6 +355,8 @@ fn publish_scene_change_batch(
     info_paths: Vec<String>,
     info_prim_paths: Vec<String>,
     transform_only_prim_paths: Vec<String>,
+    connection_paths: BTreeSet<String>,
+    sample_paths: BTreeSet<String>,
 ) {
     let generation = world
         .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
@@ -355,6 +366,8 @@ fn publish_scene_change_batch(
         world.write_message(UsdSceneChangeBatch {
             stage_id,
             stage_generation,
+            connection_paths,
+            sample_paths,
             resynced_prim_paths,
             info_paths,
             info_prim_paths,
@@ -483,46 +496,6 @@ fn transform_only_prim_paths(info_only: &[String]) -> Vec<String> {
 
 pub(crate) fn is_transform_attribute(attribute: &str) -> bool {
     attribute.starts_with("xformOp:") || matches!(attribute, "xformOpOrder" | "resetXformStack")
-}
-
-/// Returns whether an authored standard USD `inputs:*` value changed.
-///
-/// Unconnected scalar inputs are the instance-default boundary for Modelica
-/// parameters. They are reported as ordinary info-only edits, but still need
-/// to invalidate the USD-derived defaults projection so the owning cosim
-/// lifecycle can decide whether a compile-time parameter changed.
-fn authored_input_defaults_changed(info_only: &[String]) -> bool {
-    info_only.iter().any(|path| {
-        path.split_once('.')
-            .is_some_and(|(_, attribute)| attribute.starts_with("inputs:"))
-    })
-}
-
-/// Mark the live model instance owning an authored `inputs:*` edit.
-///
-/// This publishes only a generic state revision. The authoring projection does
-/// not decide whether a backend should recompile, reset, or simply accept a
-/// live input; the backend that owns the model decides that from its own state.
-fn mark_model_state_revision(world: &mut World, stage_id: AssetId<UsdStageAsset>, prim_path: &str) {
-    let candidates = {
-        let mut query = world.query::<(Entity, &UsdPrimPath)>();
-        query
-            .iter(world)
-            .filter(|(_, path)| path.stage_handle.id() == stage_id && path.path == prim_path)
-            .map(|(entity, _)| entity)
-            .collect::<Vec<_>>()
-    };
-    let entity = candidates
-        .into_iter()
-        .find(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity));
-    if let Some(entity) = entity {
-        let mut revision = world
-            .get::<lunco_core::ModelStateRevision>(entity)
-            .copied()
-            .unwrap_or_default();
-        revision.advance();
-        world.entity_mut(entity).insert(revision);
-    }
 }
 
 /// Transform paths explicitly authored by the typed live-stage projector.
@@ -898,16 +871,24 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     }
 
     let mut projected_anything = false;
-    let mut connection_paths_changed = false;
-    let mut input_defaults_changed = false;
+
     for (id, changes, authored_transform_edits) in batches {
         #[cfg(not(target_arch = "wasm32"))]
         crate::dataset_requirements::stage_changed(world, id, &changes);
         // Merge this stage's committed changes into one resync / info-only set.
         let mut resynced: Vec<String> = Vec::new();
         let mut info_only: Vec<String> = Vec::new();
+        let mut connection_paths = BTreeSet::new();
+        let mut sample_paths = BTreeSet::new();
         for c in changes {
-            connection_paths_changed |= c.connection_paths_changed;
+            connection_paths.extend(c.connection_paths.iter().map(ToString::to_string));
+            sample_paths.extend(c.sample_paths.iter().map(ToString::to_string));
+            sample_paths.extend(
+                c.resynced
+                    .iter()
+                    .filter(|path| path.is_property())
+                    .map(ToString::to_string),
+            );
             resynced.extend(
                 c.resynced
                     .iter()
@@ -943,15 +924,6 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         changed_prim_paths.extend(authored_transform_edits.keys().cloned());
         changed_prim_paths.sort();
         changed_prim_paths.dedup();
-        input_defaults_changed |= authored_input_defaults_changed(&info_only);
-        for path in &info_only {
-            if let Some((prim_path, attribute)) = path.split_once('.') {
-                if attribute.starts_with("inputs:") {
-                    mark_model_state_revision(world, id, prim_path);
-                }
-            }
-        }
-
         if resynced.is_empty() && info_only.is_empty() && authored_transform_edits.is_empty() {
             crate::native_assets::finish_stage_projection(world, id);
             publish_scene_change_batch(
@@ -961,6 +933,8 @@ pub(crate) fn project_stage_changes(world: &mut World) {
                 info_only,
                 info_prim_paths,
                 transform_only_prim_paths,
+                connection_paths,
+                sample_paths,
             );
             if !accumulate_pending_stage_changes(world, id, changed_prim_paths.clone()) {
                 if let Some((doc, generation)) = mark_stage_projected(world, id) {
@@ -990,6 +964,8 @@ pub(crate) fn project_stage_changes(world: &mut World) {
             info_only,
             info_prim_paths,
             transform_only_prim_paths,
+            connection_paths,
+            sample_paths,
         );
         // The write-side projector has already authored this batch onto the
         // canonical stage. Publish the read-side generation only after this
@@ -1010,17 +986,6 @@ pub(crate) fn project_stage_changes(world: &mut World) {
     publish_pending_stage_projections(world);
 
     // Connections are derived from native `connectionPaths` by
-    // The USD co-simulation wiring owner. Prim spawn/despawn triggers
-    // that system directly (change-detection); a `connectionPaths` **edit** on an
-    // already-spawned prim is neither — use the typed native-field notice to
-    // re-derive off the live stage. Standard authored `inputs:*` edits also
-    // publish a backend-neutral `ModelStateRevision`; the owning model adapter
-    // decides whether that state needs a rebuild, reset, or only a live update.
-    if connection_paths_changed || input_defaults_changed {
-        if let Some(mut dirty) = world.get_resource_mut::<lunco_usd_bevy_stage::UsdWiringDirty>() {
-            dirty.0 = true;
-        }
-    }
     // Same reason, one level up: a live edit to an already-spawned prim changes
     // the composed stage without spawning or despawning anything, so it raises no
     // ECS-structural signal. Every USD-derived view-model gates on this revision
@@ -1052,47 +1017,50 @@ pub(crate) fn apply_transform_edits_live(
     // Read every changed transform under one short borrow of the `!Send` stage,
     // then release it before mutating the world.
     let mut failures = Vec::new();
-    let transforms: Vec<(String, TransformEditChannels, Transform, bevy::math::DVec3)> = {
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+    let mut transforms = Vec::new();
+    {
+        let Some(stage) = world
+            .get_non_send::<CanonicalStages>()
+            .and_then(|stages| stages.get(id))
+        else {
             return;
         };
-        let Some(cs) = stages.get(id) else { return };
-        let view = cs.view();
-        edits
-            .iter()
-            .filter_map(|(path, channels)| {
-                let sp = SdfPath::new(path).ok()?;
-                if !view.has_prim(&sp) {
-                    return None;
-                }
+        let view = stage.view();
+        let mut ordered: Vec<_> = edits.iter().collect();
+        ordered.sort_unstable_by_key(|(path, _)| *path);
+        for (path, channels) in ordered {
+            let Ok(sp) = SdfPath::new(path) else { continue };
+            if !view.has_prim(&sp) {
+                continue;
+            }
+            for &entity in world.resource::<UsdPrimIndex>().in_stage(id, path) {
+                let time = world
+                    .get::<lunco_usd_bevy_scene::UsdAnimated>(entity)
+                    .map_or(0.0, |animation| animation.pose_time_code);
                 match (
-                    lunco_usd_bevy_stage::local_transform_at(&view, &sp, 0.0),
-                    lunco_usd_bevy_stage::local_transform_matrix_d_at(&view, &sp, 0.0),
+                    lunco_usd_bevy_stage::local_transform_at(&view, &sp, time),
+                    lunco_usd_bevy_stage::local_transform_matrix_d_at(&view, &sp, time),
                 ) {
                     (Ok(Some(transform)), Ok(Some(matrix))) => {
-                        Some((path.clone(), *channels, transform, matrix.w_axis.truncate()))
+                        transforms.push((entity, *channels, transform, matrix.w_axis.truncate()))
                     }
-                    (Ok(None), Ok(None)) => Some((
-                        path.clone(),
+                    (Ok(None), Ok(None)) => transforms.push((
+                        entity,
                         *channels,
                         Transform::IDENTITY,
                         bevy::math::DVec3::ZERO,
                     )),
                     (Err(error), _) | (_, Err(error)) => {
-                        failures.push((path.clone(), error.to_string()));
-                        None
+                        failures.push((path.clone(), error.to_string()))
                     }
-                    _ => {
-                        failures.push((
-                            path.clone(),
-                            "native render and canonical transform facts disagree".to_owned(),
-                        ));
-                        None
-                    }
+                    _ => failures.push((
+                        path.clone(),
+                        "native render and canonical transform facts disagree".to_owned(),
+                    )),
                 }
-            })
-            .collect()
-    };
+            }
+        }
+    }
     for (path, detail) in failures {
         let message = format!("{path}: live USD transform could not be projected: {detail}");
         let first = world
@@ -1110,29 +1078,20 @@ pub(crate) fn apply_transform_edits_live(
             });
         }
     }
-    for (path, channels, transform, translation) in transforms {
-        let entities = world
-            .resource::<UsdPrimIndex>()
-            .in_stage(id, &path)
-            .to_vec();
-        if entities.is_empty() {
-            debug!("[usd] transform edit {path}: no projected entity on this stage");
+    for (entity, channels, transform, translation) in transforms {
+        if channels.translate {
+            seat_authored_translate(world, entity, translation);
         }
-        for entity in entities {
-            if channels.translate {
-                seat_authored_translate(world, entity, translation);
+        let preview_only =
+            channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
+        if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
+            if channels.rotate {
+                tf.rotation = transform.rotation;
             }
-            let preview_only =
-                channels.scale && lunco_usd_bevy_scene::is_preview_only_entity(world, entity);
-            if let Some(mut tf) = world.entity_mut(entity).get_mut::<Transform>() {
-                if channels.rotate {
-                    tf.rotation = transform.rotation;
-                }
-                // Scale is admitted only by preview ownership; changing a live
-                // body's render scale requires its physics topology to change.
-                if preview_only {
-                    tf.scale = transform.scale;
-                }
+            // Scale is admitted only by preview ownership; changing a live
+            // body's render scale requires its physics topology to change.
+            if preview_only {
+                tf.scale = transform.scale;
             }
         }
     }
@@ -1411,7 +1370,7 @@ pub(crate) fn refresh_edited_prims_live(
         if is_transform_attribute(attr) {
             continue;
         }
-        if standard_pbr_binding_edit(world, id, prim, attr) {
+        if matches!(attr, "material:binding" | "material:binding:physics") {
             continue;
         }
         // Standard display primvars are appearance, even when authored on a
@@ -1531,69 +1490,6 @@ fn edit_confined_to_exempt_subtree(
             && (upp.path == path
                 || path.starts_with(&format!("{}/", upp.path.trim_end_matches('/'))))
     })
-}
-
-/// Standard direct bindings on concrete geometry only change its PBR look.
-/// A custom-shader ownership transition or an inherited/collection binding
-/// retains the corresponding topology owner's reconciliation boundary.
-pub(crate) fn standard_pbr_binding_edit(
-    world: &World,
-    stage_id: AssetId<UsdStageAsset>,
-    prim: &str,
-    attribute: &str,
-) -> bool {
-    if attribute != "material:binding" {
-        return false;
-    }
-    let Ok(path) = SdfPath::new(prim) else {
-        return false;
-    };
-    let Some(stage) = world
-        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-        .and_then(|stages| stages.get(stage_id))
-    else {
-        return false;
-    };
-    let view = stage.view();
-    if !matches!(
-        view.type_name(&path).as_deref(),
-        Some(
-            "Cube"
-                | "Sphere"
-                | "Cylinder"
-                | "Cone"
-                | "Capsule"
-                | "Plane"
-                | "Mesh"
-                | "NurbsPatch"
-                | "BasisCurves"
-                | "NurbsCurves"
-        )
-    ) {
-        return false;
-    }
-    let standard = match view.bound_shader(&path) {
-        Ok(None) => true,
-        Ok(Some(shader)) => {
-            view.text(&shader, "info:id").as_deref() == Some("UsdPreviewSurface")
-                && !view.has_authored_attribute(&shader, "info:wesl:sourceAsset")
-        }
-        Err(_) => false,
-    };
-    standard
-        && world.get_resource::<UsdPrimIndex>().is_some_and(|index| {
-            index.in_stage(stage_id, prim).iter().all(|entity| {
-                let visual = world
-                    .get::<lunco_usd_bevy_scene::UsdVisualMeshTarget>(*entity)
-                    .map_or(*entity, |target| target.0);
-                world
-                    .get::<lunco_usd_bevy_scene::UsdVisualShaderBound>(visual)
-                    .is_none()
-                    && world
-                        .get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(*entity)
-                        .is_none()
-            })
-        })
 }
 
 /// UI metadata is consumed from the composed stage by the authored-surface

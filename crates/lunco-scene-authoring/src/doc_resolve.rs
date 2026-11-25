@@ -50,10 +50,7 @@ pub fn resolve_shader_parameter_usd_target(
     } else {
         format!("inputs:{name}")
     };
-    let declared_type = world
-        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-        .and_then(|stages| stages.get(prim.stage_handle.id()))
-        .and_then(|stage| stage.view().attr_type_name(&shader_sdf, &attribute_name));
+    let declared_type = composed_reader(world, prim)?.attr_type_name(&shader_sdf, &attribute_name);
     let type_name =
         declared_type.unwrap_or_else(|| canonical_shader_parameter_type(value).to_owned());
     let literal = canonical_shader_parameter_literal(&type_name, value)?;
@@ -128,75 +125,32 @@ fn usd_numeric_component_count(type_name: &str) -> Option<usize> {
 /// The `UsdPreviewSurface` Shader prim bound to `prim`'s geometry, or `None` when it
 /// has no material yet.
 ///
-/// Resolves the native universal surface producer through UsdShade NodeGraphs
-/// on the live canonical stage (building it from the asset's recipe if it has
-/// not been built yet). Shared, because the two places that edit a look — the
-/// Inspector panel and the `SetObjectProperty` command — must agree on WHERE the look
-/// lives, or one of them will scribble `inputs:*` somewhere no other DCC reads it
-/// back from.
-pub fn bound_shader_prim(world: &mut World, prim: &UsdPrimPath) -> Result<Option<String>, String> {
-    let id = prim.stage_handle.id();
-    let mesh_sdf = SdfPath::new(&prim.path).map_err(|error| error.to_string())?;
-
-    let recipe = world
-        .get_resource::<Assets<UsdStageAsset>>()
-        .and_then(|stages| stages.get(&prim.stage_handle))
-        .and_then(|a| a.recipe.clone());
-    if let Some(mut canonical) =
-        world.get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-    {
-        if canonical.get(id).is_none() {
-            if let Some(r) = recipe.as_ref() {
-                canonical.get_or_build(id, r);
-            }
-        }
-    }
-    let canonical = world
-        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-        .ok_or_else(|| "native USD stages are unavailable for material authoring".to_string())?;
-    let view = canonical
-        .get(id)
-        .ok_or_else(|| format!("{} has no native stage for material authoring", prim.path))?
-        .view();
-    view.bound_shader(&mesh_sdf)
-        .map(|path| path.map(|path| path.to_string()))
+/// Resolves the native universal surface producer through composed UsdShade NodeGraphs.
+pub fn bound_shader_prim(world: &World, prim: &UsdPrimPath) -> Result<Option<String>, String> {
+    composed_reader(world, prim)?
+        .bound_shader(&SdfPath::new(&prim.path).map_err(|e| e.to_string())?)
+        .map(|shader| shader.map(|path| path.to_string()))
 }
 
-/// The composed `apiSchemas` applied to `prim`, as owned strings — what
-/// `ensure_preview_surface_ops` needs so the `MaterialBindingAPI` it applies
-/// composes WITH the prim's existing applied schemas instead of erasing them.
-/// Empty when the prim applies none (or the stage is not built yet).
-pub fn geom_api_schemas(world: &mut World, prim: &UsdPrimPath) -> Vec<String> {
+/// The applied schemas preserved when adding a material binding.
+pub fn geom_api_schemas(world: &World, prim: &UsdPrimPath) -> Result<Vec<String>, String> {
+    let path = SdfPath::new(&prim.path).map_err(|e| e.to_string())?;
+    Ok(composed_reader(world, prim)?.api_schemas(&path))
+}
+
+pub(crate) fn composed_reader<'w>(
+    world: &'w World,
+    prim: &UsdPrimPath,
+) -> Result<lunco_usd_bevy_stage::UsdReadSource<'w>, String> {
     let id = prim.stage_handle.id();
-    let Ok(sdf) = SdfPath::new(&prim.path) else {
-        return Vec::new();
-    };
-    let recipe = world
+    let stages = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .ok_or("USD projection registry unavailable")?;
+    let asset = world
         .get_resource::<Assets<UsdStageAsset>>()
-        .and_then(|stages| stages.get(&prim.stage_handle))
-        .and_then(|a| a.recipe.clone());
-    if let Some(mut canonical) =
-        world.get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-    {
-        if canonical.get(id).is_none() {
-            if let Some(r) = recipe.as_ref() {
-                canonical.get_or_build(id, r);
-            }
-        }
-    }
-    let Some(canonical) = world.get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-    else {
-        return Vec::new();
-    };
-    let Some(view) = canonical.get(id).map(|c| c.view()) else {
-        return Vec::new();
-    };
-    view.stage()
-        .prim(sdf)
-        .expect("validated USD path")
-        .api_schemas()
-        .map(|v| v.iter().map(|s| s.as_str().to_string()).collect())
-        .unwrap_or_default()
+        .and_then(|assets| assets.get(id))
+        .ok_or_else(|| format!("stage unavailable for {}", prim.path))?;
+    Ok(stages.reader_for_composed_query(id, asset).0)
 }
 
 /// Resolve the document holding the entity's exact projected stage lease.
@@ -228,7 +182,35 @@ pub fn authorable_prim(
     stages: Option<&lunco_usd_bevy_stage::canonical::CanonicalStages>,
     assets: Option<&Assets<UsdStageAsset>>,
 ) -> Option<(lunco_doc::DocumentId, String)> {
-    let prim = q_prim.get(entity).ok()?;
+    authorable_prim_path(
+        q_prim.get(entity).ok()?,
+        usd_registry,
+        backed,
+        stages,
+        assets,
+    )
+}
+
+pub(crate) fn authorable_entity(
+    world: &World,
+    entity: Entity,
+) -> Option<(lunco_doc::DocumentId, String)> {
+    authorable_prim_path(
+        world.get::<UsdPrimPath>(entity)?,
+        world.get_resource()?,
+        world.get_resource(),
+        world.get_non_send(),
+        world.get_resource(),
+    )
+}
+
+fn authorable_prim_path(
+    prim: &UsdPrimPath,
+    usd_registry: &DocumentRegistry<UsdDocument>,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    stages: Option<&lunco_usd_bevy_stage::canonical::CanonicalStages>,
+    assets: Option<&Assets<UsdStageAsset>>,
+) -> Option<(lunco_doc::DocumentId, String)> {
     let doc = resolve_doc_for_stage(prim.stage_handle.id(), backed, usd_registry)?;
     let host = usd_registry.host(doc)?;
     let prim_sdf = SdfPath::new(&prim.path).ok()?;

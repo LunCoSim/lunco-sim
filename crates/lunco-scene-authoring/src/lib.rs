@@ -7,6 +7,7 @@
 //! query packages.
 
 pub mod doc_resolve;
+pub mod local_pose;
 pub mod properties;
 pub mod shader_doc;
 pub mod shader_sources;
@@ -28,13 +29,14 @@ register_commands!(
 
 impl Plugin for SceneAuthoringPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_api::executor::DeferredCommandAppExt;
         register_all_commands(app);
+        app.register_deferred_command::<properties::SetObjectProperty>();
         app.init_resource::<shader_doc::ShaderRegistry>();
         app.add_observer(shader_doc::retire_shader_documents);
         app.init_resource::<shader_sources::PendingShaderSources>();
         app.add_observer(shader_sources::retire_shader_sources);
         app.add_systems(Update, shader_sources::publish_shader_sources);
-        app.add_observer(properties::persist_wheel_to_runtime_layer);
         app.add_systems(
             Update,
             shader_doc::wire_shader_journal_handle

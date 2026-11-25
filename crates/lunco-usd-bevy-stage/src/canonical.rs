@@ -45,22 +45,12 @@ pub struct RawStageChange {
     pub resynced: Vec<SdfPath>,
     /// Native changed-info property or metadata paths for incremental projection.
     pub info_only: Vec<SdfPath>,
-    /// True when the committed USD change authored the native
-    /// `connectionPaths` field. This is the only live-edit signal that can
-    /// invalidate the derived simulation wiring cache.
-    pub connection_paths_changed: bool,
+    /// Exact property paths with native connection and sample field changes.
+    pub connection_paths: Vec<SdfPath>,
+    pub sample_paths: Vec<SdfPath>,
     /// Identifier of the layer whose edit produced this change.
     pub layer: String,
 }
-
-/// Invalidates the derived USD connection cache after an authored endpoint or
-/// `connectionPaths` change.
-///
-/// This is a USD-stage lifecycle signal, not a Modelica-domain fact. The live
-/// USD consumer raises it while the co-simulation projector drains it after
-/// the current endpoint surfaces have been published.
-#[derive(bevy::prelude::Resource, Default)]
-pub struct UsdWiringDirty(pub bool);
 
 /// The canonical live-composed stage for the active scene. `NonSend` (holds an
 /// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
@@ -141,19 +131,20 @@ impl CanonicalStage {
                 .expect("canonical modified-layer lock poisoned")
                 .insert(change.layer_identifier.to_owned());
             if let Ok(mut q) = sink_inbox.lock() {
-                let connection_paths_changed = change
-                    .resynced
-                    .iter()
-                    .chain(change.changed_info_only.iter())
-                    .any(|path| {
-                        change
-                            .changed_fields(path)
-                            .any(|field| field == "connectionPaths")
-                    });
+                let paths_for_field = |name: &str| {
+                    change
+                        .resynced
+                        .iter()
+                        .chain(change.changed_info_only.iter())
+                        .filter(|path| change.changed_fields(path).any(|field| field == name))
+                        .cloned()
+                        .collect()
+                };
                 q.push(RawStageChange {
                     resynced: change.resynced.to_vec(),
                     info_only: change.changed_info_only.to_vec(),
-                    connection_paths_changed,
+                    connection_paths: paths_for_field("connectionPaths"),
+                    sample_paths: paths_for_field("timeSamples"),
                     layer: change.layer_identifier.to_string(),
                 });
             }
@@ -982,34 +973,6 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Author `name`'s `timeSamples[time] = value` (USD type `type_name`) onto the
-    /// prim at `prim` (current native edit target), firing the sink — the live-stage
-    /// counterpart of the document's `SetTimeSample` op. A keyframe edit reaches
-    /// the live world without a whole-scene rebuild: the per-frame animation
-    /// sampler reads this stage each frame, so a key on an already-animated prim
-    /// shows up on the next tick. Creates the attribute if absent; adds or overwrites the sample at
-    /// `time` otherwise (openusd exposes no live-stage sample *removal*, so
-    /// `RemoveTimeSample` stays on the projector's rebuild path).
-    pub(crate) fn author_time_sample(
-        &self,
-        prim: &SdfPath,
-        name: &str,
-        type_name: &str,
-        time: f64,
-        value: openusd::sdf::Value,
-    ) -> anyhow::Result<()> {
-        use anyhow::anyhow;
-        let value = crate::stage_convention(&self.view())
-            .map_err(|error| anyhow!("invalid stage convention: {error}"))?
-            .stage_xform_value(name, type_name, value);
-        self.stage
-            .create_attribute(format!("{}.{}", prim.as_str(), name), type_name)
-            .map_err(|e| anyhow!("author time sample {prim}.{name} ({type_name}): {e}"))?
-            .set_at(value, openusd::usd::TimeCode::new(time))
-            .map_err(|e| anyhow!("set time sample {prim}.{name} @ {time}: {e}"))?;
-        Ok(())
-    }
-
     /// Drain and clear the change inbox, bumping `generation` if anything landed.
     pub fn drain_changes(&mut self) -> Vec<RawStageChange> {
         let drained = self
@@ -1181,19 +1144,6 @@ impl StageProjector<'_> {
         value: openusd::sdf::Value,
     ) -> anyhow::Result<()> {
         self.0.author_attribute(prim, name, type_name, value)
-    }
-
-    /// Replay a `SetTimeSample` op — see [`CanonicalStage::author_time_sample`].
-    pub fn author_time_sample(
-        &self,
-        prim: &SdfPath,
-        name: &str,
-        type_name: &str,
-        time: f64,
-        value: openusd::sdf::Value,
-    ) -> anyhow::Result<()> {
-        self.0
-            .author_time_sample(prim, name, type_name, time, value)
     }
 }
 
@@ -1449,7 +1399,7 @@ impl CanonicalStages {
             .expect("canonical change inbox lock poisoned")
             .push(RawStageChange {
                 resynced: vec![SdfPath::abs_root()],
-                connection_paths_changed: true,
+
                 layer: replacement.scene_layer.clone(),
                 ..Default::default()
             });
@@ -2208,30 +2158,6 @@ mod authoring_tests {
         );
     }
 
-    /// A keyframe authored onto the live stage fires the sink and composes as a
-    /// `timeSamples` opinion — the write half of incremental keyframe projection.
-    /// The per-frame animation sampler reads this stage, so no whole-scene rebuild
-    /// is needed for a key on an already-animated prim.
-    #[test]
-    fn authoring_time_sample_fires_sink_and_composes() {
-        let recipe = StageRecipe::from_source("scene.usda", SCENE);
-        let mut cs = CanonicalStage::from_recipe(&recipe).expect("build stage");
-        let _ = cs.drain_changes();
-
-        let rover = SdfPath::new("/World/Rover").unwrap();
-        let v = lunco_usd_authoring::author::parse_attribute_value("double3", "(1, 2, 3)").unwrap();
-        cs.author_time_sample(&rover, "xformOp:translate", "double3", 12.0, v)
-            .expect("author keyframe");
-        assert!(
-            touches(&cs.drain_changes(), "/World/Rover"),
-            "keyframe fires the sink"
-        );
-        assert!(
-            cs.view().has_time_samples(&rover, "xformOp:translate"),
-            "the authored keyframe composes as timeSamples on the live stage"
-        );
-    }
-
     /// Keystone of #1 — **referenced spawn onto a live stage**: inject an asset's
     /// layer bytes at runtime, author a prim + a `references` arc to it, and PCP
     /// composes the referenced subtree on the live stage (its default prim's
@@ -2448,9 +2374,10 @@ mod authoring_tests {
             "the authored wire composes on the live stage"
         );
         assert!(
-            cs.drain_changes()
+            cs.drain_changes().iter().any(|change| change
+                .connection_paths
                 .iter()
-                .any(|change| change.connection_paths_changed),
+                .any(|path| path.as_str() == "/Rig/Bus.inputs:voltage")),
             "native connectionPaths edits must be typed in the stage change"
         );
     }

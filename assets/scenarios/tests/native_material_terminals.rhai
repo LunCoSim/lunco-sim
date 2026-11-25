@@ -110,14 +110,15 @@ fn material_annotate(doc) {
         material_attr(material_root(), "review:note", "string", "Checked"),
         material_attr(material_root()+"/Alternate", "review:note", "string", "Checked"),
         material_attr(material_graph(), "review:note", "string", "Checked"),
-        material_attr(material_shader(), "review:note", "string", "Checked")
+        material_attr(material_shader(), "review:note", "string", "Checked"),
+        #{CopyProperty:#{edit_target:"@root@",from_path:material_shader()+".review:note",to_path:material_root()+"/Alternate.review:copy"}}
     ]});
     if !result.ok {throw(result.to_string());}
     print("FIXTURE_APPLIED");
 }
 fn material_annotated(doc) {
-    let mat = query("QueryUsdPrim", #{doc_id:doc,path:material_root()+"/Alternate",attrs:["review:note"]});
-    if mat.attrs == () || mat.attrs["review:note"] != "Checked" {print("MATERIAL_PENDING");return;}
+    let mat = query("QueryUsdPrim", #{doc_id:doc,path:material_root()+"/Alternate",attrs:["review:note","review:copy"]});
+    if mat.attrs == () || mat.attrs["review:copy"] != "Checked" {print("MATERIAL_PENDING");return;}
     report_verdict([
         t_true(get(material_entity(doc),"Transform.translation.x")==3.0 &&
             get(find_path(material_root()+"/Unrelated"),"Transform.translation.y")==5.0,
@@ -254,3 +255,122 @@ fn material_invalid(doc) {
             "rejected material edit leaves the projection intent unchanged")
     ], "NATIVE MATERIAL TERMINAL NEGATIVE", "NATIVE_MATERIAL_TERMINAL_NEGATIVE");
 }
+
+fn material_remove_producer(doc) {
+    let edit=cmd("ApplyUsdOp",#{doc_id:doc,op:#{RemovePrim:#{edit_target:"@root@",path:material_shader()}}});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_undo_edit(doc) {
+    let edit=cmd("UndoDocument",#{doc_id:doc});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_bind_parent(doc) {
+    let root=material_root();
+    let edit=cmd("ApplyUsdOps",#{doc_id:doc,label:"Set inherited material",ops:[
+        #{SetApiSchemas:#{edit_target:"@root@",path:root,schemas:["MaterialBindingAPI"]}},
+        #{SetRelationship:#{edit_target:"@root@",path:root,name:"material:binding",targets:[root+"/Alternate"]}}
+    ]});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_inherited(doc) {
+    let child=find_path(material_root()+"/Unrelated");
+    let inherited=get(child,"PbrLook");
+    if inherited==() || abs(inherited.base_color.red-0.8)>0.001 {print("MATERIAL_PENDING");return;}
+    let shape=material_entity(doc);
+    let before=query("QueryUsdPrim",#{doc_id:doc,path:material_shape()});
+    let edit=cmd("SetObjectProperty",#{entity_id:shape,property:"wheel_radius",value:"2",intent:"Persistent"});
+    let after=query("QueryUsdPrim",#{doc_id:doc,path:material_shape(),attrs:["physxVehicleWheel:radius"]});
+    report_verdict([
+        t_true(abs(get(shape,"PbrLook").base_color.red-0.2)<0.001,"the stronger direct binding still wins"),
+        t_true(get(shape,"Transform.translation.x")==3.0 && get(child,"Transform.translation.y")==5.0,
+            "changing an inherited surface preserves live poses"),
+        t_true(!edit.ok && edit.status=="rejected" && before.document_generation==after.document_generation &&
+            after.attrs["physxVehicleWheel:radius"]==(),"a wheel edit on geometry rejects without changing USD")
+    ],"NATIVE MATERIAL INHERITANCE","NATIVE_MATERIAL_INHERITANCE");
+}
+
+fn material_physical_setup(doc) {
+    let root=material_root(); let mat=root+"/Alternate"; let body=root+"/ContactSurface";
+    let edit=cmd("ApplyUsdOps",#{doc_id:doc,label:"Prepare physical surface",ops:[
+        material_add(root,"ContactSurface","Cube"),
+        #{SetApiSchemas:#{edit_target:"@root@",path:body,schemas:["PhysicsCollisionAPI","MaterialBindingAPI"]}},
+        #{SetApiSchemas:#{edit_target:"@root@",path:mat,schemas:["PhysicsMaterialAPI"]}},
+        material_attr(mat,"physics:dynamicFriction","float","0.81"),
+        #{SetRelationship:#{edit_target:"@root@",path:body,name:"material:binding",targets:[root+"/Mat"]}}
+    ]});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_contact_visual(doc) {
+    let body=find_path(material_root()+"/ContactSurface");
+    if body<0 || query("QueryPhysicsState",#{id:body}).collider_present!=true {print("MATERIAL_PENDING");return;}
+    let friction=contact_friction(body);
+    let composed=query("QueryUsdPrim",#{doc_id:doc,path:material_root()+"/ContactSurface",topology:true});
+    if composed.topology==() || composed.topology.parts[0].materials.physics!=material_root()+"/Mat" ||
+        (friction!=() && abs(friction.dynamic-0.81)<0.001) {print("MATERIAL_PENDING");return;}
+    report_verdict([t_true(friction==() || abs(friction.dynamic-0.81)>0.001,
+        "visual-only binding leaves the collider on its ordinary contact material")],
+        "NATIVE MATERIAL VISUAL COLLIDER","NATIVE_MATERIAL_VISUAL_COLLIDER");
+}
+fn material_physical_bind(doc) {
+    if !set(material_entity(doc),"Transform.translation.x",6.0) {throw("cannot set live pose probe");}
+    let edit=cmd("ApplyUsdOp",#{doc_id:doc,op:#{SetRelationship:#{edit_target:"@root@",path:material_root()+"/ContactSurface",
+        name:"material:binding",targets:[material_root()+"/Alternate"]}}});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_contact_physical(doc) {
+    let friction=contact_friction(find_path(material_root()+"/ContactSurface"));
+    if friction==() || abs(friction.dynamic-0.81)>0.001 {print("MATERIAL_PENDING");return;}
+    report_verdict([t_true(abs(friction.dynamic-0.81)<0.001 && get(material_entity(doc),"Transform.translation.x")==6.0,"all-purpose binding updates contact friction and preserves unrelated live poses")],
+        "NATIVE MATERIAL COLLIDER","NATIVE_MATERIAL_COLLIDER");
+}
+
+fn material_animated_body() {material_root()+"/AnimatedBody"}
+fn material_sample(path, name, kind, time, value) {
+    #{SetTimeSample:#{edit_target:"@root@",path:path,name:name,type_name:kind,time:time,value:value}}
+}
+fn material_color_body(doc) {
+    let body=material_animated_body();
+    let edit=cmd("ApplyUsdOps",#{doc_id:doc,label:"Animate a dynamic body's appearance",ops:[
+        material_add(material_root(),"AnimatedBody","Cube"),
+        material_attr(body,"xformOp:translate","double3","(100,100,0)"),
+        material_attr(body,"xformOpOrder","token[]","[\"xformOp:translate\"]"),
+        #{SetApiSchemas:#{edit_target:"@root@",path:body,schemas:["PhysicsCollisionAPI","PhysicsRigidBodyAPI"]}},
+        material_sample(body,"primvars:displayColor","color3f[]",0.0,"[(0.2,0.5,0.8)]"),
+        material_sample(body,"primvars:displayColor","color3f[]",1.0,"[(0.7,0.1,0.3)]")
+    ]});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_pose_body(doc) {
+    let body=material_animated_body();
+    let edit=cmd("ApplyUsdOps",#{doc_id:doc,label:"Animate motion",ops:[
+        material_sample(body,"xformOp:translate","double3",0.0,"(100,100,0)"),
+        material_sample(body,"xformOp:translate","double3",1.0,"(100,110,0)")
+    ]});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_release_body(doc) {
+    let ops=[];
+    for time in [0.0,1.0] {
+        ops.push(#{RemoveTimeSample:#{edit_target:"@root@",path:material_animated_body(),name:"xformOp:translate",time:time}});
+    }
+    let edit=cmd("ApplyUsdOps",#{doc_id:doc,label:"Release animated motion",ops:ops});
+    if !edit.ok {throw(edit.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_body_mode(expected) {
+    let body=find_path(material_animated_body());
+    if body<0 {print("MATERIAL_PENDING");return;}
+    let mode=query("QueryPhysicsState",#{id:body}).body_mode;
+    if mode!=expected {print("MATERIAL_PENDING");return;}
+    report_verdict([t_true(mode==expected,"physics motion mode with the current animation channels is "+expected)],
+        "NATIVE ANIMATION MOTION","NATIVE_ANIMATION_MOTION");
+}
+fn material_dynamic_body(doc) {material_body_mode("dynamic");}
+fn material_kinematic_body(doc) {material_body_mode("kinematic");}

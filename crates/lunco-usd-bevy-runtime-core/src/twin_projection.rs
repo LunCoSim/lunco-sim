@@ -1652,8 +1652,32 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     .into_iter()
                     .map(|path| (path, composed_local_matrix(world, scene_id, path)))
                     .collect();
+                let physics_before = physics_binding_consumers(world, scene_id, &ops);
                 for op in &ops {
                     apply_incremental_op_to_stage(world, scene_id, op);
+                }
+                for (path, prior) in physics_before {
+                    match (prior, physical_material_binding(world, scene_id, &path)) {
+                        (Ok(before), Ok(after)) if before == after => (),
+                        (Ok(before), Ok(after))
+                            if before.as_ref().and_then(|m| m.density.as_ref())
+                                == after.as_ref().and_then(|m| m.density.as_ref()) =>
+                        {
+                            let entities = world
+                                .resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>()
+                                .in_stage(scene_id, path.as_str())
+                                .to_vec();
+                            for entity in entities {
+                                world.trigger(lunco_usd_bevy_scene::UsdContactMaterialChanged(
+                                    entity,
+                                ));
+                            }
+                        }
+                        (_, Ok(_)) => refresh_prim_subtree(world, scene_id, path.as_str()),
+                        (_, Err(error)) => {
+                            report_stage_projection_reset_failure(world, scene_id, error)
+                        }
+                    }
                 }
                 for (path, prior) in before {
                     if let (Some(prior), Some(current)) =
@@ -3156,40 +3180,14 @@ pub(crate) fn wake_twin_projection_on_stage_event(
     }
 }
 
-/// Whether an op has no incremental live-stage author yet, so the projector must
-/// rebuild the scene from the composed source rather than replay it: a
-/// whole-source replace, a namespace move (re-keys entities by path; whole-source
-/// undo may also change surviving prims' attribute values), a keyframe *removal*
-/// (openusd exposes no live-stage sample removal — unlike `SetTimeSample`, which
-/// authors incrementally), or a composition-arc edit whose effect is non-local
-/// (a variant selection or payload re-composes a whole subtree). The common
-/// interactive ops — translate, attribute, spawn, remove, keyframe *authoring*,
-/// relationship/connection edits, API-schema edits, and kind edits — return
-/// `false` and replay incrementally via [`apply_incremental_op_to_stage`].
-///
-/// `SetRelationship` and `SetConnection` use live-stage authors
-/// (`CanonicalStage::author_relationship` / `author_connection`). Their consumers
-/// (the Avian joint builder and the cosim wire reconcile) re-read on a subtree
-/// refresh, so the incremental path fully reconciles them.
-///
-/// `SetApiSchemas`, `SetPrimKind`, and `SetPrimOrder` use live authoring too. A
-/// schema edit refreshes only the affected prim subtree so physical ECS
-/// components are rebuilt at the smallest safe scope; kind and child-order
-/// metadata need no ECS refresh. None of these operations tears down unrelated
-/// simulation state.
-///
-/// Active state is structural, but the generic structural reconciler already
-/// owns exactly that operation: it despawns an inactive subtree and spawns it
-/// again when reactivated. Keeping `SetActive` incremental prevents a route
-/// annotation edit from rebuilding unrelated live vessels and their models.
+/// Stage-wide namespace, layer composition and metric changes require a new stage.
 fn op_needs_rebuild(op: &UsdOp) -> bool {
     matches!(
         op,
         UsdOp::ReplaceSource { .. }
             | UsdOp::MovePrim { .. }
             | UsdOp::MoveProperty { .. }
-            | UsdOp::CopyProperty { .. }
-            | UsdOp::RemoveTimeSample { .. }
+
             // Composition-arc changes: value resolution re-composes the prim's
             // subtree wholesale, which the incremental sink can't express.
             | UsdOp::SetVariantSelection { .. }
@@ -3203,26 +3201,19 @@ fn op_needs_rebuild(op: &UsdOp) -> bool {
     )
 }
 
-/// Classify a schema list whose effects are metadata-only.  An empty list is
-/// deliberately treated as physical/unknown: clearing a previously applied
-/// physics schema must refresh the prim subtree so its ECS components disappear.
+/// Changes to these APIs have dedicated live consumers or only describe metadata.
 fn incremental_api_schemas(schemas: &[String]) -> bool {
-    !schemas.is_empty()
-        && schemas.iter().all(|schema| {
-            matches!(
-                schema.as_str(),
-                "LunCoProgramAPI" | "LunCoMountAttachmentAPI" | "LunCoUiSchemaAPI"
-            )
-        })
+    schemas.iter().all(|schema| {
+        matches!(
+            schema.as_str(),
+            "LunCoProgramAPI"
+                | "LunCoMountAttachmentAPI"
+                | "LunCoUiSchemaAPI"
+                | "MaterialBindingAPI"
+        )
+    })
 }
 
-/// Replay one **incremental** op's typed delta onto the scene's live
-/// `CanonicalStage` — values come straight from typed ops; property removal projects the
-/// document’s newly resolved opinion because the live root combines its layers.
-/// Firing the openusd sink lets
-/// [`project_stage_changes`](crate::live_consume::project_stage_changes) reconcile
-/// ECS. Only incremental ops reach here; coarse ops ([`op_needs_rebuild`]) rebuild
-/// instead. Reads/authors the `!Send` stage under short borrows.
 fn child_prim_path(parent_path: &str, name: &str) -> String {
     if parent_path == "/" || parent_path.is_empty() {
         format!("/{name}")
@@ -3271,6 +3262,13 @@ fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMo
             UsdOp::SetPrimOrder { path, .. } => {
                 patch.fields.insert((path.clone(), "primOrder".to_owned()));
             }
+            UsdOp::CopyProperty { to_path, .. } => {
+                let (owner, _) = to_path.split_once('.')?;
+                patch.property_subtrees.insert(to_path.clone());
+                patch
+                    .fields
+                    .insert((owner.to_owned(), "propertyChildren".to_owned()));
+            }
             UsdOp::SetStageDocumentation { .. } => {
                 return Some(DependentStageRefreshMode::Rebuild);
             }
@@ -3301,7 +3299,6 @@ fn dependent_stage_refresh_mode(ops: &[UsdOp]) -> Option<DependentStageRefreshMo
             UsdOp::ReplaceSource { .. }
             | UsdOp::MovePrim { .. }
             | UsdOp::MoveProperty { .. }
-            | UsdOp::CopyProperty { .. }
             | UsdOp::SetDefaultPrim { .. }
             | UsdOp::SetStageMetrics { .. }
             | UsdOp::SetStageMassUnits { .. }
@@ -3354,6 +3351,104 @@ fn document_projection_source(
         .map_err(|error| error.to_string())
 }
 
+#[derive(PartialEq)]
+struct PhysicsMaterialBinding {
+    material: String,
+    density: Option<f64>,
+}
+
+/// A visual material can also carry a physics material. Resolve the actual
+/// inherited physics purpose for projected colliders before and after the edit.
+fn physics_binding_consumers(
+    world: &World,
+    id: AssetId<UsdStageAsset>,
+    ops: &[UsdOp],
+) -> std::collections::BTreeMap<openusd::sdf::Path, Result<Option<PhysicsMaterialBinding>, String>>
+{
+    use lunco_usd_bevy_stage::UsdRead;
+    let mut bindings = std::collections::BTreeMap::new();
+    let Some(stage) = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|s| s.get(id))
+    else {
+        return bindings;
+    };
+    let reader = stage.view();
+    let roots: std::collections::BTreeSet<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            UsdOp::SetRelationship { path, name, .. }
+            | UsdOp::RemoveRelationship { path, name, .. }
+            | UsdOp::RestoreProperty { path, name, .. }
+                if matches!(
+                    name.as_str(),
+                    "material:binding" | "material:binding:physics"
+                ) =>
+            {
+                Some(path.as_str())
+            }
+            UsdOp::CopyProperty { to_path, .. } => to_path
+                .split_once('.')
+                .filter(|(_, n)| matches!(*n, "material:binding" | "material:binding:physics"))
+                .map(|(p, _)| p),
+            UsdOp::SetApiSchemas { path, .. } => Some(path.as_str()),
+            _ => None,
+        })
+        .collect();
+    for root in roots {
+        for entity in world
+            .resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>()
+            .in_subtree(id, root)
+        {
+            let Some(prim) = world.get::<UsdPrimPath>(entity) else {
+                continue;
+            };
+            let Ok(path) = openusd::sdf::Path::new(&prim.path) else {
+                continue;
+            };
+            if !bindings.contains_key(&path)
+                && (reader.has_api_schema(&path, "PhysicsCollisionAPI")
+                    || reader.has_api_schema(&path, "PhysicsRigidBodyAPI"))
+            {
+                bindings.insert(path.clone(), physical_material_binding(world, id, &path));
+            }
+        }
+    }
+    bindings
+}
+
+fn physical_material_binding(
+    world: &World,
+    id: AssetId<UsdStageAsset>,
+    path: &openusd::sdf::Path,
+) -> Result<Option<PhysicsMaterialBinding>, String> {
+    use lunco_usd_bevy_stage::{MaterialPurpose, UsdRead};
+    let stage = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|s| s.get(id))
+        .ok_or("missing canonical stage")?;
+    let reader = stage.view();
+    let Some(material) = reader.bound_material(path, MaterialPurpose::Physics)? else {
+        return Ok(None);
+    };
+    let target = openusd::sdf::Path::new(&material).map_err(|e| e.to_string())?;
+    if !reader.has_api_schema(&target, "PhysicsMaterialAPI") {
+        return Ok(None);
+    }
+    let density = if reader.has_authored_attribute(&target, "physics:density") {
+        let value = reader
+            .real(&target, "physics:density")
+            .filter(|v| v.is_finite() && *v >= 0.0)
+            .ok_or_else(|| {
+                format!("{target}.physics:density must be a nonnegative finite density")
+            })?;
+        (value > 0.0).then_some(value)
+    } else {
+        None
+    };
+    Ok(Some(PhysicsMaterialBinding { material, density }))
+}
+
 fn composed_local_matrix(
     world: &World,
     stage_id: AssetId<UsdStageAsset>,
@@ -3362,10 +3457,13 @@ fn composed_local_matrix(
     let stage = world
         .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()?
         .get(stage_id)?;
-    let prim = openusd::sdf::Path::new(path).ok()?;
-    lunco_usd_bevy_stage::local_transform_matrix_d_at(&stage.view(), &prim, 0.0)
-        .ok()
-        .map(|matrix| matrix.unwrap_or(bevy::math::DMat4::IDENTITY))
+    let time = world
+        .resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>()
+        .in_stage(stage_id, path)
+        .iter()
+        .find_map(|e| world.get::<lunco_usd_bevy_scene::UsdAnimated>(*e))
+        .map_or(0.0, |a| a.pose_time_code);
+    lunco_usd_bevy_stage::local_pose_matrix(&stage.view(), path, time).ok()
 }
 
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
@@ -3525,28 +3623,7 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             }
         }
         UsdOp::RemoveAttribute { path, name, .. } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else {
-                return;
-            };
-            let removed = world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|stages| stages.get(scene_id))
-                .map(|stage| {
-                    let source = document_projection_source(world, scene_id, op.edit_target())?;
-                    stage
-                        .projector()
-                        .reconcile_document_property(&sp, name, &source)
-                        .map_err(|error| error.to_string())
-                });
-            match removed {
-                Some(Ok(())) => {}
-                Some(Err(error)) => report_stage_projection_reset_failure(
-                    world,
-                    scene_id,
-                    format!("remove attribute {path}.{name}: {error}"),
-                ),
-                None => {}
-            }
+            reconcile_property(world, scene_id, op, path, name);
         }
         UsdOp::SetAttribute {
             path,
@@ -3686,47 +3763,12 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 None => {}
             }
         }
-        UsdOp::SetTimeSample {
-            path,
-            name,
-            type_name,
-            time,
-            value,
-            ..
-        } => {
-            let Ok(sp) = openusd::sdf::Path::new(path) else {
-                return;
-            };
-            let v = match lunco_usd_authoring::author::parse_attribute_value(type_name, value) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("[twin] parse keyframe {path}.{name} ({type_name}) @ {time}: {e}");
-                    return;
-                }
-            };
-            let authored = match world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(scene_id))
-            {
-                Some(cs) => match cs
-                    .projector()
-                    .author_time_sample(&sp, name, type_name, *time, v)
-                {
-                    Ok(()) => true,
-                    Err(e) => {
-                        warn!("[twin] author keyframe {path}.{name} @ {time}: {e}");
-                        false
-                    }
-                },
-                None => false,
-            };
-            // The per-frame sampler in `lunco-usd-bevy-animation` reads the live stage,
-            // so a key on an ALREADY-animated prim shows up next tick with no
-            // refresh. But the FIRST key turns a static prim animated — its entity
-            // isn't `UsdAnimated` yet, so re-instantiate the subtree to let the
-            // extractor tag + plan it. Steady-state keyframing stays refresh-free.
-            if authored && !prim_entity_is_animated(world, scene_id, path) {
-                refresh_prim_subtree(world, scene_id, path);
+        UsdOp::SetTimeSample { path, name, .. } | UsdOp::RemoveTimeSample { path, name, .. } => {
+            reconcile_property(world, scene_id, op, path, name);
+        }
+        UsdOp::CopyProperty { to_path, .. } => {
+            if let Some((path, name)) = to_path.split_once('.') {
+                reconcile_property(world, scene_id, op, path, name);
             }
         }
         UsdOp::RemoveRelationship { path, name, .. } => {
@@ -3775,10 +3817,6 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
                 },
                 None => false,
             };
-            // A relationship is InfoOnly — it never spawns/despawns, so the sink
-            // won't reconcile it. Whoever consumes the target (the Avian joint
-            // builder reads `physics:body0/1`; a material binding fans out to
-            // meshes) is re-run by re-instantiating the owning prim's subtree.
             if authored {
                 refresh_relationship_dependents(world, scene_id, path, name);
             }
@@ -3817,28 +3855,36 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let authored = match world
-                .get_non_send::<CanonicalStages>()
-                .and_then(|s| s.get(scene_id))
-            {
-                Some(cs) => match cs.projector().author_api_schemas(&sp, schemas) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        warn!("[twin] author API schemas at {path}: {e}");
-                        false
-                    }
-                },
-                None => {
-                    warn!("[twin] no canonical stage while authoring API schemas at {path}");
-                    false
+            let result = (|| {
+                use lunco_usd_bevy_stage::UsdRead;
+                let stage = world
+                    .get_non_send::<CanonicalStages>()
+                    .and_then(|s| s.get(scene_id))
+                    .ok_or("missing canonical stage")?;
+                let previous = stage.view().api_schemas(&sp);
+                stage
+                    .projector()
+                    .author_api_schemas(&sp, schemas)
+                    .map_err(|e| e.to_string())?;
+                let current = stage.view().api_schemas(&sp);
+                let changed: Vec<_> = previous
+                    .iter()
+                    .filter(|s| !current.contains(s))
+                    .chain(current.iter().filter(|s| !previous.contains(s)))
+                    .cloned()
+                    .collect();
+                Ok::<_, String>(changed)
+            })();
+            match result {
+                Ok(changed) if !incremental_api_schemas(&changed) => {
+                    refresh_prim_subtree(world, scene_id, path)
                 }
-            };
-            // Metadata-only Twin schemas do not affect ECS. Physical/unknown
-            // schemas do, so refresh only this prim's subtree after the live
-            // author succeeds; unrelated scene roots and running scripts stay
-            // intact.
-            if authored && !incremental_api_schemas(schemas) {
-                refresh_prim_subtree(world, scene_id, path);
+                Err(error) => report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("apply API schemas at {path}: {error}"),
+                ),
+                _ => {}
             }
         }
         UsdOp::SetPrimOrder { path, order, .. } => {
@@ -3902,44 +3948,62 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
         _ => {}
     }
 }
-/// Re-instantiate the subtree(s) that depend on relationship `name` on `path`.
-/// A `material:binding` fans out to every mesh it reaches, so a whole-scene visual
-/// refresh is honest; any other relationship (physics bodies, collections) is
-/// local to its owning prim's consumer, so refresh just that subtree.
+/// Generic relationship consumers re-read their subtree. Material consumers
+/// track their inherited bindings separately.
 fn refresh_relationship_dependents(
     world: &mut World,
     scene_id: AssetId<UsdStageAsset>,
     path: &str,
     name: &str,
 ) {
-    if crate::live_consume::standard_pbr_binding_edit(world, scene_id, path, name) {
-        // The native notice publishes the affected geometry's new PBR intent.
-        // Neither its mesh nor its physical topology changes.
-    } else if name == "material:binding" {
-        refresh_scene_visuals(world, scene_id);
-    } else {
+    if !matches!(name, "material:binding" | "material:binding:physics") {
         refresh_prim_subtree(world, scene_id, path);
     }
 }
 
-/// Whether the live entity projecting `path` in `scene_id` is already tagged
-/// [`UsdAnimated`](lunco_usd_bevy_scene::UsdAnimated) — so the per-frame animation
-/// sampler already drives it and a fresh keyframe needs no re-instantiation. False
-/// when the prim is static (or has no live entity yet), which is when a first
-/// keyframe must trigger a subtree refresh to (re-)tag it.
-fn prim_entity_is_animated(
+/// Mirror the committed property spec, including sampled values and weaker opinions.
+fn reconcile_property(
     world: &mut World,
-    scene_id: AssetId<UsdStageAsset>,
+    stage_id: AssetId<UsdStageAsset>,
+    op: &UsdOp,
     path: &str,
-) -> bool {
-    let mut q = world.query::<(&UsdPrimPath, Option<&lunco_usd_bevy_scene::UsdAnimated>)>();
-    q.iter(world)
-        .any(|(upp, anim)| upp.stage_handle.id() == scene_id && upp.path == *path && anim.is_some())
+    name: &str,
+) {
+    let result = (|| {
+        let stage = world
+            .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+            .and_then(|stages| stages.get(stage_id))
+            .ok_or("missing canonical stage")?;
+        let prim = openusd::sdf::Path::new(path).map_err(|error| error.to_string())?;
+        let source = document_projection_source(world, stage_id, op.edit_target())?;
+        if matches!(op, UsdOp::SetTimeSample { .. }) && name.starts_with("xformOp:") {
+            let order = prim
+                .append_property("xformOpOrder")
+                .map_err(|e| e.to_string())?;
+            if source.spec(&order).is_some() {
+                let property = prim.append_property(name).map_err(|e| e.to_string())?;
+                return stage
+                    .projector()
+                    .patch_layer(
+                        stage.stage().edit_target().layer_identifier(),
+                        &source,
+                        &[property, order],
+                        &[(prim, "propertyChildren".to_owned())],
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+            }
+        }
+        stage
+            .projector()
+            .reconcile_document_property(&prim, name, &source)
+            .map_err(|error| error.to_string())
+    })();
+    if let Err(error) = result {
+        report_stage_projection_reset_failure(world, stage_id, format!("{path}.{name}: {error}"));
+    }
 }
 
-/// Author a spawn onto the live native stage using its admitted closure.
-/// The native arc is visible to every subsequent opinion in the same ordered
-/// document batch; its change sink owns bounded ECS materialization.
 fn spawn_prim_op(
     world: &mut World,
     scene_id: AssetId<UsdStageAsset>,

@@ -713,7 +713,13 @@ pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut c
         let (mut ops, shader) = match &shader_path {
             Some(path) => (Vec::new(), path.clone()),
             None => {
-                let schemas = geom_api_schemas(world, &prim);
+                let schemas = match geom_api_schemas(world, &prim) {
+                    Ok(schemas) => schemas,
+                    Err(error) => {
+                        report_inspector_error(world, &error);
+                        return;
+                    }
+                };
                 let Some((ops, shader)) = lunco_usd_core::material::ensure_preview_surface_ops(
                     edit_target.clone(),
                     &prim.path,
@@ -1147,13 +1153,34 @@ fn usd_preview_transform_section(
     entity: Entity,
     preview: PreviewTransformContext,
 ) {
-    let Some(transform) = ctx.get::<Transform>(entity).copied() else {
+    let Some(prim) = ctx.get::<UsdPrimPath>(entity) else {
         return;
     };
-    let mut translation = transform.translation.as_dvec3().to_array();
-    let mut rotation =
-        lunco_usd_document::document::usd_rotate_xyz_degrees(transform.rotation.as_dquat());
-    let mut scale = transform.scale.as_dvec3().to_array();
+    let Some((stages, asset)) = ctx
+        .non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .zip(
+            ctx.resource::<Assets<lunco_usd_bevy_stage::UsdStageAsset>>()
+                .and_then(|assets| assets.get(prim.stage_handle.id())),
+        )
+    else {
+        ui.label("Preparing USD transform");
+        return;
+    };
+    let (reader, _) = stages.reader_for_composed_query(prim.stage_handle.id(), asset);
+    let time_code = ctx
+        .get::<lunco_usd_bevy_scene::UsdAnimated>(entity)
+        .map_or(0.0, |animation| animation.pose_time_code);
+    let matrix = match lunco_usd_bevy_stage::local_pose_matrix(&reader, &preview.path, time_code) {
+        Ok(matrix) => matrix,
+        Err(error) => {
+            ui.label(error.to_string());
+            return;
+        }
+    };
+    let (s, r, t) = matrix.to_scale_rotation_translation();
+    let mut translation = t.to_array();
+    let mut rotation = lunco_usd_document::document::usd_rotate_xyz_degrees(r);
+    let mut scale = s.to_array();
     let mut translation_commit = false;
     let mut rotation_commit = false;
     let mut scale_commit = false;
@@ -1236,20 +1263,15 @@ fn usd_preview_transform_section(
         return;
     }
 
-    let result = ctx
-        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>()
-        .and_then(|registry| registry.host(preview.doc))
-        .ok_or_else(|| "USD preview document is closed".to_owned())
-        .and_then(|host| {
-            host.document().local_pose_ops(
-                &preview.edit_target,
-                &preview.path,
-                translation_commit.then(|| bevy::math::DVec3::from_array(translation)),
-                rotation_commit
-                    .then(|| lunco_usd_document::document::usd_rotate_xyz_quaternion(rotation)),
-                scale_commit.then(|| bevy::math::DVec3::from_array(scale)),
-            )
-        });
+    let result = lunco_scene_authoring::local_pose::local_pose_ops(
+        &reader,
+        &preview.edit_target,
+        &preview.path,
+        time_code,
+        translation_commit.then(|| bevy::math::DVec3::from_array(translation)),
+        rotation_commit.then(|| lunco_usd_document::document::usd_rotate_xyz_quaternion(rotation)),
+        scale_commit.then(|| bevy::math::DVec3::from_array(scale)),
+    );
     let ops = match result {
         Ok(ops) => ops,
         Err(error) => {
@@ -1262,7 +1284,7 @@ fn usd_preview_transform_section(
     };
     ctx.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: preview.doc,
-        parent_gen: (preview.generation != 0).then_some(preview.generation),
+        parent_gen: Some(preview.generation),
         label: "Edit USD transform".to_string(),
         ops,
     });

@@ -237,6 +237,22 @@ pub fn local_transform_matrix_d_at(
     Ok(Some(convention.canonical_local_matrix_d(matrix)))
 }
 
+/// Canonical double-precision parent-local pose in the selected projection.
+pub fn local_pose_matrix(
+    reader: &dyn UsdReadObject,
+    path: &str,
+    time: f64,
+) -> Result<DMat4, String> {
+    let path = SdfPath::new(path).map_err(|e| e.to_string())?;
+    if !reader.has_prim(&path) {
+        return Err(format!("missing USD prim {path}"));
+    }
+    reader
+        .local_transform_matrix_d_at(&path, time)
+        .map(|matrix| matrix.unwrap_or(DMat4::IDENTITY))
+        .map_err(|e| e.to_string())
+}
+
 /// Read a prim's canonical local transform at its default time.
 pub fn read_transform_from_usd(
     reader: &dyn UsdReadObject,

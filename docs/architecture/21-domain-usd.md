@@ -688,9 +688,7 @@ authored operation records exactly one typed op. A full reload advances the
 generation and records `UsdChange::FullReload`, but does not invent an authored
 operation. `ops_since` returns `None` when the cursor crosses a full reload or the
 op window expires; document sync then sends a layer snapshot, and the stage
-projector rebuilds from composed source. Coarse authored ops (`ReplaceSource`,
-`MovePrim`, `RemoveTimeSample`, `SetRelationship`) rebuild; common interactive ops,
-including local subtree remove/restore, replay incrementally
+projector rebuilds from composed source. Whole-source replacements, namespace moves, composition arc changes and stage metrics rebuild the stage. Property copies and keyframe insertion/removal mirror the committed property spec on its owning layer. Relationship edits notify their consumers, and local subtree removal/restoration replays incrementally
 (`apply_incremental_op_to_stage`). A reload whose parsed layer
 source string is identical is an idempotent no-op and does not advance the
 projection generation.

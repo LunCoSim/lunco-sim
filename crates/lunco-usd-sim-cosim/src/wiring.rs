@@ -272,7 +272,67 @@ fn mark_wiring_dirty_for_path_remove(
     }
 }
 
+/// Invalidate wiring only for accepted simulation endpoints in the changed stage.
+fn invalidate_edited_endpoints(
+    mut changes: MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>,
+    index: Option<Res<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>>,
+    endpoints: Query<
+        (),
+        Or<(
+            With<lunco_port_core::PortSurfaceReady>,
+            With<lunco_port_core::PortSurface>,
+            With<lunco_port_core::OutputPorts>,
+            With<SimComponent>,
+        )>,
+    >,
+    parents: Query<&ChildOf>,
+    previews: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
+    revisions: Query<&lunco_core::ModelStateRevision>,
+    mut commands: Commands,
+    mut dirty: ResMut<UsdWiringDirty>,
+) {
+    let Some(index) = index else { return };
+    let mut changed_models = std::collections::BTreeSet::new();
+    for change in changes.read() {
+        for path in change.info_paths.iter().chain(&change.connection_paths) {
+            let Some((prim, property)) = path.split_once('.') else {
+                continue;
+            };
+            let input = property.starts_with("inputs:");
+            if !input && !change.connection_paths.contains(path) {
+                continue;
+            }
+            for &entity in index.in_stage(change.stage_id, prim) {
+                if endpoints.contains(entity)
+                    && !lunco_usd_bevy_scene::is_preview_only(entity, &parents, &previews)
+                {
+                    dirty.0 = true;
+                    if input {
+                        changed_models.insert(entity);
+                    }
+                }
+            }
+        }
+    }
+    for entity in changed_models {
+        let mut revision = revisions.get(entity).copied().unwrap_or_default();
+        revision.advance();
+        commands.entity(entity).insert(revision);
+    }
+}
+
 pub(super) fn install_wiring_invalidation_observers(app: &mut App) {
+    app.add_message::<lunco_usd_bevy_scene::UsdSceneChangeBatch>()
+        .add_systems(
+            Update,
+            invalidate_edited_endpoints
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::on_message::<
+                        lunco_usd_bevy_scene::UsdSceneChangeBatch,
+                    >,
+                )
+                .before(rewire_usd_connections),
+        );
     app.add_observer(
         |_: On<Insert<GeneratedModelicaSource>>, mut dirty: ResMut<UsdWiringDirty>| {
             dirty.0 = true;

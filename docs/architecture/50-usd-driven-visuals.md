@@ -139,14 +139,9 @@ pose, contact and presentation paths above neither advance document generation
 nor issue a USD stage notice.
 
 Authored visibility changes reconcile the affected native composed descendants
-in place, keeping the ECS entities, meshes, and physics state. A direct standard
-PBR material binding on concrete geometry likewise changes its appearance
-intent rather than rebuilding the geometry. Standard material producer
-changes refresh the surfaces whose resolved shader/texture dependencies
-include that producer. Custom shader ownership changes, inherited/collection
-bindings and coarse composition or coupled-physics changes still require their
-topology-owner reconciliation; do not use these authoring paths for runtime
-interaction.
+in place, keeping the ECS entities, meshes, and physics state. Direct and inherited standard material bindings update the affected surfaces in place. Each surface tracks the shader and texture producers its terminal resolves through. Removing a producer withholds the affected geometry and reports a projection failure. Restoring the producer makes the same geometry visible again. A change to contact coefficients updates the existing native colliders. A change to material density also reconciles the owning mass projection. Co-simulation wiring listens for connection edits on simulation endpoints.
+
+Absolute pose commands, the Inspector and the gizmo plan against the admitted document generation and the displayed animation sample. The journal preserves double-precision pose values in authored stage units. Only sampled transform channels give animation control of a dynamic body. Removing the last transform channel returns motion to physics, even if appearance continues to animate. A live interaction uses the runtime pose or presentation command and leaves the document generation unchanged.
 
 ```rhai
 cmd("SetSceneView", #{batches: [

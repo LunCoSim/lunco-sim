@@ -8,12 +8,11 @@
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use openusd::sdf::Path as SdfPath;
-use openusd::sdf::Value;
 
 use lunco_render::{PbrLook, SurfaceAlpha};
 use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
 use lunco_usd_bevy_scene::{
-    UsdAnimated, UsdPrimPath, UsdSampledVisibility, UsdVisualVisibility,
+    UsdAnimated, UsdAnimatedTransform, UsdPrimPath, UsdSampledVisibility, UsdVisualVisibility,
     visibility::{UsdVisibilityReconcileSet, VisibilityProjectionChanged},
 };
 use lunco_usd_bevy_stage::canonical::CanonicalStages;
@@ -46,6 +45,23 @@ impl Plugin for UsdAnimationPlugin {
                 None,
                 refresh_animation_topology,
             ));
+        app.add_observer(|removed: On<Remove<UsdAnimated>>, mut commands: Commands| {
+            commands
+                .entity(removed.entity)
+                .try_remove::<UsdAnimatedTransform>();
+        });
+        app.add_message::<lunco_usd_bevy_scene::UsdSceneChangeBatch>();
+        app.add_systems(
+            Update,
+            refresh_sampled_channels
+                .after(lunco_usd_bevy_scene::UsdVisualProjectionSet)
+                .run_if(
+                    bevy::ecs::schedule::common_conditions::on_message::<
+                        lunco_usd_bevy_scene::UsdSceneChangeBatch,
+                    >,
+                )
+                .before(plan_usd_animation),
+        );
         app.add_systems(
             Update,
             (
@@ -64,6 +80,69 @@ impl Plugin for UsdAnimationPlugin {
                 .before(UsdVisibilityReconcileSet)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
+    }
+}
+
+/// Re-plan affected animation owners when a property gains or loses samples.
+fn refresh_sampled_channels(
+    mut changes: MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>,
+    rebound: Query<
+        (
+            &UsdPrimPath,
+            Ref<lunco_usd_bevy_scene::UsdSurfaceDependencies>,
+        ),
+        (
+            Changed<lunco_usd_bevy_scene::UsdSurfaceDependencies>,
+            Without<lunco_usd_bevy_scene::UsdSceneProjectionFailed>,
+        ),
+    >,
+    mut commands: Commands,
+) {
+    for change in changes.read() {
+        let mut affected = std::collections::BTreeSet::new();
+        for (prim, deps) in &rebound {
+            if !deps.is_added()
+                && prim.stage_handle.id() == change.stage_id
+                && let Ok(path) = SdfPath::new(&prim.path)
+            {
+                affected.insert(path);
+            }
+        }
+        let mut shaders = std::collections::BTreeSet::new();
+        for property in &change.sample_paths {
+            let Some((prim, name)) = property.split_once('.') else {
+                continue;
+            };
+            let Ok(path) = SdfPath::new(prim) else {
+                continue;
+            };
+            if name.starts_with("xformOp:")
+                || matches!(name, "visibility" | "primvars:displayColor")
+            {
+                affected.insert(path);
+            } else if lunco_usd_bevy_core::animation::ANIMATED_SHADER_INPUTS.contains(&name) {
+                shaders.insert(path);
+            }
+        }
+        if affected.is_empty() && shaders.is_empty() {
+            continue;
+        }
+        let stage_id = change.stage_id;
+        commands.queue(move |world: &mut World| {
+            if !shaders.is_empty() {
+                let mut surfaces =
+                    world.query::<(&UsdPrimPath, &lunco_usd_bevy_scene::UsdSurfaceDependencies)>();
+                for (prim, deps) in surfaces.iter(world) {
+                    if prim.stage_handle.id() == stage_id
+                        && !deps.0.is_disjoint(&shaders)
+                        && let Ok(path) = SdfPath::new(&prim.path)
+                    {
+                        affected.insert(path);
+                    }
+                }
+            }
+            refresh_animation_topology(world, stage_id, &affected.into_iter().collect::<Vec<_>>());
+        });
     }
 }
 
@@ -91,19 +170,16 @@ fn refresh_animation_topology(
             })
             .collect::<std::collections::HashMap<_, _>>()
     };
-    let mut prims = world.query::<(Entity, &UsdPrimPath)>();
-    let mut targets = prims
-        .iter(world)
-        .filter_map(|(entity, prim)| {
-            (prim.stage_handle.id() == stage_id)
-                .then(|| {
-                    facts
-                        .get(&prim.path)
-                        .map(|animated| (prim.path.clone(), entity, animated.clone()))
-                })
-                .flatten()
+    let index = world.resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>();
+    let mut targets: Vec<_> = facts
+        .into_iter()
+        .flat_map(|(path, animated)| {
+            index
+                .in_stage(stage_id, &path)
+                .iter()
+                .map(move |entity| (path.clone(), *entity, animated.clone()))
         })
-        .collect::<Vec<_>>();
+        .collect();
     targets.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     let mut commands = world.commands();
     for (_, entity, animated) in targets {
@@ -111,7 +187,7 @@ fn refresh_animation_topology(
             Ok(true) => {
                 commands
                     .entity(entity)
-                    .try_insert(UsdAnimated)
+                    .insert_if_new(UsdAnimated::default())
                     .try_remove::<AnimationPlan>();
             }
             Ok(false) => {
@@ -173,22 +249,6 @@ pub struct AnimationPlan {
     pub material: Option<MaterialPlan>,
 }
 
-/// Sample a scalar time-sampled numeric input.
-fn read_f32_at(reader: &dyn UsdReadObject, path: &SdfPath, attr: &str, time: f64) -> Option<f32> {
-    if !attr_has_time_samples(reader, path, attr) {
-        return None;
-    }
-    reader
-        .attr_value_at(path, attr, time)
-        .and_then(|value| match value {
-            Value::Float(value) => Some(value),
-            Value::Double(value) => Some(value as f32),
-            Value::Int(value) => Some(value as f32),
-            Value::Int64(value) => Some(value as f32),
-            _ => None,
-        })
-}
-
 /// Derive one animated prim's channel plan after its stage is available.
 pub fn plan_usd_animation(
     stages: Res<Assets<UsdStageAsset>>,
@@ -213,10 +273,13 @@ pub fn plan_usd_animation(
             continue;
         };
 
-        let xform = if lunco_usd_bevy_stage::read_xform_op_order(reader, &path).is_some() {
-            XformDrive::OpOrder
-        } else {
-            XformDrive::None
+        let xform = match reader.transform_might_be_time_varying(&path) {
+            Ok(true) => XformDrive::OpOrder,
+            Ok(false) => XformDrive::None,
+            Err(error) => {
+                reject_animation_projection(&mut commands, entity, error.to_string());
+                continue;
+            }
         };
         let shader = match reader.bound_shader(&path) {
             Ok(shader) => shader,
@@ -239,6 +302,11 @@ pub fn plan_usd_animation(
             opacity,
         });
 
+        if xform == XformDrive::OpOrder {
+            commands.entity(entity).insert_if_new(UsdAnimatedTransform);
+        } else {
+            commands.entity(entity).try_remove::<UsdAnimatedTransform>();
+        }
         commands.entity(entity).try_insert(AnimationPlan {
             time_codes_per_second: stage_time_codes_per_second(reader),
             xform,
@@ -284,6 +352,7 @@ pub fn sample_usd_animation(
             &UsdPrimPath,
             &AnimationPlan,
             &mut Transform,
+            &mut UsdAnimated,
             Option<&UsdVisualVisibility>,
             Option<&UsdSampledVisibility>,
             Option<&mut CellCoord>,
@@ -296,7 +365,19 @@ pub fn sample_usd_animation(
     mut commands: Commands,
     mut visibility_changes: MessageWriter<VisibilityProjectionChanged>,
 ) {
-    for (entity, prim, plan, mut transform, visibility, sampled, cell, parent, binding) in &mut q {
+    for (
+        entity,
+        prim,
+        plan,
+        mut transform,
+        mut animation,
+        visibility,
+        sampled,
+        cell,
+        parent,
+        binding,
+    ) in &mut q
+    {
         let Some(_stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
@@ -356,6 +437,7 @@ pub fn sample_usd_animation(
                     }
                     next.translation = local_translation;
                 }
+                animation.pose_time_code = time;
                 if *transform != next {
                     *transform = next;
                 }
@@ -442,8 +524,7 @@ pub fn sample_usd_material_animation(
             }
         }
         if material.opacity {
-            if let Some(opacity) = read_f32_at(
-                reader,
+            if let Some(opacity) = reader.real_f32_at(
                 material.shader.as_ref().unwrap_or(&plan.path),
                 "inputs:opacity",
                 time,

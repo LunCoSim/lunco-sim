@@ -714,9 +714,11 @@ fn restore_gizmo_dynamic(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     viewport: Option<Res<UsdViewportState>>,
-    documents: Option<
-        Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
-    >,
+    stage_sources: (
+        Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+        Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
+    ),
+    targets: Query<(&UsdPrimPath, Option<&lunco_usd_bevy_scene::UsdAnimated>)>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_drag: Query<(Entity, &GizmoDragState)>,
     mut q_vel: Query<(Option<&mut LinearVelocity>, Option<&mut AngularVelocity>)>,
@@ -806,26 +808,50 @@ fn restore_gizmo_dynamic(
                     ..
                 } = &drag.owner
                 {
-                    let position = ((drag.current_position - drag.original_position)
-                        .length_squared()
-                        > 1.0e-12)
-                        .then_some(drag.current_position);
-                    let rotation = (drag.current_rotation.dot(drag.original_rotation).abs()
-                        < 1.0 - 1.0e-12)
-                        .then_some(drag.current_rotation);
-                    let scale = drag.current_scale.zip(drag.original_scale).and_then(
-                        |(current, original)| {
-                            ((current - original).length_squared() > 1.0e-12).then_some(current)
-                        },
-                    );
-                    let result = documents
-                        .as_ref()
-                        .and_then(|registry| registry.host(*doc))
-                        .ok_or_else(|| "USD preview document is closed".to_owned())
-                        .and_then(|host| {
-                            host.document().local_pose_ops(
+                    let result = targets
+                        .get(entity)
+                        .map_err(|error| error.to_string())
+                        .and_then(|(prim, animation)| {
+                            let stage_id = prim.stage_handle.id();
+                            let (stages, asset) = stage_sources
+                                .0
+                                .as_deref()
+                                .zip(
+                                    stage_sources
+                                        .1
+                                        .as_deref()
+                                        .and_then(|assets| assets.get(stage_id)),
+                                )
+                                .ok_or("USD preview has no composed stage")?;
+                            let (reader, _) = stages.reader_for_composed_query(stage_id, asset);
+                            let time_code =
+                                animation.map_or(0.0, |animation| animation.pose_time_code);
+                            let (authored_scale, authored_rotation, authored_translation) =
+                                lunco_usd_bevy_stage::local_pose_matrix(&reader, path, time_code)?
+                                    .to_scale_rotation_translation();
+                            let delta = drag.current_position - drag.original_position;
+                            let position = (delta.length_squared() > 1.0e-12)
+                                .then_some(authored_translation + delta);
+                            let rotation =
+                                (drag.current_rotation.dot(drag.original_rotation).abs()
+                                    < 1.0 - 1.0e-12)
+                                    .then(|| {
+                                        (drag.current_rotation
+                                            * drag.original_rotation.inverse()
+                                            * authored_rotation)
+                                            .normalize()
+                                    });
+                            let scale = drag.current_scale.zip(drag.original_scale).and_then(
+                                |(current, original)| {
+                                    ((current - original).length_squared() > 1.0e-12)
+                                        .then(|| authored_scale * (current / original))
+                                },
+                            );
+                            lunco_scene_authoring::local_pose::local_pose_ops(
+                                &reader,
                                 edit_target,
                                 path,
+                                time_code,
                                 position,
                                 rotation,
                                 scale,
@@ -851,7 +877,7 @@ fn restore_gizmo_dynamic(
                     if !ops.is_empty() {
                         commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
                             doc_id: *doc,
-                            parent_gen: (*generation != 0).then_some(*generation),
+                            parent_gen: Some(*generation),
                             label: "Edit USD transform".to_string(),
                             ops,
                         });

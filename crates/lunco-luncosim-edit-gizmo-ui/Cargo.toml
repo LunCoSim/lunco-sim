@@ -25,12 +25,13 @@ lunco-control-core = { path = "../lunco-control-core" }
 lunco-core = { path = "../lunco-core" }
 lunco-core-runtime = { path = "../lunco-core-runtime" }
 lunco-interaction-core = { path = "../lunco-interaction-core" }
-lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
 lunco-doc = { path = "../lunco-doc" }
 lunco-physics = { path = "../lunco-physics" }
+lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-command-contracts = { path = "../lunco-scene-command-contracts" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-time = { path = "../lunco-time" }
+lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-core = { path = "../lunco-usd-core" }
 lunco-usd-document = { path = "../lunco-usd-document" }

@@ -1144,8 +1144,7 @@ cache. The connection system therefore waits for both entities **and** the
 target's runtime contract; it never creates an edge merely to discover on a later
 fixed tick that the port surface was absent.
 
-Wiring admission uses the existing `UsdWiringDirty` latch. Endpoint contract
-and identity observers, removals, live USD edits, and authority changes wake
+Co-simulation owns the `UsdWiringDirty` latch. Endpoint contract and identity observers, removals, authored input and connection changes on admitted simulation endpoints, and authority changes wake
 reconciliation; stable updates read the latch without scanning endpoint
 entities for `Added<T>` matches.
 

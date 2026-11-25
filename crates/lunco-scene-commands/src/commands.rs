@@ -1349,6 +1349,7 @@ pub struct TransformPersistence<'w, 's> {
     backed: Option<Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     canonical: Option<NonSend<'w, lunco_usd_bevy_stage::canonical::CanonicalStages>>,
     usd_assets: Option<Res<'w, Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
+    animation: Query<'w, 's, &'static lunco_usd_bevy_scene::UsdAnimated>,
     q_prim: Query<'w, 's, &'static UsdPrimPath>,
 }
 
@@ -1383,25 +1384,34 @@ impl TransformPersistence<'_, '_> {
             .as_deref()
             .and_then(|backed| backed.applied_stage_generation(doc, stage_id))
             == Some(host.generation());
-        let stage = self
+        if !current {
+            return Err(Reject::InvalidOp(
+                "Pose edit requires the current composed document revision".into(),
+            ));
+        }
+        let stages = self
             .canonical
             .as_deref()
-            .and_then(|stages| stages.get(stage_id))
-            .filter(|_| current);
-        let layer = LayerId::runtime();
-        let ops = match stage {
-            Some(canonical) => lunco_usd_document::document::local_pose_ops(
-                canonical.stage(),
-                &layer,
-                &path,
-                translation,
-                rotation,
-                None,
-            ),
-            None => host
-                .document()
-                .local_pose_ops(&layer, &path, translation, rotation, None),
-        }
+            .ok_or_else(|| Reject::InvalidOp("USD projection registry is unavailable".into()))?;
+        let asset = self
+            .usd_assets
+            .as_deref()
+            .and_then(|assets| assets.get(stage_id))
+            .ok_or_else(|| Reject::InvalidOp("USD stage asset is unavailable".into()))?;
+        let (reader, _) = stages.reader_for_composed_query(stage_id, asset);
+        let time_code = self
+            .animation
+            .get(entity)
+            .map_or(0.0, |animation| animation.pose_time_code);
+        let ops = lunco_scene_authoring::local_pose::local_pose_ops(
+            &reader,
+            &LayerId::runtime(),
+            &path,
+            time_code,
+            translation,
+            rotation,
+            None,
+        )
         .map_err(Reject::InvalidOp)?;
         Ok(Some(ApplyUsdOps {
             doc_id: doc,
