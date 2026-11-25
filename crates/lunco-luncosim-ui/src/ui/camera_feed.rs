@@ -469,8 +469,69 @@ pub(super) struct CameraFeedUiState {
     layouts: BTreeMap<u64, CameraFeedWindowLayout>,
     hidden: BTreeSet<u64>,
     revision: u64,
+    catalog: Option<std::sync::Arc<CameraFeedCatalog>>,
 }
 impl SceneResource for CameraFeedUiState {}
+
+struct CameraFeedCatalog {
+    identities: Vec<(GlobalEntityId, String)>,
+    source_groups: BTreeMap<String, String>,
+    candidates: Vec<(GlobalEntityId, String, String)>,
+    owner_labels: BTreeMap<String, String>,
+}
+
+impl CameraFeedCatalog {
+    fn new(
+        identities: Vec<(GlobalEntityId, String)>,
+        source_groups: BTreeMap<String, String>,
+    ) -> Self {
+        let paths: Vec<_> = identities.iter().map(|(_, path)| path.clone()).collect();
+        let labels = lunco_camera_core::camera_display_labels(&paths);
+        let owner_paths: Vec<_> = source_groups
+            .values()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let owner_labels: BTreeMap<_, _> = owner_paths
+            .iter()
+            .cloned()
+            .zip(lunco_camera_core::camera_display_labels(&owner_paths))
+            .collect();
+        let group = |path: &str| {
+            source_groups
+                .get(path)
+                .and_then(|owner| owner_labels.get(owner))
+                .map(String::as_str)
+                .unwrap_or("Scene views")
+        };
+        let mut candidates: Vec<_> = identities
+            .iter()
+            .zip(labels)
+            .map(|((id, path), label)| (*id, path.clone(), label))
+            .collect();
+        candidates.sort_by(|a, b| {
+            group(&a.1)
+                .cmp(group(&b.1))
+                .then(a.2.cmp(&b.2))
+                .then(a.1.cmp(&b.1))
+        });
+        Self {
+            identities,
+            source_groups,
+            candidates,
+            owner_labels,
+        }
+    }
+
+    fn group(&self, path: &str) -> &str {
+        self.source_groups
+            .get(path)
+            .and_then(|owner| self.owner_labels.get(owner))
+            .map(String::as_str)
+            .unwrap_or("Scene views")
+    }
+}
 
 #[derive(Event)]
 struct SetCameraHudVisibility {
@@ -770,47 +831,6 @@ pub(super) fn draw_camera_feed(
     state
         .last_match_request
         .retain(|id, _| feeds.instances.contains_key(id));
-    let mut candidates: Vec<_> = cameras
-        .iter()
-        .map(|(id, name, callsign, catalog, ..)| {
-            (
-                *id,
-                name.as_str().to_owned(),
-                entity_display_name(Some(name), callsign, catalog),
-            )
-        })
-        .collect();
-    let paths: Vec<_> = candidates.iter().map(|(_, path, _)| path.clone()).collect();
-    let labels = lunco_camera_core::camera_display_labels(&paths);
-    for (candidate, label) in candidates.iter_mut().zip(labels) {
-        candidate.2 = label;
-    }
-    let owner_paths: Vec<_> = selection
-        .camera_group_paths
-        .values()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let owner_labels: BTreeMap<_, _> = owner_paths
-        .iter()
-        .cloned()
-        .zip(lunco_camera_core::camera_display_labels(&owner_paths))
-        .collect();
-    let group = |path: &String| {
-        selection
-            .camera_group_paths
-            .get(path)
-            .and_then(|owner| owner_labels.get(owner))
-            .cloned()
-            .unwrap_or_else(|| "Scene views".into())
-    };
-    candidates.sort_by(|a, b| {
-        group(&a.1)
-            .cmp(&group(&b.1))
-            .then(a.2.cmp(&b.2))
-            .then(a.1.cmp(&b.1))
-    });
     state
         .searches
         .retain(|id, _| feeds.instances.contains_key(id));
@@ -826,6 +846,36 @@ pub(super) fn draw_camera_feed(
         .filter(|(_, visibility)| visibility.get())
         .filter_map(|(tags, _)| tags.tags().get("camera_feed")?.parse().ok())
         .collect();
+    // Retire per-feed drafts before the visibility check, but do not prepare
+    // a dropdown for a hidden or author-embedded camera view.
+    if feeds
+        .instances
+        .keys()
+        .all(|id| embedded.contains(id) || state.hidden.contains(id))
+    {
+        return;
+    }
+    let catalog_current = state.catalog.as_ref().is_some_and(|catalog| {
+        catalog.source_groups == selection.camera_group_paths
+            && cameras
+                .iter()
+                .map(|(id, name, ..)| (*id, name.as_str()))
+                .eq(catalog
+                    .identities
+                    .iter()
+                    .map(|(id, path)| (*id, path.as_str())))
+    });
+    if !catalog_current {
+        state.catalog = Some(std::sync::Arc::new(CameraFeedCatalog::new(
+            cameras
+                .iter()
+                .map(|(id, name, ..)| (*id, name.as_str().to_owned()))
+                .collect(),
+            selection.camera_group_paths.clone(),
+        )));
+    }
+    let catalog = std::sync::Arc::clone(state.catalog.as_ref().expect("catalog admitted"));
+    let candidates = &catalog.candidates;
     for (index, (id, feed)) in feeds.instances.iter().enumerate() {
         // An authored HUD owns presentation of this same native image.
         if embedded.contains(id) || state.hidden.contains(id) {
@@ -905,10 +955,10 @@ pub(super) fn draw_camera_feed(
                                 .hint_text("Find rover or camera…"),
                         );
                         let filter=search.to_lowercase();let mut previous=None;
-                        for (source,path,label) in &candidates {
-                            let owner=group(path);
+                        for (source,path,label) in candidates {
+                            let owner=catalog.group(path);
                             if !filter.is_empty() && !format!("{owner} {path} {label}").to_lowercase().contains(&filter){continue;}
-                            if previous.as_ref()!=Some(&owner){ui.separator();ui.strong(&owner);previous=Some(owner);}
+                            if previous.as_ref()!=Some(&owner){ui.separator();ui.strong(owner);previous=Some(owner);}
                             if ui.selectable_label(feed.source==Some(*source),label).on_hover_text(path).clicked()
                                 && feed.source!=Some(*source) {
                                 commands.trigger(SetCameraFeed {feed:Some(*id),source:Some(*source),label:label.clone(),width:None,height:None,minimum_scene_items:None});

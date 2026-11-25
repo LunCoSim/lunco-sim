@@ -106,8 +106,10 @@ commands with stable producer identity return their next-tick admission stamp.
 Use `ReleasePort` for one input or `ReleaseControl` to return all local input
 holds to authored wiring; release commands do not write replacement values.
 Twin policy owns safe values and writes them explicitly through `SetPorts`.
-The keyboard path continues to emit its resolved binding batch and therefore
-replaces or neutralizes its own values as intents change.
+The keyboard path continues to replace or neutralize its own values as intents
+change. Local kinematic self-drive reuses already committed operator levels
+when the live map, hold and successful write receipt match exactly; release,
+external changes and faults re-admit the command on the interaction clock.
 
 The fixed-step vessel controller captures physical `ActionState<UserIntent>` into
 a by-value `PhysicalIntentFrame` semantic snapshot. Admission requires the

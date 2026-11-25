@@ -178,6 +178,7 @@ class ProductionSession:
         subcommand: str | None = None,
         require_readiness: bool = True,
         expected_exit_code: int = 0,
+        env: dict[str, str] | None = None,
     ) -> None:
         self.port = port
         self.extra_args = list(extra_args)
@@ -186,6 +187,7 @@ class ProductionSession:
         self.subcommand = subcommand
         self.require_readiness = require_readiness
         self.expected_exit_code = expected_exit_code
+        self.env = env
         self._log = None
         self.process: subprocess.Popen[bytes] | None = None
 
@@ -212,6 +214,7 @@ class ProductionSession:
             stdout=self._log,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=self.env,
         )
         try:
             if self.require_readiness:

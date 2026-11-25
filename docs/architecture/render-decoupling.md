@@ -53,6 +53,39 @@ logged at surface configuration; Tracy `surface_acquire` and `surface_present`
 measure their separate costs. Surface throughput can still bound interactive
 frame cadence; this is not a separate simulation clock.
 
+The Vulkan adapter identifies the rendering device. The window system also
+participates in presenting its images. Attribute native waits by comparing
+the same binary, camera and physical target on identified surfaces. Measure
+acquire and present on the render thread, then use a separate uninstrumented
+process for application frame intervals. An isolated Weston GL output
+exercises native Wayland buffer exchange. Physical scanout timing requires
+evidence from the display compositor or monitor. See the
+[performance driver](../../scripts/perf/README.md).
+
+FIFO measurements use the application's normal pacing and record the selected
+surface mode. For a private Weston output, its completed repaint timestamps
+measure output cadence. An uncapped Mailbox client can submit several images
+between repaints. Keep the client frame intervals and the output repaint
+intervals as distinct measurements when comparing presentation paths.
+
+## Reuse of presentation work
+
+The native picking backend republishes cached hits for identical pointer rays
+and mesh-candidate state (geometry, visibility, transforms, layers and picking
+settings). Changes to mesh assets also invalidate hits. Terrain picking follows
+its own analytic oracle; reuse requires the same grid ray and exact oracle and
+active-frame pose identities. Both backends continue emitting ordinary pointer
+hits each frame so hover and click dispatch are unchanged.
+
+Screenshot cleanup visits only captured screenshot entities. The transform-gizmo
+backend creates grouped gizmos only when targets exist and rebuilds draw data
+only for changed configuration, interaction, target transforms or active drag.
+Blueprint material bindings retain unique unscoped material identities; mesh
+membership changes rebuild that set, and frame or material edits revisit only
+its current identities. A missing render projection invalidates the inventory
+so recovery admits the live bindings. None of these caches alters the
+rendering quality settings or simulation cadence.
+
 ## Initial scene presentation
 
 The interactive application keeps the main scene camera inactive during scene
@@ -89,7 +122,10 @@ shifting or a second physical solver.
 
 The native UI provides an independent camera picker, new-view button, resize,
 move and close for each image window. It reads projected camera identities,
-uses weak egui textures and submits typed commands. Selection and equipment
+uses weak egui textures and submits typed commands. A scene-scoped catalog
+reuses camera labels and groups when projected identity metadata is unchanged;
+no floating-window catalog is built when every feed is hidden or embedded.
+Selection and equipment
 validity policy remain authored Rhai. The capture collection resets at scene
 teardown. A retired source releases its view's image/camera and clears its
 selection; other views continue. Bevy/egui retire released textures. No source

@@ -525,12 +525,10 @@ for one captured fact snapshot. Both fields are validated before the surface
 is published, so malformed visibility or properties fail the whole decision.
 There is one backend fact conversion and one hook call per admitted surface
 snapshot. Rhai owns camera visibility as well as runtime subject visibility.
-The built-in projection counts statuses through indexed participant
-access and passes only those counts to its formatting helper. Rhai array
-iteration and by-value helper arguments can copy nested input/output maps;
-presentation helpers should receive only the fields they consume. Custom
-policies retain the complete typed participant facts at the existing hook
-boundary.
+The same captured participant facts supply a typed `participant_status_counts`
+map keyed by raw status. The built-in Rhai projection formats those counts
+without copying each nested input/output map. Custom policies retain the
+complete typed `participants` array at the existing hook boundary.
 
 Subject-scoped publication is lifecycle-scoped. It accepts only prims below the
 current primary `SceneMountState::active_root`; preview, additive, and outgoing
@@ -864,9 +862,12 @@ the producer through `retain_across_scenes`.
 
 The runtime-surface producer keeps authored USD metadata behind its existing
 active-root and `UsdStageRevision` cache. That includes surface membership,
-program source metadata, and per-participant declared public output names.
-Simulation status, telemetry, participant outputs, and Rhai policy results
-remain live at the bounded publication cadence. Do not reread composed USD to
+program source metadata, per-participant declared public output names,
+participant membership and authored telemetry descriptors. Component membership,
+parent, identity and descriptor changes invalidate the derived inventories;
+unchanged simulation components share immutable participant captures across
+publications. Telemetry samples, changed participant outputs, simulation status
+and Rhai policy results remain live at the bounded publication cadence. Do not reread composed USD to
 rebuild those static facts on each publication or add a second revision owner.
 Public output projection resolves that authored name set through
 `PortMap::slots_for_names` and reads the selected live samples in map order.

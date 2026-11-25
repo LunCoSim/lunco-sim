@@ -186,16 +186,16 @@ fn runtime_ui_surface(facts) {
     result.coordinate_frame = coordinates.coordinate_frame;
     result.angular_velocity = angular_speed_text(facts.angular_velocity);
     result.telemetry_summary = telemetry_text(facts.telemetry);
-    // Read the participant collection once. Repeated access through the outer
-    // facts map can clone the complete nested model-value inventory.
-    let participants = facts.participants;
+    // The raw status histogram is derived from the same participant snapshot.
+    // Formatting never needs to clone the participants' complete port maps.
+    let statuses = facts.participant_status_counts;
     let participant_counts = #{};
-    for index in 0..participants.len() {
-        let label = status_label(participants[index].status);
+    for status in statuses.keys() {
+        let label = status_label(status);
         participant_counts[label] = if participant_counts[label] == () {
-            1
+            statuses[status]
         } else {
-            participant_counts[label] + 1
+            participant_counts[label] + statuses[status]
         };
     }
     result.simulation_summary = participant_text(participant_counts);

@@ -578,7 +578,7 @@ observation and UI preparation/scene-contract verdicts passed. The headless
 dependency gate confirmed absence of the GPU stack but found the existing
 input-focus dependency from `lunco-control-core`.
 
-The paused FPS ceiling and unchanged MainPropulsion mean establish that the
+The paused Xvfb FPS ceiling and unchanged MainPropulsion mean establish that the
 performance objective is not achieved. A bounded render-world handoff does
 not isolate the authoritative clock; independent immutable presentation and
 reliable render extraction lifecycle are still required. Remaining solver
@@ -589,3 +589,62 @@ static/dynamic caster indexing. The precise sun gate still admitted 300/300
 live Griffin evaluations; its regression is a correctness improvement, not
 proof of a scene-level reduction. Do not relax simulation or render fidelity
 to reach the target.
+
+## Native Griffin presentation on Linux
+
+The same High-quality release executable and 1600×1000 Griffin tracking camera
+ran at 21.84 FPS on Xvfb and 90.23 FPS on a private Weston GL output. Paused
+rates were 21.62 and 109.20 FPS. Both used NVIDIA Vulkan on the RTX 5060.
+Xvfb offered FIFO and Immediate and selected Immediate. Wayland also offered
+Mailbox and selected it. Weston reported the NVIDIA DRM render node and DMA-BUF
+modifier support. Runtime receipts retained all 597 source hashes, 193 resident
+terrain tiles with none pending, and the authored landing handoff at 22.516667 s.
+
+In a separate pair of runs with identical instrumented executable hashes,
+Tracy attributed 43.89 ms per present call to Xvfb and 4.87 ms to Wayland while
+running. Respective p95s were 47.28 and 6.34 ms. Acquire averaged 0.024 and
+0.027 ms. A standalone NVIDIA Vulkan cube requested Immediate on both outputs.
+The whole 240-frame processes took 8.48 s on Xvfb and 0.35 s on Wayland.
+This reproduces the display-path penalty independently of LunCoSim and of the
+choice between Mailbox and Immediate. The measurements do not identify the
+operation inside the proprietary driver responsible for the difference.
+
+At 2560×1440, the private GPU Wayland output delivered 82.18 application FPS
+with a 15.67 ms p95. The active camera retained its requested physical target
+throughout the window. The renderer's bounded batch still owns the texture,
+native window and queue until presentation completes. Adding another queued
+frame would change latency without eliminating the measured transport cost.
+Use the [native profiling driver](../../scripts/perf/README.md) for repeatable
+surface comparisons. Product acceptance on a monitor requires its own desktop
+cohort. Receipts and matched traces are under `target/perf/griffin-native-wsi/`
+and `target/perf/griffin-repeat-work-fixed-20261125/`.
+
+Two consecutive release runs at 1600×1000 used the same NVIDIA Vulkan client.
+With the Radeon 610M compositing the window, Griffin ran at 92.71 FPS
+(p95 13.96 ms). With the RTX 5060 compositing, it ran at 95.81 FPS
+(p95 13.67 ms). One-second process samples detected no compiler CPU time in
+either run. The earlier 42.58 FPS hybrid run overlapped three compilers.
+
+In the matched Tracy captures, the hybrid render thread spent 5.57 ms per
+native present call while running. Only 0.11 ms on average remained after
+the next extraction finished. The same-GPU figures were 4.87 ms and 0.02 ms.
+All 1,002 hybrid and 978 same-GPU running presents matched the adjacent
+render updates and extractions. With physics paused, 4.22–4.38 ms remained
+after extraction, and the renderer performed 0.72–0.73 ms of work before
+acquiring the next image. These intervals describe the existing schedule.
+
+With ordinary focused-window pacing and FIFO, the private Weston output
+gave 39.71 application FPS. A diagnostic Mailbox run recorded 95.18
+application FPS and 39.58 completed output repaints per second in the same
+settled window. On private Mutter outputs configured at 60 and 180 Hz, the
+same FIFO application reported 89.75 and 90.42 FPS. A virtual output's
+configured refresh rate alone does not establish its delivery cadence.
+
+In a separate Weston FIFO diagnostic, Griffin produced 39.62 application
+frames per second and the virtual output completed 39.61 repaints per second.
+Wayland registered three 1600×1000 DMA-BUFs for the window at startup. From
+landing handoff through exit, each buffer was attached 276 times and the
+window imported no additional full-size buffer. Keep the bounded render
+handoff. Across the paired running frames, moving existing pre-acquire work
+alongside the outstanding present could overlap at most 0.046 ms per frame
+on average on the hybrid path and 0.013 ms on the same-GPU path.

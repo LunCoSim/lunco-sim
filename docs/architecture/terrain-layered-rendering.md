@@ -1044,3 +1044,11 @@ their native directional lookups use the rasterized surface and its view depth.
 Their far-field heightfield/horizon-cache sampling is a separate owner and does
 not sample native directional maps at displaced positions. The capability does
 not alter either shadow source, DEM coverage, procedural detail or LOD policy.
+
+## Resident mesh accounting
+
+Visual LOD mesh accounting retains the unique-handle resident, cached and retired
+byte totals until mesh ownership or residency actually changes. Admission and
+eviction still use the same byte and entry budgets, and retired handles count
+until the live geometry releases them. See [presentation work reuse](render-decoupling.md#reuse-of-presentation-work)
+for analytic pointer-ray admission.

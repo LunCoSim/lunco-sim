@@ -361,7 +361,9 @@ keyboard focus undisturbed. The current `DISPLAY`, `WAYLAND_DISPLAY`, or X11
 guarantee placement.
 
 When placement cannot be guaranteed, use a private graphical display for the
-windowed test. On Linux, start `xvfb-run -a` with inherited `DISPLAY`,
+windowed test. For native presentation timing on Linux, use the GPU-backed
+Wayland output in the [performance driver](../../scripts/perf/README.md).
+For X11 UI interaction, start `xvfb-run -a` with inherited `DISPLAY`,
 `WAYLAND_DISPLAY`, and `WAYLAND_SOCKET` cleared so the test uses the private
 X11 server. Verify the window rendered there. Use the headless runner for
 checks that do not require a window. If graphical isolation is unavailable,

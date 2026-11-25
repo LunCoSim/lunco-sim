@@ -2253,8 +2253,7 @@ dependencies = [
 [[package]]
 name = "bevy_picking"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47a04fb644c62a57a4f338f5cd8b61519c569139742eafe87dccb523e4b7cf2e"
+source = "git+https://github.com/LunCoSim/bevy?rev=b33d65990122c80aa73f835cd0c77d5a22ab4dd0#b33d65990122c80aa73f835cd0c77d5a22ab4dd0"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2378,7 +2377,7 @@ dependencies = [
 [[package]]
 name = "bevy_render"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=33c9a2d62c5381b2e4ae72f8ebe189928b3127f2#33c9a2d62c5381b2e4ae72f8ebe189928b3127f2"
+source = "git+https://github.com/LunCoSim/bevy?rev=b33d65990122c80aa73f835cd0c77d5a22ab4dd0#b33d65990122c80aa73f835cd0c77d5a22ab4dd0"
 dependencies = [
  "async-channel",
  "bevy_app",
@@ -17784,7 +17783,7 @@ dependencies = [
 [[package]]
 name = "transform-gizmo"
 version = "0.9.0"
-source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=01302a171ac3db662c0c322ef9e98fe7d5f33a6a#01302a171ac3db662c0c322ef9e98fe7d5f33a6a"
+source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=6d87d6c28ed1ad3bd134c444e8367ce8cf8d7e41#6d87d6c28ed1ad3bd134c444e8367ce8cf8d7e41"
 dependencies = [
  "ahash",
  "ecolor",
@@ -17799,7 +17798,7 @@ dependencies = [
 [[package]]
 name = "transform-gizmo-bevy"
 version = "0.9.0"
-source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=01302a171ac3db662c0c322ef9e98fe7d5f33a6a#01302a171ac3db662c0c322ef9e98fe7d5f33a6a"
+source = "git+https://github.com/LunCoSim/mitchty-transform-gizmo?rev=6d87d6c28ed1ad3bd134c444e8367ce8cf8d7e41#6d87d6c28ed1ad3bd134c444e8367ce8cf8d7e41"
 dependencies = [
  "bevy_app",
  "bevy_asset",
