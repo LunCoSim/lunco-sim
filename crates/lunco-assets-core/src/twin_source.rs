@@ -1454,16 +1454,20 @@ impl AssetReader for TwinReader {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            return Ok(
-                match self
-                    .roots
-                    .resolve_directory(name, &relative)
-                    .map_err(asset_reader_error)?
-                {
-                    Some(_) => true,
-                    None => false,
-                },
-            );
+            let Some((root, routes)) = self.roots.mount_paths(name).map_err(asset_reader_error)?
+            else {
+                return Ok(false);
+            };
+            let routes =
+                routes.ok_or_else(|| asset_reader_error(TwinRootsError::AssetRoutesUnavailable))?;
+            // Probe the selected entry without requiring a directory kind:
+            // a file is a negative predicate, not a failed lookup.
+            let Some(full) = resolve_twin_relative_path(&root, &relative, &routes)
+                .map_err(asset_reader_error)?
+            else {
+                return Ok(false);
+            };
+            return Ok(std::fs::metadata(full)?.is_dir());
         }
         #[cfg(target_arch = "wasm32")]
         Ok(self
@@ -1496,6 +1500,11 @@ mod tests {
                         .unwrap()
                 );
             }
+            assert!(
+                AssetReader::is_directory(&reader, &Path::new(&authority).join("entry/child"))
+                    .await
+                    .is_err()
+            );
             assert!(
                 AssetReader::is_directory(&reader, &Path::new(&authority).join("directory"))
                     .await
@@ -1808,6 +1817,13 @@ mod tests {
                 first
             );
             assert!(twin.manifest.is_none());
+            assert!(matches!(
+                roots.resolve_file(&first, relative),
+                Err(TwinRootsError::AssetRoutesUnavailable)
+            ));
+            roots
+                .replace_asset_routes(&first, Vec::new())
+                .expect("install empty manifest routes");
             let origin =
                 bevy::asset::AssetPath::from_path_buf(Path::new(&first).join("entry.usda"))
                     .with_source(TWIN_SCHEME);

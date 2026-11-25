@@ -323,25 +323,39 @@ mod tests {
         lunco_storage::write_file_sync(&cached.join("downloaded.rhai"), b"20 + 22")
             .expect("cached scenario");
 
-        let id = "twin://example/scenario.rhai";
-        assert_eq!(
-            read_asset_bytes_in_scope(
-                id,
-                None,
-                Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
-                1024
-            )
-            .expect("authored file"),
-            b"40 + 2"
-        );
+        let undeclared = crate::TwinReadScope::declared("example", root.path()).unwrap();
         assert_eq!(
             read_asset_bytes_in_scope(
                 "twin://example/downloaded.rhai",
                 None,
-                Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
+                Some(&undeclared),
                 1024
             )
-            .expect("cached file"),
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        let scope = crate::TwinReadScope::declared_with_routes(
+            "example",
+            root.path(),
+            vec![
+                crate::TwinAssetRoute::new(
+                    "downloaded.rhai",
+                    crate::TwinAssetStorage::TwinCache,
+                    "downloaded.rhai",
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let id = "twin://example/scenario.rhai";
+        assert_eq!(
+            read_asset_bytes_in_scope(id, None, Some(&scope), 1024).expect("authored file"),
+            b"40 + 2"
+        );
+        assert_eq!(
+            read_asset_bytes_in_scope("twin://example/downloaded.rhai", None, Some(&scope), 1024)
+                .expect("cached file"),
             b"20 + 22"
         );
         for id in [
@@ -349,13 +363,8 @@ mod tests {
             "twin://example/a/../../outside.rhai",
             r"twin://example/..\outside.rhai",
         ] {
-            let error = read_asset_bytes_in_scope(
-                id,
-                None,
-                Some(&crate::TwinReadScope::declared("example", root.path()).unwrap()),
-                1024,
-            )
-            .expect_err("unsafe Twin path must be rejected");
+            let error = read_asset_bytes_in_scope(id, None, Some(&scope), 1024)
+                .expect_err("unsafe Twin path must be rejected");
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         }
     }

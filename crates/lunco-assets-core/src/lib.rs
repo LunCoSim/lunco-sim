@@ -1186,10 +1186,29 @@ mod asset_directory_tests {
                     .is_err()
             );
         }
+        let cached_address = twin_uri(&authority, "parts/cached");
+        assert!(matches!(
+            resolve(&cached_address),
+            Err(TwinRootsError::AssetResolution(
+                std::io::ErrorKind::NotFound,
+                _
+            ))
+        ));
+        roots
+            .replace_asset_routes(
+                &authority,
+                vec![
+                    TwinAssetRoute::new(
+                        "parts/cached",
+                        TwinAssetStorage::TwinCache,
+                        "parts/cached",
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
         assert_eq!(
-            resolve(&twin_uri(&authority, "parts/cached"))
-                .unwrap()
-                .path(),
+            resolve(&cached_address).unwrap().path(),
             lunco_storage::canonicalize_file_path(&cached).unwrap()
         );
         assert!(resolve(&twin_uri(&authority, "../escape")).is_err());
