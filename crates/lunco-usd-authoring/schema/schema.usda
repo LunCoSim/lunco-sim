@@ -104,6 +104,21 @@ class LunCoPolicy "LunCoPolicy" (
     )
 }
 
+class "LunCoSoilAPI" (
+    inherits = </APISchemaBase>
+    customData = {
+        token apiSchemaType = "singleApply"
+    }
+    doc = "Homogeneous deformable soil for wheel contact on this terrain."
+)
+{
+    double lunco:soil:pressureGradient (doc = "Effective pressure per unit sinkage, Pa/m.")
+    double lunco:soil:cohesion (doc = "Cohesion, Pa.")
+    double lunco:soil:frictionAngleDeg (doc = "Internal friction angle, degrees.")
+    double lunco:soil:unitWeight (doc = "Bulk density times local gravity, N/m³.")
+    double lunco:soil:shearLength (doc = "Shear displacement scale, m.")
+}
+
 class "LunCoTerrainAPI" (
     inherits = </APISchemaBase>
     customData = {
@@ -557,9 +572,12 @@ class "LunCoTireAPI" (
     customData = {
     token apiSchemaType = "singleApply"
 }
-    doc = "Evidence envelope for the tire's steady-state force curve. Physical\n    grip remains standard UsdPhysicsMaterialAPI authoring; this API carries only\n    the validation bound that neither UsdPhysics nor PhysxVehicleTireAPI represents."
+    doc = "Measured rolling side-force curve and speed envelope for wheel-soil contact. Rigid supports use the standard PhysX stiffness graph and material friction."
 )
 {
+    double2[] lunco:tire:soilSideForceCurve (
+        doc = "Rolling side force divided by wheel load versus slip angle in degrees. Starts at (0,0). Used on LunCoSoilAPI surfaces."
+    )
     float lunco:tire:minValidatedSpeed = 0.0 (
         customData = {
     double max = 10.0

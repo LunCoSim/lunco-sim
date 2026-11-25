@@ -586,12 +586,12 @@ Coarse composition and graph-connected physical topology still use the
 graph-safe reset owner; eliminating that promotion requires a dependency-local
 teardown and readmission contract, not bypassing the physics guard.
 
-`ApplyUsdTransientOps` creates and edits explicitly composed `@view@` opinions,
-such as establishing a route ribbon prim with its USD material binding. It
-checks the document generation and advances the live projection, while leaving
-undo/redo, save output, and the Twin journal alone. Ongoing presentation
-values use the [live ECS presentation path](50-usd-driven-visuals.md#live-values-and-saved-settings)
-or an existing view owner such as `UpdateUsdCurveView`.
+`ApplyUsdTransientOps` creates and edits explicitly composed `@view@` opinions.
+It checks the document generation and advances the live projection outside
+undo/redo, save output and the Twin journal. Runtime values use the ECS
+presentation owners. Route ribbons acquire a keyed scene child with
+`SetSceneViewObject` and submit geometry with `UpdateUsdCurveView`.
+See [live values and saved settings](50-usd-driven-visuals.md#live-values-and-saved-settings).
 
 Views observing a `UsdDocument`:
 
@@ -719,8 +719,8 @@ Before replacement asset I/O, the document owner republishes the current
 persistent source for the scene and its tracked reference closure. This includes
 referenced Editor buffers that advanced since their preview mounted. Dirty
 buffers stay dirty, and disposable `@view@` opinions are excluded. Restart also
-clears the view layer of the mounted source closure before remount. Derived route
-positions and other presentation from the outgoing scene cannot enter the new
+clears the view layer of the mounted source closure before remount. Disposable USD
+opinions from the outgoing scene cannot enter the new
 scene through canonical document projection. Clearing view data advances its
 projection generation without changing authored dirty state or undo history.
 Publishing

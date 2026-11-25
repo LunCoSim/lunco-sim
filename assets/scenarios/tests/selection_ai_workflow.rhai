@@ -222,6 +222,10 @@ fn on_tick(me, ctx) {
     }
     if this.phase == 7 {
         if !ready(12202, this.fork) { return; }
+        let retained = assembly_edit::selection_context_for(FORK_PREVIEW);
+        this.checks.push(t_true(retained.selection_mode == "single"
+            && retained.primary.path == PART && retained.primary.identity == this.context.primary.identity,
+            "a committed edit preserves the selected preview path and document identity through projection"));
         let committed_generation = assembly_edit::describe(this.fork).generation;
         let changed = query("QueryUsdPrim", #{ doc_id: this.fork, path: PART });
         let untouched = query("QueryUsdPrim", #{ doc_id: this.original, path: PART });
@@ -286,6 +290,32 @@ fn on_tick(me, ctx) {
         let restored = query("QueryUsdPrim", #{ doc_id: this.fork, path: PART });
         this.checks.push(t_true(restored.attrs["xformOp:translate"][1] == 0.0,
             "undo restores the selected part through the same projection"));
+        this.pre_disable_generation = generation;
+        let disabled = assembly_edit::active(this.fork, "@root@", PART, false, generation);
+        this.checks.push(t_true(disabled.ok != false, "deactivate the selected part in its preview"));
+        this.phase = 81;
+        return;
+    }
+    if this.phase == 81 {
+        let generation = assembly_edit::describe(this.fork).generation;
+        if generation <= this.pre_disable_generation || !ready(FORK_PREVIEW, this.fork) { return; }
+        let absent = assembly_edit::selection_context_for(FORK_PREVIEW);
+        this.checks.push(t_true(absent.primary == () && absent.stale_selection_count > 0,
+            "the removed projection reports its saved selection as stale"));
+        this.pre_enable_generation = generation;
+        let enabled = assembly_edit::active(this.fork, "@root@", PART, true, generation);
+        this.checks.push(t_true(enabled.ok != false, "reactivate the selected part in its preview"));
+        this.phase = 82;
+        return;
+    }
+    if this.phase == 82 {
+        let generation = assembly_edit::describe(this.fork).generation;
+        if generation <= this.pre_enable_generation || !ready(FORK_PREVIEW, this.fork) { return; }
+        let retained = assembly_edit::selection_context_for(FORK_PREVIEW);
+        this.checks.push(t_true(retained.primary != ()
+            && retained.primary.identity == this.context.primary.identity
+            && retained.stale_selection_count == 0,
+            "the new projected entity restores the original selected document and path"));
         let deleted = assembly_edit::delete_inspection_preset(this.inspection_preset);
         this.checks.push(t_true(deleted.ok != false,
             "inspection camera preset deletion is admitted through the typed settings owner"));

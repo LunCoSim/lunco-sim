@@ -61,19 +61,16 @@ paths as explicit requirements. Exercise fault stimuli and safe/degraded modes
 through event-driven policy and tests; do not turn missing telemetry or an
 invalid command into a silent fallback.
 
-For live route edits, Rhai owns the route policy and calls the generic typed USD
-operation command. The reusable `waypoint_editor` tool authors ordinary USD
-route points, whether their route scope is inline or composed from a separate
-route-plan asset. Document authoring composes the base, runtime, and view layers
-at their actual strengths before validating selected-variant children; the
-`route_variant_lifecycle` production gate covers add, move, and delete on that
-route shape. It uses a local `active=false` opinion when a point comes from
-a reference arc, and updates the disposable ribbon in the document's `@view@`
-layer under the selected route scope from the committed USD route. An edit can
-use the selected route point to resolve its enclosing route and does not require
-rover possession; multiple routes still require an explicit route or subject
-selection. A selection-only delete resolves the selected point when no pointer
-target is present. Bind a route program to its composed USD document and build
+Live route commands alter the route program's session-owned plan. Use
+`waypoint_editor::live_route_snapshot(doc, route)` for the active route and
+`waypoint_editor::route_positions(doc, route)` for its authored definition.
+The program applies native marker/sensor admission through `SetRuntimeMarker`,
+existing point moves through live `MoveEntity`, and participation through
+`SetSceneParticipation`. It publishes a typed actor snapshot through
+`publish_scenario_state`. Runtime geometry and color changes do not journal USD.
+Pass `edit_intent: "Persistent"` only for an explicit authored tool action;
+`route_variant_lifecycle` covers composed-variant add, move and delete. The
+route's ribbon is a native keyed view for both paths. Bind a route program to its composed USD document and build
 its ribbon from the matching `usd.document.projected` event; that event is the
 authoritative boundary for the route identity and does not wait for Modelica
 admission. Keep `on_visualization(me, ctx)` for presentation preparation that
@@ -81,8 +78,8 @@ does not depend on a document attachment that may still be settling. This
 one-shot callback runs in `PreUpdate`, after the time spine and before the first
 fixed tick, top-level initialization, or `on_start`; use the host id, parameters,
 and read-only queries. Rhai blocks direct world writes and events there.
-`ApplyUsdTransientOps` creates a disposable composed view prim, and
-`UpdateUsdCurveView` updates its live presentation. During a regular
+On a graphics host, `SetSceneViewObject` creates the keyed route ribbon under
+its mounted owner. `UpdateUsdCurveView` updates its live geometry. During a regular
 Presentation task, use `SetSceneView` for owner-registered values such as
 billboard text and visibility. For a group toggle, target the root once;
 its indexed composed descendants inherit the runtime opinion while retaining
@@ -216,12 +213,11 @@ a direct point root can override it. Colored visited points dim without losing
 their hue. The native route context menu exposes both choices and inheritance
 reset. See `docs/architecture/waypoints-in-usd.md` for the authoring planner.
 `route_follow` applies progress colors to the Dome through
-`waypoint_editor`'s transient USD view operation. Route progress is keyed by USD
-point path and survives autopilot stop/start. At `on_start`, the program reads
+`SetSceneView`. Route progress is keyed by the active point identity (authored path or live marker key) and survives autopilot stop/start. At `on_start`, the program reads
 the current Avian contact for only the first unvisited route point through the
 generic `SensorOccupants` query. A simultaneous occupancy snapshot has no visit
 order, so it cannot mark later points. A later sensor enter marks a visit only
-when its zone is the first unvisited point; out-of-order arrivals are ignored
+when its zone or native sensor is the first unvisited point; out-of-order arrivals are ignored
 until that point is entered after its predecessors. Active route progression
 uses the same order. This is presentation state, not a vessel component or a
 second route fact.
@@ -325,7 +321,9 @@ public command registry without dispatching anything.
 
 Define any subset. First param (`me`) is the host entity id. Production
 progression is returned by `task(me, ctx)` and advanced by the native behavior
-kernel; `mission(me, ctx)` supplies durable objective tracking. Lifecycle/event hooks
+kernel. `mission(me, ctx)` tracks objectives for the current run. To save and resume
+terminal objectives, declare `fn mission_progress() { #{ id: "survey-v1", save: true, restore: true } }`.
+Use a versioned ID for each mission on a host. Lifecycle/event hooks
 remain available for setup, reactions, and teardown.
 
 ```rhai

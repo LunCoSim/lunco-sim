@@ -128,8 +128,11 @@ Use `KeyF` for the default action binding only after checking the active
 `input_binding(...)` rather than assuming a physical key. Use a secondary
 pointer event for context menus. Do not combine press and release events in
 one same-frame script step when testing focus, modifier state, or picking.
+After the menu has been painted, query `InspectSceneContextMenu`, find the
+visible action by its label, and inject the click at its reported `center`.
+Each item also reports its tool and hook. The center is absent until painted.
 
-A route-point secondary click opens its authored context menu without changing
+A route-point secondary click opens its route context menu without changing
 scene selection. Selecting a point is separate from the `Move route point`
 action: select enables the generic gizmo, while Move selects its explicit point
 and arms click-to-place with a disposable ghost. That selected point remains the
@@ -231,12 +234,12 @@ previous-frame capture hit. Bevy can emit move events for both the pass-through
 preview and lower hits. Before deduplication, skip the preview event and stop
 its ancestor propagation; otherwise the preview can consume the cursor sample
 intended for terrain beneath it. Keep the hook presentation-only: update the
-live transform of the projected `@view@` preview through the generic typed
-preview-transform command. It validates document and view-layer ownership and
-uses the canonical active-frame/parent-local conversion; hover must not edit the
-USD document, trigger projection, or sample a full terrain path. Route add and
-delete hooks send the accepted route-point snapshot to `UpdateUsdCurveView`;
-the presentation owner coalesces it and prepares sparse terrain-local strokes.
+live transform of the keyed presentation child through
+`SetSceneViewObjectPosition`. The owner validates document ownership and
+converts the active-frame position to the child's local frame. Arm, hover
+and cancel leave the document generation unchanged. Route edits send the
+accepted point snapshot to `UpdateUsdCurveView`, which coalesces requests
+and prepares sparse terrain-local strokes.
 The terrain shader paints them on its own fragments without changing USD generation.
 For a DEM route, require `InspectUsdCurveView.projection = "terrain_surface"`,
 a positive `surface_binding_count`, and exactly one segment per authored leg;
@@ -248,8 +251,9 @@ and `surface_texture`; current-revision bindings may still be pending.
 Its positive fixture needs terrain covering a 40 m circle around the first
 waypoint and a connector 300 m away along positive X/Z. Pass
 its explicit `view_owner` scenario so the gate can isolate and restore that writer. The
-next primary click commits a moved route point through the canonical
-`@runtime@` USD edit path, whose projected change updates the ribbon once. The
+next primary click moves the route point in the active live plan unless the
+explicit Author move was armed. An Author move journals `@runtime@` and the
+projected change updates the ribbon once. Both use the same native curve owner. The
 `route_interaction` production gate verifies that Move selects and retains the
 target, the live ghost follows a coalesced injected terrain cursor trace, and
 document generation stays unchanged during preview. It observes application

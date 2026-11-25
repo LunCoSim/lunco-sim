@@ -42,8 +42,11 @@ use std::collections::HashSet;
 mod jointed_tire;
 mod raycast_travel;
 mod sensing;
+mod soil_modelica;
+mod soil_tire;
 mod wheel_spin;
 pub use jointed_tire::{JointedWheelTire, apply_jointed_tire_forces};
+pub use soil_tire::{SoilSideForceCurve, SoilSurfaces, WheelForceSample};
 use wheel_spin::update_wheel_spin;
 
 /// Orient an Avian contact normal so it points from the support surface toward
@@ -137,6 +140,7 @@ impl Plugin for LunCoMobilityPlugin {
         // so scripts can react via `on_event` instead of polling distance().
         sensing::register_collision_event_bridge(app);
 
+        app.init_non_send::<soil_modelica::SoilModelicaCache>();
         app.init_scene_resource::<DynamicFixedBodies>()
             .init_scene_resource::<DifferentialSolverOrder>()
             .add_systems(
@@ -148,6 +152,7 @@ impl Plugin for LunCoMobilityPlugin {
             .register_type::<Suspension>()
             .register_type::<WheelRaycast>()
             .register_type::<WheelHeatPorts>()
+            .register_type::<WheelForceSample>()
             .register_type::<JointedWheelTire>()
             .register_type::<TireLateralStiffnessGraph>()
             .register_type::<DifferentialCoupling>()
@@ -1402,12 +1407,9 @@ impl LongitudinalSlipDenominators {
 /// zero while the patch moves sideways, the angle tends to 90 degrees and the
 /// ordinary Coulomb limit supplies static lateral resistance.
 ///
-/// The final pair is scaled onto the single Coulomb cone without changing its
-/// direction. Both wheel realizations call this function: raycast wheels apply
-/// its result to the chassis, while jointed wheels apply it to the wheel body at
-/// Avian's saved contact point. The Avian bridge retains the normal constraint
-/// but disables its generic tangent impulse for jointed tire contacts, so this
-/// remains the only tire model.
+/// Rigid-tire response for a single contact carrying the entire wheel load.
+/// Both native realizations use the same shear limiter. Multi-point wheels
+/// distribute stiffness by normal load in `soil_tire::PatchResponse`.
 pub fn tire_patch_force(
     longitudinal_stiffness: f64,
     longitudinal_slip_speed: f64,
@@ -1432,7 +1434,14 @@ pub fn tire_patch_force(
         0.0
     };
 
-    let cone = friction_mu.max(0.0) * normal_force;
+    limit_tire_shear(
+        longitudinal_force,
+        lateral_force,
+        friction_mu.max(0.0) * normal_force,
+    )
+}
+
+fn limit_tire_shear(longitudinal_force: f64, lateral_force: f64, cone: f64) -> (f64, f64) {
     let magnitude = longitudinal_force.hypot(lateral_force);
     if magnitude > cone {
         let scale = cone / magnitude;
@@ -2247,11 +2256,14 @@ pub struct WheelRaycast {
     pub slip_stiffness: f64,
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
+    /// World-frame rolling-resistance moment, committed with the tire force.
+    pub tire_rolling_torque: DVec3,
     /// like ice.
     /// Standard PhysX tire lateral stiffness graph evaluated at the contact
     /// load. The force is clamped with the load-dependent Coulomb cone after
     /// the graph law is evaluated.
     pub lateral_stiffness_graph: TireLateralStiffnessGraph,
+    pub soil_side_force_curve: SoilSideForceCurve,
     /// Lowest speed at which the authored steady-state cornering curve was
     /// validated. This is an evidence boundary, not a fitted transition.
     pub min_validated_speed: f64,
@@ -2307,9 +2319,11 @@ impl Default for WheelRaycast {
             friction_mu: 0.0,
             slip_stiffness: 0.0,
             lateral_stiffness_graph: TireLateralStiffnessGraph::default(),
+            soil_side_force_curve: Default::default(),
             min_validated_speed: 0.0,
             longitudinal_slip_denominators: LongitudinalSlipDenominators::default(),
             tire_force: DVec3::ZERO,
+            tire_rolling_torque: DVec3::ZERO,
             brake_torque_max: 0.0,
             heading_axis: DVec3::Y,
             axle_axis: DVec3::ZERO,
@@ -3008,12 +3022,17 @@ fn apply_wheel_drive(
                                 }
                             }
                         }
+                        let rolling_torque = if locked {
+                            DVec3::ZERO
+                        } else {
+                            wheel.tire_rolling_torque
+                        };
                         pending.push(lunco_physics::BodyForce {
                             local_force: DVec3::ZERO,
                             body: parent_entity,
                             force,
                             point: Some(lunco_spatial::coords::GridPos(contact_point)),
-                            torque: DVec3::ZERO,
+                            torque: rolling_torque,
                             wake: commanded,
                         });
                         if q_traits.get(support).is_ok_and(|(mode, disabled, ..)| {
@@ -3024,7 +3043,7 @@ fn apply_wheel_drive(
                                 body: support,
                                 force: -force,
                                 point: Some(lunco_spatial::coords::GridPos(contact_point)),
-                                torque: DVec3::ZERO,
+                                torque: -rolling_torque,
                                 wake: commanded,
                             });
                         }

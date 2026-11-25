@@ -869,7 +869,7 @@ fn shortest_angular_delta(previous: DQuat, target: DQuat) -> DVec3 {
 
 /// Observer for `MoveEntity`.
 #[on_command(MoveEntity)]
-pub fn on_move_entity_command(
+pub(crate) fn on_move_entity_command(
     trigger: On<MoveEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -883,6 +883,7 @@ pub fn on_move_entity_command(
     q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
+    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
     bounds: Option<Res<lunco_physics::WorldBounds>>,
     persistence: TransformPersistence,
     reply: CommandReply,
@@ -904,6 +905,11 @@ pub fn on_move_entity_command(
             "invalid or unavailable move target".into(),
         ));
     };
+    if runtime_marker_parts.contains(target) {
+        return Err(Reject::InvalidOp(
+            "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool".into(),
+        ));
+    }
 
     let target_abs = DVec3::from_array(cmd.translation);
     if q_grids.get(active_frame.0).is_err() {
@@ -1130,7 +1136,7 @@ pub struct RotateEntity {
 
 /// Observer for `RotateEntity`.
 #[on_command(RotateEntity)]
-pub fn on_rotate_entity_command(
+pub(crate) fn on_rotate_entity_command(
     trigger: On<RotateEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -1144,6 +1150,7 @@ pub fn on_rotate_entity_command(
     q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
+    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
     persistence: TransformPersistence,
     reply: CommandReply,
 ) -> Result<CommandOutcome, Reject> {
@@ -1155,6 +1162,11 @@ pub fn on_rotate_entity_command(
             "invalid or unavailable rotation target".into(),
         ));
     };
+    if runtime_marker_parts.contains(target) {
+        return Err(Reject::InvalidOp(
+            "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool".into(),
+        ));
+    }
 
     let q_in = DQuat::from_array(cmd.rotation);
     if !q_in.is_finite() || !q_in.length_squared().is_finite() || q_in.length_squared() < 1e-12 {
@@ -1341,7 +1353,7 @@ impl TransformPersistence<'_, '_> {
 }
 
 /// Convert an accepted f64 parent-local position at the native storage boundary.
-fn checked_pose_storage(
+pub(super) fn checked_pose_storage(
     grid: Option<&Grid>,
     local_position: DVec3,
 ) -> Result<(Option<CellCoord>, Vec3), Reject> {
@@ -1378,7 +1390,7 @@ fn checked_pose_storage(
 
 /// Validate and apply a complete live pose, optionally journaling the same pose.
 #[on_command(TransformEntity)]
-pub fn on_transform_entity_command(
+pub(crate) fn on_transform_entity_command(
     trigger: On<TransformEntity>,
     time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -1396,6 +1408,7 @@ pub fn on_transform_entity_command(
     q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
+    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
     bounds: Option<Res<lunco_physics::WorldBounds>>,
     persistence: TransformPersistence,
     reply: CommandReply,
@@ -1426,6 +1439,11 @@ pub fn on_transform_entity_command(
         warn!("TRANSFORM_ENTITY: no api_id={}", cmd.entity_id);
         return Err(Reject::InvalidOp("unknown scene entity".into()));
     };
+    if runtime_marker_parts.contains(target) {
+        return Err(Reject::InvalidOp(
+            "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool".into(),
+        ));
+    }
 
     let rotation = rotation.normalize();
     let target_position = DVec3::from_array(cmd.translation);
@@ -1774,10 +1792,11 @@ impl PrimRemoval<'_, '_> {
 
 /// Delete a live entity or submit the revision-fenced edit to its document owner.
 #[on_command(DeleteEntity)]
-pub fn on_delete_entity(
+pub(crate) fn on_delete_entity(
     trigger: On<DeleteEntity>,
     selected: Option<ResMut<SelectedEntities>>,
     removal: PrimRemoval,
+    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
     q_joint_state: Query<
         (),
         Or<(
@@ -1790,6 +1809,11 @@ pub fn on_delete_entity(
     mut commands: Commands,
 ) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
+    if runtime_marker_parts.contains(cmd.target) {
+        return Err(Reject::InvalidOp(
+            "Runtime marker lifetime belongs to SetRuntimeMarker; use its owning tool".into(),
+        ));
+    }
     if q_joint_state.contains(cmd.target) {
         return Err(Reject::InvalidOp(format!(
             "target {:?} is a joint; use DetachJoint",
@@ -1934,6 +1958,8 @@ impl Plugin for SpawnCommandPlugin {
         app.add_plugins(lunco_scene_queries::SceneQueryPlugin);
         crate::environment_light::install(app);
         crate::scene_participation::install(app);
+        crate::runtime_objects::install(app);
+        crate::runtime_markers::install(app);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
         // module; `SceneEditPlugin` registers them. The headless server has no

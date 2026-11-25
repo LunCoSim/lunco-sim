@@ -51,6 +51,15 @@ values belong to their runtime owners. For example, use `SetSceneView` for a
 billboard's computed text and `SetPortsBatch` for named simulation inputs.
 Use `ApplyUsdTransientOps` when an actual composed `@view@` prim or opinion
 is required.
+For generated simulation runs and replay geometry, use `ReplaceRuntimeObjects`
+and `QueryRuntimeObjects` to admit or retire native objects by mounted document
+and group, then act on their stable live IDs. Use `SetRuntimeMarker` and
+`QueryRuntimeMarkers` for individually keyed native visual markers and overlap
+sensors. The active route policy uses those operations without USD changes.
+Only explicitly authored waypoint actions use the document journal. Physical groups require paused
+standalone transport while their topology is replaced. For generated route
+ribbons and editing ghosts, use the keyed `SetSceneViewObject` presentation
+owner. These operations leave document generation unchanged.
 For moving interactive elements, use `TransformEntity` with
 live intent (the default) for discrete live poses, declared joint inputs for
 continuous physical motion, `SetColliderEnabled` for a prepared collider,
@@ -603,7 +612,7 @@ one and leaves the object half-edited.
 
 This law is for authored edits. A derived presentation may use the typed
 `ApplyUsdTransientOps` command after resolving its source from the composed
-stage when it needs a USD prim identity, schema, or picking contract. That path
+stage when it needs an actual composed schema opinion. That path
 is generation-checked and projected through OpenUSD, but is explicitly outside
 save, undo/redo, and the Twin journal. Do not use it for a user edit or to
 refresh dense per-edit geometry. Keep high-frequency or terrain-sampled view

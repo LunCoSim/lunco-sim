@@ -18,6 +18,7 @@ struct PendingMenu {
     screen_position: [f32; 2],
     items: Vec<(Entity, ScriptMenuItem)>,
     dismiss_armed: bool,
+    painted_centers: Vec<[f32; 2]>,
 }
 
 #[derive(Resource, Default)]
@@ -31,6 +32,47 @@ impl SceneContextMenuState {
         if let Some(menu) = self.pending.take() {
             commands.entity(menu.root).try_despawn();
         }
+    }
+}
+
+/// Inspect the currently open menu and its painted button centers in window coordinates.
+pub(crate) struct InspectSceneContextMenu;
+impl lunco_api::queries::ApiQueryProvider for InspectSceneContextMenu {
+    fn name(&self) -> &'static str {
+        "InspectSceneContextMenu"
+    }
+
+    fn schema(&self) -> lunco_api_core::ApiQuerySchema {
+        lunco_api_core::ApiQuerySchema {
+            name: self.name().into(),
+            description: Some(
+                "Inspect visible scene menu actions and their painted window coordinates.".into(),
+            ),
+            parameters: Some(Vec::new()),
+            exactly_one_of: Vec::new(),
+            response: Some(
+                "{ open, items: [{ label, tool, hook, center: [x, y] | null }] }".into(),
+            ),
+        }
+    }
+
+    fn execute(&self, world: &World, _: &lunco_api_core::ApiValue) -> lunco_api::ApiQueryResult {
+        let menu = world
+            .get_resource::<SceneContextMenuState>()
+            .and_then(|state| state.pending.as_ref());
+        let mut items = Vec::new();
+        if let Some(menu) = menu {
+            for (i, (_, item)) in menu.items.iter().enumerate() {
+                let center = menu.painted_centers.get(i).copied();
+                items.push(lunco_api_core::api_value!({
+                    "label": item.label.clone(), "tool": item.tool.clone(), "hook": item.hook.clone(),
+                    "center": center,
+                }));
+            }
+        }
+        Ok(Some(
+            lunco_api_core::api_value!({"open": menu.is_some(), "items": items}),
+        ))
     }
 }
 
@@ -94,6 +136,7 @@ pub fn on_script_ui_request(
                 // that opened the menu. Do not treat that transaction as an
                 // outside click when the popup is first painted.
                 dismiss_armed: false,
+                painted_centers: Vec::new(),
             });
         }
         _ => {}
@@ -161,13 +204,17 @@ pub fn draw_scene_context_menu(
     }
 
     let mut selected: Option<(Entity, ScriptMenuItem)> = None;
+    let mut painted_centers = Vec::with_capacity(menu.items.len());
     let response = egui::Area::new(egui::Id::new(("lunco_scene_context_menu", menu.root)))
         .order(egui::Order::Foreground)
         .fixed_pos(egui::pos2(menu.screen_position[0], menu.screen_position[1]))
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 for (binding, item) in &menu.items {
-                    if ui.button(&item.label).clicked() {
+                    let button = ui.button(&item.label);
+                    let center = button.rect.center();
+                    painted_centers.push([center.x, center.y]);
+                    if button.clicked() {
                         selected = Some((*binding, item.clone()));
                     }
                 }
@@ -179,6 +226,9 @@ pub fn draw_scene_context_menu(
     // A foreground egui Area can sit inside the 3D scene leaf. Register its
     // exact painted bounds as chrome so ordered scene/gizmo hits cannot also
     // claim a menu click.
+    if let Some(pending) = &mut state.pending {
+        pending.painted_centers = painted_centers;
+    }
     let menu_rect = response.response.rect;
     scene_pick.record_chrome_panel(menu_rect, menu_rect);
 

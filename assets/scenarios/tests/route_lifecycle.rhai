@@ -8,7 +8,6 @@ const ROOT = "/RouteLifecycle";
 const ROUTE = "/RouteLifecycle/Route";
 const ALTERNATE_ROUTE = "/RouteLifecycle/AlternateRoute";
 const SUBJECT_PATH = "/RouteLifecycle/Subject";
-const RIBBON_GEOMETRY = "/RouteLifecycle/Route/RouteRibbon/Geometry";
 const ADMISSION_LANDING_PATH = "/RouteLifecycle/AdmissionLanding";
 const ADMISSION_POINT_PATH = "/RouteLifecycle/AdmissionPoint";
 const NESTED_ADMISSION_PATH = "/RouteLifecycle/NestedAdmissionMarker";
@@ -44,54 +43,19 @@ fn route_revision(doc) {
     usd_document_generation(doc)
 }
 
-fn ribbon_present(doc) {
-    let result = query("QueryUsdPrim", #{ doc_id: doc, path: RIBBON_GEOMETRY });
-    result != () && result.ok != false
-}
+fn ribbon_present(doc) { waypoint_editor::ribbon_entity(doc, ROUTE) >= 0 }
 
-fn ribbon_is_open(doc) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: RIBBON_GEOMETRY,
-        attrs: ["wrap", "curveVertexCounts", "points"],
-    });
-    if result == () || result.ok == false || result.attrs == ()
-        || result.attrs["wrap"] != "nonperiodic"
-        || result.attrs["curveVertexCounts"] == ()
-        || result.attrs["points"] == () {
-        return false;
-    }
-    let points = result.attrs["points"];
-    let counts = result.attrs["curveVertexCounts"];
-    if counts.len() != 1 || counts[0] != points.len() || points.len() < 2 {
-        return false;
-    }
-    let first = points[0];
-    let last = points[points.len() - 1];
-    first.len() == 3 && last.len() == 3
-        && ((first[0] - last[0]).abs() > 0.000001
-            || (first[1] - last[1]).abs() > 0.000001
-            || (first[2] - last[2]).abs() > 0.000001)
-}
-
-fn ribbon_width(doc) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: RIBBON_GEOMETRY,
-        attrs: ["widths"],
-    });
-    if result == () || result.ok == false || result.attrs == ()
-        || result.attrs["widths"] == () { return (); }
-    result.attrs["widths"]
-}
+fn ribbon_is_open(doc) { ribbon_view_ready(doc, point_count(doc)) }
 
 fn ribbon_width_matches(doc, expected) {
-    let widths = ribbon_width(doc);
-    widths != () && widths.len() == 1 && (widths[0] - expected).abs() < 0.001
+    let id = waypoint_editor::ribbon_entity(doc, ROUTE);
+    if id < 0 { return false; }
+    let view = query("InspectUsdCurveView", #{doc_id:doc, entity_id:id});
+    view != () && view.width_m != () && (view.width_m - expected).abs() < 0.001
 }
 
 fn ribbon_view_ready(doc, point_count) {
-    let entity = find_path(RIBBON_GEOMETRY);
+    let entity = waypoint_editor::ribbon_entity(doc, ROUTE);
     if entity < 0 { return false; }
     let result = query("InspectUsdCurveView", #{ doc_id: doc, entity_id: entity });
     result != () && result.ok != false && result.state == "ready"
@@ -104,14 +68,11 @@ fn ribbon_anchor_matches_point(doc, point_path) {
         doc_id: doc,
         path: point_path,
     });
-    let ribbon = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: "/RouteLifecycle/Route/RouteRibbon",
-    });
-    if point == () || ribbon == () || point.world_position == ()
-        || ribbon.world_position == () { return false; }
+    let id = waypoint_editor::ribbon_entity(doc, ROUTE);
+    if point == () || point.world_position == () || id < 0 || !track_entity_read(id) { return false; }
     let a = point.world_position;
-    let b = ribbon.world_position;
+    let b = world_pos(id);
+    if b == () { return false; }
     (a[0] - b[0]).abs() < 0.001
         && (a[1] - b[1]).abs() < 0.001
         && (a[2] - b[2]).abs() < 0.001
@@ -156,6 +117,7 @@ fn color_matches(actual, expected) {
 fn context(doc, path, position) {
     let value = #{
         button: "primary",
+        edit_intent:"Persistent",
         screen_position: [64.0, 64.0],
         doc_id: doc,
         scene_root_path: ROOT,
@@ -200,7 +162,7 @@ fn selected_route_context(doc, path, position, program) {
 fn invalid_edit_checks(doc) {
     let before = route_revision(doc);
     let missing_context = waypoint_editor::on_click(#{
-        button: "primary",
+        edit_intent:"Persistent", button: "primary",
         doc_id: doc,
         scene_root_path: ROOT,
         route_path: ROUTE,
@@ -208,7 +170,7 @@ fn invalid_edit_checks(doc) {
     });
     let missing_position = waypoint_editor::on_move(context(doc, "/RouteLifecycle/NotAPoint", ()));
     let missing_ribbon = waypoint_editor::update_ribbon_view(
-        doc, ROOT + "/NotARoute", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+        doc, ROOT + "/NotARoute", [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], (),
     );
     let program = program_editor::list(doc, ROUTE);
     let program_path = if program.ok && program.programs.len() > 0 {
@@ -224,7 +186,7 @@ fn invalid_edit_checks(doc) {
         t_true(missing_position.ok == false, "move without a world position is rejected"),
         t_true(missing_ribbon.ok == false && missing_ribbon.retryable == false
             && missing_ribbon.error != "",
-            "a rejected ribbon seed is a terminal presentation diagnostic"),
+            "a missing ribbon owner is a terminal presentation diagnostic"),
         t_true(program_delete.ok == false, "delete cannot target the route program"),
         t_true(normalized == ROUTE,
             "a program identity is normalized to its containing route scope"),
@@ -469,7 +431,7 @@ fn route_step_route_fixture_action(me) {
         || !ribbon_anchor_matches_point(this.doc, ROUTE + "/P0") {
         return;
     }
-    this.ribbon_entity = find_path(RIBBON_GEOMETRY);
+    this.ribbon_entity = waypoint_editor::ribbon_entity(this.doc, ROUTE);
     if this.ribbon_entity < 0 { return; }
     let listed = program_editor::list(this.doc, ROUTE);
     if listed == () || !listed.ok || listed.programs.len() == 0 { return; }
@@ -492,23 +454,10 @@ fn route_step_route_fixture_action(me) {
     this.checks.push(t_true(ribbon_is_open(this.doc),
         "route ribbon is open and never connects the last point to the first"));
     this.checks.push(t_true(ribbon_present(this.doc),
-        "route ribbon keeps one disposable USD identity for its live mesh"));
-    let ribbon_view = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/RouteRibbon",
-        edit_target: "@view@",
-    });
-    let ribbon_runtime = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/RouteRibbon",
-        edit_target: "@runtime@",
-    });
-    this.checks.push(t_true(ribbon_view != () && ribbon_view.ok != false
-        && ribbon_view.composed_exists == true && ribbon_view.authored_here == true
-        && ribbon_runtime != () && ribbon_runtime.ok != false
-        && ribbon_runtime.authored_here == false
-        && ribbon_runtime.authored_in_document == false,
-        "route ribbon exists only in the disposable runtime view layer"));
+        "route ribbon keeps one live identity for its mesh"));
+    let ribbon_view = waypoint_editor::route_view(this.doc, ROUTE, "route.ribbon");
+    this.checks.push(t_true(ribbon_view.entity_id == this.ribbon_entity,
+        "route geometry is keyed to its mounted presentation owner"));
     this.checks.push(t_true(listed.ok && listed.programs.len() == 1
         && listed.programs[0]["path"] == this.program_path,
         "generic program discovery lists the authored executable"));
@@ -770,17 +719,8 @@ fn route_step_route_point_policy_action(me) {
         path: this.new_point,
         edit_target: "@runtime@",
     });
-    let ribbon_policy = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: RIBBON_GEOMETRY,
-        attrs: ["lunco:interaction:left", "lunco:interaction:right"],
-        schemas: true,
-    });
-    if ribbon_policy == () || ribbon_policy.ok == false
-        || ribbon_policy.api_schemas == () || ribbon_policy.attrs == ()
-        || !ribbon_policy.api_schemas.contains("LunCoPointerInteractionAPI")
-        || ribbon_policy.attrs["lunco:interaction:left"] != "pass_through"
-        || ribbon_policy.attrs["lunco:interaction:right"] != "context" { return; }
+    let ribbon_policy = waypoint_editor::route_view(this.doc, ROUTE, "route.ribbon");
+    if !ribbon_policy.ok || ribbon_policy.entity_id == () { return; }
     this.checks.push(t_true(true,
         "the add-point policy appends a named route point"));
     this.checks.push(t_true(position != () && position[2] == -32.0,
@@ -790,23 +730,19 @@ fn route_step_route_point_policy_action(me) {
     this.checks.push(t_true(authored != () && authored.ok != false
         && authored.authored_here == true,
         "a nested route-point spawn is authored in the runtime layer of the canonical document"));
-    this.checks.push(t_true(ribbon_policy != () && ribbon_policy.ok != false
-        && ribbon_policy.api_schemas != ()
-        && ribbon_policy.api_schemas.contains("LunCoPointerInteractionAPI")
-        && ribbon_policy.attrs != ()
-        && ribbon_policy.attrs["lunco:interaction:left"] == "pass_through"
-        && ribbon_policy.attrs["lunco:interaction:right"] == "context",
-        "the view-layer ribbon passes primary hits through and accepts secondary context"));
-    let ribbon_context = context(this.doc, RIBBON_GEOMETRY, ());
+    this.checks.push(t_true(ribbon_policy.left == "pass_through" && ribbon_policy.right == "context",
+        "ribbon passes primary hits through and accepts secondary context"));
+    let ribbon_context = context(this.doc, ROUTE, ());
+    ribbon_context.view_key = "route.ribbon";
     ribbon_context.button = "secondary";
     ribbon_context.pointer_intents = ["route.context"];
     ribbon_context.pointer_policy = #{ right: "context" };
     ribbon_context.prim_paths = [
-        RIBBON_GEOMETRY, ROUTE + "/RouteRibbon", ROUTE, ROOT,
+        ROUTE, ROOT,
     ];
     let ribbon_action = waypoint_editor::route_pointer_action(ribbon_context);
     this.checks.push(t_true(ribbon_action.handled == true
-        && ribbon_action.path == RIBBON_GEOMETRY,
+        && ribbon_action.path == ROUTE,
         "right-clicking the route ribbon routes to its authored add-point menu policy"));
     let secondary = context(this.doc, this.new_point, ());
     secondary.button = "secondary";
@@ -860,15 +796,8 @@ fn route_step_move_preview_action(me) {
     if this.done { return; }
     this.waiting_for = "the route move preview projection";
     if this.move_preview_started {
-        if find_path(ROUTE + "/MovePreview") < 0 { return; }
-        let point_parts = this.new_point.split("/");
-        let target = query("ResolveUsdTarget", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview/Target_"
-                + point_parts[point_parts.len() - 1],
-            edit_target: "@view@",
-        });
-        if target == () || target.ok == false || target.authored_here != true { return; }
+        let target = waypoint_editor::move_preview_target(this.doc, ROUTE);
+        if target.point != this.new_point || target.entity_id == () { return; }
         if !this.move_preview_update_sent {
             let preview = #{
                 doc_id: this.doc,
@@ -881,23 +810,19 @@ fn route_step_move_preview_action(me) {
             let shown = waypoint_editor::on_pointer_move(preview);
             if shown.ok != true {
                 this.checks.push(t_true(false,
-                    "armed route-point hover updates a disposable move ghost in the view layer"));
+                    "armed route-point hover updates a disposable move live ghost"));
                 this = finish(this);
                 return;
             }
             this.move_preview_update_sent = true;
             return;
         }
-        let ghost = query("ResolveUsdTarget", #{
-            doc_id: this.doc,
-            path: ROUTE + "/MovePreview",
-            edit_target: "@view@",
-        });
-        if ghost == () || ghost.ok == false || ghost.authored_here != true { return; }
+        let ghost = waypoint_editor::move_preview_target(this.doc, ROUTE);
+        if ghost == () || ghost.ok == false || ghost.armed != true { return; }
         this.checks.push(t_true(true,
             "the explicit Move action selects and arms the point with a disposable view marker"));
         this.checks.push(t_true(true,
-            "armed route-point hover updates a disposable move ghost in the view layer"));
+            "armed route-point hover updates a disposable move live ghost"));
         this.route_step_move_preview_finished = true;
         return;
     }
@@ -924,15 +849,18 @@ fn route_step_move_preview_action(me) {
         world_position: point3(destination, "active_physics"),
     };
     let unarmed_hover = waypoint_editor::on_pointer_move(preview);
-    let unarmed_ghost = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        edit_target: "@view@",
-    });
+    let unarmed_ghost = waypoint_editor::move_preview_target(this.doc, ROUTE);
     this.checks.push(t_true(unarmed_hover.ok == true
         && (unarmed_ghost == () || unarmed_ghost.ok == false
-            || unarmed_ghost.authored_here != true),
+            || unarmed_ghost.armed != true),
         "hovering a selected point does not arm route movement"));
+    let before_drag = route_revision(this.doc);
+    let first_arm = waypoint_editor::on_move_begin(context(this.doc, this.new_point, ()));
+    let canceled = waypoint_editor::clear_move_preview(this.doc, ROUTE);
+    let idle = waypoint_editor::move_preview_target(this.doc, ROUTE);
+    this.checks.push(t_true(first_arm.ok && canceled.ok && idle.ok && !idle.armed
+        && route_revision(this.doc) == before_drag,
+        "arming and canceling a waypoint drag preserves the document generation"));
     let move_action = waypoint_editor::on_move_begin(
         context(this.doc, this.new_point, ()),
     );
@@ -953,33 +881,16 @@ fn route_step_move_preview_complete(me) { this.done || this.route_step_move_prev
 
 fn route_step_commit_move_action(me) {
     if this.done { return; }
-    this.waiting_for = "the view-layer move target";
-    // The placement hit can arrive before the disposable preview has been
-    // projected into the live scene. Resolve its target from the view
-    // layer and apply the click without waiting for composed reads.
-    let point_parts = this.new_point.split("/");
-    let target_path = ROUTE + "/MovePreview/Target_"
-        + point_parts[point_parts.len() - 1];
-    let preview = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        edit_target: "@view@",
-        authored_children: true,
-    });
-    let preview_target_found = false;
-    if preview != () && preview.ok != false && preview.authored_children != () {
-        for child in preview.authored_children {
-            if child == target_path { preview_target_found = true; }
-        }
-    }
-    this.checks.push(t_true(preview_target_found,
-        "the transient move target resolves directly from its authored view layer"));
+    this.waiting_for = "the live move target";
+    let preview = waypoint_editor::move_preview_target(this.doc, ROUTE);
+    this.checks.push(t_true(preview.ok && preview.point == this.new_point,
+        "placement resolves the exact subject attached to the live preview"));
     let destination = this.move_preview_expected;
     let place = context(this.doc, (), destination);
     place.active_pointer_move = #{
         interaction_id: waypoint_editor::move_interaction_id(ROUTE),
         tool: "scene_interaction", hook: "on_pointer_move",
-        context: #{ route_path: ROUTE },
+        context: #{route_path:ROUTE,route_point_key:this.new_point,edit_intent:"Persistent"},
     };
     place.selected_path = this.new_point;
     place.target_path = ();
@@ -1004,15 +915,11 @@ fn route_step_move_projection_action(me) {
     if this.done { return; }
     this.waiting_for = "the moved route-point projection";
     let position = point_position(this.doc, this.new_point);
-    let ghost = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        edit_target: "@view@",
-    });
+    let ghost = waypoint_editor::move_preview_target(this.doc, ROUTE);
     if position == () || position[0] != 6.0 || position[2] != -36.0
         || !ribbon_present(this.doc) { return; }
     this.checks.push(t_true(ghost == () || ghost.ok == false
-        || ghost.authored_here != true,
+        || ghost.armed != true,
         "committing the move removes its transient ghost"));
     this.route_step_move_projection_finished = true;
     return;
@@ -1179,7 +1086,7 @@ fn route_step_one_point_route_action(me) {
     if this.done { return; }
     this.waiting_for = "the one-point route projection";
     if point_count(this.doc) != 1 || has_path(this.doc, ROUTE + "/P1")
-        || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
+        || waypoint_editor::ribbon_entity(this.doc, ROUTE) != this.ribbon_entity { return; }
     this.checks.push(t_true(true,
         "a one-point route keeps the stable ribbon identity"));
     waypoint_editor::on_delete(context(this.doc, ROUTE + "/P0", ()));
@@ -1195,7 +1102,7 @@ fn route_step_empty_route_action(me) {
     this.waiting_for = "the empty route projection";
     let points = direct_points(this.doc);
     if points == () || points.len() != 0
-        || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
+        || waypoint_editor::ribbon_entity(this.doc, ROUTE) != this.ribbon_entity { return; }
     let route_projection = query("QueryUsdPrim", #{
         doc_id: this.doc,
         path: ROUTE,
@@ -1271,7 +1178,7 @@ fn route_step_first_new_point_action(me) {
     if this.done { return; }
     this.waiting_for = "the first new route-point projection";
     if point_count(this.doc) != 1
-        || find_path(RIBBON_GEOMETRY) != this.ribbon_entity { return; }
+        || waypoint_editor::ribbon_entity(this.doc, ROUTE) != this.ribbon_entity { return; }
     let added = waypoint_editor::on_click(context(this.doc, (), [0.0, 1.0, -16.0]));
     this.checks.push(t_true(added.ok == true && added.path != (),
         "the route accepts a second point after rebuilding an empty path"));
@@ -1737,8 +1644,9 @@ fn route_step_verify_insert_after_action(me) {
         && after_position[2] < adjacent_position[2],
         "Add point after extends five meters outward along the final segment"));
     let ribbon_context = context(
-        this.doc, ALTERNATE_ROUTE + "/RouteRibbon/Geometry", [14.0, 1.0, -25.0],
+        this.doc, ALTERNATE_ROUTE, [14.0, 1.0, -25.0],
     );
+    ribbon_context.view_key = "route.ribbon";
     ribbon_context.route_path = ();
     let ribbon_add = waypoint_editor::on_add_here(ribbon_context);
     this.checks.push(t_true(ribbon_add.ok == true
@@ -1876,7 +1784,7 @@ fn route_color_phase(me) {
     let amber = [1.0,0.45,0.03];
     let point = ROUTE + "/P1";
     if this.color_phase == 0 {
-        let context = #{doc_id:this.doc, route_path:ROUTE, color_path:ROUTE, color:blue};
+        let context = #{doc_id:this.doc, route_path:ROUTE, color_path:ROUTE, color:blue,edit_intent:"Persistent"};
         let result = waypoint_editor::on_set_color(context);
         if result.retryable == true { return; }
         if result.ok != true { print("ROUTE_COLOR_EDIT|" + result.to_string()); }
@@ -1884,7 +1792,7 @@ fn route_color_phase(me) {
         this.color_phase = 1;
         return;
     }
-    let curve = find_path_in_document(this.doc, RIBBON_GEOMETRY);
+    let curve = waypoint_editor::ribbon_entity(this.doc, ROUTE);
     let view = if curve >= 0 { query("InspectUsdCurveView", #{doc_id:this.doc, entity_id:curve}) } else { () };
     let line = if view == () || view.state != "ready" { () } else { view.requested_surface_rgb };
     if this.color_phase == 1 {
@@ -1892,7 +1800,7 @@ fn route_color_phase(me) {
             || !ribbon_view_ready(this.doc, 3) { return; }
         this.checks.push(t_true(true, "route color updates projected markers and ribbon"));
         this.ribbon_color_revision = view.requested_revision;
-        let result = waypoint_editor::on_set_color(#{doc_id:this.doc, route_path:ROUTE,
+        let result = waypoint_editor::on_set_color(#{doc_id:this.doc, route_path:ROUTE,edit_intent:"Persistent",
             color_path:point, color:amber});
         this.checks.push(t_true(result.ok, "a waypoint can override its route color"));
         this.color_phase = 2;

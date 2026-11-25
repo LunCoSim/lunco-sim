@@ -2697,17 +2697,7 @@ pub fn insert_physics_material(
     material: Option<material::PhysicsMaterial>,
 ) {
     if let Some(pm) = material {
-        if pm.dynamic_friction.is_some() || pm.static_friction.is_some() {
-            let d = Friction::default();
-            let friction = Friction {
-                dynamic_coefficient: pm
-                    .dynamic_friction
-                    .map_or(d.dynamic_coefficient, |f| f.into()),
-                static_coefficient: pm
-                    .static_friction
-                    .map_or(d.static_coefficient, |f| f.into()),
-                combine_rule: pm.friction_combine.unwrap_or(d.combine_rule),
-            };
+        if let Some(friction) = pm.friction() {
             commands.entity(entity).try_insert(friction);
 
             // Arm material contact modification before collider admission so
@@ -2720,12 +2710,8 @@ pub fn insert_physics_material(
                 );
             }
         }
-        if let Some(r) = pm.restitution {
-            let d = Restitution::default();
-            commands.entity(entity).try_insert(Restitution {
-                coefficient: r.into(),
-                combine_rule: pm.restitution_combine.unwrap_or(d.combine_rule),
-            });
+        if let Some(restitution) = pm.restitution() {
+            commands.entity(entity).try_insert(restitution);
         }
     }
 }

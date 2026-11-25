@@ -72,8 +72,75 @@ fn vector_equal(left, right) {
     true
 }
 
+fn authoring(context) {
+    if context == () { return false; }
+    let intent = context["edit_intent"];
+    if intent != () && intent != "Persistent" && intent != "Interactive" {
+        throw "route edit_intent must be Interactive or Persistent";
+    }
+    intent == "Persistent" || (intent == () && context["scene_interaction_mode"] == "editor")
+}
+
+// Resolve the exact mounted scenario host from the authored route scope and
+// its program children. Only a running route policy with this identity can
+// accept live edits; a bare source definition is not a live route.
+fn read_route_publication(doc,route,path) {
+    let id = find_path_in_document(doc,path);
+    if id < 0 { return (); }
+    if execution_context().clock == "simulation" { track_entity_read(id); }
+    let published = scenario_public_state(id,"route-plan");
+    if published != () && published.route_path == route
+        && (""+published.route_document) == (""+doc) { published } else { () }
+}
+
+fn live_route_state(doc, route) {
+    // A route scope normally owns its program directly. Resolve its mounted
+    // publication in constant time; a program authored on a child is resolved
+    // from the one composed child inventory, not one query per waypoint.
+    let direct = read_route_publication(doc,route,route);
+    if direct != () { return direct; }
+    let scope = query("QueryUsdPrim",#{doc_id:doc,path:route,children:true});
+    if scope == () || scope.ok == false || scope.children == () { return (); }
+    let records = query("QueryUsdPrims",#{doc_id:doc,paths:scope.children,attrs:[],rels:["inputs:subject"],schemas:true});
+    if records == () || records.records == () { return (); }
+    let result = ();
+    for record in records.records {
+        if !record_is_route_program(record,()) { continue; }
+        let published = read_route_publication(doc,route,record.path);
+        if published != () {
+            if result != () { return (); }
+            result = published;
+        }
+    }
+    result
+}
+
+fn live_route_snapshot(doc,route) {
+    let state = live_route_state(doc,route);
+    if state == () { return #{ok:false,error:"No running route program owns the live plan"}; }
+    if state.live_route != () { state.live_route } else { route_positions(doc,route) }
+}
+
+fn live_route_edit(doc,route,action,key,position,color) {
+    let state = live_route_state(doc,route);
+    if state == () { return failure("select a running route program for a live route change"); }
+    if state.live_route_pending != () { return failure("the previous live route change is still being admitted"); }
+    let request = #{doc_id:doc,route:route,action:action};
+    if key != () { request.key = key; }
+    if position != () { request.position = position; }
+    if color != () { request.color = color; }
+    if !emit("route.live.edit",request) {
+        return failure("the live route action was not admitted");
+    }
+    #{ok:true, pending:true, intent:"Interactive", path:key}
+}
+
+fn on_reset_live_route(context) {
+    live_route_edit(context.doc_id,context.route_path,"reset",(),(),())
+}
+
 fn ui_label() { "Route point" }
-fn ui_hint() { "Add points to the active route's Twin Runtime layer; they persist when runtime persistence is enabled" }
+fn ui_hint() { "Alt-click adds a live route point for this run. Editor actions labeled Author change the Twin document." }
 
 // Called by the one scene-interaction policy for an unarmed pointer gesture.
 // Physical button/modifier meaning is resolved by shared input settings; this
@@ -137,20 +204,26 @@ fn move_selected_from_pointer(context, route) {
     if context == () || context.doc_id == () { return (); }
     let target = move_preview_target(context.doc_id, route);
     if target.ok != true || target.armed != true {
+        clear_move_preview(context.doc_id, route);
         let result = failure(if target.ok != true { target.error }
             else { "active route movement has no preview target" });
         result.handled = true;
         return result;
     }
-    let point = target.point;
+    let armed = context.active_pointer_move.context;
+    let point = armed.route_point_key;
     // Marker hits retain their own context and selection semantics.
     if context_route_point(context, route) != () { return (); }
     let pointer = pointer_point(context);
     if pointer.ok != true {
         return #{ ok: true, changed: false, handled: false };
     }
-    let result = move_route_point(context.doc_id, route, point,
-        point_values(pointer.point));
+    let result = if armed.edit_intent == "Persistent" {
+        move_route_point(context.doc_id, route, point, point_values(pointer.point))
+    } else {
+        live_route_edit(context.doc_id,route,"move",point,point_values(pointer.point),())
+    };
+    if result.ok == true { clear_move_preview(context.doc_id,route); }
     result.handled = true;
     result
 }
@@ -209,29 +282,6 @@ fn apply_ops(doc, label, ops) {
     #{ ok: true, changed: true }
 }
 
-fn apply_view_ops(doc, label, ops) {
-    if ops.len() == 0 { return #{ ok: true, changed: false }; }
-    let result = cmd("ApplyUsdTransientOps", #{
-        doc_id: doc,
-        parent_gen: generation(doc),
-        label: label,
-        ops: ops,
-    });
-    if result != () && result.status == "pending" && result.id != () {
-        return #{ok:true, pending:true, command_id:result.id, changed:false};
-    }
-    if result == () || result.ok != true {
-        let error = if result == () { "USD view edit returned no result" } else { result.error };
-        // The native document owner admits one dependency-preparation lease
-        // at a time. Another route's seed is a temporary admission conflict,
-        // not a terminal failure of this route's presentation.
-        let busy = type_of(error) == "string"
-            && error.contains("already has an edit awaiting dependency preparation");
-        return #{ ok: false, retryable: busy, error:error };
-    }
-    #{ ok: true, changed: true }
-}
-
 fn material_color_write(property, rgb) {
     #{property:property, value:if rgb == () { "Clear" } else { #{LinearRgb:#{value:rgb}} }}
 }
@@ -246,7 +296,9 @@ fn sync_marker_snapshot(doc, snapshot, visited) {
     let batches = [];
     for i in 0..snapshot.paths.len() {
         let point = snapshot.paths[i];
-        let dome = find_path_in_document(doc, point + "/Dome");
+        let dome = if snapshot.marker_ids != () && snapshot.marker_ids.contains(point) {
+            snapshot.marker_ids[point]
+        } else { find_path_in_document(doc, point + "/Dome") };
         if dome < 0 {
             return #{ok:false, retryable:true, error:"route-point dome is awaiting projection: " + point};
         }
@@ -333,6 +385,22 @@ fn route_edit_path_with_scene_discovery(context, allow_scene_discovery) {
     // edits. A selected program is the unambiguous route identity for the
     // dynamic program HUD when several programs control the same subject.
     let selected = context["selected_path"];
+    if selected == () && context["selected_entity_id"] != () && !authoring(context) {
+        let id = context.selected_entity_id.to_int();
+        if execution_context().clock == "simulation" { track_entity_read(id); }
+        let owner = parent(id);
+        if owner != () {
+            let owner_path = usd_path(owner);
+            if owner_path != () {
+                let state = live_route_state(doc,owner_path);
+                if state != () && state.live_route != () {
+                    for key in state.live_route.paths {
+                        if state.live_route.bindings[key].point_id == id { return owner_path; }
+                    }
+                }
+            }
+        }
+    }
     let selected_route = route_for_path(doc, selected, subject);
     if selected_route != () { return selected_route; }
     if subject != () {
@@ -576,6 +644,25 @@ fn context_route_point(context, route) {
     if context == () { return (); }
     let doc = context["doc_id"];
     if doc == () { return (); }
+    if !authoring(context) {
+        let state = live_route_state(doc,route);
+        let plan = if state == () {()} else {state.live_route};
+        if plan != () && plan.bindings != () {
+            let key = context["route_point_key"];
+            if key != () && plan.bindings.contains(key) { return key; }
+            for candidate in plan.paths {
+                let binding = plan.bindings[candidate];
+                for hit in [context["hit_entity_id"],context["target_entity_id"]] {
+                    if hit != () && (hit.to_int() == binding.point_id || hit.to_int() == binding.visual_id) {
+                        return candidate;
+                    }
+                }
+            }
+            let path = context_route_point_path(context,route);
+            if path != () && plan.bindings.contains(path) { return path; }
+            return ();
+        }
+    }
     let point = context_route_point_path(context, route);
     if point != () && direct_route_point(doc, point, route) { return point; }
     ()
@@ -604,23 +691,8 @@ fn context_route_point_path(context, route) {
 }
 
 fn context_route_ribbon(context, route) {
-    if context == () || type_of(route) != "string" || route == "" { return false; }
-    let ribbon = ribbon_geometry_path(route);
-    let candidates = [];
-    let target = context["target_path"];
-    let hit = context["hit_path"];
-    if type_of(target) == "string" && target != "" { candidates.push(target); }
-    if type_of(hit) == "string" && hit != "" { candidates.push(hit); }
-    let prim_paths = context["prim_paths"];
-    if type_of(prim_paths) == "array" {
-        for path in prim_paths {
-            if type_of(path) == "string" && path != "" { candidates.push(path); }
-        }
-    }
-    for path in candidates {
-        if path == ribbon || path.starts_with(ribbon + "/") { return true; }
-    }
-    false
+    context != () && route != () && context["view_key"] == "route.ribbon"
+        && (context["target_path"] == route || context["hit_path"] == route)
 }
 
 fn delete_route_point(context, route) {
@@ -780,8 +852,8 @@ fn route_positions(doc, route) {
         route_scope: true, color:snapshot.color, marker_colors:colors }
 }
 
-// A route view depends on authored point identity and placement, not on the
-// document generation used by disposable @view@ presentation edits. Keep the
+// A route view depends on active point identity and placement, not on the
+// authored document generation or colors. Keep the
 // key at the policy boundary so the generic live projector does not need to
 // know that a particular consumer is a route ribbon.
 fn route_view_key(read) {
@@ -789,13 +861,7 @@ fn route_view_key(read) {
         || read.paths.len() != read.points.len() {
         return ();
     }
-    let key = "";
-    for i in 0..read.paths.len() {
-        let point = read.points[i];
-        key += read.paths[i] + ":" + point[0].to_string() + ","
-            + point[1].to_string() + "," + point[2].to_string() + ";";
-    }
-    key
+    #{paths:read.paths,points:read.points}
 }
 
 fn point_literal(point) {
@@ -803,95 +869,50 @@ fn point_literal(point) {
         + point[1].to_string() + ", " + point[2].to_string() + ")"
 }
 
-fn ribbon_path(route) {
-    // Keep the generated view under the route scope. Route points and their
-    // annotation then share the same USD parent frame, including when a Twin
-    // places the route below a transformed scene scope.
-    route + "/RouteRibbon"
+fn route_view(doc, route, key) {
+    let owner = find_path_in_document(doc, route);
+    if owner < 0 { return #{ok:false, retryable:false, error:"route view owner is not mounted"}; }
+    if execution_context().clock == "simulation" { track_entity_read(owner); }
+    let view = query("InspectSceneViewObject", #{doc_id:doc, owner_id:owner, key:key});
+    if view == () || view.ok == false {
+        return #{ok:false, error:if view == () { "route view lookup returned no result" } else {view.error}};
+    }
+    // Native API IDs are unsigned. Rhai entity functions accept its signed
+    // integer, which represents every stable 53-bit scene identity exactly.
+    if view.entity_id != () { view.entity_id = to_int(view.entity_id); }
+    if view.subject_id != () { view.subject_id = to_int(view.subject_id); }
+    view.owner_id = owner;
+    view.ok = true;
+    view
 }
 
-fn ribbon_geometry_path(route) {
-    ribbon_path(route) + "/Geometry"
+fn ribbon_entity(doc, route) {
+    let view = route_view(doc, route, "route.ribbon");
+    if view.ok == true && view.entity_id != () { view.entity_id } else { -1 }
 }
 
-fn ribbon_seed_ops(route, anchor) {
-    let ribbon = ribbon_path(route);
-    [
-        #{ AddPrim: #{
-            edit_target: "@view@",
-            parent_path: route,
-            name: "RouteRibbon",
-            type_name: "Xform",
-            reference: "lunco://markers/route_ribbon.usda",
-            reference_prim_path: "",
-        }},
-        #{ SetTranslate: #{ edit_target: "@view@", path: ribbon, value: anchor }},
-    ]
-}
-
-// Sparse route points are prepared by the presentation owner from immutable
-// terrain frame and coverage facts. The document contains the standard USD curve
-// identity and interaction schema needed for picking and material binding.
-fn update_ribbon_view(doc, route, points) {
-    update_ribbon_view(doc, route, points, ())
-}
-
-fn update_ribbon_view(doc, route, points, pending_command) {
-    if !command_available("UpdateUsdCurveView") {
-        return #{ok:true, pending:false};
-    }
-    if pending_command != () {
-        let result = command_result(pending_command);
-        if result == () || result.status == "pending" {
-            return #{ok:true, pending:true, command_id:pending_command};
-        }
-        if result.ok != true {
-            return #{ok:false, retryable:false, error:result.error};
+fn update_ribbon_view(doc, route, points, color) {
+    if !command_available("SetSceneViewObject") { return #{ok:true, pending:false}; }
+    let view = route_view(doc, route, "route.ribbon");
+    if !view.ok { return view; }
+    if !view.exists && points.len() < 2 { return #{ok:true, pending:false}; }
+    if view.exists && view.entity_id == () { return #{ok:true, pending:true}; }
+    if color != () && !valid_color(color) { return failure("route ribbon color is invalid"); }
+    let rgb = if color == () { [0.20, 1.40, 0.55] } else { color };
+    if points.len() >= 2 {
+        let styled = cmd("SetSceneViewObject", #{doc_id:doc, owner_id:view.owner_id, key:"route.ribbon",
+            shape:#{Curve:#{anchor:points[0], emissive:rgb, opacity:0.85, context_on_secondary:true}}});
+        if styled == () || styled.ok != true {
+            return #{ok:false, error:if styled == () {"curve creation returned no result"} else {styled.error}};
         }
     }
-    let ribbon = ribbon_path(route);
-    let geometry = ribbon_geometry_path(route);
-    let root_entity = find_path_in_document(doc, ribbon);
-    let curve_entity = find_path_in_document(doc, geometry);
-    if root_entity >= 0 && curve_entity >= 0 {
-        let style = query("QueryUsdPrim", #{doc_id:doc, path:route,
-            attrs:["primvars:displayColor"]});
-        let color = record_color(style);
-        if !color.ok { return color; }
-        if execution_context().clock == "simulation" { track_entity_read(curve_entity); }
-        if get(curve_entity, "PbrLook") == () { return #{ok:true, pending:true}; }
-        let painted = cmd("SetSceneView", #{batches:[#{target:curve_entity,
-            writes:[material_color_write("material.emissive", color.color)]}]});
-        if painted == () || painted.ok != true {
-            return #{ok:false, error:if painted == () { "route ribbon colour returned no result" } else { painted.error }};
-        }
-        let result = cmd("UpdateUsdCurveView", #{
-            doc_id: doc,
-            root_entity_id: root_entity,
-            curve_entity_id: curve_entity,
-            points: points,
-            width_m: route_ribbon_width(),
-        });
-        if result == () || result.ok != true {
-            return #{ ok: false, retryable: false,
-                error: if result == () { "route mesh update returned no result" } else { result.error } };
-        }
-        return #{ ok: true, pending: false };
+    if view.entity_id == () { return #{ok:true, pending:true}; }
+    let drawn = cmd("UpdateUsdCurveView", #{doc_id:doc, root_entity_id:view.entity_id,
+        curve_entity_id:view.entity_id, points:points, width_m:route_ribbon_width()});
+    if drawn == () || drawn.ok != true {
+        return #{ok:false, error:if drawn == () {"curve update returned no result"} else {drawn.error}};
     }
-    // The document may have committed the seed while its referenced subtree
-    // is still entering the live scene. Test authored identity, not only a
-    // possibly older projection, before proposing another AddPrim.
-    let authored = target_record(doc, ribbon, "@view@");
-    if !authored.ok {
-        return #{ok:false, retryable:true, error:authored.error};
-    }
-    if !authored.exists {
-        if points.len() < 2 { return #{ ok: true, pending: false }; }
-        let result = apply_view_ops(doc, "Create route ribbon view", ribbon_seed_ops(route, points[0]));
-        if result.ok != true || result.pending == true { return result; }
-        return #{ ok: true, pending: true };
-    }
-    #{ ok: true, pending: true }
+    #{ok:true, pending:false}
 }
 
 fn marker_ops(doc, route, position, read) {
@@ -1037,6 +1058,9 @@ fn insert_route_point(context, before) {
     if route == () || target == () {
         return failure("insert target is not a direct route point");
     }
+    if !authoring(context) {
+        return live_route_edit(context.doc_id,route,if before {"before"} else {"after"},target,(),());
+    }
     // Use one document-scoped composed read for point placement, name
     // allocation, and order. The order includes only active composed children;
     // name allocation also reserves authored inactive children.
@@ -1082,37 +1106,12 @@ fn insert_route_point(context, before) {
 fn on_insert_before(context) { insert_route_point(context, true) }
 fn on_insert_after(context) { insert_route_point(context, false) }
 
-fn preview_path(route) { route + "/MovePreview" }
-
-// The view-only preview owns the waypoint being moved. UI selection may change
-// while the preview is armed and is not the operation's target state.
 fn move_preview_target(doc, route) {
-    let preview = query("ResolveUsdTarget", #{
-        doc_id: doc,
-        path: preview_path(route),
-        edit_target: "@view@",
-        authored_children: true,
-    });
-    if preview == () || preview.ok == false || preview.authored_children == () {
-        return #{ ok: false, error: "move preview target state is unavailable" };
-    }
-    if preview.authored_here != true { return #{ ok: true, armed: false }; }
-    let prefix = preview_path(route) + "/Target_";
-    let point = ();
-    for child in preview.authored_children {
-        if !child.starts_with(prefix) { continue; }
-        if point != () {
-            return #{ ok: false, error: "move preview has more than one waypoint target" };
-        }
-        let name = child_name(child);
-        let suffix = name.sub_string("Target_".len());
-        point = route + "/" + suffix;
-    }
-    if point == () { return #{ ok: true, armed: false }; }
-    if !direct_route_point(doc, point, route) {
-        return #{ ok: false, error: "move preview target is not a direct route point" };
-    }
-    #{ ok: true, armed: true, point: point }
+    let view = route_view(doc, route, "route.drag");
+    if !view.ok { return view; }
+    if !view.exists { return #{ok:true, armed:false}; }
+    if view.subject_id == () { return #{ok:false, error:"route drag subject is no longer mounted"}; }
+    #{ok:true, armed:true, point:view.subject_path, subject_id:view.subject_id, entity_id:view.entity_id}
 }
 
 fn move_interaction_id(route) {
@@ -1120,6 +1119,10 @@ fn move_interaction_id(route) {
 }
 
 fn clear_move_preview(doc, route) {
+    if !command_available("ClearScenePointerMoveHook") {
+        if command_available("SetSceneViewObject") { return remove_move_preview(doc, route); }
+        return #{ok:true, changed:false};
+    }
     let subscription = cmd("ClearScenePointerMoveHook", #{
         doc_id: doc,
         interaction_id: move_interaction_id(route),
@@ -1135,143 +1138,9 @@ fn clear_move_preview(doc, route) {
 }
 
 fn remove_move_preview(doc, route) {
-    let path = preview_path(route);
-    let target = target_record(doc, path, "@view@");
-    // A missing preview is the idle state; clearing it is idempotent.
-    if !target.ok || !target.exists {
-        return #{ ok: true, changed: false };
-    }
-    apply_view_ops(doc, "Clear route-point move preview", [#{ RemovePrim: #{
-        edit_target: "@view@",
-        path: path,
-    }}])
-}
-
-fn move_preview_ops(doc, route, point, position) {
-    let path = preview_path(route);
-    let target = target_record(doc, path, "@view@");
-    let ops = [];
-    if !target.ok || !target.exists {
-        let marker = query("QueryUsdPrim", #{
-            doc_id: doc,
-            path: point + "/Dome",
-            attrs: ["radius", "xformOp:translate"],
-        });
-        if marker == () || marker.ok == false || marker.attrs == ()
-            || marker.attrs["radius"] == () || marker.attrs["xformOp:translate"] == () {
-            return #{ ok: false, retryable: true,
-                error: "selected route point marker geometry is not synchronized" };
-        }
-        ops.push(#{ AddPrim: #{
-            edit_target: "@view@",
-            parent_path: route,
-            name: "MovePreview",
-            type_name: "Xform",
-            reference: (),
-            reference_prim_path: "",
-        }});
-        ops.push(#{ SetApiSchemas: #{
-            edit_target: "@view@",
-            path: path,
-            schemas: ["LunCoPointerInteractionAPI"],
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: path,
-            name: "lunco:interaction:left",
-            type_name: "token",
-            value: "\"pass_through\"",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: path,
-            name: "lunco:interaction:right",
-            type_name: "token",
-            value: "\"pass_through\"",
-        }});
-        ops.push(#{ AddPrim: #{
-            edit_target: "@view@",
-            parent_path: path,
-            name: "Dome",
-            type_name: "Sphere",
-            reference: (),
-            reference_prim_path: "",
-        }});
-        let dome = path + "/Dome";
-        ops.push(#{ SetApiSchemas: #{
-            edit_target: "@view@",
-            path: dome,
-            schemas: ["LunCoSurfaceAPI", "LunCoPointerInteractionAPI"],
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "lunco:interaction:left",
-            type_name: "token",
-            value: "\"pass_through\"",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "lunco:interaction:right",
-            type_name: "token",
-            value: "\"pass_through\"",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "radius",
-            type_name: "double",
-            value: marker.attrs["radius"].to_string(),
-        }});
-        ops.push(#{ SetTranslate: #{
-            edit_target: "@view@",
-            path: dome,
-            value: marker.attrs["xformOp:translate"],
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "primvars:displayColor",
-            type_name: "color3f[]",
-            value: "[(0.05, 0.75, 1.0)]",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "primvars:displayOpacity",
-            type_name: "float[]",
-            value: "[0.72]",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "lunco:surface:unlit",
-            type_name: "bool",
-            value: "true",
-        }});
-        ops.push(#{ SetAttribute: #{
-            edit_target: "@view@",
-            path: dome,
-            name: "primvars:doNotCastShadows",
-            type_name: "bool",
-            value: "true",
-        }});
-        ops.push(#{ AddPrim: #{
-            edit_target: "@view@",
-            parent_path: path,
-            name: "Target_" + child_name(point),
-            type_name: "Xform",
-            reference: (),
-            reference_prim_path: "",
-        }});
-    }
-    ops.push(#{ SetTranslate: #{
-            edit_target: "@view@",
-            path: path,
-            value: position,
-        }});
-    #{ ok: true, ops: ops }
+    let owner = find_path_in_document(doc, route);
+    if owner < 0 { return failure("route view owner is not mounted"); }
+    cmd("SetSceneViewObject", #{doc_id:doc, owner_id:owner, key:"route.drag", shape:"Clear"})
 }
 
 fn on_pointer_move(context) {
@@ -1289,12 +1158,12 @@ fn on_pointer_move(context) {
     }
     let pointer = pointer_point(context);
     if pointer.ok != true { return #{ ok: true, changed: false }; }
-    let preview = find_path_in_document(context.doc_id, preview_path(route));
-    if preview < 0 {
+    let preview = target.entity_id;
+    if preview == () {
         return #{ ok: false, retryable: true,
             error: "route-point move preview is not projected yet" };
     }
-    let result = cmd("SetUsdViewPreviewTransform", #{
+    let result = cmd("SetSceneViewObjectPosition", #{
         doc_id: context.doc_id,
         entity_id: preview,
         translation: point_values(pointer.point),
@@ -1321,6 +1190,7 @@ fn on_add_here(context) {
         && heights[0].height != () {
         position[1] = heights[0].height;
     }
+    if !authoring(context) { return live_route_edit(context.doc_id,route,"add",(),position,()); }
     let read = route_positions(context.doc_id, route);
     if read.ok != true { return failure("route stage is not synchronized"); }
     let marker = marker_ops(context.doc_id, route, position, read);
@@ -1345,6 +1215,7 @@ fn on_click(context) {
     if route == () {
         return failure("select an authored route program before adding a point");
     }
+    if !authoring(context) { return live_route_edit(context.doc_id,route,"add",(),point_values(pointer.point),()); }
     let read = route_positions(context.doc_id, route);
     if read.ok != true { return failure("route stage is not synchronized"); }
     let point = marker_ops(context.doc_id, route, point_values(pointer.point), read);
@@ -1365,7 +1236,8 @@ fn on_move(context) {
     let route = route_edit_path(context);
     let point = context_route_point(context, route);
     if point == () { return failure("move target is not a direct route point"); }
-    move_route_point(context.doc_id, route, point, point_values(pointer.point))
+    if authoring(context) { move_route_point(context.doc_id, route, point, point_values(pointer.point)) }
+    else { live_route_edit(context.doc_id,route,"move",point,point_values(pointer.point),()) }
 }
 
 fn on_delete(context) {
@@ -1375,6 +1247,7 @@ fn on_delete(context) {
     let route = route_edit_path(context);
     let point = delete_route_point(context, route);
     if point == () { return failure("delete target is not a direct route point"); }
+    if !authoring(context) { return live_route_edit(context.doc_id,route,"delete",point,(),()); }
     let target = target_record(context.doc_id, point, "@runtime@");
     if !target.ok || !target.exists { return failure("delete target does not exist"); }
 
@@ -1420,7 +1293,7 @@ fn on_select(context) {
     if editor == () || editor.ok == false {
         return failure("the editor selection owner is unavailable");
     }
-    let result = if editor.focused == true && editor.doc_id == context.doc_id {
+    let result = if authoring(context) && editor.focused == true && editor.doc_id == context.doc_id {
         cmd("SelectUsdPrim", #{
             preview: editor.preview,
             path: point,
@@ -1430,7 +1303,10 @@ fn on_select(context) {
     } else {
         // Resolve the canonical live entity instead of trusting the nested
         // visual or lower object chosen by scene picking.
-        let entity_id = find_path_in_document(context.doc_id, point);
+        let plan = if authoring(context) { () } else { live_route_snapshot(context.doc_id,route) };
+        let entity_id = if plan != () && plan.ok == true && plan.bindings != () && plan.bindings.contains(point) {
+            plan.bindings[point].point_id
+        } else { find_path_in_document(context.doc_id, point) };
         if entity_id < 0 {
             return #{ ok: true, path: point, selected: false, pending: true };
         }
@@ -1452,8 +1328,8 @@ fn on_select(context) {
 }
 
 // The explicit Move menu action selects its point and creates the disposable
-// ghost at that point's current route-local position. Its target marker is the
-// policy state that arms subsequent hover and placement input.
+// ghost at that point's current route-local pose. Its subject identifies the
+// waypoint for subsequent hover and placement input.
 fn on_move_begin(context) {
     if context == () || context.doc_id == () {
         return failure("move has no active document");
@@ -1463,32 +1339,29 @@ fn on_move_begin(context) {
     if route == () || point == () {
         return failure("move target is not a direct route point");
     }
-    let authored = query("QueryUsdPrim", #{
-        doc_id: context.doc_id,
-        path: point,
-        attrs: ["xformOp:translate"],
-    });
-    if authored == () || authored.ok == false || authored.attrs == ()
-        || authored.attrs["xformOp:translate"] == () {
-        return failure("move target position is not synchronized");
-    }
     let selected = on_select(context);
     if selected == () || selected.ok != true { return selected; }
     let cleared = clear_move_preview(context.doc_id, route);
     if cleared == () || cleared.ok != true {
         return failure("existing move preview could not be cleared");
     }
-    let plan = move_preview_ops(context.doc_id, route, point,
-        authored.attrs["xformOp:translate"]);
-    if plan.ok != true { return failure(plan.error); }
-    let result = apply_view_ops(context.doc_id, "Begin route-point move", plan.ops);
-    if result.ok == true && !is_unattended() {
+    let plan = if authoring(context) { () } else { live_route_snapshot(context.doc_id,route) };
+    let binding = if plan != () && plan.ok == true && plan.bindings != () && plan.bindings.contains(point) {
+        plan.bindings[point]
+    } else { #{point_id:find_path_in_document(context.doc_id,point),visual_id:find_path_in_document(context.doc_id,point+"/Dome")} };
+    let result = cmd("SetSceneViewObject", #{doc_id:context.doc_id,
+        owner_id:find_path_in_document(context.doc_id, route), key:"route.drag",
+        shape:#{MeshPreview:#{subject_id:binding.point_id,
+            mesh_id:binding.visual_id, color:[0.05,0.75,1.0,0.72]}}});
+    if result == () { return failure("route drag creation returned no result"); }
+    if result.ok == true && command_available("SetScenePointerMoveHook") {
         let subscription = cmd("SetScenePointerMoveHook", #{
             doc_id: context.doc_id,
             interaction_id: move_interaction_id(route),
             tool: "scene_interaction",
             hook: "on_pointer_move",
-            context: #{ route_path: route },
+            context: #{ route_path: route, route_point_key:point,
+                edit_intent:if authoring(context) {"Persistent"} else {"Interactive"} },
         });
         if subscription == () || subscription.ok != true {
             remove_move_preview(context.doc_id, route);
@@ -1528,6 +1401,9 @@ fn on_color_menu(context) {
 
 fn on_set_color(context) {
     if context == () || context.doc_id == () { return failure("color edit has no document"); }
+    if !authoring(context) {
+        return live_route_edit(context.doc_id,context.route_path,"color",context.color_path,(),context.color);
+    }
     let read = route_positions(context.doc_id, context.route_path);
     if !read.ok { return read; }
     let path = context.color_path;
@@ -1542,8 +1418,11 @@ fn on_set_color(context) {
 fn color_menu_item(context, route, point) {
     let args = #{doc_id:context.doc_id, route_path:route,
         color_path:if point == () { route } else { point },
+        edit_intent:if authoring(context) {"Persistent"} else {"Interactive"},
         screen_position:context.screen_position};
-    #{label:if point == () { "Route color…" } else { "Point color…" },
+    #{label:if authoring(context) {
+            if point == () {"Author route color…"} else {"Author point color…"}
+        } else {if point == () {"Live route color…"} else {"Live point color…"}},
         tool:"waypoint_editor", hook:"on_color_menu", args:args}
 }
 
@@ -1561,77 +1440,59 @@ fn on_context(context) {
         return failure("context target is not a direct route point or its route ribbon");
     }
     if is_unattended() {
-        let path = if ribbon { ribbon_geometry_path(route) } else { point };
+        let path = if ribbon { route } else { point };
         return #{ ok: true, path: path, selected: false };
     }
     if context.screen_position == () {
         return failure("context click has no screen position");
     }
+    let authored = authoring(context);
+    let intent = if authored {"Persistent"} else {"Interactive"};
     if ribbon {
         let action_context = #{
-            doc_id: context["doc_id"],
-            route_path: route,
-            target_path: context["target_path"],
-            hit_path: context["hit_path"],
-            prim_paths: context["prim_paths"],
-            world_position: context["world_position"],
+            doc_id: context["doc_id"], route_path:route, edit_intent:intent,
+            target_path:context["target_path"], hit_path:context["hit_path"],
+            view_key:context["view_key"], prim_paths:context["prim_paths"],
+            world_position:context["world_position"],
         };
-        let opened = open_context_menu(context.screen_position, [#{
-            label: "Add point at cursor on route",
-            tool: "waypoint_editor",
-            hook: "on_add_here",
-            args: action_context,
-        }, color_menu_item(context, route, ())]);
-        if !opened { return failure("the scene context-menu host is unavailable"); }
-        return #{ ok: true, path: ribbon_geometry_path(route), menu: true, selected: false };
+        let items = [#{label:if authored {"Author point at cursor"} else {"Add live point at cursor"},
+            tool:"waypoint_editor",hook:"on_add_here",args:action_context},color_menu_item(context,route,())];
+        if !authored {
+            let author = action_context;
+            author.edit_intent = "Persistent";
+            items.push(#{label:"Author point at cursor",tool:"waypoint_editor",hook:"on_add_here",args:author});
+            items.push(#{label:"Reset live route to authored plan",tool:"waypoint_editor",hook:"on_reset_live_route",args:action_context});
+        }
+        if !open_context_menu(context.screen_position,items) { return failure("the scene context-menu host is unavailable"); }
+        return #{ok:true,path:route,menu:true,selected:false};
     }
-    let action_context = #{
-        doc_id: context["doc_id"],
-        route_path: route,
-        selected_path: point,
-        target_path: point,
-        hit_path: point,
-        prim_paths: [point],
-    };
-    let items = [#{
-            label: "Select route point",
-            tool: "waypoint_editor",
-            hook: "on_select",
-            args: action_context,
-        }];
-    items.push(#{
-        label: "Move point (click destination)",
-        tool: "waypoint_editor",
-        hook: "on_move_begin",
-        args: action_context,
-    });
-    items.push(color_menu_item(context, route, ()));
-    items.push(color_menu_item(context, route, point));
-    let route_read = route_positions(context.doc_id, route);
+    let action_context = #{doc_id:context["doc_id"],route_path:route,route_point_key:point,
+        edit_intent:intent,selected_path:point,target_path:point,hit_path:point,prim_paths:[point]};
+    let items = [#{label:"Select route point",tool:"waypoint_editor",hook:"on_select",args:action_context},
+        #{label:if authored {"Author move point (click destination)"} else {"Move live point (click destination)"},
+            tool:"waypoint_editor",hook:"on_move_begin",args:action_context}];
+    items.push(color_menu_item(context,route,()));
+    items.push(color_menu_item(context,route,point));
+    let route_read = if authored {route_positions(context.doc_id,route)} else {live_route_snapshot(context.doc_id,route)};
     if route_read.ok == true && route_read.paths.len() >= 2 {
-        if insertion_position(route_read, point, true) != () {
-            items.push(#{
-                label: insertion_action_label(route_read, point, true),
-                tool: "waypoint_editor",
-                hook: "on_insert_before",
-                args: action_context,
-            });
-        }
-        if insertion_position(route_read, point, false) != () {
-            items.push(#{
-                label: insertion_action_label(route_read, point, false),
-                tool: "waypoint_editor",
-                hook: "on_insert_after",
-                args: action_context,
-            });
+        for before in [true,false] {
+            if insertion_position(route_read,point,before) != () {
+                items.push(#{label:(if authored {"Author: "} else {"Live: "})+insertion_action_label(route_read,point,before),
+                    tool:"waypoint_editor",hook:if before {"on_insert_before"} else {"on_insert_after"},args:action_context});
+            }
         }
     }
-    items.push(#{
-            label: "Delete route point",
-            tool: "waypoint_editor",
-            hook: "on_delete",
-            args: action_context,
-        });
+    items.push(#{label:if authored {"Author delete point"} else {"Delete live point"},
+        tool:"waypoint_editor",hook:"on_delete",args:action_context});
+    if !authored {
+        if direct_route_point(context.doc_id,point,route) {
+            let author = action_context;
+            author.edit_intent = "Persistent";
+            items.push(#{label:"Author move point (click destination)",tool:"waypoint_editor",hook:"on_move_begin",args:author});
+            items.push(#{label:"Author delete point",tool:"waypoint_editor",hook:"on_delete",args:author});
+        }
+        items.push(#{label:"Reset live route to authored plan",tool:"waypoint_editor",hook:"on_reset_live_route",args:action_context});
+    }
     let opened = open_context_menu(context.screen_position, items);
     if !opened { return failure("the scene context-menu host is unavailable"); }
     #{ ok: true, path: point, menu: true, selected: false }

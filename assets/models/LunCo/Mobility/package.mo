@@ -6,8 +6,8 @@ package Mobility "Surface mobility: authored command laws and mechanical port de
 mechanical demands consumed by a rover's wheels and joints. Each vehicle
 composition chooses the model that matches its kinematics.</p>
 
-<p><b>What belongs here:</b> command laws, steering geometry, and motor
-dynamics. These are per-vehicle decisions: a skid rover and an Ackermann
+<p><b>What belongs here:</b> command laws, steering geometry, motor
+dynamics, and wheel-soil constitutive equations. These are per-vehicle decisions: a skid rover and an Ackermann
 rover answer the same command differently, so each has an authored model with
 its own equations.</p>
 

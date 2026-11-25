@@ -3,11 +3,13 @@
 Route geometry and route execution are program-level concerns. A route is an
 ordinary USD scope containing reusable route-point prims and a child Rhai
 program. The scope may be authored in the scene or in a separate route-plan
-USD asset that the scene composes at its canonical path. New and edited route
-points are opinions in the document's `@runtime@` layer, saved to the owning
-Twin's `.lunco/runtime/<scene-path>` sidecar when
-`usd.runtime_persistence` is enabled. The source scene and route-plan files
-remain untouched. The subject is an authored relationship on the program, so a
+USD asset that the scene composes at its canonical path. That definition
+initializes the active route program. Terrain clicks, waypoint movement,
+insertion, deletion, and palette changes in Simulation change its live,
+session-only plan and do not write USD. Explicit **Author** actions, or route
+editing in the Editor perspective, journal the requested definition change in
+`@runtime@`. Such authored opinions are saved to the Twin's runtime sidecar
+when `usd.runtime_persistence` is enabled. The subject is an authored relationship on the program, so a
 vehicle does not own a waypoint list and the Rust core does not know about
 vehicles or autopilot programs.
 
@@ -16,15 +18,19 @@ vehicles or autopilot programs.
 | Concern | Owner |
 |---|---|
 | Route identity, point placement, trigger radius, look, and subject relationship | Composed USD |
-| Route sequencing, enable/disable policy, mission reactions | Rhai program |
+| Active route plan, sequencing, enable/disable policy, mission reactions | Rhai program |
+| Generated waypoint marker and overlap sensor | Mounted native `SetRuntimeMarker` owner |
 | Avian sensor transitions (`SENSOR_ENTER` / `SENSOR_EXIT`) | Generic physics/sensor runtime |
 | Optional named geofence events (`enter:<zone>` / `exit:<zone>`) | Generic physics/sensor runtime from `TriggerZone` metadata |
 | Steering math and named-port writes | Generic navigation/port mechanisms |
 | Equations, actuator dynamics, and contact response | Modelica / Avian |
 | Route ribbon presentation | Rhai route policy plus the generic `UpdateUsdCurveView` command and bounded surface-annotation preparation |
 
-USD stays the authoring source; the live scene still needs ECS entities for
-rendering, sensors, and physics. Its projection is incremental: a move updates
+USD stays the authoring source; the live scene uses ECS entities for rendering,
+sensors, and physics. The live plan uses existing admitted point entities and
+adds keyed native markers only for additional points. Live move and delete
+commands act on those native identities. For an explicit authored change,
+projection is incremental: a move updates
 the existing entity transform, a delete despawns that point subtree, and an add
 projects only the new point's composed subtree. OpenUSD can include the route
 scope as structural context in the sink notice, but an already-live ancestor is
@@ -106,25 +112,29 @@ When a route plan is stored separately, keep the route scope and its points in
 that file and reference or payload the scope into the scene; do not duplicate
 points in the scene and the plan. The scene owns subject placement and its
 `programs` binding, while the route-plan file owns route topology. A
-document-backed live edit still uses the composed canonical path and the
-existing USD journal boundary.
+document-backed authoring action uses the composed canonical path and the
+existing USD journal boundary. The route program owns live edits at the
+simulation boundary and publishes its acknowledged plan through the scripting
+snapshot interface. `waypoint_editor::live_route_snapshot(doc, route)` reads
+that plan. `route_positions(doc, route)` reads the composed definition. A
+live-route reset restores the current authored definition, discards additional
+markers, and stops the active route; editing the definition also resets an
+active live plan with a visible notice.
 
-The route tool derives a ribbon from the same point children. Route-point
-topology and transforms are durable `@runtime@` edits. The tool first checks
-`command_available("UpdateUsdCurveView")`. A headless simulation runs route
-selection, sensors and navigation with the original document generation. It
-creates no ribbon or pending presentation job.
+The route tool derives a ribbon from the active plan's ordered points, seeded
+from authored waypoint children. The tool first checks
+`command_available("SetSceneViewObject")`. Headless hosts run navigation and
+sensors without allocating presentation objects. On desktop and offscreen
+hosts, two points are sufficient to create a keyed ECS curve beneath the
+mounted route. The stable identity derives from that owner and the key
+`route.ribbon`. Look it up with `waypoint_editor::ribbon_entity(doc, route)`
+or inspect its pointer policy with `InspectSceneViewObject`. The same
+entity supplies the material, picking target and terrain annotation. Fewer
+than two points hide the existing curve so subsequent edits reuse its identity.
+Opening the route, changing its colour and advancing its program preserve the
+document generation on every host.
 
-The desktop and offscreen renderers use the route's composed
-`RouteRibbon/Geometry` prim for its material binding, stable picking identity
-and terrain annotation. A route author can reference the standard
-[ribbon asset](../../assets/markers/route_ribbon.usda) as a child named
-`RouteRibbon` to supply that identity with the initial scene. When the route
-has at least two points and lacks the reference, the graphics host adds the
-reference and its anchor once to the disposable `@view@` layer. That initial
-edit advances the document generation and projects the ribbon subtree.
-Subsequent movement, progress and live colour updates reuse the projected prim.
-Rejected seed edits are terminal presentation results until a new route revision. `UpdateUsdCurveView` captures ordered f64
+`UpdateUsdCurveView` captures ordered f64
 parent-local route points and resolves them into the owning terrain's local
 plane. The terrain annotation owner builds a bounded spatial index off-thread;
 its production and diagnostic fragments paint the route on their own surface,
@@ -142,8 +152,9 @@ results. Updating points on an admitted curve preserves the document generation 
 See [USD-driven visuals](50-usd-driven-visuals.md) for the rendering ABI and gate.
 
 The route-following program owns live ribbon refreshes. The waypoint editor
-commits only the authored route operation; it does not also submit a preview
-view from a second point snapshot. `usd.document.projected` is emitted once the
+sends a live route request by default; the route actor applies a validated
+native operation and publishes one updated plan for both guidance and ribbon.
+An explicit authoring action commits only its document operation. `usd.document.projected` is emitted once the
 document generation has reached the live stage and every active referenced
 subtree from that edit has a live instance projection. The event carries the
 union of the reconciled stage paths, so the route policy refreshes from the
@@ -157,9 +168,10 @@ authoring commands, including local overrides for referenced children. The
 standard Delete command removes a runtime-only point and deactivates a
 base-authored or referenced point in the runtime layer; it never tries to
 remove a spec from a layer that does not own it. Durable changes are journaled
-and feed the live ribbon presentation owner. Route moves, adds, deletes, and external
-document edits refresh through the route-follow program after the complete
-projected change event. Marker colors synchronize when the visited set or
+and feed the live ribbon presentation owner. Authored moves, adds, deletes and external document edits refresh through the
+route-follow program after the complete projected change event. Live changes
+use the same curve owner on the acknowledged route-plan change and do not wait
+for document projection. Marker colors synchronize when the visited set or
 an authored color changes; progress-only updates do not resubmit ribbon geometry.
 Color and topology keys are separate, so recoloring does not retarget guidance.
 Runtime-layer snapshots
@@ -176,8 +188,7 @@ that local target immediately, while a point-name or composed-stage read that
 is not synchronized reports a retryable authoring error rather than guessing
 or silently reusing an existing path. Once mounted, `QueryUsdPrim` reads the
 current canonical stage even at generation zero, so it observes inactive
-referenced points and live `@view@` previews instead of the loader's initial
-snapshot. A document-scoped query can observe an exact generation after it has
+referenced points at their current composed paths. A document-scoped query can observe an exact generation after it has
 reached the mounted stage, even while the ECS projection cursor is catching up;
 operations still pending at the stage boundary remain retryable. Synchronous
 document preflight composes base, runtime, and view at their actual USD layer
@@ -198,10 +209,11 @@ Every Avian sensor transition emits `SENSOR_ENTER` or `SENSOR_EXIT`, with the
 sensor GID in `TelemetryEvent.source` and the moving body's GID in the event
 value. This identity-based event does not require a `TriggerZone` label. A
 non-empty label additionally emits `enter:<zone>` or `exit:<zone>` for authored
-geofence policies that use names. The route program consumes the named form,
-accepting an enter event when its payload is the current subject or a registered
-descendant collider in that subject's generic parent chain, and the zone is the
-next unvisited point in authored route order. An out-of-order enter does not
+geofence policies that use names. The route program matches named events for authored zones and uses the exact
+sensor identity for a generated native waypoint. An enter event is accepted
+when its payload is the current subject or a registered descendant collider in
+that subject's generic parent chain, and the sensor belongs to the next
+unvisited point in active route order. An out-of-order enter does not
 change visit state or advance the route; the point must be entered again after
 its predecessors. At startup, only the first unvisited point can be marked from
 `SensorOccupants`, because a simultaneous occupancy snapshot does not establish
@@ -278,8 +290,7 @@ Pass-through hits can still emit their own Bevy pointer event, while the
 `Pickable` hit map also includes lower hits. The shared dispatcher stops the
 pass-through event's ancestor propagation and returns before click and hover
 de-duplication, so the independently emitted lower blocking or context event
-can own the gesture or terrain position. The move preview and its Dome child author
-pass-through behavior for both buttons, so their visual overlap cannot consume
+can own the gesture or terrain position. The runtime drag root and mesh both ignore picking, so their visual overlap cannot consume
 waypoint selection, context clicks, or move-preview terrain samples.
 
 Route-edit hooks run in the bounded UI interaction queue, so each hook keeps
@@ -303,6 +314,8 @@ to another open document that composes the same prim path; using that tab as the
 write destination would move the wrong route opinion while the live command
 targets the correct entity.
 
+A text-only or preparing USD document has no projected selection surface. Live
+viewport selection remains active until a focused preview mounts its stage.
 The `Move route point` context-menu action selects the point and arms placement
 for the next ordinary primary scene hit. While its transient preview exists,
 the route tool subscribes that document to the generic pointer-move hook with
@@ -331,21 +344,17 @@ the bounded typed UI-hook queue. Enter supplies the first scene sample when a
 cursor leaves a menu and retires the chrome hit from the prior picking frame.
 Scene pointer consumers use the picked hit to distinguish scene input from
 chrome; they do not gate that hit
-with the later-published `EguiFocus` snapshot. Rhai creates a translucent `Xform` and
-Dome in the disposable `@view@` layer, with a view-layer target child that
-identifies the armed point. The Dome copies the selected marker's authored
-radius and local offset. Hover sends a typed `SetUsdViewPreviewTransform`
-command that validates the projected target against its document and view-layer
-authorship, converts the active-frame position through the target's real parent
-hierarchy, and updates only its live render transform. It does not edit the USD
-document or trigger projection. Preview creation and cleanup each use one
-transient view-layer edit; only the placement click authors the waypoint's
-canonical `@runtime@` position through `MoveEntity` with `intent: "Persistent"`, which
-owns active-frame conversion and persistence. Selecting a point alone does not
-arm movement.
-Placement resolves the preview's `Target_<point>` from the explicit `@view@`
-layer with `ResolveUsdTarget(authored_children: true)`. It does not wait for the
-composed stage to enumerate a preview that was just authored.
+with the later-published `EguiFocus` snapshot. Rhai opens a keyed mesh preview with
+`SetSceneViewObject`. The preview retains the selected waypoint as its
+subject and shares the projected dome mesh and local transform. The
+`route.drag` key scopes the operation to its mounted route. Hover sends
+`SetSceneViewObjectPosition` with the stable preview identity and the
+active-frame pointer position. The owner resolves parent coordinates and
+updates the live render transform. Cancel retires the preview. Placement
+resolves the subject directly from `InspectSceneViewObject` and commits its
+position through `MoveEntity` with `intent: "Persistent"`. Selecting a
+point alone leaves the drag inactive.
+
 The route ribbon view is prepared asynchronously from a coalesced point
 snapshot. Hover changes to the move ghost update only its live transform; they
 do not sample terrain, author a USD operation, or wait for a projection. The
@@ -362,8 +371,8 @@ Existing point paths and route-progress identities do not change. Interior
 insertions use the adjacent-point midpoint. Endpoint insertions extend five
 meters outward along the neighboring segment's direction. A single-point route
 has no direction to infer, so the menu does not offer these actions yet.
-Right-clicking the ribbon offers `Add point at cursor on route`; the stable
-`BasisCurves` seed carries the standard pointer-interaction API in `@view@`,
+Right-clicking the ribbon offers `Add live point at cursor` and `Author point at cursor`; the live
+curve supplies its view key, route owner and secondary context policy,
 and the action uses the ribbon hit's world position, snapping its height to
 terrain when the terrain query has a support point.
 
@@ -380,9 +389,9 @@ the hit prim's registered `LunCoPointerInteractionAPI` marks that button as
 `context`. The popup host registers its foreground egui bounds as chrome in
 `ScenePickGate`, so menu rows own clicks that overlap transform handles. Only
 the explicit “Select route point” action selects the point; “Move point” also
-selects its target and arms ghost placement. The view-layer `Target_<point>`
-child owns the move target until placement or cancellation, independent of later
-editor or scene selection changes. Hover contexts are scoped to
+selects its target and arms ghost placement. The native `route.drag` view owns the stable subject identity until placement
+or cancellation, independent of later editor or scene selection changes. The
+pointer subscription also retains the point key and explicit edit intent. Hover contexts are scoped to
 the document of the scene hit and include selection/control paths only when
 they belong to that document. Route-bearing hit paths take precedence over a
 stale rover selection when opening a context menu. The menu carries the
@@ -408,26 +417,26 @@ unchanged document generation during preview, terrain placement, and deletion.
 It waits for the possession camera's waypoint projection to settle before each
 scene gesture, so coordinates match the rendered marker.
 The `route_lifecycle` gate covers route selection precedence, insertion order,
-and ribbon context policy, including placement from an authored preview before
-the composed query projection settles.
+and ribbon context policy, including placement from the subject retained by the live preview.
 
 Pointer and menu tool hooks use the bounded UI queue, which runs after Bevy
 picking in `PreUpdate` and before fixed simulation. General `RunRhai` requests
 stay in the separate `Repl` queue, so unrelated script work cannot delay route
-input policy. The rate boundary is explicit: the `@view@` preview is created
-once when Move is armed, then each coalesced pointer sample updates only its
-live ECS transform through the typed preview-transform command. This path does
-not wait for a physics tick, author a USD op, project a document revision, or
-rebuild the ribbon. Placement is a low-frequency boundary: the next primary
-surface click converts its hit through the active frame and commits one
-canonical `@runtime@` move. The `route_interaction` gate uses the Rhai behavior
+input policy. Arming allocates the mesh preview once. Each coalesced
+pointer sample updates its transform on the interaction clock. Placement applies one live waypoint move by default. An explicitly armed
+Author move commits one canonical `@runtime@` move. The `route_interaction` gate uses the Rhai behavior
 tree vocabulary (`seq`, `once`, `wait_until`, and `step`) to send injected
 window input across task ticks and verify that preview motion leaves document
 generation unchanged. Its `InjectWindowInput` events exercise Bevy picking but
 do not verify OS, compositor, or winit delivery.
 
 In the editor, the runtime edit panel identifies `@runtime@` as the target for
-route points, runtime spawns, and gizmo edits. Its Twin setting tells the user
+authored route points, persistent spawns, and persistent gizmo edits. Simulation
+Alt-click appends a native waypoint. Right-click **Move live point**, **Delete
+live point**, and **Live** insertion or color actions alter the active plan.
+**Reset live route to authored plan** discards these changes. Select **Author**
+for a document edit, or switch to the Editor perspective. For authored tool
+calls pass `edit_intent: "Persistent"`; omitted intent is live. Its Twin setting tells the user
 whether those authored edits persist across sessions or remain session-only.
 The `route_runtime_persistence` production Rhai scene gate uses the existing
 Rhai task tree (`seq`, named `once`/`wait_until` callbacks, and `check`/`sel`
@@ -458,15 +467,14 @@ unvisited points are green and completed points are gray. Author one constant
 `color3f[] primvars:displayColor` on the route scope to color its line and points.
 A direct point root can override the route color. This changes the marker without scheduling a new ribbon geometry revision. Completed colored points dim
 to 35 percent brightness while retaining their hue. The route and point roots own their
-persistent palette choices. The route program applies the resulting dome colour
-to `material.base_color` and the ribbon colour to `material.emissive` through
-`SetSceneView`. The terrain annotation snapshots the same effective appearance
-as the ordinary ribbon mesh. Clearing a live channel restores its authored
-value. A visit changes the marker's private render material and preserves the
+persistent palette choices. The route program applies the dome colour
+through `SetSceneView` and the curve's emissive colour through
+`SetSceneViewObject`. The terrain annotation snapshots the same appearance
+as the ordinary ribbon mesh. A visit changes the marker's private render material and preserves the
 USD generation.
 
 Right-click a route line or marker and choose **Route color…**; marker menus also
-provide **Point color…**. Palette edits use the normal `@runtime@` journal,
+provide **Point color…**. Live palette edits stay in the plan; explicitly authored palette edits use the `@runtime@` journal,
 undo/redo, and Twin runtime persistence. **Use route color** clears a point's
 local override; **Default color** clears the route override. Arbitrary linear RGB
 values in [0, 1] are supported through the pure
@@ -495,7 +503,10 @@ Real Avian trigger arrival and route resume are covered
 by [`route_progress.usda`](../../assets/scenes/tests/route_progress.usda); the
 windowed pointer/menu path is covered by
 [`route_interaction.usda`](../../assets/scenes/tests/editor/route_interaction/route_interaction.usda).
-The manifest-backed runtime-layer write and restore path is covered by
+The scene-attached `live_route_plan.rhai` acceptance observes live additions,
+native and authored point movement, deletion, color-only updates and reset
+against unchanged USD generation. The manifest-backed authored runtime-layer
+write and restore path is covered by
 [`route_runtime_persistence.usda`](../../assets/scenes/tests/route_runtime_persistence.usda)
 and `scripts/api/test_route_runtime_persistence.py`.
 The remaining route/task behavior contract is covered by authored scene

@@ -106,6 +106,19 @@ pub struct CollisionGroupTable {
 }
 
 impl CollisionGroupTable {
+    /// Native objects may opt into a composed group's membership without
+    /// adding a synthetic path to its authored collection.
+    pub fn layers_for_group(&self, path: &str) -> Option<CollisionLayers> {
+        let group = self
+            .groups
+            .iter()
+            .find(|g| g.prims.iter().any(|p| p == path))?;
+        Some(CollisionLayers::new(
+            LayerMask(1u32 << group.bit),
+            LayerMask(!group.blocked),
+        ))
+    }
+
     /// Read every `PhysicsCollisionGroup` on the stage and resolve merges,
     /// membership and the blocked-pair table.
     pub fn read(reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject) -> Self {
@@ -351,6 +364,13 @@ pub struct CollisionGroupTables {
 }
 
 impl CollisionGroupTables {
+    pub fn get(
+        &self,
+        stage: AssetId<lunco_usd_bevy_stage::UsdStageAsset>,
+    ) -> Option<&CollisionGroupTable> {
+        self.by_stage.get(&stage)
+    }
+
     /// The table for `stage`, reading it on first ask.
     pub fn get_or_read(
         &mut self,

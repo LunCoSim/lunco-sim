@@ -25,6 +25,7 @@
 //! by `drain_world_scripts` with the prelude and every tool in scope, so an
 //! authored interaction policy can do anything a scenario can.
 
+mod view_objects;
 use bevy::math::DVec3;
 use bevy::picking::hover::PreviousHoverMap;
 use bevy::picking::pointer::{PointerButton, PointerId};
@@ -51,9 +52,11 @@ use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 use lunco_terrain_surface::annotations::{SurfaceAnnotationImages, SurfaceCurveAnnotation};
 use lunco_terrain_surface::{GridSurfaceQuery, TerrainSurfaceSnapshot};
 use lunco_usd_bevy_mesh::{TransientUsdCurveView, UsdCurveMesh};
-use lunco_usd_document::document::{LayerId, UsdDocument};
+use lunco_usd_document::document::UsdDocument;
 use lunco_usd_geometry::ribbon::{RibbonPoint, build_ribbon_mesh};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use view_objects::SceneViewObject;
+pub use view_objects::{SceneViewShape, SetSceneViewObject};
 
 /// Shared curve and terrain-annotation presentation for every rendering host.
 /// It does not install pointer tools, egui panels, or a workbench.
@@ -75,6 +78,8 @@ impl Plugin for UsdCurveViewPlugin {
             )
                 .chain(),
         );
+        view_objects::install(app);
+        __register_on_set_scene_view_object_position(app);
         __register_on_update_usd_curve_view(app);
     }
 }
@@ -162,6 +167,7 @@ struct UsdCurveViewRequest {
 }
 
 struct UsdCurveViewBuild {
+    parent: Entity,
     revision: u64,
     root: Entity,
     curve: Entity,
@@ -203,14 +209,13 @@ pub fn clear_scene_pointer_dispatch(mut dispatch: ResMut<ScenePointerDispatch>) 
     dispatch.pending_moves.clear();
 }
 
-/// Set the presentation transform of a prim authored in the disposable USD
-/// view layer. The target is resolved by stable entity identity and validated
-/// against its owning document before its live Bevy transform is updated.
+/// Move a keyed presentation object within its mounted document.
 #[Command(default)]
-pub struct SetUsdViewPreviewTransform {
-    /// USD document which owns the view-layer prim.
+pub struct SetSceneViewObjectPosition {
+    /// Mounted USD document.
     pub doc_id: u64,
-    /// Stable API identity of the projected preview prim.
+    /// Stable presentation object identity.
+    #[reflect(@lunco_core::AuthzTarget)]
     pub entity_id: u64,
     /// Target translation in the active physics frame.
     pub translation: [f64; 3],
@@ -370,10 +375,10 @@ pub(crate) fn reset_scene_pointer_move_hooks(
     dispatch.pending_moves.clear();
 }
 
-#[on_command(SetUsdViewPreviewTransform)]
-fn on_set_usd_view_preview_transform(
-    trigger: On<SetUsdViewPreviewTransform>,
-    documents: Res<DocumentRegistry<UsdDocument>>,
+#[on_command(SetSceneViewObjectPosition)]
+fn on_set_scene_view_object_position(
+    trigger: On<SetSceneViewObjectPosition>,
+    views: Query<&SceneViewObject, With<view_objects::PreviewOf>>,
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     active_frame: Option<Res<ActivePhysicsFrame>>,
@@ -395,26 +400,14 @@ fn on_set_usd_view_preview_transform(
     let entity = entities
         .resolve(&entity_id)
         .ok_or_else(|| "preview transform target is not live".to_string())?;
-    let prim = q_prim
+    let view = views
         .get(entity)
-        .map_err(|_| "preview transform target is not a USD prim".to_string())?;
-    let target_doc = lunco_usd_bevy_twin::scene_document_for(&backed, prim.stage_handle.id())
-        .ok_or_else(|| "preview transform target has no document-backed scene".to_string())?;
-    if target_doc != doc {
-        return Err("preview transform target belongs to another USD document".to_string());
-    }
-    let host = documents
-        .host(doc)
-        .ok_or_else(|| format!("USD document {doc} is not open"))?;
-    if !host
-        .document()
-        .authored_prim_exists(&LayerId::view(), &prim.path)
-        .map_err(|error| format!("cannot validate USD view prim {}: {error}", prim.path))?
-    {
-        return Err(format!(
-            "preview transform target {} is not authored in the USD view layer",
-            prim.path
-        ));
+        .map_err(|_| "Position target must be a scene mesh preview")?;
+    let prim = q_prim
+        .get(view.owner)
+        .map_err(|_| "Scene view owner is no longer live")?;
+    if lunco_usd_bevy_twin::scene_document_for(&backed, prim.stage_handle.id()) != Some(doc) {
+        return Err("Presentation target belongs to another document".into());
     }
     let frame = active_frame
         .as_deref()
@@ -475,22 +468,22 @@ pub enum UsdCurveViewProjection {
     Spatial,
 }
 
-/// Coalesced presentation update of an existing USD curve, preserving its material.
+/// Coalesced geometry update for a projected USD curve or keyed scene view.
 /// Spatial geometry is not projected onto terrain and does not move its anchor.
 /// No USD layer, document generation or physical geometry is changed.
 #[Command(default)]
 pub struct UpdateUsdCurveView {
-    /// USD document which owns both target prims.
+    /// Mounted document owning the curve and anchor.
     pub doc_id: u64,
-    /// Stable API identity of the Xform carrying the curve's anchor.
+    /// Anchor identity. A keyed curve uses its own entity here.
     pub root_entity_id: u64,
-    /// Stable API identity of the projected UsdGeomBasisCurves entity.
+    /// Stable identity of the curve geometry.
     pub curve_entity_id: u64,
     /// Ordered centerline points in the route parent's local USD coordinates.
     pub points: Vec<[f64; 3]>,
     /// Spatial points are curve-local; surface points retain route-parent coordinates.
     pub projection: UsdCurveViewProjection,
-    /// Optional per-point ribbon normals. Empty uses local Y, as for legacy views.
+    /// Optional per-point ribbon normals. An empty array selects local Y.
     pub normals: Vec<[f64; 3]>,
     /// Full ribbon width in metres.
     pub width_m: f64,
@@ -527,13 +520,13 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                     name: "entity_id".to_owned(),
                     type_name: "u64".to_owned(),
                     required: true,
-                    description: "Stable API identity of the projected curve prim.".to_owned(),
+                    description: "Stable API identity of the presented curve.".to_owned(),
                     allowed_values: None,
                 },
             ]),
             exactly_one_of: Vec::new(),
             response: Some(
-                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, requested_surface_rgb, surface_binding_count, displayed_surface_binding_count, surface_texture, index_updated_segments, index_touched_nodes, index_patch_bytes, index_full_uploads, uploaded_patch_bytes, uploaded_patch_batches, index_upload_sequence, uploaded_patch_sequence, error }"
+                "{ doc_id, entity_id, path, view_key, width_m, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, requested_surface_rgb, surface_binding_count, displayed_surface_binding_count, surface_texture, index_updated_segments, index_touched_nodes, index_patch_bytes, index_full_uploads, uploaded_patch_bytes, uploaded_patch_batches, index_upload_sequence, uploaded_patch_sequence, error }"
                     .to_owned(),
             ),
         }
@@ -566,10 +559,13 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                 format!("InspectUsdCurveView entity {raw_entity} is not live"),
             ));
         };
-        let Some(prim) = world.get::<lunco_usd_bevy_scene::UsdPrimPath>(entity) else {
+        let owner = world
+            .get::<SceneViewObject>(entity)
+            .map_or(entity, |view| view.owner);
+        let Some(prim) = world.get::<lunco_usd_bevy_scene::UsdPrimPath>(owner) else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::DeserializationError,
-                "InspectUsdCurveView target is not a USD prim",
+                "InspectUsdCurveView target has no mounted USD owner",
             ));
         };
         if world.get::<UsdCurveMesh>(entity).is_none() {
@@ -689,6 +685,8 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             "doc_id": raw_doc,
             "entity_id": raw_entity,
             "path": prim.path.clone(),
+            "view_key": world.get::<SceneViewObject>(entity).map(|view|view.key.clone()),
+            "width_m": world.get_resource::<PendingUsdCurveViews>().and_then(|views|views.sources.get(&entity)).map(|source|source.width_m),
             "state": state,
             "requested_revision": status.requested_revision,
             "completed_revision": status.completed_revision,
@@ -726,12 +724,10 @@ fn on_update_usd_curve_view(
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    views: Query<&SceneViewObject>,
     q_look: Query<(&lunco_render::PbrLook, Option<&lunco_render::PbrViewColor>)>,
     q_parents: Query<&ChildOf>,
-    mut q_curve: Query<
-        (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
-        With<UsdCurveMesh>,
-    >,
+    mut q_curve: Query<(&Mesh3d, &mut Visibility), With<UsdCurveMesh>>,
     mut pending: ResMut<PendingUsdCurveViews>,
     mut commands: Commands,
 ) -> Result<Ack, String> {
@@ -775,21 +771,38 @@ fn on_update_usd_curve_view(
             command.curve_entity_id,
         ))
         .ok_or_else(|| "curve view geometry is not live".to_string())?;
-    let root_prim = q_root
-        .get(root)
-        .map_err(|_| "curve view anchor is not a USD prim".to_string())?;
-    let (curve_prim, _, mut visibility) = q_curve
+    let (_, mut visibility) = q_curve
         .get_mut(curve)
-        .map_err(|_| "curve view geometry is not a projected USD curve".to_string())?;
-    if root_prim.stage_handle.id() != curve_prim.stage_handle.id()
-        || !curve_prim.path.starts_with(&(root_prim.path.clone() + "/"))
-    {
-        return Err("curve view geometry is not a descendant of its anchor".to_string());
+        .map_err(|_| "Curve view target has no curve mesh")?;
+    let parent = q_parents
+        .get(root)
+        .map_err(|_| "Curve anchor has no parent")?
+        .parent();
+    let parent_prim = q_root
+        .get(parent)
+        .map_err(|_| "Curve owner is not a USD prim")?;
+    let stage_id = parent_prim.stage_handle.id();
+    if let Ok(view) = views.get(curve) {
+        if curve != root || view.owner != parent {
+            return Err("Runtime curve must use its own anchor and mounted owner".into());
+        }
+    } else {
+        let root_prim = q_root
+            .get(root)
+            .map_err(|_| "Curve anchor is not a USD prim")?;
+        let curve_prim = q_root
+            .get(curve)
+            .map_err(|_| "Curve geometry is not a USD prim")?;
+        if root_prim.stage_handle.id() != stage_id
+            || curve_prim.stage_handle.id() != stage_id
+            || !curve_prim.path.starts_with(&(root_prim.path.clone() + "/"))
+            || root_prim.path.rsplit_once('/').map(|(p, _)| p) != Some(parent_prim.path.as_str())
+        {
+            return Err("Curve geometry and anchor must belong to the requested USD owner".into());
+        }
     }
-    let target_doc = lunco_usd_bevy_twin::scene_document_for(&backed, root_prim.stage_handle.id())
-        .ok_or_else(|| "curve view target has no document-backed scene".to_string())?;
-    if target_doc != doc {
-        return Err("curve view targets belong to another USD document".to_string());
+    if lunco_usd_bevy_twin::scene_document_for(&backed, stage_id) != Some(doc) {
+        return Err("Curve view belongs to another document".into());
     }
     // Spatial meshes retain either their authored shader or PBR material.
     // Only terrain annotations need a PBR colour to publish into the ground.
@@ -807,24 +820,6 @@ fn on_update_usd_curve_view(
             look.base_color.alpha,
         )
     };
-    let parent = q_parents
-        .get(root)
-        .map_err(|_| "curve view anchor has no USD route parent".to_string())?
-        .parent();
-    let expected_parent_path = root_prim
-        .path
-        .rsplit_once('/')
-        .map(|(parent, _)| parent)
-        .ok_or_else(|| "curve view anchor path has no parent".to_string())?;
-    let parent_prim = q_root
-        .get(parent)
-        .map_err(|_| "curve view route parent is not a USD prim".to_string())?;
-    if parent_prim.stage_handle.id() != root_prim.stage_handle.id()
-        || parent_prim.path != expected_parent_path
-    {
-        return Err("curve view anchor is not directly parented to its route prim".to_string());
-    }
-
     if command.points.len() >= 2
         && pending.sources.len() >= MAX_PENDING_CURVE_VIEW_REQUESTS
         && !pending.sources.contains_key(&curve)
@@ -888,7 +883,7 @@ fn on_update_usd_curve_view(
             root,
             curve,
             parent,
-            stage_id: root_prim.stage_handle.id(),
+            stage_id,
             points: command.points.clone(),
             normals: command.normals.clone(),
             projection: command.projection,
@@ -899,8 +894,7 @@ fn on_update_usd_curve_view(
     if let Some(request) = pending.requests.get(&curve).cloned() {
         pending.sources.insert(curve, request);
     }
-    // Once the route tool takes ownership, subsequent authored stage changes
-    // must not rebuild this mesh from its intentionally minimal USD seed.
+    // Registered curve sources own subsequent geometry updates.
     commands.entity(curve).try_insert(TransientUsdCurveView);
     Ok(Ack::new(OpId::new()))
 }
@@ -921,10 +915,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
     annotations: Query<&SurfaceCurveAnnotation>,
-    mut q_curve: Query<
-        (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
-        With<UsdCurveMesh>,
-    >,
+    mut q_curve: Query<(&Mesh3d, &mut Visibility), With<UsdCurveMesh>>,
 ) {
     for entity in removed_curves.read() {
         pending.sources.remove(&entity);
@@ -942,7 +933,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
             .values()
             .filter(|source| {
                 source.projection == UsdCurveViewProjection::Surface
-                    && q_root.contains(source.root)
+                    && q_spatial.contains(source.root)
                     && q_curve.contains(source.curve)
             })
             .cloned()
@@ -962,7 +953,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
         }
         pending
             .sources
-            .retain(|_, source| q_root.contains(source.root) && q_curve.contains(source.curve));
+            .retain(|_, source| q_spatial.contains(source.root) && q_curve.contains(source.curve));
     }
     if pending.tasks.len() >= MAX_ACTIVE_CURVE_VIEW_BUILDS || pending.requests.is_empty() {
         return;
@@ -1009,12 +1000,12 @@ pub(crate) fn prepare_pending_usd_curve_views(
         let Some(request) = pending.requests.remove(&entity) else {
             continue;
         };
-        let Ok((curve, _, mut visibility)) = q_curve.get_mut(entity) else {
+        let Ok((_, mut visibility)) = q_curve.get_mut(entity) else {
             pending.latest_revision.remove(&entity);
             pending.status.remove(&entity);
             continue;
         };
-        let Ok(root) = q_root.get(request.root) else {
+        let Ok(parent) = q_root.get(request.parent) else {
             pending.latest_revision.remove(&entity);
             *visibility = Visibility::Hidden;
             complete_curve_view_status(
@@ -1027,8 +1018,8 @@ pub(crate) fn prepare_pending_usd_curve_views(
             warn!("[usd-curve-view] queued anchor is no longer live");
             continue;
         };
-        if curve.stage_handle.id() != request.stage_id
-            || root.stage_handle.id() != request.stage_id
+        if parent.stage_handle.id() != request.stage_id
+            || !q_spatial.contains(request.root)
             || request.curve != entity
         {
             pending.latest_revision.remove(&entity);
@@ -1088,6 +1079,7 @@ pub(crate) fn prepare_pending_usd_curve_views(
                 })
             });
             UsdCurveViewBuild {
+                parent: task_request.parent,
                 revision: task_request.revision,
                 root: task_request.root,
                 curve: task_request.curve,
@@ -1106,11 +1098,9 @@ pub(crate) fn poll_pending_usd_curve_views(
     mut pending: ResMut<PendingUsdCurveViews>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
-    mut q_root: Query<(&lunco_usd_bevy_scene::UsdPrimPath, &mut Transform)>,
-    mut q_curve: Query<
-        (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
-        With<UsdCurveMesh>,
-    >,
+    owners: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    mut q_root: Query<&mut Transform>,
+    mut q_curve: Query<(&Mesh3d, &mut Visibility), With<UsdCurveMesh>>,
 ) {
     let mut completed = Vec::new();
     for (&entity, task) in &mut pending.tasks {
@@ -1123,11 +1113,11 @@ pub(crate) fn poll_pending_usd_curve_views(
         if pending.latest_revision.get(&entity) != Some(&result.revision) {
             continue;
         }
-        let Ok((curve_prim, mesh_handle, mut visibility)) = q_curve.get_mut(result.curve) else {
+        let Ok((mesh_handle, mut visibility)) = q_curve.get_mut(result.curve) else {
             pending.latest_revision.remove(&entity);
             continue;
         };
-        let Ok((root_prim, mut root_transform)) = q_root.get_mut(result.root) else {
+        let Ok(mut root_transform) = q_root.get_mut(result.root) else {
             pending.latest_revision.remove(&entity);
             *visibility = Visibility::Hidden;
             complete_curve_view_status(
@@ -1140,8 +1130,9 @@ pub(crate) fn poll_pending_usd_curve_views(
             warn!("[usd-curve-view] completed anchor is no longer live");
             continue;
         };
-        if curve_prim.stage_handle.id() != result.stage_id
-            || root_prim.stage_handle.id() != result.stage_id
+        if !owners
+            .get(result.parent)
+            .is_ok_and(|prim| prim.stage_handle.id() == result.stage_id)
         {
             pending.latest_revision.remove(&entity);
             *visibility = Visibility::Hidden;
@@ -1196,18 +1187,17 @@ pub(crate) fn poll_pending_usd_curve_views(
                     );
                     continue;
                 }
-                let Some(mut current_mesh) = meshes.get_mut(&mesh_handle.0) else {
+                if let Err(error) = meshes.insert(mesh_handle.id(), mesh) {
                     *visibility = Visibility::Hidden;
                     complete_curve_view_status(
                         &mut pending,
                         entity,
                         revision,
                         0,
-                        Some("projected curve mesh asset is unavailable".into()),
+                        Some(format!("Curve mesh handle is no longer current: {error}")),
                     );
                     continue;
-                };
-                *current_mesh = mesh;
+                }
                 if let Some(anchor) = anchor {
                     root_transform.translation = anchor.as_vec3();
                 }
@@ -1323,6 +1313,7 @@ pub(crate) struct SceneToolWorld<'w, 's> {
     q_mobility: Query<'w, 's, Entity, With<lunco_core::MobilityRoot>>,
     q_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
     q_prim: Query<'w, 's, &'static lunco_usd_bevy_scene::UsdPrimPath>,
+    q_views: Query<'w, 's, &'static SceneViewObject>,
     q_pointer_policy: Query<'w, 's, &'static lunco_interaction_core::ScenePointerPolicy>,
     q_scene_roots: Query<
         'w,
@@ -1410,6 +1401,7 @@ pub(crate) fn on_scene_click_script_tool(
         &world.q_mobility,
         &world.q_ids,
         &world.q_prim,
+        &world.q_views,
         &world.q_pointer_policy,
         &world.q_scene_roots,
         &world.q_parents,
@@ -1444,6 +1436,7 @@ fn scene_tool_context(
     q_mobility: &Query<Entity, With<lunco_core::MobilityRoot>>,
     q_ids: &Query<&lunco_core::GlobalEntityId>,
     q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
+    q_views: &Query<&SceneViewObject>,
     q_pointer_policy: &Query<&lunco_interaction_core::ScenePointerPolicy>,
     q_scene_roots: &Query<
         &lunco_usd_bevy_scene::UsdPrimPath,
@@ -1470,35 +1463,49 @@ fn scene_tool_context(
     let root = crate::selection::find_selectable(click.entity, q_selectable, q_mobility, q_parents);
 
     let mut prim_paths = Vec::new();
+    let mut hit_view = None;
+    let mut hit_prim = None;
+    let mut hit_id = None;
     let mut inspector_part = None;
+    let mut below_selection_root = true;
     let mut pointer_policy = None;
     let mut ancestor = Some(click.entity);
     for _ in 0..32 {
         let Some(entity) = ancestor else { break };
+        below_selection_root &= root != entity;
+        if hit_id.is_none() {
+            hit_id = q_ids.get(entity).ok();
+        }
+        if hit_view.is_none() {
+            hit_view = q_views.get(entity).ok();
+        }
         if pointer_policy.is_none() {
             pointer_policy = q_pointer_policy.get(entity).ok().copied();
         }
         if let Ok(path) = q_prim.get(entity) {
+            hit_prim.get_or_insert(path);
             prim_paths.push(TelemetryValue::String(path.path.clone()));
-            if root != entity && inspector_part.is_none() {
+            if below_selection_root && inspector_part.is_none() {
                 inspector_part = Some(entity);
             }
         }
         ancestor = q_parents.get(entity).ok().map(|parent| parent.0);
     }
 
-    let target_prim = q_prim
-        .get(root)
-        .ok()
+    let target_prim = hit_view
+        .and_then(|view| q_prim.get(view.owner).ok())
+        .or_else(|| q_prim.get(root).ok())
         .or_else(|| q_prim.get(click.entity).ok());
     let selected_entity = selected.primary();
     let controlled_entity = local_avatar
         .0
         .and_then(|avatar| q_links.get(avatar).ok().map(|link| link.target));
-    let context_prim = controlled_entity
-        .and_then(|entity| q_prim.get(entity).ok())
-        .or_else(|| selected_entity.and_then(|entity| q_prim.get(entity).ok()))
-        .or(target_prim);
+    let context_prim = hit_prim.or_else(|| {
+        controlled_entity
+            .and_then(|entity| q_prim.get(entity).ok())
+            .or_else(|| selected_entity.and_then(|entity| q_prim.get(entity).ok()))
+            .or(target_prim)
+    });
 
     let modifiers = tool_map(vec![
         (
@@ -1558,6 +1565,9 @@ fn scene_tool_context(
         ("prim_paths".to_string(), TelemetryValue::Array(prim_paths)),
         ("modifiers".to_string(), modifiers),
     ];
+    if let Some(view) = hit_view {
+        context.push(("view_key".into(), TelemetryValue::String(view.key.clone())));
+    }
     if let Some(policy) = pointer_policy {
         context.push((
             "pointer_policy".to_string(),
@@ -1573,7 +1583,7 @@ fn scene_tool_context(
             ]),
         ));
     }
-    if let Ok(id) = q_ids.get(click.entity) {
+    if let Some(id) = hit_id {
         context.push((
             "hit_entity_id".to_string(),
             TelemetryValue::I64(id.get() as i64),
@@ -1711,9 +1721,8 @@ fn scene_tool_context(
     {
         let mut hits = Vec::new();
         for (entity, annotation) in annotations {
-            // Only USD-backed curves are authoring targets. Wheel histories
-            // carry no prim identity and must not enter the distance scan.
-            let (Ok(id), Ok(prim)) = (q_ids.get(entity), q_prim.get(entity)) else {
+            let owner = q_views.get(entity).map_or(entity, |view| view.owner);
+            let (Ok(id), Ok(prim)) = (q_ids.get(entity), q_prim.get(owner)) else {
                 continue;
             };
             if !images.published.get(&annotation.terrain).is_some_and(|p| {
@@ -1733,6 +1742,10 @@ fn scene_tool_context(
         }
         hits.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         if let Some((_, id, entity, prim)) = hits.first() {
+            context.retain(|(key, _)| key != "view_key");
+            if let Ok(view) = q_views.get(*entity) {
+                context.push(("view_key".into(), TelemetryValue::String(view.key.clone())));
+            }
             let replacements = [
                 ("hit_entity_id", TelemetryValue::I64(*id as i64)),
                 ("target_entity_id", TelemetryValue::I64(*id as i64)),
@@ -2002,6 +2015,7 @@ pub(crate) fn on_scene_pointer_event(
         &world.q_mobility,
         &world.q_ids,
         &world.q_prim,
+        &world.q_views,
         &world.q_pointer_policy,
         &world.q_scene_roots,
         &world.q_parents,
@@ -2473,7 +2487,6 @@ fn merge_pointer_move_context(
 }
 
 register_commands!(
-    on_set_usd_view_preview_transform,
     on_set_scene_pointer_move_hook,
     on_clear_scene_pointer_move_hook
 );

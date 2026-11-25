@@ -27,6 +27,7 @@
 //! | brake torque | `physxVehicleWheel:maxBrakeTorque` | yes |
 //! | slip stiffness (longitudinal) | `physxVehicleTire:longitudinalStiffness` | yes |
 //! | lateral stiffness graph | `physxVehicleTire:lateralStiffnessGraph` + `restLoad` | yes |
+//! | measured rolling side force/load vs degrees | `lunco:tire:soilSideForceCurve` | optional on soil |
 //! | Coulomb μ | `physics:dynamicFriction` (`UsdPhysicsMaterialAPI`) | yes |
 //! | heading axis | `lunco:wheel:headingAxis` | yes |
 //! | suspension | `lunco:suspension:restLength` + `physxVehicleSuspension:springStrength`/`:springDamperRate` | raycast only |
@@ -337,7 +338,7 @@ fn attachment_endpoint(
 /// The complete authored dynamics of one wheel — the single source both
 /// `setup_raycast_wheel` and `setup_physical_wheel` consume, and the single
 /// struct the live resync path re-derives.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct WheelParams {
     /// Wheel radius, m (`physxVehicleWheel:radius`).
     pub radius: f64,
@@ -367,6 +368,7 @@ pub struct WheelParams {
     pub slip_stiffness: f64,
     /// Standard PhysX load-dependent lateral stiffness graph and reference load.
     pub lateral_stiffness_graph: TireLateralStiffnessGraph,
+    pub soil_side_force_curve: lunco_mobility::SoilSideForceCurve,
     /// Lower edge of the tire's measured steady-state cornering-speed envelope.
     pub min_validated_speed: f64,
     /// Standard vehicle-level positive longitudinal slip speeds, m/s.
@@ -459,6 +461,22 @@ impl WheelParams {
         lateral_stiffness_graph.rest_load = rest_load;
         let min_validated_speed =
             read_optional_real(reader, tire, "lunco:tire:minValidatedSpeed", &mut missing);
+        let curve_attr = "lunco:tire:soilSideForceCurve";
+        let mut soil_side_force_curve = lunco_mobility::SoilSideForceCurve::default();
+        if reader.has_authored_attribute(tire, curve_attr) {
+            match reader.attr_value(tire, curve_attr) {
+                Some(openusd::sdf::Value::Vec2dVec(points))
+                    if reader.has_api_schema(tire, "LunCoTireAPI") =>
+                {
+                    let knots = points.iter().map(|p| [p.x.to_radians(), p.y]).collect();
+                    match lunco_mobility::SoilSideForceCurve::new(knots) {
+                        Some(curve) if min_validated_speed > 0.0 => soil_side_force_curve = curve,
+                        _ => missing.push(format!("{curve_attr}: expected increasing angles in [0,90], finite nonnegative ratios, origin and a positive minValidatedSpeed")),
+                    }
+                }
+                _ => missing.push(format!("{curve_attr}: expected LunCoTireAPI double2[]")),
+            }
+        }
         let friction_mu = read_required_real(reader, tire, "physics:dynamicFriction", &mut missing);
         // A zero is an authored, documented solid-cylinder derivation. The
         // standard PhysX wheel attribute itself remains required, so an
@@ -578,6 +596,7 @@ impl WheelParams {
             brake_torque_max,
             slip_stiffness,
             lateral_stiffness_graph,
+            soil_side_force_curve,
             min_validated_speed,
             longitudinal_slip_denominators,
             friction_mu,
@@ -596,6 +615,8 @@ impl WheelParams {
         lunco_mobility::JointedWheelTire {
             drive_joint,
             radius: self.radius,
+            width: self.width,
+            soil_side_force_curve: self.soil_side_force_curve.clone(),
             axle_inertia: self.axle_inertia(),
             slip_stiffness: self.slip_stiffness,
             lateral_stiffness_graph: self.lateral_stiffness_graph,
@@ -639,6 +660,7 @@ impl WheelParams {
         wheel.friction_mu = self.friction_mu;
         wheel.slip_stiffness = self.slip_stiffness;
         wheel.lateral_stiffness_graph = self.lateral_stiffness_graph;
+        wheel.soil_side_force_curve = self.soil_side_force_curve.clone();
         wheel.min_validated_speed = self.min_validated_speed;
         wheel.longitudinal_slip_denominators = self.longitudinal_slip_denominators;
         wheel.brake_torque_max = self.brake_torque_max;

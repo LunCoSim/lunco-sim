@@ -74,8 +74,9 @@ settle, while Modelica compilation may still hold simulation admission. It runs
 before top-level initialization and `on_start`, so it uses its host id,
 parameters, and read-only world queries to prepare disposable presentation
 state. Rhai mutation guards reject world
-writes and events; only `ApplyUsdTransientOps` may update the disposable USD
-view layer. The normal dependency plan and lifecycle remain gated by Modelica
+writes and events; the runtime presentation commands `SetSceneView`,
+`SetSceneViewObject`, `SetSceneViewObjectPosition`, and `UpdateUsdCurveView`
+remain available. The normal dependency plan and lifecycle remain gated by Modelica
 and the other declared simulation inputs.
 
 ### Invalidation

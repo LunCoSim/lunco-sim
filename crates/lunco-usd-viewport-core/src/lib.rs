@@ -941,6 +941,13 @@ impl UsdViewportState {
         self.focused.and_then(|id| self.sessions.get(&id))
     }
 
+    /// The focused preview that currently owns a mounted 3D selection surface.
+    /// Ownership follows the stage lease through each projection generation.
+    pub fn focused_projected_preview(&self) -> Option<UsdPreviewId> {
+        let session = self.focused_session()?;
+        session.stage_handle().map(|_| session.id())
+    }
+
     /// The focused view identity.
     pub fn focused_view_id(&self) -> Option<UsdPreviewViewId> {
         self.focused_view

@@ -225,8 +225,9 @@ and terrain preparation holds; Modelica holds do not block this visual path.
 Independent presentation programs do not require scene admission. Its context
 uses presentation time and has no simulation tick, so it can prepare disposable
 visual state while Modelica participants are loading. Rhai blocks world writes
-and events in this phase; only `ApplyUsdTransientOps` can update the disposable
-USD view. `on_start` and `on_event` inherit the lifecycle or simulation context
+and events in this phase. `SetSceneView`, `SetSceneViewObject`,
+`SetSceneViewObjectPosition`, and `UpdateUsdCurveView` update runtime presentation
+without editing USD. `on_start` and `on_event` inherit the lifecycle or simulation context
 of the pass that invokes them, which is available through `execution_context()`.
 
 An unsupported execution target or timing value, or an unknown metadata directive,
@@ -657,7 +658,8 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   component/joint/socket paths; USD remains the scene/topology authority and
   Modelica remains the equation/graph authority. Obtain document ids from
   `ListOpenDocuments` before authoring.
-- **Mission durability.** To save objective checkpoints, return the host prim's document ID from `mission_document(me)` using `assembly_edit::document_for_entity(me)`. The checkpoint reader and writer use that document and the host's exact prim path. Omit the document for a live-only mission.
+- **Published scenario state.** `publish_scenario_state(key, value)` publishes a detached typed snapshot from the currently executing scenario. `scenario_public_state(target_gid, key)` reads it (or `()` when absent). Simulation callers declare the actor in the relevant entity read/write sets. Publishing `()` removes the key. The owner retires all snapshots on scenario replacement, stop, host removal or scene teardown. Use it for a route plan, dialog state or another actor-owned read view; it does not persist or let readers mutate the actor.
+- **Mission progress.** Objectives are live by default. To resume a mission, declare `fn mission_progress() { #{ id: "survey-v1", save: true, restore: true } }`. The independent flags control saving and restoring terminal objective states. Dwell times, event latches and callbacks always begin fresh. Progress belongs to the current user, owning Twin (when present), scene source, authored host prim and mission ID. Change the ID when objective meanings change. To save a custom phase explicitly, use `mission_checkpoint_write(id, "phase", value)`, `mission_checkpoint_read(id, "phase")` and `mission_checkpoint_clear(id, "phase")`. Reads return `()` for an absent key. The `objective:` prefix belongs to the objective driver. Mission progress never changes the USD document.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
 - **Route programs** ([`route_follow.rhai`](../assets/scenarios/route_follow.rhai)): the scene owns an ordered USD route and a sibling `LunCoProgramAPI` program. The program resolves its `inputs:subject` relationship, reads route-point poses, records only the next unvisited point in USD order, and advances an enabled route on the matching named sensor enter event. Generic `SENSOR_ENTER` / `SENSOR_EXIT` events carry sensor and moving-body identity; `TriggerZone` labels additionally provide named geofence events. Out-of-order arrivals do not mark later points. Route points are not stored on or discovered through a vessel-owned list.
@@ -1603,7 +1605,7 @@ scoped to that hook.
 | [`mission_plan.rhai`](../assets/scripting/examples/mission_plan.rhai) | a declarative route plan via the task kernel |
 | [`sequence.rhai`](../assets/scripting/examples/sequence.rhai) | a linear task-tree sequence |
 | [`timeline.rhai`](../assets/scripting/examples/timeline.rhai) | a Layer-2 mission as data |
-| [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission with durable phase checkpoints and the default no-`on_tick` style |
+| [`robot_mission.rhai`](../assets/scripting/examples/robot_mission.rhai) | task-tree mission that resumes from saved terminal objectives and the default no-`on_tick` style |
 | [`script_first_robot.rhai`](../assets/scripting/examples/script_first_robot.rhai) | USD component assembly plus a Modelica control graph batch |
 | [`multi_robot_mission_coordinator.rhai`](../assets/scripting/examples/multi_robot_mission_coordinator.rhai) | single-authority event-driven assignment coordinator |
 | [`multi_robot_mission_worker.rhai`](../assets/scripting/examples/multi_robot_mission_worker.rhai) | identity-scoped worker that installs a native task tree |

@@ -178,8 +178,8 @@ can be saved independently of the source `.usda`. When the owning Twin enables
 `usd.runtime_persistence`, the runtime layer is serialized to
 `.lunco/runtime/<scene-path>` and restored before the next scene mount.
 
-`@view@` contains disposable projections such as route ribbons and visited
-marker colors. `ApplyUsdOps` rejects this target; derived presentation uses the
+`@view@` holds explicit disposable USD opinions. Route ribbons and visited
+marker colors live on ECS presentation owners. `ApplyUsdOps` rejects this target; derived presentation uses the
 transient USD command, which updates the live stage but does not alter the
 runtime sidecar or undo history.
 

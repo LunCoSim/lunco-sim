@@ -52,7 +52,7 @@ fn route_point_is_new(me) { this.restored != true }
 fn create_runtime_point(me) {
     print("ROUTE_RUNTIME_GATE: ABSENT_AT_START");
     let result = waypoint_editor::on_click(#{
-        button: "primary",
+        edit_intent:"Persistent", button: "primary",
         doc_id: this.doc,
         route_path: ROUTE,
         scene_root_path: "/RouteRuntimePersistence",

@@ -39,6 +39,15 @@ class LunCoPolicy "LunCoPolicy"
     bool lunco:policy:deterministic = true
 }
 
+class "LunCoSoilAPI"
+{
+    double lunco:soil:pressureGradient
+    double lunco:soil:cohesion
+    double lunco:soil:frictionAngleDeg
+    double lunco:soil:unitWeight
+    double lunco:soil:shearLength
+}
+
 class "LunCoTerrainAPI"
 {
     uniform token lunco:terrain:surfaceRole
@@ -212,6 +221,7 @@ class "LunCoWheelAPI"
 
 class "LunCoTireAPI"
 {
+    double2[] lunco:tire:soilSideForceCurve
     float lunco:tire:minValidatedSpeed = 0.0
 }
 

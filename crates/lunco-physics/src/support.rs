@@ -9,6 +9,20 @@
 use bevy::math::DVec3;
 use bevy::prelude::*;
 
+/// The terrain material for a streamed tile is owned by this surface entity.
+#[derive(Component)]
+pub struct ColliderTileOf(pub Entity);
+
+/// SI soil properties used by a tire with an empirical rolling response.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct WheelSoil {
+    pub pressure_gradient: f64, // Pa/m
+    pub cohesion: f64,          // Pa
+    pub friction_angle: f64,    // radians
+    pub unit_weight: f64,       // N/m³ in the simulated gravity
+    pub shear_length: f64,      // m
+}
+
 /// Ordering boundary for the shared support-footprint contract.
 ///
 /// Physics producers publish their authored support geometry before terrain or

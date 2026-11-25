@@ -531,3 +531,45 @@ if let Some(compliance) = compliance_opt {
 ```
 
 This design keeps the compliance properties fully isolated and modular, allowing the loader to attach them only when authored, without adding complexity to the core physics or standard visual updates.
+
+## Rolling curves and wheel-soil contact
+
+A jointed tire evaluates its standard stiffness graph at the whole wheel's normal
+load. Each contact receives a share proportional to its normal reaction. Its
+tangent basis, slip, force application point and opposite support reaction remain
+local. Raycast and jointed wheels use the same force law for axle balance and
+applied force.
+
+A tire can author `lunco:tire:soilSideForceCurve` as angle in degrees and
+dimensionless side force per unit normal load. A `LunCoSoilAPI` surface supplies
+pressure gradient (Pa/m), cohesion (Pa), friction angle (degrees), unit weight
+(N/m³) and shear displacement scale (m). Streamed colliders resolve the material
+from their terrain owner. Rigid surfaces use the standard tire graph.
+
+The curve describes the measured total lateral force during rolling at
+geometric wheel yaw. `LunCo.Mobility.RegolithWheelContact` is the Modelica
+owner of the soil constitutive equations. It uses the relative hub velocity
+and trial tread velocity, computes longitudinal shear mobilization and
+limits the tread contribution to lateral force jointly with traction. The
+portion of the measured lateral resistance above the tread shear limit
+remains a passive soil reaction. At low carriage speed, a quasi-steady
+shallow-footprint model supplies mobilized shear and passive side pressure.
+
+The native mobility owner prepares the algebraic Modelica kernel once per
+app when a calibrated wheel first reaches authored soil. Every trial
+evaluation writes all inputs and refreshes the algebraic values from the
+prepared model. It does not advance a participant clock or change soil
+history. The same evaluator supplies the accepted force and rolling moment.
+The latter represents compaction work from the pressure-depth relation
+and enters the axle torque residual, the applied wheel/support wrench and
+the dissipated work. An authored rigid support uses the standard tire
+response without this soil moment.
+
+Normal force remains the native contact constraint. Sinkage is estimated
+from wheel load for the force calculation, so this model does not deform
+the terrain or represent cumulative rut development. The calibration
+curves and quasi-steady soil parameters bound physical predictive validity.
+
+Jointed wheels publish `WheelForceSample` for the last master step,
+including total normal load, applied longitudinal/lateral force, slip,
+effective sinkage, drive torque and lateral dissipative power.

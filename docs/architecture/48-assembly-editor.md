@@ -74,8 +74,9 @@ neutral clear-color background.
   bind the snapshot to a filesystem path.
 - `UsdOp` plus `ApplyUsdOp`/`ApplyUsdOps` is the only **authored** write path. It
   supplies journaling, inverse operations, save, undo, and live projection.
-  Derived presentation may use the typed `ApplyUsdTransientOps` path; that
-  path updates the live runtime view only and never creates authored history.
+  Derived presentation uses owner-managed runtime commands. An explicitly
+  composed view-layer opinion uses `ApplyUsdTransientOps`, which projects
+  the affected namespace and never creates authored history.
 - Reusable editor policy is authored as Rhai tool libraries. Direct
   `name::function(...)` calls remain available to hooks, while dependencies use
   Rhai's normal `import "name" as name` resolver and load from the registered
@@ -195,9 +196,10 @@ neutral clear-color background.
   selected by the focused view. View cameras and render targets are separate
   presentation state, so pan/zoom and image resources cannot leak between
   views or between documents with identical prim paths. The shared ECS
-  selection is only the focused-session projection; the editor-owned session
-  selection stores canonical prim paths and restores fresh ECS projections when
-  focus changes or a document is reprojected.
+  selection follows the focused session only while it owns a mounted stage.
+  An unmounted text, preparing, or failed session cannot clear live selection.
+  The editor-owned session selection stores canonical prim paths and restores
+  fresh ECS projections when focus changes or a document is reprojected.
 - The prim tree and connection canvas only derive their composed-stage views
   while the corresponding workbench panel is visible. The prim tree waits for
   the preview's projection-ready boundary before its first hierarchy build and
@@ -668,7 +670,10 @@ Multi-selection and no-selection are explicit states; duplicate projected paths
 and stale selection entries are reported instead of being resolved by a name or
 an arbitrary entity. `assembly_edit::selection_context()` reads the focused
 context and `selection_context_for(preview)` reads a hidden open preview
-without changing user-visible focus.
+without changing user-visible focus. A mounted preview retains those canonical
+paths while its projection is pending and restores the highlights when the
+same lease finishes projecting. A text-only tab leaves live-scene selection
+with its scene owner.
 
 For an agent request such as “the selected part is wrong”, that context is the
 referent. The agent reads the matching viewport readiness and document

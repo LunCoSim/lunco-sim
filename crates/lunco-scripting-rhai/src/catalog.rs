@@ -265,8 +265,16 @@ fn native_verb_entries() -> Result<Vec<NativeVerbEntry>, ApiQueryError> {
 /// Curated descriptions and product return-type labels for public native
 /// verbs. Callable signatures are read from the runtime registration schema.
 const VERB_DOCS: &[(&str, &str, &str)] = &[
-    ("http_request", "integer request id", "Native. Start a configured Twin HTTP connection with unit (GET) or a JSON value (POST)."),
-    ("http_result", "map | ()", "Native. Poll a Twin HTTP request. Unit while pending; consumes the terminal response."),
+    (
+        "http_request",
+        "integer request id",
+        "Native. Start a configured Twin HTTP connection with unit (GET) or a JSON value (POST).",
+    ),
+    (
+        "http_result",
+        "map | ()",
+        "Native. Poll a Twin HTTP request. Unit while pending; consumes the terminal response.",
+    ),
     (
         "cmd",
         "#{ id: u64, ok, status, data, error }",
@@ -473,6 +481,31 @@ const VERB_DOCS: &[(&str, &str, &str)] = &[
         "nav_command",
         "#{ throttle, steer, brake, arrived } | ()",
         "Compute one authored-capability-aware navigation command through the shared host law; () means the authoritative pose or steering geometry is unavailable and the caller must hold brake.",
+    ),
+    (
+        "publish_scenario_state",
+        "()",
+        "Publish a typed value under a key for the executing scenario instance; () clears that key.",
+    ),
+    (
+        "scenario_public_state",
+        "value | ()",
+        "Read a detached snapshot for a host and key; absent or retired publications return (). Simulation reads require declared target access.",
+    ),
+    (
+        "mission_checkpoint_read",
+        "string | ()",
+        "Read a saved checkpoint by mission namespace and key for the executing mounted host.",
+    ),
+    (
+        "mission_checkpoint_write",
+        "()",
+        "Save a nonempty checkpoint string for the executing mounted host and mission namespace.",
+    ),
+    (
+        "mission_checkpoint_clear",
+        "()",
+        "Remove a checkpoint for the executing mounted host and mission namespace.",
     ),
     (
         "usd_types_agree",

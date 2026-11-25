@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**339 commands** across **62** crates. All documented.
+**342 commands** across **62** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -24,7 +24,7 @@ actually call, with the fields the deserializer actually accepts. See the
 **Scene editing & authoring**
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
-- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (30 commands)
+- [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (31 commands)
 - [`lunco-scene-commands`](#lunco-scene-commands) (3 commands)
 
 **USD / scenes**
@@ -114,7 +114,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
 - [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
-- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (6 commands)
+- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (8 commands)
 - [`lunco-scene-validation`](#lunco-scene-validation) (1 command)
 - [`lunco-scripting-rhai-runtime`](#lunco-scripting-rhai-runtime) (12 commands)
 - [`lunco-scripting-rhai-world`](#lunco-scripting-rhai-world) (2 commands)
@@ -483,6 +483,31 @@ actually call, with the fields the deserializer actually accepts. See the
 | `hook` | `String` |  One-argument pointer-move hook name. |
 | `context` | `BTreeMap < String, String >` |  Stable context merged with each live pointer sample. |
 
+#### `SetSceneViewObject`
+
+ Set or clear a keyed presentation child of a mounted USD owner.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools/view_objects.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |  Mounted source document. |
+| `owner_id` | `u64` |  Stable identity of the presentation object's parent. |
+| `key` | `String` |  Stable key within the parent. |
+| `shape` | `SceneViewShape` |  Requested presentation geometry, or an explicit Clear. |
+
+#### `SetSceneViewObjectPosition`
+
+ Move a keyed presentation object within its mounted document.
+
+- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |  Mounted USD document. |
+| `entity_id` | `u64` |  Stable presentation object identity. |
+| `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
+
 #### `SetShowTestAssets`
 
  Set the persisted test-asset visibility preference selected by Rhai policy.
@@ -492,20 +517,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `show` | `bool` |  Whether asset consumers include test content in their listings. |
-
-#### `SetUsdViewPreviewTransform`
-
- Set the presentation transform of a prim authored in the disposable USD
- view layer. The target is resolved by stable entity identity and validated
- against its owning document before its live Bevy transform is updated.
-
-- *defined in:* `crates/lunco-luncosim-edit-ui/src/script_tools.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `doc_id` | `u64` |  USD document which owns the view-layer prim. |
-| `entity_id` | `u64` |  Stable API identity of the projected preview prim. |
-| `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
 
 #### `UndoConnectionView`
 
@@ -533,7 +544,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `UpdateUsdCurveView`
 
- Coalesced presentation update of an existing USD curve, preserving its material.
+ Coalesced geometry update for a projected USD curve or keyed scene view.
  Spatial geometry is not projected onto terrain and does not move its anchor.
  No USD layer, document generation or physical geometry is changed.
 
@@ -541,12 +552,12 @@ actually call, with the fields the deserializer actually accepts. See the
 
 | Field | Type | Description |
 |---|---|---|
-| `doc_id` | `u64` |  USD document which owns both target prims. |
-| `root_entity_id` | `u64` |  Stable API identity of the Xform carrying the curve's anchor. |
-| `curve_entity_id` | `u64` |  Stable API identity of the projected UsdGeomBasisCurves entity. |
+| `doc_id` | `u64` |  Mounted document owning the curve and anchor. |
+| `root_entity_id` | `u64` |  Anchor identity. A keyed curve uses its own entity here. |
+| `curve_entity_id` | `u64` |  Stable identity of the curve geometry. |
 | `points` | `Vec < [f64 ; 3] >` |  Ordered centerline points in the route parent's local USD coordinates. |
 | `projection` | `UsdCurveViewProjection` |  Spatial points are curve-local; surface points retain route-parent coordinates. |
-| `normals` | `Vec < [f64 ; 3] >` |  Optional per-point ribbon normals. Empty uses local Y, as for legacy views. |
+| `normals` | `Vec < [f64 ; 3] >` |  Optional per-point ribbon normals. An empty array selects local Y. |
 | `width_m` | `f64` |  Full ribbon width in metres. |
 
 ### `lunco-scene-commands` <a id="lunco-scene-commands"></a>
@@ -3296,6 +3307,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame, in f64 precision. |
 | `intent` | `EditIntent` |  Live by default; Persistent explicitly authors the accepted translation. |
 
+#### `ReplaceRuntimeObjects`
+
+ Atomically replace a named group of generated native runtime objects in an
+ admitted scene. An empty group retires its existing objects. No USD layer is
+ written. Physical groups are prepared between simulation runs.
+
+- *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `doc_id` | `u64` |   |
+| `group` | `String` |   |
+| `objects` | `Vec < RuntimeObjectSpec >` |   |
+
 #### `SetColliderEnabled`
 
  Set the live contact participation of an already admitted native collider.
@@ -3307,6 +3332,18 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `target` | `Entity` |  Exact collider entity, not a source prim that has no native collider. |
 | `enabled` | `bool` |  Whether the collider participates in live contact detection. |
+
+#### `SetRuntimeMarker`
+
+ Create or update a single live marker, or retire it by supplying a null marker.
+
+- *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `owner` | `Entity` |  Mounted USD prim owning this marker's lifetime. |
+| `key` | `String` |  Identity within this owner. |
+| `marker` | `Option < RuntimeMarkerSpec >` |   |
 
 #### `SetSceneParticipation`
 
@@ -4977,7 +5014,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 339 commands from the runtime schema; scanned 1120 .rs files for docs (0 parse failure(s) skipped).
+<!-- 342 commands from the runtime schema; scanned 1126 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

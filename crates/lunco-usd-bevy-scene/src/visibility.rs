@@ -4,8 +4,8 @@
 //! own authored pruning opinions and native purpose visibility.
 
 use crate::{
-    RuntimeVisibilityOverride, UsdPrimPath, UsdSampledVisibility, UsdSceneProjectionFailed,
-    UsdVisualVisibility, prim_index::UsdPrimIndex, scene_root_in_world,
+    NativeViewVisibility, RuntimeVisibilityOverride, UsdPrimPath, UsdSampledVisibility,
+    UsdSceneProjectionFailed, UsdVisualVisibility, prim_index::UsdPrimIndex, scene_root_in_world,
 };
 use bevy::prelude::*;
 use lunco_usd_bevy_stage::{
@@ -54,6 +54,12 @@ pub fn validate_runtime_visibility(world: &World, target: Entity) -> Result<(), 
     }) || crate::is_preview_only_entity(world, target)
     {
         return Err(format!("{target:?} is outside the mounted scene"));
+    }
+    if world.get::<NativeViewVisibility>(target).is_some() {
+        return world
+            .get::<Visibility>(target)
+            .map(|_| ())
+            .ok_or_else(|| format!("{target:?} has no native visibility component"));
     }
     if world
         .get::<UsdVisualVisibility>(target)
@@ -137,6 +143,20 @@ fn scope(world: &World, entity: Entity) -> Option<(Entity, Option<Entity>)> {
 /// Authored visibility errors stay owned by the USD projection. We never reveal
 /// a prim that another projection owner has withheld.
 pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
+    for &root in roots {
+        if let Some(base) = world.get::<NativeViewVisibility>(root) {
+            let visible = world
+                .get::<RuntimeVisibilityOverride>(root)
+                .map_or(base.0, |value| value.visible);
+            if let Some(mut visibility) = world.get_mut::<Visibility>(root) {
+                visibility.set_if_neq(if visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+            }
+        }
+    }
     let facts = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;

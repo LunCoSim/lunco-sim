@@ -18,8 +18,6 @@ const SITES = [
     [  0.0, 0.0,  0.0],
 ];
 
-fn mission_document(me) { assembly_edit::document_for_entity(me) }
-
 fn robot_key(robot) { robot.to_string() }
 
 fn robot_is_assigned(assigned, robot) {
@@ -42,6 +40,7 @@ fn assign_next(assigned, next_site, robot, site_count) {
 fn on_start(me, ctx) {
     subscribe("ROBOT_READY");
     subscribe("ROBOT_SITE_COMPLETE");
+    subscribe("ALL_SITES_COMPLETE");
     this.next_site = 0;
     this.assigned = #{};
     this.completed = 0;
@@ -65,8 +64,7 @@ fn on_event(me, evt, ctx) {
         this.completed += 1;
         emit("SITE_COMPLETE", this.completed);
         if this.completed >= SITES.len() {
-            mission_checkpoint(me, mission_document(me), "@root@", "phase", "complete");
-            emit("MISSION_COMPLETE", true);
+            emit("ALL_SITES_COMPLETE", true);
             print("coordinator: mission complete");
         }
     }
@@ -75,6 +73,6 @@ fn on_event(me, evt, ctx) {
 fn mission(me, ctx) {
     [objective("all_sites", #{
         text: "All assigned sites complete",
-        requires_event: "MISSION_COMPLETE",
+        requires_event: "ALL_SITES_COMPLETE",
     })]
 }

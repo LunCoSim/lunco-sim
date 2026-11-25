@@ -65,8 +65,11 @@ Production scripts return a tree from `fn task(me, ctx)`. The native kernel owns
 cursor, dwell timestamps, event delivery, and terminal status. Production
 scripts do not implement a fixed-tick `on_tick` loop. Authored test scenarios
 may use `on_tick` only to sample state and publish a bounded verdict, while
-`fn mission(me, ctx)` is a separate objective/checkpoint policy and may run beside
-the task.
+`fn mission(me, ctx)` observes live objectives beside the task. Rhai chooses
+whether to save or restore terminal objectives through `mission_progress()`.
+The scripting runtime stores opted-in checkpoints in a typed per-user settings
+section keyed by Twin, mounted scene, host prim and mission namespace. The USD
+document and its projection never participate in a checkpoint transition.
 
 ```rhai
 fn task(me, ctx) {

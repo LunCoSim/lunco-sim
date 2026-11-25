@@ -9,6 +9,17 @@ pub(crate) struct InactiveBody;
 #[derive(Component)]
 pub(crate) struct InactiveBodyCollider;
 
+/// Initialize an independent newly constructed body whose sole collider is on
+/// the body entity. The constructing owner has validated its physical facts.
+pub fn initialize_inactive_body(world: &mut World, entity: Entity) {
+    world.entity_mut(entity).insert((
+        InactiveBody,
+        InactiveBodyCollider,
+        RigidBodyDisabled,
+        ColliderDisabled,
+    ));
+}
+
 /// A validated transition consumed in the same exclusive World command.
 pub struct PhysicsParticipation {
     bodies: Vec<(Entity, bool, Vec<Entity>)>,

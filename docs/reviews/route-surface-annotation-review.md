@@ -1,8 +1,8 @@
 # Route surface annotation review
 
 Terrain fragments own the rendered surface; route policy supplies ordered f64
-points and width through `UpdateUsdCurveView`. The disposable USD curve retains
-its authored identity and pointer policy while its independent mesh is hidden
+points and width through `UpdateUsdCurveView`. The runtime curve retains
+its owner-derived identity and pointer policy while its independent mesh is hidden
 on DEM terrain. No presentation update edits an authored USD layer.
 
 The contract is defined in
@@ -18,3 +18,7 @@ local index/GPU updates, missing-coverage rejection, unchanged authored waypoint
 and restoration of writer state. `route_interaction` owns the editing contract.
 See [the incremental review](incremental-surface-annotations-review.md) for the
 index/render boundary and current evidence.
+
+The Apollo 15 Space School route passed all 12 checks with just its initial
+USD projection. One local vertex edit updated four segments, 31 index nodes
+and 2,800 bytes without a full upload or replacement of the displayed texture.

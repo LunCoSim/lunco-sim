@@ -276,13 +276,13 @@ from `on_start` that the committed source revision is available. The generic
 scenario lifecycle test may verify Pending-to-Ready hold/release mechanics;
 the authored scene gate must verify the domain key and source revision.
 
-For transient USD curve views, use `InspectUsdCurveView` to wait until
-`completed_revision == requested_revision`, fail immediately on `state ==
-"failed"`, and require `applied_revision == requested_revision` for a successful
-mesh. Assert `local_visibility` and result vertex count rather than reading the
-unchanged USD curve seed. A route with fewer than two active points must finish
-with hidden local visibility and zero generated vertices; adding the second
-point must produce an applied mesh revision.
+For runtime route curves, obtain the presentation identity using
+`waypoint_editor::ribbon_entity(doc, route)`. Use `InspectUsdCurveView` to
+wait for completion, fail on `state == "failed"` and require an applied
+revision equal to the requested revision. Check one `result_segment_count`
+per leg. Reducing an existing curve below two points hides it and reports
+zero segments. Restoring two points publishes a new revision under the same
+identity. First activation, drag and cancel preserve document generation.
 
 For ordered asynchronous scene checks, author the sequence with the existing
 Rhai task tree (`seq`, `once`, `wait_until`, `check`, and `sel`) rather than a

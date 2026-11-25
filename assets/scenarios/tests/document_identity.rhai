@@ -1,6 +1,17 @@
 // TEST-ONLY: mixed-domain document lifecycle through the production Editor.
 const TEST_KIND = "editor";
 const PREVIEW = 15201;
+const PROGRESS_ID = "document-identity-fixture-v1";
+
+fn mission_progress() { #{ id: PROGRESS_ID, save: true, restore: true } }
+fn mission(me, ctx) {
+    let first_run = mission_checkpoint_read(PROGRESS_ID, "objective:restart") == ();
+    [
+        objective("restored", #{ done: |m| false }),
+        objective("saved", #{ requires: ["restored"] }),
+        objective("restart", #{ done: |m| first_run }),
+    ]
+}
 
 fn record_for(docs, id) {
     for record in docs.open_documents {
@@ -15,6 +26,9 @@ fn simulation_dependencies(me, ctx) {
 }
 
 fn on_start(me, ctx) {
+    this.resuming = mission_checkpoint_read(PROGRESS_ID, "objective:restart") != ();
+    mission_checkpoint_write(PROGRESS_ID, "objective:restored", "complete");
+    mission_checkpoint_clear(PROGRESS_ID, "objective:saved");
     this.phase = 0;
     this.elapsed = 0.0;
     this.done = false;
@@ -107,13 +121,32 @@ fn on_tick(me, ctx) {
         let wrong = assembly_edit::describe(this.modelica);
         this.checks.push(t_true(wrong.ok == false,
             "Modelica handle is rejected by the USD owner"));
-        let host = find_path_in_document(this.original, "/DocumentIdentity/Part");
-        let generation = usd_document_generation(this.fork);
-        let foreign = false;
-        try { mission_checkpoint(host, this.fork, "@root@", "identity", "foreign"); }
-        catch (error) { foreign = error.to_string().contains("does not own"); }
-        this.checks.push(t_true(host >= 0 && foreign && usd_document_generation(this.fork) == generation,
-            "checkpoint rejects a different document containing the same prim path"));
+        let live_gen = usd_document_generation(this.original);
+        let preview_gen = usd_document_generation(this.fork);
+        this.checks.push(t_true(mission_checkpoint_read(PROGRESS_ID, "objective:saved") == "complete",
+            "restored prerequisite unlocks the next objective and saves its terminal transition"));
+        this.checks.push(t_true(__obj_state(this.mission, "restart") == "complete",
+            "a fresh run records progress and a resumed run restores it despite a false completion condition"));
+        if this.resuming {
+            print("MISSION_PROGRESS_GATE RESTORED_AT_START");
+            mission_checkpoint_clear(PROGRESS_ID, "objective:restart");
+        } else {
+            print("MISSION_PROGRESS_GATE ABSENT_AT_START");
+        }
+        mission_checkpoint_write(PROGRESS_ID, "phase", "survey");
+        let invalid = false;
+        try { mission_checkpoint_write(PROGRESS_ID, "phase", ""); }
+        catch (error) { invalid = error.to_string().contains("nonempty"); }
+        this.checks.push(t_true(invalid && mission_checkpoint_read(PROGRESS_ID, "phase") == "survey"
+            && mission_checkpoint_read(PROGRESS_ID + "-other", "phase") == (),
+            "bad checkpoint writes preserve the value and mission namespaces are isolated"));
+        for key in ["phase", "objective:restored", "objective:saved"] {
+            mission_checkpoint_clear(PROGRESS_ID, key);
+        }
+        this.checks.push(t_true(mission_checkpoint_read(PROGRESS_ID, "phase") == ()
+            && usd_document_generation(this.original) == live_gen
+            && usd_document_generation(this.fork) == preview_gen,
+            "saving and clearing host progress preserve both document generations"));
         this.save_path = "target/document-identity-" + this.fork + ".usda";
         assembly_edit::save_as_document(this.fork, this.save_path);
         this.phase = 6;
