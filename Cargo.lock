@@ -9549,6 +9549,10 @@ dependencies = [
  "lunco-spatial",
  "lunco-telemetry-core",
  "lunco-time",
+ "rumoca-compile",
+ "rumoca-ir-solve",
+ "rumoca-sim",
+ "rumoca-solver",
 ]
 
 [[package]]

@@ -42,6 +42,7 @@ use std::collections::HashSet;
 mod jointed_tire;
 mod raycast_travel;
 mod sensing;
+mod soil_modelica;
 mod soil_tire;
 mod wheel_spin;
 pub use jointed_tire::{JointedWheelTire, apply_jointed_tire_forces};
@@ -139,6 +140,7 @@ impl Plugin for LunCoMobilityPlugin {
         // so scripts can react via `on_event` instead of polling distance().
         sensing::register_collision_event_bridge(app);
 
+        app.init_non_send::<soil_modelica::SoilModelicaCache>();
         app.init_scene_resource::<DynamicFixedBodies>()
             .init_scene_resource::<DifferentialSolverOrder>()
             .add_systems(
@@ -2254,6 +2256,8 @@ pub struct WheelRaycast {
     pub slip_stiffness: f64,
     /// one number instead of two independently-fudged ones.
     pub tire_force: DVec3,
+    /// World-frame rolling-resistance moment, committed with the tire force.
+    pub tire_rolling_torque: DVec3,
     /// like ice.
     /// Standard PhysX tire lateral stiffness graph evaluated at the contact
     /// load. The force is clamped with the load-dependent Coulomb cone after
@@ -2319,6 +2323,7 @@ impl Default for WheelRaycast {
             min_validated_speed: 0.0,
             longitudinal_slip_denominators: LongitudinalSlipDenominators::default(),
             tire_force: DVec3::ZERO,
+            tire_rolling_torque: DVec3::ZERO,
             brake_torque_max: 0.0,
             heading_axis: DVec3::Y,
             axle_axis: DVec3::ZERO,
@@ -3017,12 +3022,17 @@ fn apply_wheel_drive(
                                 }
                             }
                         }
+                        let rolling_torque = if locked {
+                            DVec3::ZERO
+                        } else {
+                            wheel.tire_rolling_torque
+                        };
                         pending.push(lunco_physics::BodyForce {
                             local_force: DVec3::ZERO,
                             body: parent_entity,
                             force,
                             point: Some(lunco_spatial::coords::GridPos(contact_point)),
-                            torque: DVec3::ZERO,
+                            torque: rolling_torque,
                             wake: commanded,
                         });
                         if q_traits.get(support).is_ok_and(|(mode, disabled, ..)| {
@@ -3033,7 +3043,7 @@ fn apply_wheel_drive(
                                 body: support,
                                 force: -force,
                                 point: Some(lunco_spatial::coords::GridPos(contact_point)),
-                                torque: DVec3::ZERO,
+                                torque: -rolling_torque,
                                 wake: commanded,
                             });
                         }

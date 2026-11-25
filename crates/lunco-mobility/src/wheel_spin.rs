@@ -257,6 +257,12 @@ pub(crate) fn update_wheel_spin(
             v_long,
             v_lat,
             wheel.min_validated_speed,
+            friction_mu,
+            if !wheel.soil_side_force_curve.knots.is_empty() {
+                soils.model()
+            } else {
+                None
+            },
         );
         let patch = |omega: f64| {
             let tread = omega * r;
@@ -267,17 +273,35 @@ pub(crate) fn update_wheel_spin(
             );
             let angle =
                 (-v_lat).atan2(v_long.abs().max(tread.abs()).max(wheel.min_validated_speed));
-            response.force(k_slip * ((tread - v_long) / denom), angle, friction_mu)
+            response.wrench(
+                tread,
+                k_slip * ((tread - v_long) / denom),
+                angle,
+                friction_mu,
+            )
         };
-        let step = crate::solve_axle_step(
+        let step = crate::solve_axle_step_with_roundoff(
             wheel.spin_velocity,
             inertia,
             c_bearing,
             tau_drive,
             if braking { wheel.brake_torque_max } else { 0.0 },
-            r * friction_mu * load,
+            r * friction_mu * load + response.rolling_moment_limit,
             dt,
-            |omega| patch(omega).0 * r,
+            |omega| {
+                let (fx, _, moment) = patch(omega);
+                fx * r + moment
+            },
+            |omega| {
+                if !response.is_soil() {
+                    return 0.0;
+                }
+                let scale = (omega * r).abs() + v_long.abs();
+                64.0 * f64::EPSILON
+                    * (r * response.tread_gain_bound * scale
+                        + r * friction_mu * load
+                        + response.rolling_moment_limit)
+            },
         );
         let step = match step {
             Ok(step) => step,
@@ -301,18 +325,21 @@ pub(crate) fn update_wheel_spin(
         let w = step.speed;
         let mut f_long = 0.0;
         let mut f_lat = 0.0;
+        let mut rolling_moment = 0.0;
         let mut bearing_heat = 0.0;
         let mut brake_heat = 0.0;
         let mut tire_heat = 0.0;
         for interval in step.intervals.into_iter().filter(|s| s.duration > 0.0) {
             let weight = interval.duration / dt;
-            let (long, lat) = patch(interval.speed);
+            let (long, lat, moment) = patch(interval.speed);
+            rolling_moment += weight * moment;
             f_long += weight * long;
             f_lat += weight * lat;
             bearing_heat += weight * c_bearing * interval.speed * interval.speed;
             brake_heat -=
                 weight * interval.brake_torque * (interval.start_speed + interval.speed) * 0.5;
-            tire_heat += weight * (long * (interval.speed * r - v_long) - lat * v_lat);
+            tire_heat += weight
+                * (long * (interval.speed * r - v_long) - lat * v_lat + moment * interval.speed);
         }
         wheel.spin_velocity = w;
         wheel.spin_angle = (wheel.spin_angle + w * dt).rem_euclid(TAU);
@@ -338,6 +365,7 @@ pub(crate) fn update_wheel_spin(
             }
         }
         wheel.tire_force = basis.0 * f_long + basis.1 * f_lat;
+        wheel.tire_rolling_torque = basis.1 * rolling_moment;
         // Compose the visual mesh rotation from the fixed-step wheel state:
         // steering rotation · roll about the axle · cylinder-on-its-side base.
         // Rebuilding from the wrapped absolute angle
@@ -480,6 +508,7 @@ mod tests {
                 longitudinal_slip_denominators: crate::LongitudinalSlipDenominators::default(),
                 brake_torque_max: 0.0,
                 tire_force: DVec3::ZERO,
+                tire_rolling_torque: DVec3::ZERO,
             },
             Suspension {
                 rest_length: 1.0,
@@ -584,6 +613,7 @@ mod tests {
                     longitudinal_slip_denominators: crate::LongitudinalSlipDenominators::default(),
                     brake_torque_max: 1500.0,
                     tire_force: DVec3::ZERO,
+                    tire_rolling_torque: DVec3::ZERO,
                 },
                 Suspension {
                     rest_length: 0.7,

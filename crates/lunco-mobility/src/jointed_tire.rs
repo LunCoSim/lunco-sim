@@ -548,6 +548,12 @@ pub fn apply_jointed_tire_forces(
                         contact.v_long,
                         contact.v_lat,
                         tire.min_validated_speed,
+                        tire.friction_mu,
+                        if contact.soil.is_some() && !tire.soil_side_force_curve.knots.is_empty() {
+                            soils.model()
+                        } else {
+                            None
+                        },
                     )
                 })
                 .collect();
@@ -570,7 +576,7 @@ pub fn apply_jointed_tire_forces(
                 let long = tire.slip_stiffness
                     * (contact.normal_force / total_normal_force)
                     * ((tread - contact.v_long) / denom);
-                responses[i].force(long, angle(contact, tread), tire.friction_mu)
+                responses[i].wrench(tread, long, angle(contact, tread), tire.friction_mu)
             };
             let step = match solve_axle_step_with_roundoff(
                 omega,
@@ -578,13 +584,20 @@ pub fn apply_jointed_tire_forces(
                 tire.bearing_damping,
                 drive_torque,
                 if braking { motor.brake_torque } else { 0.0 },
-                tire.radius * tire.friction_mu * total_normal_force,
+                tire.radius * tire.friction_mu * total_normal_force
+                    + responses
+                        .iter()
+                        .map(|p| p.rolling_moment_limit)
+                        .sum::<f64>(),
                 full_dt,
                 |w| {
                     contacts
                         .iter()
                         .enumerate()
-                        .map(|(i, _)| patch(i, w).0 * tire.radius)
+                        .map(|(i, _)| {
+                            let (fx, _, moment) = patch(i, w);
+                            fx * tire.radius + moment
+                        })
                         .sum()
                 },
                 |w| {
@@ -605,6 +618,15 @@ pub fn apply_jointed_tire_forces(
                                     drive_torque != 0.0 || (braking && motor.brake_torque > 0.0),
                                 ),
                             );
+                            if responses[i].is_soil() {
+                                return 64.0
+                                    * f64::EPSILON
+                                    * (tire.radius
+                                        * responses[i].tread_gain_bound
+                                        * velocity_scale
+                                        + tire.radius * tire.friction_mu * contact.normal_force
+                                        + responses[i].rolling_moment_limit);
+                            }
                             let rolling = contact
                                 .v_long
                                 .abs()
@@ -691,11 +713,16 @@ pub fn apply_jointed_tire_forces(
                 sample.sinkage_m += share * responses[i].sinkage_m;
                 sample.lateral_speed_mps += share * contact.v_lat;
                 let mut force = DVec3::ZERO;
+                let mut rolling_moment = 0.0;
                 for interval in step.intervals.iter().filter(|s| s.duration > 0.0) {
                     let fraction = interval.duration / full_dt;
                     sample.slip_angle_rad += share
                         * fraction
-                        * angle(contact, (interval.speed + housing_speed) * tire.radius);
+                        * if responses[i].is_soil() {
+                            (-contact.v_lat).atan2(contact.v_long.abs())
+                        } else {
+                            angle(contact, (interval.speed + housing_speed) * tire.radius)
+                        };
                     if let Some(hold) = static_hold
                         && interval.start_speed == 0.0
                         && interval.speed == 0.0
@@ -703,26 +730,30 @@ pub fn apply_jointed_tire_forces(
                         force += hold * fraction;
                         tire_heat -= hold.dot(contact.relative_velocity) * fraction;
                     } else {
-                        let (long, lat) = patch(i, interval.speed);
+                        let (long, lat, moment) = patch(i, interval.speed);
+                        rolling_moment += fraction * moment;
                         force += (contact.forward * long + contact.right * lat) * fraction;
                         tire_heat += fraction
                             * (long
                                 * ((interval.speed + housing_speed) * tire.radius
                                     - contact.v_long)
-                                - lat * contact.v_lat);
+                                - lat * contact.v_lat
+                                + moment * (interval.speed + housing_speed));
                     }
                 }
                 // The axle owner wakes the island when the brake changes.
                 // A held brake supplies a passive contact reaction on both bodies.
+                sample.rolling_moment_nm += rolling_moment;
                 sample.longitudinal_n += force.dot(contact.forward);
                 sample.lateral_n += force.dot(contact.right);
                 sample.lateral_dissipation_w -= force.dot(contact.right) * contact.v_lat;
+                let rolling_torque = -axle_world * motor.coordinate_sign() * rolling_moment;
                 pending.push(lunco_physics::BodyForce {
                     local_force: DVec3::ZERO,
                     body: wheel,
                     force,
                     point: Some(lunco_spatial::coords::GridPos(contact.point)),
-                    torque: DVec3::ZERO,
+                    torque: rolling_torque,
                     wake: drive_torque != 0.0,
                 });
                 // A dynamic support receives the opposite tangential force at
@@ -739,7 +770,7 @@ pub fn apply_jointed_tire_forces(
                         body: support,
                         force: -force,
                         point: Some(lunco_spatial::coords::GridPos(contact.point)),
-                        torque: DVec3::ZERO,
+                        torque: -rolling_torque,
                         wake: drive_torque != 0.0,
                     });
                 }

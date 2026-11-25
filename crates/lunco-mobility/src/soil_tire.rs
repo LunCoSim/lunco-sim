@@ -1,5 +1,8 @@
 //! Rolling calibration and quasi-steady lateral soil resistance, evaluated at wheel load.
-use crate::TireLateralStiffnessGraph;
+use crate::{
+    TireLateralStiffnessGraph,
+    soil_modelica::{SoilModelica, SoilModelicaCache},
+};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use lunco_physics::support::{ColliderTileOf, WheelSoil};
@@ -15,6 +18,7 @@ pub struct WheelForceSample {
     pub slip_angle_rad: f64,
     pub sinkage_m: f64,
     pub drive_torque_nm: f64,
+    pub rolling_moment_nm: f64,
     pub lateral_dissipation_w: f64,
 }
 
@@ -22,9 +26,14 @@ pub struct WheelForceSample {
 pub struct SoilSurfaces<'w, 's> {
     owners: Query<'w, 's, &'static ColliderTileOf>,
     materials: Query<'w, 's, &'static WheelSoil>,
+    model: Option<NonSend<'w, SoilModelicaCache>>,
 }
 
 impl SoilSurfaces<'_, '_> {
+    pub(crate) fn model(&self) -> Option<&SoilModelica> {
+        self.model.as_ref().and_then(|model| model.get())
+    }
+
     pub(crate) fn get(&self, collider: Entity) -> Option<&WheelSoil> {
         let owner = self.owners.get(collider).map_or(collider, |tile| tile.0);
         self.materials.get(owner).ok()
@@ -60,24 +69,27 @@ impl SoilSideForceCurve {
     }
 }
 
-/// One physical patch's share of the whole wheel's lateral response.
-/// Soil geometry and yield are independent of the implicit spin iterations.
-#[derive(Clone, Copy)]
+/// One contact's fraction of a whole wheel's soil response. The parameters
+/// are immutable across the implicit axle iterations; each query supplies only
+/// the trial tread velocity.
 pub(crate) struct PatchResponse<'a> {
     stiffness: f64,
-    curve: &'a SoilSideForceCurve,
     load: f64,
-    rolling_weight: f64,
-    shear_n: f64,
-    passive_n: f64,
+    soil: Option<SoilTrial<'a>>,
     pub sinkage_m: f64,
+    pub rolling_moment_limit: f64,
+    pub tread_gain_bound: f64,
+}
+struct SoilTrial<'a> {
+    evaluator: Option<&'a SoilModelica>,
+    inputs: [f64; 15],
 }
 
 impl<'a> PatchResponse<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         graph: TireLateralStiffnessGraph,
-        curve: &'a SoilSideForceCurve,
+        curve: &SoilSideForceCurve,
         soil: Option<&WheelSoil>,
         load: f64,
         total: f64,
@@ -86,89 +98,92 @@ impl<'a> PatchResponse<'a> {
         longitudinal_speed: f64,
         lateral_speed: f64,
         validated_speed: f64,
+        mu: f64,
+        evaluator: Option<&'a SoilModelica>,
     ) -> Self {
         let share = if total > 0.0 { load / total } else { 0.0 };
         let mut patch = Self {
             stiffness: share * graph.stiffness_at_load(total),
-            curve,
             load,
-            rolling_weight: 0.0,
-            shear_n: 0.0,
-            passive_n: 0.0,
+            soil: None,
             sinkage_m: 0.0,
+            rolling_moment_limit: 0.0,
+            tread_gain_bound: 0.0,
         };
         if let Some(soil) = soil.filter(|_| !curve.knots.is_empty() && load > 0.0) {
-            // Shallow cylindrical footprint L ~= sqrt(8 R z). Solve W = G z b L.
-            let z = (total / (soil.pressure_gradient * width * (8.0 * radius).sqrt()))
-                .powf(2.0 / 3.0)
-                .min(radius);
-            let length = (8.0 * radius * z).sqrt();
-            let phi = soil.friction_angle;
-            let root_kp = (std::f64::consts::FRAC_PI_4 + 0.5 * phi).tan();
-            // Finite contact residence time regularizes quasi-static shear at rest.
-            let displacement =
-                lateral_speed.abs() * length / longitudinal_speed.abs().max(validated_speed);
-            let mobilized = -(-displacement / soil.shear_length).exp_m1();
-            patch.shear_n =
-                share * (soil.cohesion * width * length + total * phi.tan()) * mobilized;
-            // Integrated passive earth pressure over the leading side face.
-            patch.passive_n = share
-                * length
-                * z
-                * root_kp
-                * (0.5 * soil.unit_weight * z * root_kp + 2.0 * soil.cohesion)
-                * mobilized;
-            patch.sinkage_m = z;
-            let t = (longitudinal_speed.abs() / validated_speed).min(1.0);
-            patch.rolling_weight = t * t * (3.0 - 2.0 * t);
+            let angle = lateral_speed.abs().atan2(longitudinal_speed.abs());
+            let inputs = [
+                total,
+                load,
+                radius,
+                width,
+                longitudinal_speed,
+                lateral_speed,
+                longitudinal_speed,
+                soil.pressure_gradient,
+                soil.cohesion,
+                soil.friction_angle,
+                soil.unit_weight,
+                soil.shear_length,
+                mu,
+                curve.ratio(angle),
+                validated_speed,
+            ];
+            let trial = SoilTrial { evaluator, inputs };
+            let sample = trial.evaluate(longitudinal_speed);
+            patch.sinkage_m = sample[2];
+            patch.rolling_moment_limit = sample[5];
+            patch.tread_gain_bound = sample[6];
+            patch.soil = Some(trial);
         }
         patch
     }
 
-    pub(crate) fn angular_gain_bound(&self) -> f64 {
-        if self.sinkage_m == 0.0 {
-            return self.stiffness;
-        }
-        let slope = self
-            .curve
-            .knots
-            .windows(2)
-            .map(|w| ((w[1][1] - w[0][1]) / (w[1][0] - w[0][0])).abs())
-            .fold(0.0, f64::max);
-        let [end, ratio] = *self.curve.knots.last().unwrap();
-        let range = std::f64::consts::FRAC_PI_2 - end;
-        self.load * slope
-            + if range > 0.0 {
-                (self.load * ratio + self.shear_n + self.passive_n) / range
-            } else {
-                0.0
-            }
+    pub(crate) fn is_soil(&self) -> bool {
+        self.soil.is_some()
     }
 
-    pub(crate) fn force(&self, long: f64, angle: f64, mu: f64) -> (f64, f64) {
+    pub(crate) fn angular_gain_bound(&self) -> f64 {
+        // Soil empirical lateral demand depends on geometric travel yaw and is
+        // constant during the axle iteration. The tread-dependent shear
+        // projection is bounded by the constitutive tread gain.
+        if self.is_soil() { 0.0 } else { self.stiffness }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force(&self, tread: f64, long: f64, angle: f64, mu: f64) -> (f64, f64) {
+        let (fx, fy, _) = self.wrench(tread, long, angle, mu);
+        (fx, fy)
+    }
+
+    pub(crate) fn wrench(&self, tread: f64, long: f64, angle: f64, mu: f64) -> (f64, f64, f64) {
         if self.load <= 0.0 {
-            return (0.0, 0.0);
+            return (0.0, 0.0, 0.0);
         }
-        let (lateral, passive) = if self.sinkage_m > 0.0 {
-            let magnitude = angle.abs();
-            let end = self.curve.knots.last().unwrap()[0];
-            let extrapolation = if magnitude > end {
-                (magnitude - end) / (std::f64::consts::FRAC_PI_2 - end)
-            } else {
-                0.0
-            };
-            let rolling = self.rolling_weight * (1.0 - extrapolation);
-            let low = 1.0 - rolling;
-            (
-                angle.signum()
-                    * (rolling * self.load * self.curve.ratio(magnitude) + low * self.shear_n),
-                angle.signum() * low * self.passive_n,
-            )
+        if let Some(soil) = &self.soil {
+            let [fx, fy, _, _, moment, _, _] = soil.evaluate(tread);
+            (fx, fy, moment)
         } else {
-            (self.stiffness * angle, 0.0)
+            let (fx, fy) = crate::limit_tire_shear(long, self.stiffness * angle, mu * self.load);
+            (fx, fy, 0.0)
+        }
+    }
+}
+
+impl SoilTrial<'_> {
+    fn evaluate(&self, tread: f64) -> [f64; 7] {
+        let mut inputs = self.inputs;
+        inputs[6] = tread;
+        let Some(evaluator) = self.evaluator else {
+            return [f64::NAN; 7];
         };
-        let (fx, fy) = crate::limit_tire_shear(long, lateral, mu * self.load);
-        (fx, fy + passive)
+        match evaluator.evaluate(inputs) {
+            Ok(result) => result,
+            Err(error) => {
+                bevy::log::error!("Modelica wheel reaction failed: {error}");
+                [f64::NAN; 7]
+            }
+        }
     }
 }
 
@@ -203,6 +218,7 @@ mod tests {
     #[test]
     fn equivalent_tow_contact_subdivisions_preserve_force_and_moment() {
         let curve = curve();
+        let model = SoilModelica::compile().unwrap();
         for material in [None, Some(soil())] {
             for speed in [0.1, 1.32] {
                 for long_demand in [0., 500.] {
@@ -222,11 +238,19 @@ mod tests {
                                 speed,
                                 -0.115,
                                 1.07,
+                                0.6,
+                                Some(&model),
                             );
-                            let (fx, fy) = patch.force(long_demand / n, 5f64.to_radians(), 0.6);
+                            let (fx, fy, rolling_moment) = patch.wrench(
+                                speed + long_demand / 1000.,
+                                long_demand / n,
+                                5f64.to_radians(),
+                                0.6,
+                            );
                             let force = bevy::math::DVec3::new(fx, 0., fy);
                             sum += force;
-                            torque += bevy::math::DVec3::new(x, -0.465, 0.).cross(force);
+                            torque += bevy::math::DVec3::new(x, -0.465, 0.).cross(force)
+                                + bevy::math::DVec3::X * rolling_moment;
                         }
                         (sum, torque)
                     };
@@ -241,6 +265,7 @@ mod tests {
     }
     #[test]
     fn rolling_curve_transfers_across_wes_load_groups() {
+        let model = SoilModelica::compile().unwrap();
         let groups = [
             [(189., 41.5), (190., 63.7)],
             [(277., 71.4), (276., 113.)],
@@ -273,8 +298,10 @@ mod tests {
                     1.32,
                     -1.32 * angle.tan(),
                     1.07,
+                    0.6,
+                    Some(&model),
                 );
-                let (_, lateral) = p.force(0., angle, 0.6);
+                let (_, lateral) = p.force(1.32, 0., angle, 0.6);
                 let error = (lateral - measured).abs();
                 assert!(error / measured < 0.18);
                 absolute_error += error;
@@ -284,8 +311,131 @@ mod tests {
     }
 
     #[test]
+    fn soil_contact_does_not_change_with_drive_mode_and_covers_high_yaw() {
+        let model = SoilModelica::compile().unwrap();
+        let curve = SoilSideForceCurve::new(
+            [
+                (0.0_f64, 0.0),
+                (5., 0.24496),
+                (10., 0.37195),
+                (15., 0.481),
+                (25., 0.517),
+                (40., 0.533),
+                (65., 0.809),
+                (85., 1.266),
+                (90., 1.107),
+            ]
+            .into_iter()
+            .map(|(degrees, ratio)| [degrees.to_radians(), ratio])
+            .collect(),
+        )
+        .unwrap();
+        let patch = PatchResponse::new(
+            graph(),
+            &curve,
+            Some(&soil()),
+            182.25,
+            182.25,
+            0.465,
+            0.28,
+            0.2,
+            0.1,
+            1.07,
+            0.6,
+            Some(&model),
+        );
+        let passive = patch.force(0.21, 20.0, 0.1, 0.6);
+        let active = patch.force(0.21, 381.0, 0.1, 0.6);
+        assert_eq!(passive, active);
+        eprintln!("identical kinematics: passive={passive:?} active={active:?}");
+        for (degrees, load, speed, tread, observed) in [
+            (40.0_f64, 274., 1.30, 0.8, 144.8),
+            (65., 188., 1.31, 0.31, 152.2),
+            (85., 186., 1.33, 0.10, 235.5),
+            (90., 185., 1.31, 0.0, 204.9),
+        ] {
+            let angle = degrees.to_radians();
+            let patch = PatchResponse::new(
+                graph(),
+                &curve,
+                Some(&soil()),
+                load,
+                load,
+                0.465,
+                0.28,
+                speed * angle.cos(),
+                speed * angle.sin(),
+                1.07,
+                0.6,
+                Some(&model),
+            );
+            let (fx, fy) = patch.force(tread, 0., angle, 0.6);
+            assert!(fx.is_finite() && fy < 0.0);
+            eprintln!(
+                "WES {degrees} deg: load={load} measured={observed} lateral={} longitudinal={fx}",
+                fy.abs()
+            );
+            assert!(
+                (fy.abs() - observed).abs() / observed < 0.15,
+                "{degrees} degrees: predicted {fy}, measured {observed}"
+            );
+        }
+    }
+
+    #[test]
+    fn modelica_wrench_closes_implicit_axle_balance_and_compaction_work() {
+        let model = SoilModelica::compile().unwrap();
+        let patch = PatchResponse::new(
+            graph(),
+            &curve(),
+            Some(&soil()),
+            182.25,
+            182.25,
+            0.465,
+            0.28,
+            1.32,
+            0.,
+            1.07,
+            0.6,
+            Some(&model),
+        );
+        let radius = 0.465;
+        let initial_speed = 1.32 / radius;
+        let inertia = 1.0;
+        let dt = 1.0 / 60.0;
+        let reaction = |omega: f64| {
+            let (fx, _, moment) = patch.wrench(omega * radius, 0., 0., 0.6);
+            fx * radius + moment
+        };
+        let next = crate::solve_axle_step_with_roundoff(
+            initial_speed,
+            inertia,
+            0.,
+            0.,
+            0.,
+            radius * 0.6 * 182.25 + patch.rolling_moment_limit,
+            dt,
+            reaction,
+            |omega| {
+                64.0 * f64::EPSILON
+                    * (radius * patch.tread_gain_bound * (omega.abs() * radius + 1.32)
+                        + radius * 0.6 * 182.25
+                        + patch.rolling_moment_limit)
+            },
+        )
+        .unwrap();
+        let (fx, fy, moment) = patch.wrench(next.speed * radius, 0., 0., 0.6);
+        assert!(next.speed < initial_speed && fx < 0. && fy == 0. && moment > 0.);
+        assert!(moment * next.speed > 0.);
+        assert!((inertia * (next.speed - initial_speed) / dt + reaction(next.speed)).abs() < 1e-8);
+        let (_, _, reversed) = patch.wrench(-1.32, 0., 0., 0.6);
+        assert!(reversed < 0.);
+    }
+
+    #[test]
     fn pivot_soil_resists_both_slip_signs_and_unloads_without_force() {
         let curve = curve();
+        let model = SoilModelica::compile().unwrap();
         for slip in [-0.2_f64, 0., 0.2] {
             for load in [0., 182.25] {
                 let patch = PatchResponse::new(
@@ -299,8 +449,10 @@ mod tests {
                     0.,
                     slip,
                     1.07,
+                    0.6,
+                    Some(&model),
                 );
-                let (fx, fy) = patch.force(1000., (-slip).atan2(1.07), 0.6);
+                let (fx, fy) = patch.force(1., 1000., (-slip).atan2(1.07), 0.6);
                 if load == 0. {
                     assert_eq!((fx, fy, patch.sinkage_m), (0., 0., 0.));
                 } else {

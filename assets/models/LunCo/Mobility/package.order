@@ -2,3 +2,4 @@ RoverCommandAuthority
 RoverAutopilotGuidance
 RoverDrivetrain
 RoverAckermannDrivetrain
+RegolithWheelContact
