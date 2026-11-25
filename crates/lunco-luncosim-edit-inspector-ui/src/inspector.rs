@@ -1236,28 +1236,30 @@ fn usd_preview_transform_section(
         return;
     }
 
-    let mut ops = Vec::with_capacity(3);
-    if translation_commit {
-        ops.push(UsdOp::SetTranslate {
-            edit_target: preview.edit_target.clone(),
-            path: preview.path.clone(),
-            value: translation,
+    let result = ctx
+        .resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>()
+        .and_then(|registry| registry.host(preview.doc))
+        .ok_or_else(|| "USD preview document is closed".to_owned())
+        .and_then(|host| {
+            host.document().local_pose_ops(
+                &preview.edit_target,
+                &preview.path,
+                translation_commit.then(|| bevy::math::DVec3::from_array(translation)),
+                rotation_commit
+                    .then(|| lunco_usd_document::document::usd_rotate_xyz_quaternion(rotation)),
+                scale_commit.then(|| bevy::math::DVec3::from_array(scale)),
+            )
         });
-    }
-    if rotation_commit {
-        ops.push(UsdOp::SetRotate {
-            edit_target: preview.edit_target.clone(),
-            path: preview.path.clone(),
-            value: rotation,
-        });
-    }
-    if scale_commit {
-        ops.push(UsdOp::SetScale {
-            edit_target: preview.edit_target.clone(),
-            path: preview.path.clone(),
-            value: scale,
-        });
-    }
+    let ops = match result {
+        Ok(ops) => ops,
+        Err(error) => {
+            ctx.trigger(lunco_core::RuntimeError {
+                name: "usd-pose-edit-rejected".into(),
+                message: error,
+            });
+            return;
+        }
+    };
     ctx.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: preview.doc,
         parent_gen: (preview.generation != 0).then_some(preview.generation),

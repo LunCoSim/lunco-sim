@@ -70,9 +70,31 @@ pub fn usd_rotate_xyz_degrees(rotation: DQuat) -> [f64; 3] {
     [x, y, z].map(f64::to_degrees)
 }
 
-fn usd_rotate_xyz_quaternion(degrees: [f64; 3]) -> DQuat {
+/// Convert fixed-axis USD rotateXYZ angles in degrees to a local rotation.
+pub fn usd_rotate_xyz_quaternion(degrees: [f64; 3]) -> DQuat {
     let [x, y, z] = degrees.map(f64::to_radians);
     DQuat::from_euler(EulerRot::XYZEx, x, y, z)
+}
+
+/// Insert a newly authored common transform channel at its USD TRS position.
+/// Preserve the relative order of every existing authored operation.
+pub fn insert_xform_channel(order: &mut Vec<String>, op: &str) {
+    fn rank(op: &str) -> u8 {
+        match op.strip_prefix("!invert!").unwrap_or(op) {
+            "!resetXformStack!" => 0,
+            t if t.starts_with("xformOp:translate") => 1,
+            t if t.starts_with("xformOp:rotate") || t.starts_with("xformOp:orient") => 2,
+            t if t.starts_with("xformOp:scale") => 3,
+            _ => 4,
+        }
+    }
+    if !order.iter().any(|token| token == op) {
+        let index = order
+            .iter()
+            .position(|token| rank(token) > rank(op))
+            .unwrap_or(order.len());
+        order.insert(index, op.to_owned());
+    }
 }
 
 /// The stage's declared up axis. USD's default is `Y` (AOUSD); DCC/robotics

@@ -42,6 +42,14 @@ fn material_prepare(doc) {
         material_attr(material_shader(), "inputs:diffuseColor", "color3f", "(0.2,0.4,0.6)"),
         material_attr(material_shader(), "inputs:roughness", "float", "0.3"),
         material_attr(material_shader(), "outputs:surface", "token", "\"surface\""),
+        material_add(mat, "Custom", "Shader"),
+        material_attr(mat+"/Custom", "info:implementationSource", "token", "\"sourceAsset\""),
+        material_attr(mat+"/Custom", "info:wesl:sourceAsset", "asset", "@lunco://shaders/pbr_lit.wesl@"),
+        material_attr(mat+"/Custom", "outputs:surface", "token", "\"surface\""),
+        material_add(mat, "Second", "Shader"),
+        material_attr(mat+"/Second", "info:id", "token", "\"UsdPreviewSurface\""),
+        material_attr(mat+"/Second", "inputs:diffuseColor", "color3f", "(0.1,0.9,0.1)"),
+        material_attr(mat+"/Second", "outputs:surface", "token", "\"surface\""),
         material_add(mat, "Graph", "NodeGraph"),
         material_connect(material_graph(), material_shader()),
         material_connect(mat, material_graph()),
@@ -99,6 +107,7 @@ fn material_rebound(doc) {
 }
 fn material_annotate(doc) {
     let result = cmd("ApplyUsdOps", #{doc_id:doc, label:"Annotate shading network", ops:[
+        material_attr(material_root(), "review:note", "string", "Checked"),
         material_attr(material_root()+"/Alternate", "review:note", "string", "Checked"),
         material_attr(material_graph(), "review:note", "string", "Checked"),
         material_attr(material_shader(), "review:note", "string", "Checked")
@@ -114,6 +123,57 @@ fn material_annotated(doc) {
             get(find_path(material_root()+"/Unrelated"),"Transform.translation.y")==5.0,
             "shading annotations preserve bound and unrelated live poses")
     ],"NATIVE MATERIAL ANNOTATION","NATIVE_MATERIAL_ANNOTATION");
+}
+fn material_switch_terminal(doc) {
+    let result = cmd("ApplyUsdOp", #{doc_id:doc, op:material_connect(material_root()+"/Mat",material_root()+"/Mat/Second")});
+    if !result.ok {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_terminal_switched(doc) {
+    let shape = material_entity(doc);
+    let look = get(shape,"PbrLook");
+    if look == () || abs(look.base_color.green - 0.9) > 0.001 { print("MATERIAL_PENDING"); return; }
+    report_verdict([t_true(get(shape,"Transform.translation.x")==3.0 &&
+        get(find_path(material_root()+"/Unrelated"),"Transform.translation.y")==5.0,
+        "a new producing shader changes only the bound appearance")],
+        "NATIVE MATERIAL RECONNECT","NATIVE_MATERIAL_RECONNECT");
+}
+fn material_switch_custom(doc) {
+    let result = cmd("ApplyUsdOp", #{doc_id:doc, op:material_connect(material_root()+"/Mat",material_root()+"/Mat/Custom")});
+    if !result.ok {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_custom(doc) {
+    let shape = material_entity(doc);
+    let prim=query("QueryUsdPrim",#{doc_id:doc,path:material_shape(),topology:true});
+    if prim.topology==() || get(shape,"PbrLook")!=() {print("MATERIAL_PENDING");return;}
+    report_verdict([t_true(prim.topology.parts[0].materials.shader == material_root()+"/Mat/Custom" &&
+        get(shape,"UsdSceneProjectionFailed")==() && get(shape,"Transform.translation.x")==3.0,
+        "custom shader owns the existing surface and preserves its live transform")],
+        "NATIVE MATERIAL CUSTOM","NATIVE_MATERIAL_CUSTOM");
+}
+fn material_repair_cycle(doc) {
+    let result=cmd("ApplyUsdOp",#{doc_id:doc,op:material_connect(material_graph(),material_shader())});
+    if !result.ok {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_restored_graph(doc) {
+    let shape = material_entity(doc);
+    if get(shape, "UsdSceneProjectionFailed") != () { print("MATERIAL_PENDING"); return; }
+    let look = get(shape, "PbrLook");
+    report_verdict([
+        t_true(look != () && abs(look.perceptual_roughness - 0.7) < 0.001 &&
+            !get(shape, "Visibility").to_string().contains("Hidden"),
+            "repairing the forwarding graph restores its surface and visibility"),
+        t_true(get(shape, "Transform.translation.x") == 3.0 &&
+            get(find_path(material_root()+"/Unrelated"), "Transform.translation.y") == 5.0,
+            "repair preserves the bound and unrelated live transforms")
+    ], "NATIVE MATERIAL GRAPH REPAIR", "NATIVE_MATERIAL_GRAPH_REPAIR");
+}
+fn material_restore_terminal(doc) {
+    let result = cmd("ApplyUsdOp", #{doc_id:doc, op:material_connect(material_root()+"/Mat",material_graph())});
+    if !result.ok {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
 }
 fn material_roughness_write(doc, value) {
     let result=cmd("ApplyUsdOp",#{doc_id:doc,parent_gen:(),

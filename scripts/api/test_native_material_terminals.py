@@ -41,10 +41,14 @@ def main():
                 ("material_rebind", "material_rebound", 3),
                 ("material_annotate", "material_annotated", 1),
                 ("material_restore", "material_valid", 3),
+                ("material_switch_terminal", "material_terminal_switched", 1),
+                ("material_switch_custom", "material_custom", 1),
+                ("material_restore_terminal", "material_valid", 3),
                 ("material_bad_input", "material_bad_input_verdict", 2),
                 ("material_repair_input", "material_repaired_input", 2),
                 ("material_edit", "material_edited", 3),
                 ("material_cycle", "material_invalid", 5),
+                ("material_repair_cycle", "material_restored_graph", 2),
             ]:
                 if prepare:
                     apply_fixture(session, source, prepare, doc)

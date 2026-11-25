@@ -4,7 +4,6 @@ use lunco_usd_data::units::ConventionTransform;
 use openusd::sdf::{Path as SdfPath, Value};
 
 use crate::read::UsdReadObject;
-use crate::read::read_vec3_f64_at;
 use crate::units::stage_convention;
 use crate::view::StageView;
 
@@ -42,55 +41,37 @@ fn malformed_transform(path: &SdfPath) -> TransformReadError {
     }
 }
 
-/// Read a grid-direct USD translation without narrowing its `double3` value.
-///
-/// High-precision cell splitting is defined for a pure `xformOp:translate`
-/// stack. More complex stacks can move the translation through pivots or
-/// matrix operations, so a double-valued position in one of those stacks is
-/// rejected instead of being silently projected through Bevy's `f32`
-/// `Transform`.
+/// Split the composed local translation into grid coordinates before any
+/// narrowing. Pivots, inverse operations and matrix edits have the same
+/// OpenUSD evaluation here as in the authored-pose projector.
 pub fn grid_translation_d_at(
     reader: &dyn UsdReadObject,
     path: &SdfPath,
     time: f64,
 ) -> Result<Option<DVec3>, TransformReadError> {
-    if reader.attr_type_name(path, "xformOp:translate").as_deref() != Some("double3") {
+    use openusd_schemas::geom::XformOpKind;
+    let Some(matrix) = reader.local_transform_matrix_d_at(path, time)? else {
         return Ok(None);
-    }
-
-    let Some(order) = read_xform_op_order(reader, path) else {
-        if !reader.has_authored_attribute(path, "xformOpOrder")
-            || authored_empty_xform_op_order(reader, path)
-        {
-            return Ok(None);
-        }
-        return Err(malformed_transform(path));
     };
-    let translation_is_ordered = order.iter().any(|operation| {
-        operation.strip_prefix("!invert!").unwrap_or(operation) == "xformOp:translate"
+    let has_translation = read_xform_op_order(reader, path).is_some_and(|order| {
+        order
+            .iter()
+            .rev()
+            .take_while(|op| op.as_str() != "!resetXformStack!")
+            .any(|op| {
+                matches!(
+                    XformOpKind::from_attr_name(op.strip_prefix("!invert!").unwrap_or(op)),
+                    Some(
+                        XformOpKind::Translate
+                            | XformOpKind::TranslateX
+                            | XformOpKind::TranslateY
+                            | XformOpKind::TranslateZ
+                            | XformOpKind::Transform
+                    )
+                )
+            })
     });
-    if !translation_is_ordered {
-        return Ok(None);
-    }
-    if order.first().map(String::as_str) != Some("xformOp:translate")
-        || order.iter().skip(1).any(|operation| {
-            let operation = operation.strip_prefix("!invert!").unwrap_or(operation);
-            !(operation.starts_with("xformOp:rotate")
-                || operation.starts_with("xformOp:orient")
-                || operation.starts_with("xformOp:scale"))
-        })
-    {
-        return Err(malformed_transform(path));
-    }
-    let Some(value) = read_vec3_f64_at(reader, path, "xformOp:translate", time) else {
-        return Err(malformed_transform(path));
-    };
-    let value = DVec3::from_array(value);
-    if !value.is_finite() {
-        return Err(malformed_transform(path));
-    }
-    let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
-    Ok(Some(convention.point_d(value)))
+    Ok(has_translation.then(|| matrix.w_axis.truncate()))
 }
 
 /// Compose a live OpenUSD transform through the shared reader contract.
@@ -392,13 +373,6 @@ pub fn read_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> Option
     (!order.is_empty()).then_some(order)
 }
 
-fn authored_empty_xform_op_order(reader: &dyn UsdReadObject, path: &SdfPath) -> bool {
-    match reader.attr_value(path, "xformOpOrder") {
-        Some(Value::TokenVec(values)) => values.is_empty(),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod high_precision_grid_translation_tests {
     use super::*;
@@ -505,9 +479,10 @@ def Xform "Vehicle"
     }
 
     #[test]
-    fn unsupported_double3_stack_is_rejected() {
+    fn rotated_double_translation_is_split_in_parent_coordinates() {
         let stage = plan(
             r#"#usda 1.0
+(metersPerUnit = 1)
 def Xform "Vehicle"
 {
     double3 xformOp:translate = (149597870700, 0, 0)
@@ -518,7 +493,11 @@ def Xform "Vehicle"
         );
         let path = SdfPath::new("/Vehicle").expect("valid prim path");
 
-        assert!(grid_translation_d_at(&stage, &path, 0.0).is_err());
+        let position = grid_translation_d_at(&stage, &path, 0.0).unwrap().unwrap();
+        let expected = bevy::math::DQuat::from_rotation_z(30.0_f64.to_radians())
+            * DVec3::X
+            * 149_597_870_700.0;
+        assert!(position.abs_diff_eq(expected, 0.0001));
     }
 
     #[test]

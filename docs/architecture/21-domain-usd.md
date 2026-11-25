@@ -1615,7 +1615,7 @@ time code. `timeCodesPerSecond` maps presentation seconds to that stage's time
 codes. Native ordered-transform variation and consumed appearance samples determine
 `UsdAnimated`; the per-frame samplers then drive:
 
-- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` may use `double3 xformOp:translate`; its f64 position is split into `(CellCoord, Transform)` before the cell-local translation is narrowed. This high-precision path accepts a translate-first stack followed by rotations and scale; a transform stack whose ordered translation cannot be split with its authored meaning intact is rejected visibly. A translation attribute omitted from `xformOpOrder` is inert and does not block projection. Live edits use the composed f64 matrix translation for that same cell split, so an intermediate render `Transform` cannot narrow canonical positions.
+- **Transform** — the full transform decode above, evaluated at the entity's resolved time. A prim directly beneath a BigSpace `Grid` uses the translation of the composed f64 local matrix for its cell split. This includes ordered translations, pivots, inverses and matrix operations. Only the cell-local remainder is narrowed for Bevy. Initial projection, animation and live pose edits evaluate the same ordered USD stack.
 - **Visibility** — animated `visibility` token (held).
 - **Material** — animated `inputs:diffuseColor` / `inputs:opacity` (and geom
   `primvars:displayColor`) into the entity's **`PbrLook`** — the render-free appearance

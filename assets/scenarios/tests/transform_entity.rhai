@@ -23,6 +23,7 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.sent = false;
+    this.stack_phase = 0;
     this.runtime_tested = false;
     this.rejection_tested = false;
     this.runtime_checks = [];
@@ -52,6 +53,11 @@ fn quat_abs_dot(a, b) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     this.elapsed += dt();
+
+    if this.stack_phase > 0 {
+        this = verify_mixed_stack(this);
+        return;
+    }
 
     if this.target < 0 {
         if this.elapsed > 5.0 {
@@ -178,8 +184,52 @@ fn on_tick(me, ctx) {
         "QueryEntity did not identify the active physics frame"));
     checks.push(t_present(attrs["xformOp:rotateXYZ"],
         "USD runtime layer has no authored rotation"));
-    report_verdict(checks, "TRANSFORM ENTITY", "TRANSFORM_ENTITY");
-    this.done = true;
+    this.runtime_checks = checks;
+    this.doc = authored.doc_id;
+    let setup = cmd("ApplyUsdOps", #{doc_id:this.doc, label:"Axis-authored rotation", ops:[
+        #{SetAttribute:#{edit_target:"@runtime@",path:TARGET_PATH,name:"xformOp:rotateY",type_name:"double",value:"30"}},
+        #{SetAttribute:#{edit_target:"@runtime@",path:TARGET_PATH,name:"xformOpOrder",type_name:"token[]",
+            value:"[\"xformOp:translate\",\"xformOp:rotateY\"]"}}
+    ]});
+    if !setup.ok {fail(this,setup.to_string());return;}
+    this.stack_phase = 1;
+    this.stack_generation = authored.document_generation;
+}
+
+fn verify_mixed_stack(me) {
+    let authored = query("QueryUsdPrim",#{path:TARGET_PATH,attrs:["xformOpOrder","xformOp:rotateY"]});
+    if authored == () || authored.attrs == () || authored.document_generation <= me.stack_generation { return me; }
+    me.stack_generation = authored.document_generation;
+    let id = me.target;
+    if me.stack_phase == 1 {
+        me.live_position = vadd(world_pos(id),[0.0,2.0,0.0]);
+        let move = cmd("MoveEntity",#{entity_id:id,translation:me.live_position});
+        if !move.ok {fail(me,move.to_string());return me;}
+        let commit = cmd("RotateEntity",#{entity_id:id,rotation:[0.0,0.0,0.0,1.0],intent:"Persistent"});
+        if !commit.ok {fail(me,commit.to_string());return me;}
+        me.stack_phase = 2;
+    } else if me.stack_phase == 2 {
+        me.runtime_checks.push(t_true(quat_abs_dot(world_rotation(id),[0.0,0.0,0.0,1.0])>1.0-MAX_ROTATION_ERROR
+            && authored.attrs["xformOp:rotateY"]==30.0 && authored.attrs["xformOpOrder"].contains("xformOp:rotateY"),
+            "persistent absolute rotation preserves the authored hinge channel and lands on the requested pose"));
+        me.runtime_checks.push(t_max(vec_error(world_pos(id),me.live_position),MAX_POSITION_ERROR,
+            "committing rotation keeps the live translation on the same prim"));
+        let commit = cmd("RotateEntity",#{entity_id:id,rotation:TARGET_ROTATION,intent:"Persistent"});
+        if !commit.ok {fail(me,commit.to_string());return me;}
+        me.stack_phase = 3;
+    } else if me.stack_phase == 3 {
+        me.runtime_checks.push(t_true(quat_abs_dot(world_rotation(id),TARGET_ROTATION)>1.0-MAX_ROTATION_ERROR,
+            "a second commit on the same stack replaces its pose adjustment"));
+        let undo = cmd("UndoDocument",#{doc_id:me.doc});
+        if !undo.ok {fail(me,undo.to_string());return me;}
+        me.stack_phase = 4;
+    } else {
+        me.runtime_checks.push(t_true(quat_abs_dot(world_rotation(id),[0.0,0.0,0.0,1.0])>1.0-MAX_ROTATION_ERROR,
+            "undo restores the prior composed hinge pose"));
+        report_verdict(me.runtime_checks,"TRANSFORM ENTITY","TRANSFORM_ENTITY");
+        me.done = true;
+    }
+    me
 }
 
 fn distance_from(a, b) {

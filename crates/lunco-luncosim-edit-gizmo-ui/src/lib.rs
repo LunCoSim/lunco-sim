@@ -714,6 +714,9 @@ fn restore_gizmo_dynamic(
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     viewport: Option<Res<UsdViewportState>>,
+    documents: Option<
+        Res<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>,
+    >,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     q_drag: Query<(Entity, &GizmoDragState)>,
     mut q_vel: Query<(Option<&mut LinearVelocity>, Option<&mut AngularVelocity>)>,
@@ -803,34 +806,48 @@ fn restore_gizmo_dynamic(
                     ..
                 } = &drag.owner
                 {
-                    let mut ops = Vec::with_capacity(3);
-                    if (drag.current_position - drag.original_position).length_squared() > 1.0e-12 {
-                        ops.push(lunco_usd_document::document::UsdOp::SetTranslate {
-                            edit_target: edit_target.clone(),
-                            path: path.clone(),
-                            value: drag.current_position.to_array(),
+                    let position = ((drag.current_position - drag.original_position)
+                        .length_squared()
+                        > 1.0e-12)
+                        .then_some(drag.current_position);
+                    let rotation = (drag.current_rotation.dot(drag.original_rotation).abs()
+                        < 1.0 - 1.0e-12)
+                        .then_some(drag.current_rotation);
+                    let scale = drag.current_scale.zip(drag.original_scale).and_then(
+                        |(current, original)| {
+                            ((current - original).length_squared() > 1.0e-12).then_some(current)
+                        },
+                    );
+                    let result = documents
+                        .as_ref()
+                        .and_then(|registry| registry.host(*doc))
+                        .ok_or_else(|| "USD preview document is closed".to_owned())
+                        .and_then(|host| {
+                            host.document().local_pose_ops(
+                                edit_target,
+                                path,
+                                position,
+                                rotation,
+                                scale,
+                            )
                         });
-                    }
-                    if drag.current_rotation.dot(drag.original_rotation).abs() < 1.0 - 1.0e-12 {
-                        ops.push(lunco_usd_document::document::UsdOp::SetRotate {
-                            edit_target: edit_target.clone(),
-                            path: path.clone(),
-                            value: lunco_usd_document::document::usd_rotate_xyz_degrees(
-                                drag.current_rotation,
-                            ),
-                        });
-                    }
-                    if let (Some(current), Some(original)) =
-                        (drag.current_scale, drag.original_scale)
-                    {
-                        if (current - original).length_squared() > 1.0e-12 {
-                            ops.push(lunco_usd_document::document::UsdOp::SetScale {
-                                edit_target: edit_target.clone(),
-                                path: path.clone(),
-                                value: current.to_array(),
+                    let ops = match result {
+                        Ok(ops) => ops,
+                        Err(error) => {
+                            if let Ok(mut tf) = spatial.p1().get_mut(entity) {
+                                tf.translation = drag.original_position.as_vec3();
+                                tf.rotation = drag.original_rotation.as_quat();
+                                if let Some(scale) = drag.original_scale {
+                                    tf.scale = scale.as_vec3();
+                                }
+                            }
+                            commands.trigger(lunco_core::RuntimeError {
+                                name: "usd-pose-edit-rejected".into(),
+                                message: error,
                             });
+                            Vec::new()
                         }
-                    }
+                    };
                     if !ops.is_empty() {
                         commands.trigger(lunco_usd_core::commands::ApplyUsdOps {
                             doc_id: *doc,

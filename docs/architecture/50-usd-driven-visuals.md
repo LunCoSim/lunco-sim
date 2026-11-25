@@ -53,9 +53,19 @@ drain and `usd.projection.visuals_failed` for a failed visual. This presentation
 boundary runs independently of simulation admission. The status UI distinguishes initial scene loading, USD edits, simulation
 preparation and visual streaming. Live interactions produce no projection event.
 
-A shading annotation remains queryable on its material or shader. Only a network
-property, a composed schema property, or a registered live-edit owner can request
-projection work for a shading node.
+A custom annotation on any prim remains queryable through the document. Projection
+work requires a schema property, a projected USD interface (such as a primvar),
+or a claim from a registered consumer. A shading connection publishes one native
+change notice. The visual owner tracks the bound material, terminal forwarding
+nodes and texture producers and updates the affected appearance in place.
+Simulation wiring consumes the native connection-field change independently.
+
+An explicit pose commit targets the composed parent-local pose. Common TRS
+channels use the same order in the document and live stage. For a mixed stack
+(hinge axes, pivots, orientations or matrix ops), the document retains the
+existing ops and authors a parent-space matrix adjustment using standard
+UsdGeom transform operations. The adjustment and its order are one undo group.
+A singular or sheared mixed stack rejects the pose edit before live mutation.
 
 Use the current value's owner to choose the update path:
 

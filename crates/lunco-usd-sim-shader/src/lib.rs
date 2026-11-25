@@ -83,7 +83,24 @@ impl Plugin for UsdShaderPlugin {
                 .after(UsdVisualProjectionSet)
                 .in_set(UsdSimSet::ProjectionPrepare),
         );
+        app.add_observer(refresh_surface_shader);
         ports::build(app);
+    }
+}
+
+fn refresh_surface_shader(
+    edit: On<lunco_usd_bevy_scene::UsdSurfaceShaderEdit>,
+    mut commands: Commands,
+) {
+    if edit.custom {
+        commands.entity(edit.prim).remove::<UsdShaderResolved>();
+    } else {
+        commands.entity(edit.target).remove::<(
+            ShaderLook,
+            lunco_materials::ShaderLookBound,
+            lunco_materials::ShaderLookReady,
+            lunco_usd_bevy_scene::UsdVisualShaderBound,
+        )>();
     }
 }
 

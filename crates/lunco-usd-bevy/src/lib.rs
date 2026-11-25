@@ -1284,6 +1284,7 @@ fn instantiate_usd_prim_from_reader<R: UsdRead>(
                 .try_remove::<(Mesh3d, PbrLook, PendingUsdMesh, UsdSceneGeometryPending)>()
                 .try_insert((
                     UsdSceneProjectionFailed(message.clone()),
+                    LiveSurfaceProjectionFailure(message.clone()),
                     Visibility::Hidden,
                 ));
             lunco_core::trigger_runtime_error(commands, "usd-visual-sync-failed", message);
@@ -3037,6 +3038,38 @@ fn material_unit_interval(
 #[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
 struct StandardSurfaceDependencies(std::collections::BTreeSet<SdfPath>);
 
+impl StandardSurfaceDependencies {
+    /// Record the forwarding path as well as its endpoint. UsdShade owns terminal
+    /// resolution; this walk identifies which edits can invalidate its answer,
+    /// including repairs to a broken or cyclic connection.
+    fn terminal(
+        reader: &dyn read::UsdReadObject,
+        prim: &SdfPath,
+    ) -> Result<Self, MaterialReadError> {
+        let mut deps = Self::default();
+        if let Some(material) = reader
+            .bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Render)
+            .map_err(|_| MaterialReadError::new("material:binding"))?
+        {
+            let mut pending = vec![format!("{material}.outputs:surface")];
+            let mut visited = std::collections::HashSet::new();
+            while let Some(property) = pending.pop() {
+                if !visited.insert(property.clone()) {
+                    continue;
+                }
+                let (owner, name) = property
+                    .split_once('.')
+                    .ok_or(MaterialReadError::new("outputs:surface"))?;
+                let path =
+                    SdfPath::new(owner).map_err(|_| MaterialReadError::new("outputs:surface"))?;
+                pending.extend(reader.connections(&path, name));
+                deps.0.insert(path);
+            }
+        }
+        Ok(deps)
+    }
+}
+
 /// A live standard-surface read withheld an already admitted appearance. The
 /// owner can recover on a later valid edit without clearing another domain's
 /// projection diagnostic or rematerializing the geometry.
@@ -3083,8 +3116,8 @@ fn read_standard_material(
     asset_server: &AssetServer,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
-) -> Result<(PbrLook, StandardSurfaceDependencies), MaterialReadError> {
-    let mut dependencies = StandardSurfaceDependencies::default();
+    dependencies: &mut StandardSurfaceDependencies,
+) -> Result<PbrLook, MaterialReadError> {
     let mut base_color_texture = None;
     let mut emissive_texture = None;
     let mut metallic_roughness_texture = None;
@@ -3396,54 +3429,51 @@ fn read_standard_material(
                     .any(|i| attr_has_time_samples(reader, &shader, i))
             });
 
-    Ok((
-        PbrLook {
-            base_color: base_color.with_alpha(alpha).to_linear(),
-            emissive,
-            perceptual_roughness: roughness,
-            metallic,
-            ior,
-            clearcoat,
-            clearcoat_perceptual_roughness: clearcoat_roughness,
-            specular_tint,
-            alpha: alpha_mode,
-            textures: PbrTextures {
-                base_color: base_color_texture,
-                emissive: emissive_texture,
-                metallic_roughness: metallic_roughness_texture,
-                normal_map: normal_map_texture,
-                occlusion: occlusion_texture,
-            },
-            unlit,
-            unshared: animated,
-            // `doubleSided` — core `UsdGeomGprim`, and it was not being read at all.
-            //
-            // It matters most for TRIMMED surfaces. A trim cuts a genuine hole, and
-            // the moment there is a hole you can see the far side of the shell
-            // through it. Single-sided, those backfaces are culled and the opening
-            // reads as a hole from outside but as nothing at all from within — which
-            // is exactly how HAB-1's arched doorway presented: visible from one side
-            // only, with a black interior.
-            //
-            // USD's fallback is `false`, and that is kept: back-face culling is the
-            // right default for closed solids and halves the fragment work. An asset
-            // that opens itself up asks for the other behaviour explicitly.
-            double_sided: read_material_bool(reader, sdf_path, "doubleSided")?.unwrap_or(false),
-            // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
-            // reads it on the gprim and Composer surfaces it as the mesh's "Cast
-            // Shadows" toggle, so a scene authored there arrives here with its shadow
-            // intent intact. Its polarity already matches `no_shadow_cast`.
-            //
-            // Alpha does NOT answer this question: a blended surface is still
-            // rasterised opaquely into the shadow map, so a translucent plume throws a
-            // hard shadow until this says otherwise. Read on the GPRIM, not the shader
-            // — two prims sharing one material can disagree about casting, and
-            // `material:binding` is not the place to say so.
-            no_shadow_cast,
-            ..default()
+    Ok(PbrLook {
+        base_color: base_color.with_alpha(alpha).to_linear(),
+        emissive,
+        perceptual_roughness: roughness,
+        metallic,
+        ior,
+        clearcoat,
+        clearcoat_perceptual_roughness: clearcoat_roughness,
+        specular_tint,
+        alpha: alpha_mode,
+        textures: PbrTextures {
+            base_color: base_color_texture,
+            emissive: emissive_texture,
+            metallic_roughness: metallic_roughness_texture,
+            normal_map: normal_map_texture,
+            occlusion: occlusion_texture,
         },
-        dependencies,
-    ))
+        unlit,
+        unshared: animated,
+        // `doubleSided` — core `UsdGeomGprim`, and it was not being read at all.
+        //
+        // It matters most for TRIMMED surfaces. A trim cuts a genuine hole, and
+        // the moment there is a hole you can see the far side of the shell
+        // through it. Single-sided, those backfaces are culled and the opening
+        // reads as a hole from outside but as nothing at all from within — which
+        // is exactly how HAB-1's arched doorway presented: visible from one side
+        // only, with a black interior.
+        //
+        // USD's fallback is `false`, and that is kept: back-face culling is the
+        // right default for closed solids and halves the fragment work. An asset
+        // that opens itself up asks for the other behaviour explicitly.
+        double_sided: read_material_bool(reader, sdf_path, "doubleSided")?.unwrap_or(false),
+        // `primvars:doNotCastShadows` — OMNIVERSE'S name, not one of ours. RTX
+        // reads it on the gprim and Composer surfaces it as the mesh's "Cast
+        // Shadows" toggle, so a scene authored there arrives here with its shadow
+        // intent intact. Its polarity already matches `no_shadow_cast`.
+        //
+        // Alpha does NOT answer this question: a blended surface is still
+        // rasterised opaquely into the shadow map, so a translucent plume throws a
+        // hard shadow until this says otherwise. Read on the GPRIM, not the shader
+        // — two prims sharing one material can disagree about casting, and
+        // `material:binding` is not the place to say so.
+        no_shadow_cast,
+        ..default()
+    })
 }
 
 /// A DEM terrain owns a procedural mesh even when the initial USD projection has
@@ -3579,9 +3609,15 @@ fn apply_standard_material(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<(), MaterialReadError> {
-    let (look, dependencies) =
-        read_standard_material(reader, sdf_path, asset_server, stage_id, twin_roots)?;
-    entity_cmd.try_insert((Mesh3d(mesh_handle.clone()), look, dependencies));
+    apply_standard_material_intent(
+        reader,
+        sdf_path,
+        entity_cmd,
+        asset_server,
+        stage_id,
+        twin_roots,
+    )?;
+    entity_cmd.try_insert(Mesh3d(mesh_handle.clone()));
     Ok(())
 }
 
@@ -3598,9 +3634,17 @@ fn apply_standard_material_intent(
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     twin_roots: Option<&lunco_assets_core::TwinRoots>,
 ) -> Result<(), MaterialReadError> {
-    let (look, dependencies) =
-        read_standard_material(reader, sdf_path, asset_server, stage_id, twin_roots)?;
-    entity_cmd.try_insert((look, dependencies));
+    let mut dependencies = StandardSurfaceDependencies::terminal(reader, sdf_path)?;
+    let look = read_standard_material(
+        reader,
+        sdf_path,
+        asset_server,
+        stage_id,
+        twin_roots,
+        &mut dependencies,
+    );
+    entity_cmd.try_insert(dependencies);
+    entity_cmd.try_insert(look?);
     Ok(())
 }
 
@@ -3622,9 +3666,9 @@ fn refresh_standard_surface_material_intents(
         Has<LiveSurfaceProjectionFailure>,
     )>,
     looks: Query<&PbrLook>,
+    custom_shaders: Query<(), With<lunco_usd_bevy_scene::UsdVisualShaderBound>>,
     mut commands: Commands,
 ) {
-    let mut edited_stages = std::collections::HashSet::new();
     let mut edited_prims = std::collections::HashMap::new();
     let mut edited_producers = std::collections::HashMap::new();
     for change in changes.read() {
@@ -3633,51 +3677,41 @@ fn refresh_standard_surface_material_intents(
         };
         let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
         for info in &change.info_paths {
-            let (path, property) = info
-                .split_once('.')
-                .map_or((info.as_str(), None), |(path, attr)| (path, Some(attr)));
-            if change
-                .transform_only_prim_paths
-                .iter()
-                .any(|prim| prim == path)
-            {
+            let Some((path, property)) = info.split_once('.') else {
                 continue;
-            }
+            };
             let Ok(prim) = SdfPath::new(path) else {
                 continue;
             };
             match UsdRead::type_name(&reader, &prim).as_deref() {
-                Some("Shader" | "NodeGraph" | "Material")
-                    if property.is_some_and(|name| {
-                        !lunco_usd_bevy_stage::is_shading_network_property(name)
-                    }) =>
-                {
-                    continue;
-                }
-                Some("Shader")
-                    if matches!(
-                        UsdRead::text(&reader, &prim, "info:id").as_deref(),
-                        Some("UsdPreviewSurface" | "UsdUVTexture")
-                    ) =>
-                {
-                    edited_producers
-                        .entry(change.stage_id)
-                        .or_insert_with(std::collections::BTreeSet::new)
-                        .insert(prim);
-                }
                 Some("Shader" | "NodeGraph" | "Material") => {
-                    edited_stages.insert(change.stage_id);
+                    if lunco_usd_bevy_stage::is_shading_network_property(property) {
+                        edited_producers
+                            .entry(change.stage_id)
+                            .or_insert_with(std::collections::BTreeSet::new)
+                            .insert(prim);
+                    }
                 }
-                _ => {
+                _ if property == "material:binding"
+                    || property == "doubleSided"
+                    || matches!(
+                        property,
+                        "primvars:displayColor"
+                            | "primvars:displayOpacity"
+                            | "primvars:doNotCastShadows"
+                    )
+                    || property.starts_with("lunco:surface:") =>
+                {
                     edited_prims
                         .entry(change.stage_id)
                         .or_insert_with(std::collections::HashSet::new)
                         .insert(path.to_owned());
                 }
+                _ => {}
             }
         }
     }
-    if edited_stages.is_empty() && edited_prims.is_empty() && edited_producers.is_empty() {
+    if edited_prims.is_empty() && edited_producers.is_empty() {
         return;
     }
 
@@ -3686,10 +3720,9 @@ fn refresh_standard_surface_material_intents(
     // recorded by the same reader that resolved the material.
     for (entity, prim_path, visual_target, dependencies, was_failed) in &prims {
         let stage_id = prim_path.stage_handle.id();
-        if !edited_stages.contains(&stage_id)
-            && !edited_prims
-                .get(&stage_id)
-                .is_some_and(|paths| paths.contains(&prim_path.path))
+        if !edited_prims
+            .get(&stage_id)
+            .is_some_and(|paths| paths.contains(&prim_path.path))
             && !edited_producers.get(&stage_id).is_some_and(|paths| {
                 dependencies.is_some_and(|dependencies| !dependencies.0.is_disjoint(paths))
             })
@@ -3703,29 +3736,63 @@ fn refresh_standard_surface_material_intents(
             continue;
         };
         let (reader, _) = canonical.reader_for(stage_id, stage_asset);
-        let target = visual_target
-            .map(|target| target.0)
-            .filter(|target| looks.get(*target).is_ok())
-            .or_else(|| looks.get(entity).ok().map(|_| entity));
-        let Some(target) = target else {
-            continue;
-        };
-        if let Err(message) = UsdRead::bound_shader(&reader, &sdf_path) {
-            withhold_live_surface(&mut commands, entity, message);
+        let target = visual_target.map_or(entity, |target| target.0);
+        let was_custom = custom_shaders.contains(target);
+        if dependencies.is_none() && !was_custom && !looks.contains(target) {
             continue;
         }
-        match read_standard_material(
-            &reader,
-            &sdf_path,
-            &asset_server,
-            stage_id,
-            twin_roots.as_deref(),
-        ) {
-            Ok((look, next_dependencies)) => {
-                if dependencies != Some(&next_dependencies) {
-                    commands.entity(entity).insert(next_dependencies);
-                }
-                if !looks.get(target).is_ok_and(|current| *current == look) {
+        let mut next_dependencies = match StandardSurfaceDependencies::terminal(&reader, &sdf_path)
+        {
+            Ok(deps) => deps,
+            Err(error) => {
+                withhold_live_surface(
+                    &mut commands,
+                    entity,
+                    format!("{sdf_path}: invalid {}", error.attribute),
+                );
+                continue;
+            }
+        };
+        let appearance = UsdRead::bound_shader(&reader, &sdf_path).and_then(|shader| {
+            let custom = shader.as_ref().is_some_and(|shader| {
+                UsdRead::has_authored_attribute(&reader, shader, "info:wesl:sourceAsset")
+            });
+            if custom || was_custom {
+                commands.trigger(lunco_usd_bevy_scene::UsdSurfaceShaderEdit {
+                    prim: entity,
+                    target,
+                    custom,
+                });
+            }
+            if custom {
+                return Ok(None);
+            }
+            read_standard_material(
+                &reader,
+                &sdf_path,
+                &asset_server,
+                stage_id,
+                twin_roots.as_deref(),
+                &mut next_dependencies,
+            )
+            .map(Some)
+            .map_err(|error| {
+                format!(
+                    "{sdf_path} has malformed material attribute `{}`",
+                    error.attribute
+                )
+            })
+        });
+        // Keep dependencies discovered during a failed read so fixing a newly
+        // connected producer can recover the same geometry.
+        if dependencies != Some(&next_dependencies) {
+            commands.entity(entity).insert(next_dependencies);
+        }
+        match appearance {
+            Ok(look) => {
+                if let Some(look) = look
+                    && !looks.get(target).is_ok_and(|current| *current == look)
+                {
                     commands.entity(target).insert(look);
                 }
                 if was_failed {
@@ -3739,6 +3806,9 @@ fn refresh_standard_surface_material_intents(
                                 .is_some_and(|failure| failure.0 == prior.0)
                             {
                                 target.remove::<UsdSceneProjectionFailed>();
+                                if !target.contains::<UsdSceneProjected>() {
+                                    target.insert(UsdSceneProjectionQueued);
+                                }
                             }
                         }
                         lunco_usd_bevy_scene::visibility::reconcile_runtime_visibility(
@@ -3748,17 +3818,7 @@ fn refresh_standard_surface_material_intents(
                     });
                 }
             }
-            Err(error) => {
-                error!(
-                    "[usd-bevy] {} has malformed authored material attribute `{}`; withholding surface",
-                    sdf_path.as_str(),
-                    error.attribute
-                );
-                let message = format!(
-                    "{} has malformed material attribute `{}`",
-                    sdf_path.as_str(),
-                    error.attribute
-                );
+            Err(message) => {
                 withhold_live_surface(&mut commands, entity, message);
             }
         }

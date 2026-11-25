@@ -986,13 +986,6 @@ pub fn on_move_entity_command(
         ));
     };
 
-    let authored_destination = if cmd.intent.is_persistent() {
-        Some(persistence.target(target).ok_or_else(|| {
-            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
-        })?)
-    } else {
-        None
-    };
     let target_abs = DVec3::from_array(cmd.translation);
     if q_grids.get(active_frame.0).is_err() {
         warn!(
@@ -1102,6 +1095,13 @@ pub fn on_move_entity_command(
             ));
         }
     }
+    let authored = persistence.plan(
+        target,
+        cmd.intent,
+        Some(local_position),
+        None,
+        "Move entity",
+    )?;
     let mut writable = spatial.p1();
     let Ok((mut tf, lin_vel_opt)) = writable.get_mut(target) else {
         warn!(
@@ -1158,16 +1158,8 @@ pub fn on_move_entity_command(
         angular_pulse: false,
     });
 
-    if let Some((doc, path)) = authored_destination {
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: UsdOp::SetTranslate {
-                edit_target: LayerId::runtime(),
-                path,
-                value: local_position.to_array(),
-            },
-        });
+    if let Some(edit) = authored {
+        commands.trigger(edit);
     }
     debug!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
@@ -1245,13 +1237,6 @@ pub fn on_rotate_entity_command(
         ));
     };
 
-    let authored_destination = if cmd.intent.is_persistent() {
-        Some(persistence.target(target).ok_or_else(|| {
-            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
-        })?)
-    } else {
-        None
-    };
     let q_in = DQuat::from_array(cmd.rotation);
     if !q_in.is_finite() || !q_in.length_squared().is_finite() || q_in.length_squared() < 1e-12 {
         warn!(
@@ -1301,6 +1286,13 @@ pub fn on_rotate_entity_command(
         };
         (previous_rotation, local_rotation)
     };
+    let authored = persistence.plan(
+        target,
+        cmd.intent,
+        None,
+        Some(local_rotation),
+        "Rotate entity",
+    )?;
     let mut writable = spatial.p1();
     let Ok((mut tf, angular_velocity)) = writable.get_mut(target) else {
         warn!(
@@ -1339,16 +1331,8 @@ pub fn on_rotate_entity_command(
         });
     }
 
-    if let Some((doc, path)) = authored_destination {
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: UsdOp::SetRotate {
-                edit_target: LayerId::runtime(),
-                path,
-                value: lunco_usd_document::document::usd_rotate_xyz_degrees(local_rotation),
-            },
-        });
+    if let Some(edit) = authored {
+        commands.trigger(edit);
     }
     debug!(
         "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
@@ -1369,6 +1353,63 @@ pub struct TransformPersistence<'w, 's> {
 }
 
 impl TransformPersistence<'_, '_> {
+    fn plan(
+        &self,
+        entity: Entity,
+        intent: lunco_core::EditIntent,
+        translation: Option<DVec3>,
+        rotation: Option<DQuat>,
+        label: &str,
+    ) -> Result<Option<ApplyUsdOps>, Reject> {
+        if !intent.is_persistent() {
+            return Ok(None);
+        }
+        let (doc, path) = self.target(entity).ok_or_else(|| {
+            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
+        })?;
+        let host = self
+            .usd_registry
+            .as_ref()
+            .and_then(|r| r.host(doc))
+            .ok_or_else(|| Reject::InvalidOp("Pose document is closed".into()))?;
+        let stage_id = self
+            .q_prim
+            .get(entity)
+            .map_err(|e| Reject::InvalidOp(e.to_string()))?
+            .stage_handle
+            .id();
+        let current = self
+            .backed
+            .as_deref()
+            .and_then(|backed| backed.applied_stage_generation(doc, stage_id))
+            == Some(host.generation());
+        let stage = self
+            .canonical
+            .as_deref()
+            .and_then(|stages| stages.get(stage_id))
+            .filter(|_| current);
+        let layer = LayerId::runtime();
+        let ops = match stage {
+            Some(canonical) => lunco_usd_document::document::local_pose_ops(
+                canonical.stage(),
+                &layer,
+                &path,
+                translation,
+                rotation,
+                None,
+            ),
+            None => host
+                .document()
+                .local_pose_ops(&layer, &path, translation, rotation, None),
+        }
+        .map_err(Reject::InvalidOp)?;
+        Ok(Some(ApplyUsdOps {
+            doc_id: doc,
+            parent_gen: Some(host.generation()),
+            label: label.into(),
+            ops,
+        }))
+    }
     fn target(&self, entity: Entity) -> Option<(lunco_doc::DocumentId, String)> {
         lunco_scene_authoring::doc_resolve::authorable_prim(
             entity,
@@ -1467,13 +1508,6 @@ pub fn on_transform_entity_command(
         return Err(Reject::InvalidOp("unknown scene entity".into()));
     };
 
-    let authored_destination = if cmd.intent.is_persistent() {
-        Some(persistence.target(target).ok_or_else(|| {
-            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
-        })?)
-    } else {
-        None
-    };
     let rotation = rotation.normalize();
     let target_position = DVec3::from_array(cmd.translation);
     if q_grids.get(active_frame.0).is_err() {
@@ -1592,6 +1626,13 @@ pub fn on_transform_entity_command(
         }
     }
 
+    let authored = persistence.plan(
+        target,
+        cmd.intent,
+        Some(local_position),
+        Some(new_rotation),
+        "Transform entity",
+    )?;
     {
         let mut writable = spatial.p1();
         let Ok((mut tf, lin_vel_opt, angular_vel_opt)) = writable.get_mut(target) else {
@@ -1646,24 +1687,8 @@ pub fn on_transform_entity_command(
     // derives Avian Position/Rotation from it; never create a second Position
     // writer here.
     if cmd.intent.is_persistent() {
-        if let Some((doc, path)) = authored_destination {
-            commands.trigger(ApplyUsdOps {
-                doc_id: doc,
-                parent_gen: None,
-                label: "Transform entity".to_owned(),
-                ops: vec![
-                    UsdOp::SetTranslate {
-                        edit_target: LayerId::runtime(),
-                        path: path.clone(),
-                        value: local_position.to_array(),
-                    },
-                    UsdOp::SetRotate {
-                        edit_target: LayerId::runtime(),
-                        path,
-                        value: lunco_usd_document::document::usd_rotate_xyz_degrees(new_rotation),
-                    },
-                ],
-            });
+        if let Some(edit) = authored {
+            commands.trigger(edit);
         }
         info!(
             "TRANSFORM_ENTITY: {:?} → position={:?}, rotation={:?}",

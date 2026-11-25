@@ -62,10 +62,11 @@ in the runtime owner, not `@runtime@` or `@view@`. The live commands do not
 publish a USD notice or advance document generation. See the
 [live update routes](../../docs/architecture/50-usd-driven-visuals.md#live-values-and-saved-settings).
 
-An annotation on a Material, Shader or NodeGraph should preserve unrelated live state.
-Exercise the annotation and broken-terminal cases in `test_native_material_terminals.py`.
-For an authored rotation use `usd_rotate_xyz_degrees` and exercise the multi-axis
-round trip in `transform_entity.usda`. Use `usd.document.projected` for composed
+An unclaimed annotation on any prim preserves live state. Exercise annotations,
+terminal reconnection, and broken graphs in `test_native_material_terminals.py`.
+For absolute pose commits, plan the complete ordered stack with
+`UsdDocument::local_pose_ops`. Exercise the compound quaternion, mixed-stack
+hinge, repeat edit and undo in `transform_entity.usda`. Use `usd.document.projected` for composed
 reads and `usd.projection.visuals_ready` or `usd.projection.visuals_failed` for
 the outcome of a subtree or stage visual rebuild.
 

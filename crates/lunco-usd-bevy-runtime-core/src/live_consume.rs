@@ -394,9 +394,52 @@ impl TransformEditChannels {
             TRANSLATE_ATTR => channels.translate = true,
             ROTATE_ATTR => channels.rotate = true,
             SCALE_ATTR => channels.scale = true,
+            // A matrix, pivot, rotation axis or stack reorder can affect more
+            // than one TRS channel. Sample the composed local transform once.
+            name if is_transform_attribute(name) => {
+                return Some(Self {
+                    translate: true,
+                    rotate: true,
+                    scale: true,
+                });
+            }
             _ => return None,
         }
         Some(channels)
+    }
+
+    /// Property edits to a mixed stack may affect several channels. Compare
+    /// authored poses so a rotation commit keeps a simulation-owned translation.
+    pub(crate) fn changed(before: bevy::math::DMat4, after: bevy::math::DMat4) -> Self {
+        if before == after {
+            return Self::default();
+        }
+        if !before.determinant().is_finite()
+            || before.determinant() == 0.0
+            || !after.determinant().is_finite()
+            || after.determinant() == 0.0
+        {
+            return Self {
+                translate: true,
+                rotate: true,
+                scale: true,
+            };
+        }
+        let (s0, r0, t0) = before.to_scale_rotation_translation();
+        let (s1, mut r1, t1) = after.to_scale_rotation_translation();
+        if r0.dot(r1) < 0.0 {
+            r1 = -r1;
+        }
+        let differs = |a: bevy::math::DVec3, b: bevy::math::DVec3| {
+            let tolerance =
+                a.abs().max(b.abs()).max(bevy::math::DVec3::ONE) * (16.0 * f64::EPSILON);
+            (a - b).abs().cmpgt(tolerance).any()
+        };
+        Self {
+            translate: differs(t0, t1),
+            rotate: !r0.abs_diff_eq(r1, 16.0 * f64::EPSILON),
+            scale: differs(s0, s1),
+        }
     }
 
     pub(crate) fn merge(&mut self, other: Self) {
@@ -438,7 +481,7 @@ fn transform_only_prim_paths(info_only: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn is_transform_attribute(attribute: &str) -> bool {
+pub(crate) fn is_transform_attribute(attribute: &str) -> bool {
     attribute.starts_with("xformOp:") || matches!(attribute, "xformOpOrder" | "resetXformStack")
 }
 
@@ -930,9 +973,9 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         projected_anything = true;
 
         let mut transform_edits = transform_edits(&info_only);
-        for (path, channels) in authored_transform_edits {
-            transform_edits.entry(path).or_default().merge(channels);
-        }
+        // The authoring batch knows which composed channels actually changed,
+        // even when USD also emits a broad xformOpOrder notice.
+        transform_edits.extend(authored_transform_edits);
         apply_transform_edits_live(world, id, &transform_edits);
         // EVERYTHING ELSE. Any other authored attribute — a colour, a material
         // input, a light's intensity, a radius, `visibility` — re-projects here,
@@ -1029,7 +1072,12 @@ pub(crate) fn apply_transform_edits_live(
                     (Ok(Some(transform)), Ok(Some(matrix))) => {
                         Some((path.clone(), *channels, transform, matrix.w_axis.truncate()))
                     }
-                    (Ok(None), Ok(None)) => None,
+                    (Ok(None), Ok(None)) => Some((
+                        path.clone(),
+                        *channels,
+                        Transform::IDENTITY,
+                        bevy::math::DVec3::ZERO,
+                    )),
                     (Err(error), _) | (_, Err(error)) => {
                         failures.push((path.clone(), error.to_string()));
                         None
@@ -1248,9 +1296,8 @@ mod translate_seat_tests {
 /// - **standard display color/opacity and `UsdPreviewSurface` inputs** — the render owner re-reads the
 ///   affected bound `PbrLook` values from `UsdSceneChangeBatch`; scene entities
 ///   and unrelated behavior owners stay live.
-/// - **unclaimed shading annotations** — document-only. Other shading network or
-///   applied-schema properties may have consumers spanning
-///   the scene, so re-project the scene's visuals.
+/// - **unclaimed annotations** — document-only on any prim. Shading network
+///   properties invalidate their bound appearance consumers.
 /// - **anything else** — re-instantiate just that prim's subtree.
 ///
 /// `DomeLight`s are excluded: the light projection consumes
@@ -1306,6 +1353,22 @@ pub(crate) fn refresh_edited_prims_live(
                 continue;
             }
         }
+        // Connectable shading properties are consumed by the appearance owners from
+        // this same notice. Domain-specific live-edit owners have first claim.
+        if lunco_usd_bevy_stage::is_shading_network_property(attr)
+            && world
+                .get_non_send::<CanonicalStages>()
+                .and_then(|stages| stages.get(id))
+                .zip(SdfPath::new(prim).ok())
+                .is_some_and(|(stage, path)| {
+                    matches!(
+                        stage.view().type_name(&path).as_deref(),
+                        Some("Material" | "Shader" | "NodeGraph")
+                    )
+                })
+        {
+            continue;
+        }
         // A mission tree is a `LunCoProgramAPI` child. The shared resolver owns
         // the selected source arm and backend; a live edit to either arm or to
         // the selector re-reads the tree from the prim that owns it.
@@ -1348,9 +1411,7 @@ pub(crate) fn refresh_edited_prims_live(
         if is_transform_attribute(attr) {
             continue;
         }
-        if standard_surface_input_edit(world, id, prim, attr)
-            || standard_pbr_binding_edit(world, id, prim, attr)
-        {
+        if standard_pbr_binding_edit(world, id, prim, attr) {
             continue;
         }
         // Standard display primvars are appearance, even when authored on a
@@ -1366,19 +1427,16 @@ pub(crate) fn refresh_edited_prims_live(
         if curve_geometry_edit(world, id, prim, attr) {
             continue;
         }
-        // Arbitrary attributes on a shading node are available to document readers.
-        // Only its shading network and composed schema properties can require
-        // generic projection. Applied API properties (e.g. physics materials)
-        // and registered live-edit owners retain their own invalidation.
+        // Extensible USD interfaces (ports and primvars) can have projected
+        // consumers without a schema-defined property. Other undeclared
+        // properties remain available to document and stage-revision readers.
         if !lunco_usd_bevy_stage::is_shading_network_property(attr)
+            && !attr.starts_with("primvars:")
+            && !attr.starts_with("material:binding")
             && let Some(stage) = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(id))
             && let Ok(path) = SdfPath::new(prim)
-            && matches!(
-                stage.view().type_name(&path).as_deref(),
-                Some("Material" | "Shader" | "NodeGraph")
-            )
         {
             match stage
                 .view()
@@ -1473,34 +1531,6 @@ fn edit_confined_to_exempt_subtree(
             && (upp.path == path
                 || path.starts_with(&format!("{}/", upp.path.trim_end_matches('/'))))
     })
-}
-
-/// Standard `UsdPreviewSurface` values are re-read by the visual owner from
-/// `UsdSceneChangeBatch`; rebuilding the stage entities would also restart
-/// unrelated authored programs and simulation projections.
-fn standard_surface_input_edit(
-    world: &mut World,
-    stage_id: AssetId<UsdStageAsset>,
-    prim: &str,
-    attribute: &str,
-) -> bool {
-    if !attribute.starts_with("inputs:") {
-        return false;
-    }
-    let Ok(path) = SdfPath::new(prim) else {
-        return false;
-    };
-    world
-        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-        .and_then(|stages| stages.get(stage_id))
-        .is_some_and(|stage| {
-            let view = stage.view();
-            view.type_name(&path).as_deref() == Some("Shader")
-                && matches!(
-                    view.text(&path, "info:id").as_deref(),
-                    Some("UsdPreviewSurface" | "UsdUVTexture")
-                )
-        })
 }
 
 /// Standard direct bindings on concrete geometry only change its PBR look.

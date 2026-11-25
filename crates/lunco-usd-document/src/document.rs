@@ -74,8 +74,10 @@ use lunco_usd_authoring::author::{
     self, extract_edit_layer_data, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
-pub use lunco_usd_data::units::usd_rotate_xyz_degrees;
+mod local_pose;
+pub use local_pose::local_pose_ops;
 use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
+pub use lunco_usd_data::units::{usd_rotate_xyz_degrees, usd_rotate_xyz_quaternion};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
 use openusd::usd::Stage;
@@ -448,12 +450,9 @@ pub enum UsdOp {
         /// Target-layer xform order to restore, if this edit authored one.
         order: Option<Vec<String>>,
     },
-    /// Set the `xformOp:rotateXYZ` attribute (Euler XYZ, **degrees**) on the
-    /// prim at `path` — the rotation counterpart of [`UsdOp::SetTranslate`].
-    /// Authors `xformOpOrder` too if the prim has none yet (like `SetTranslate`,
-    /// it only synthesizes a fresh order — it never rewrites an existing xform
-    /// stack). This is what lets a `SetEnvironmentLight` sun-direction tweak
-    /// persist + journal (the sun's orientation is `xformOp:rotateXYZ`).
+    /// Set a canonical Euler XYZ rotation channel in degrees. A missing channel
+    /// is inserted at its common TRS position in the composed order. Absolute
+    /// pose editors use `local_pose_ops` to account for other authored operations.
     SetRotate {
         /// Layer to write to.
         edit_target: LayerId,
@@ -2176,7 +2175,7 @@ fn author_xform_op_order(
     mut order: Vec<String>,
     op_name: &str,
 ) -> Result<(), DocumentError> {
-    order.push(op_name.to_owned());
+    lunco_usd_data::units::insert_xform_channel(&mut order, op_name);
     stage
         .create_attribute(format!("{path}.xformOpOrder"), "token[]")
         .map_err(author_err)?
@@ -2720,7 +2719,7 @@ impl<'a> UsdEditSession<'a> {
                     .map_err(author_err)?;
                 let restore_order = append_op.then(|| {
                     let mut order = composed_order.clone();
-                    order.push("xformOp:translate".into());
+                    lunco_usd_data::units::insert_xform_channel(&mut order, "xformOp:translate");
                     order
                 });
                 if append_op {
@@ -3024,7 +3023,7 @@ impl<'a> UsdEditSession<'a> {
             UsdOp::SetRotate { path, value, .. } => {
                 // Direct mirror of `SetTranslate` for `xformOp:rotateXYZ`
                 // (Euler XYZ degrees). Same target-layer pre-state read, same
-                // composed-order append rule.
+                // composed channel insertion rule.
                 let (prim_sdf, composed_order, append_op) =
                     self.transform_edit_context(&path, "xformOp:rotateXYZ")?;
                 let layer = self.layer(target);
@@ -3049,7 +3048,7 @@ impl<'a> UsdEditSession<'a> {
                     .map_err(author_err)?;
                 let restore_order = append_op.then(|| {
                     let mut order = composed_order.clone();
-                    order.push("xformOp:rotateXYZ".into());
+                    lunco_usd_data::units::insert_xform_channel(&mut order, "xformOp:rotateXYZ");
                     order
                 });
                 if append_op {
@@ -3113,7 +3112,7 @@ impl<'a> UsdEditSession<'a> {
                     .map_err(author_err)?;
                 let restore_order = append_op.then(|| {
                     let mut order = composed_order.clone();
-                    order.push("xformOp:scale".into());
+                    lunco_usd_data::units::insert_xform_channel(&mut order, "xformOp:scale");
                     order
                 });
                 if append_op {
@@ -3410,7 +3409,7 @@ impl<'a> UsdEditSession<'a> {
                 };
                 // A time-sampled xform channel is not usable unless its token is
                 // present in the prim's xformOpOrder. Reuse the same composed-order
-                // append rule as SetTranslate/SetRotate/SetScale so keyframing a channel is
+                // insertion rule as SetTranslate/SetRotate/SetScale so keyframing a channel is
                 // a complete USD edit rather than a detached attribute that the
                 // transform evaluator ignores.
                 let (composed_order, append_xform_op) =

@@ -1635,8 +1635,37 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                 }
                 let _span =
                     bevy::log::info_span!("usd_twin_projection_apply_incremental_ops").entered();
+                let stack_paths: std::collections::BTreeSet<_> = ops
+                    .iter()
+                    .filter_map(|op| match op {
+                        UsdOp::SetAttribute { path, name, .. }
+                        | UsdOp::RemoveAttribute { path, name, .. }
+                        | UsdOp::RestoreProperty { path, name, .. }
+                            if crate::live_consume::is_transform_attribute(name) =>
+                        {
+                            Some(path)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let before: Vec<_> = stack_paths
+                    .into_iter()
+                    .map(|path| (path, composed_local_matrix(world, scene_id, path)))
+                    .collect();
                 for op in &ops {
                     apply_incremental_op_to_stage(world, scene_id, op);
+                }
+                for (path, prior) in before {
+                    if let (Some(prior), Some(current)) =
+                        (prior, composed_local_matrix(world, scene_id, path))
+                    {
+                        crate::live_consume::mark_live_transform(
+                            world,
+                            scene_id,
+                            path.clone(),
+                            crate::live_consume::TransformEditChannels::changed(prior, current),
+                        );
+                    }
                 }
             }
         }
@@ -3325,6 +3354,20 @@ fn document_projection_source(
         .map_err(|error| error.to_string())
 }
 
+fn composed_local_matrix(
+    world: &World,
+    stage_id: AssetId<UsdStageAsset>,
+    path: &str,
+) -> Option<bevy::math::DMat4> {
+    let stage = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()?
+        .get(stage_id)?;
+    let prim = openusd::sdf::Path::new(path).ok()?;
+    lunco_usd_bevy_stage::local_transform_matrix_d_at(&stage.view(), &prim, 0.0)
+        .ok()
+        .map(|matrix| matrix.unwrap_or(bevy::math::DMat4::IDENTITY))
+}
+
 fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAsset>, op: &UsdOp) {
     let _span = bevy::log::info_span!("usd_twin_projection_apply_incremental_op").entered();
     use lunco_usd_bevy_stage::canonical::CanonicalStages;
@@ -3750,27 +3793,24 @@ fn apply_incremental_op_to_stage(world: &mut World, scene_id: AssetId<UsdStageAs
             let Ok(sp) = openusd::sdf::Path::new(path) else {
                 return;
             };
-            let authored = match world
+            // The native notice carries both the edited property and the
+            // connectionPaths field change to the appearance and wiring owners.
+            let result = world
                 .get_non_send::<CanonicalStages>()
                 .and_then(|s| s.get(scene_id))
-            {
-                Some(cs) => match cs
-                    .projector()
-                    .author_connection(&sp, name, type_name, sources)
-                {
-                    Ok(()) => true,
-                    Err(e) => {
-                        warn!("[twin] author connection {path}.{name}: {e}");
-                        false
-                    }
-                },
-                None => false,
-            };
-            // Cosim wires (`SimConnection`) are derived from `connectionPaths` by
-            // `reconcile_usd_connections`, which re-scans the composed stage — the
-            // subtree refresh re-triggers it for the owning prim.
-            if authored {
-                refresh_prim_subtree(world, scene_id, path);
+                .ok_or_else(|| "missing canonical stage".to_owned())
+                .and_then(|stage| {
+                    stage
+                        .projector()
+                        .author_connection(&sp, name, type_name, sources)
+                        .map_err(|error| error.to_string())
+                });
+            if let Err(error) = result {
+                report_stage_projection_reset_failure(
+                    world,
+                    scene_id,
+                    format!("author connection {path}.{name}: {error}"),
+                );
             }
         }
         UsdOp::SetApiSchemas { path, schemas, .. } => {

@@ -297,6 +297,14 @@ pub struct UsdSampledVisibility(pub bool);
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdVisualShaderBound;
 
+/// A bound geometry changed shader ownership or needs its custom shader re-read.
+#[derive(Event, Debug, Clone, Copy)]
+pub struct UsdSurfaceShaderEdit {
+    pub prim: Entity,
+    pub target: Entity,
+    pub custom: bool,
+}
+
 /// Presentation override for one USD prim in an editor preview.
 ///
 /// This is transient viewport intent. It does not author USD `visibility` and

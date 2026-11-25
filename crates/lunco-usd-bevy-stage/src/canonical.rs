@@ -374,20 +374,6 @@ impl CanonicalStage {
         Ok(())
     }
 
-    /// Rank of `op` in XformCommonAPI's canonical stack: `!resetXformStack!`
-    /// first, then translate → rotate/orient → scale, with unknown/extra ops
-    /// after the canonical trio.
-    fn canonical_xform_rank(op: &str) -> usize {
-        let base = op.strip_prefix("!invert!").unwrap_or(op);
-        match base {
-            "!resetXformStack!" => 0,
-            t if t.starts_with("xformOp:translate") => 1,
-            t if t.starts_with("xformOp:rotate") || t.starts_with("xformOp:orient") => 2,
-            t if t.starts_with("xformOp:scale") => 3,
-            _ => 4,
-        }
-    }
-
     /// Insert `op` into `xformOpOrder` at its XformCommonAPI canonical slot —
     /// a blind append would place a translate authored after a rotate *inside*
     /// it (innermost), flipping the composed transform. No-op when `op` is
@@ -411,13 +397,8 @@ impl CanonicalStage {
         if existing.iter().any(|t| t == op) {
             return Ok(());
         }
-        let rank = Self::canonical_xform_rank(op);
-        let at = existing
-            .iter()
-            .position(|t| Self::canonical_xform_rank(t) > rank)
-            .unwrap_or(existing.len());
         let mut updated = existing;
-        updated.insert(at, op.to_string());
+        lunco_usd_data::units::insert_xform_channel(&mut updated, op);
         prim.create_attribute("xformOpOrder", "token[]")
             .map_err(|e| anyhow!("author xformOpOrder at {path}: {e}"))?
             .set_variability(openusd::sdf::Variability::Uniform)

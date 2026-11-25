@@ -2155,12 +2155,9 @@ fn set_translate_does_not_clobber_nested_child_translate() {
     );
 }
 
-/// `xformOpOrder` ACCUMULATES: authoring a second xform op appends to the
-/// order in author order — it must not replace the list with a one-element
-/// order, which silently discards the first op at composition time even
-/// though its value attribute survives.
+/// Each new channel preserves the preceding transform facts.
 #[test]
-fn set_translate_then_rotate_lists_both_ops_in_author_order() {
+fn set_translate_then_rotate_lists_both_ops() {
     let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
     let mut doc = UsdDocument::with_origin(
         DocumentId::new(60),
@@ -2277,10 +2274,8 @@ fn set_scale_authors_standard_op_and_typed_undo() {
     ));
 }
 
-/// The order is the AUTHOR order, not a canonical translate-first order:
-/// rotate authored first stays first.
 #[test]
-fn xform_op_order_is_author_order_not_canonical() {
+fn translate_after_rotation_uses_the_same_trs_order_as_live_projection() {
     let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Rig\"\n{\n}\n";
     let mut doc = UsdDocument::with_origin(
         DocumentId::new(61),
@@ -2302,18 +2297,13 @@ fn xform_op_order_is_author_order_not_canonical() {
     assert_eq!(
         xform_op_order_tokens(&native_snapshot(&doc), &SdfPath::new("/Rig").unwrap()),
         vec![
-            "xformOp:rotateXYZ".to_string(),
-            "xformOp:translate".to_string()
-        ],
-        "rotate-first authoring lists rotate first"
+            "xformOp:translate".to_string(),
+            "xformOp:rotateXYZ".to_string()
+        ]
     );
 }
 
-/// The referenced-asset clobber case: the prim's composed `xformOpOrder`
-/// already lists ops this edit did not author (an asset's own rotate/scale).
-/// Authoring a translate must APPEND to that composed order — clobbering it
-/// leaves the rotate/scale value attributes orphaned (authored but no longer
-/// applied), which is exactly the silent visual regression this pins.
+/// A new translation preserves the relative order of the composed rotation and scale.
 #[test]
 fn set_translate_preserves_preexisting_composed_op_order() {
     let scene = "#usda 1.0\n(\n    metersPerUnit = 1\n)\ndef Xform \"Part\"\n{\n    double3 xformOp:rotateXYZ = (0, 45, 0)\n    double3 xformOp:scale = (2, 2, 2)\n    uniform token[] xformOpOrder = [\"xformOp:rotateXYZ\", \"xformOp:scale\"]\n}\n";
@@ -2333,11 +2323,10 @@ fn set_translate_preserves_preexisting_composed_op_order() {
     assert_eq!(
         xform_op_order_tokens(&native_snapshot(&doc), &part),
         vec![
+            "xformOp:translate".to_string(),
             "xformOp:rotateXYZ".to_string(),
             "xformOp:scale".to_string(),
-            "xformOp:translate".to_string(),
-        ],
-        "translate appends AFTER the pre-existing ops, none dropped"
+        ]
     );
     // The pre-existing op values are untouched.
     assert_eq!(
