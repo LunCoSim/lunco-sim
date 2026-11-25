@@ -541,11 +541,10 @@ do not supply the product FPS number.
 
 ## Griffin follow-up — 2026-11-25
 
-The pinned official-fork changes prepare Rumoca exact assignment certificates
+The official-fork revisions used for the following measurements prepare Rumoca exact assignment certificates
 and indexed projection diagnostics (`9763caab5014875da353663df14c75fe0cd8e990`),
 and return Bevy's render world before its bounded native presentation batch
-(`33c9a2d62c5381b2e4ae72f8ebe189928b3127f2`). Both commits are published and
-locked. Application changes balance persistent solver lanes by admitted scalar
+(`33c9a2d62c5381b2e4ae72f8ebe189928b3127f2`). Both commits were pinned for these captures. Application changes balance persistent solver lanes by admitted scalar
 weight, reuse ordered observation names and parameter lookups, retain optical
 geometry and receiver-domain proofs, avoid equal-value sun light invalidation
 and skip under-budget terrain eviction sorting. The complete runtime observation
@@ -648,3 +647,46 @@ window imported no additional full-size buffer. Keep the bounded render
 handoff. Across the paired running frames, moving existing pre-acquire work
 alongside the outstanding present could overlap at most 0.046 ms per frame
 on average on the hybrid path and 0.013 ms on the same-GPU path.
+
+## Griffin main propulsion on upstream Rumoca e0a856fea
+
+Replaying the first 1,440 production input transactions at 60 Hz through
+LunCoSim’s release solver adapter produced identical binary64 values across
+all 3,295 observations with the prior fork and the upstream merge. Both took
+2,711 internal steps in the first 1,352 communication steps and another 176
+in the final 88. In the latter window each made 5,686,320 singleton visits.
+
+Upstream orders algebraic blocks by execution reads only when every projection
+stage is explicit. The Griffin plan contains 2,662 explicit stages and 14
+compact declaration runs, so this pass returns before it examines the reads.
+The first rejected plume dependency has its consumer at scalar block 119
+and its producer at 620. An extension should represent reads and writes of
+declaration runs in the ordering pass, preserve order within a run, and split
+it at a dependency boundary when necessary. Retain coupled-block and cycle
+semantics and compare accepted steps and the full observation stream again.
+
+The four sequential release replays ran on logical CPU 12. Each entry is a
+mean per 1/60-second communication step in milliseconds. Full step includes
+input admission, integration and reading all observations.
+
+| Run order | Flight integration | Flight full step | Settled integration | Settled full step | Host load average, start to end |
+|---|---:|---:|---:|---:|---:|
+| Prior pin, first | 48.47 | 66.14 | 22.79 | 25.73 | 42.61 to 19.01 |
+| Upstream merge, first | 26.25 | 32.73 | 15.39 | 16.98 | 19.01 to 10.15 |
+| Upstream merge, second | 22.67 | 27.90 | 15.38 | 17.10 | 10.15 to 6.24 |
+| Prior pin, second | 24.43 | 30.36 | 15.97 | 17.64 | 6.24 to 3.77 |
+
+The last two runs give the closer comparison under lower host load. In every
+run the ordered observation stream had SHA-256
+`f9b17c3d55fba129cb4848af93776d569b3c75ec2f2d834b034cfb16bee89d9b`.
+The production engine-out, fuel-exhaustion and oxidizer-exhaustion scenes
+passed at ticks 242, 213 and 125 respectively.
+
+The updated 1600×1000 High, private-Wayland mission reached landing handoff.
+It averaged 49.41 application FPS, 15.83 authoritative ticks/s and 45.11 ms
+per settled MainPropulsion worker step. Other simulator activity consumed
+72.86 sampled CPU-seconds in the measured window. The earlier qualified
+baseline averaged 77.11 FPS and 26.13 ticks/s with 2.7 other-simulator
+CPU-seconds. The fresh headful baseline lost its build and capture directory
+after scene readiness. The different contention levels prevent attributing
+the frame-rate difference to Rumoca.
