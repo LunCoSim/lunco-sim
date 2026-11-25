@@ -1398,6 +1398,7 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
                                 return;
                             };
                             ctx.trigger(MoveEntity {
+                                intent: lunco_core::EditIntent::Persistent,
                                 entity_id: gid.get(),
                                 translation: [x, y, z],
                             });

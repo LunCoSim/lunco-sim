@@ -39,16 +39,17 @@ impl Plugin for UsdScenePlugin {
             app.add_plugins(prim_index::UsdPrimIndexPlugin);
         }
         app.register_type::<UsdSceneProjectionFailed>();
-        app.add_message::<visibility::VisibilityProjectionAdmitted>()
+        app.add_message::<visibility::VisibilityProjectionChanged>()
             .add_observer(visibility::queue_visibility_projection)
             .add_systems(
                 PostUpdate,
                 visibility::reconcile_new_visibility_projections
                     .run_if(
                         bevy::ecs::schedule::common_conditions::on_message::<
-                            visibility::VisibilityProjectionAdmitted,
+                            visibility::VisibilityProjectionChanged,
                         >,
                     )
+                    .in_set(visibility::UsdVisibilityReconcileSet)
                     .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
             );
         app.register_type::<billboard::UsdBillboard>();
@@ -281,6 +282,11 @@ pub struct RuntimeVisibilityOverride {
     pub visible: bool,
     pub script: Option<lunco_core::GlobalEntityId>,
 }
+
+/// Current sampled ordinary visibility; animation publishes this fact, never
+/// writes Bevy Visibility directly. The namespace visibility owner consumes it.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsdSampledVisibility(pub bool);
 
 /// Marks a render target whose appearance is owned by a custom shader.
 ///

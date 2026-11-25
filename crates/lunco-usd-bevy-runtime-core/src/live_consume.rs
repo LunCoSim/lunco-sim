@@ -54,14 +54,87 @@ struct PendingStageProjection {
     required_reference_paths: BTreeSet<String>,
 }
 
+/// Actual work admitted by the USD projection owner, not an inference from
+/// the set of changed property paths. Coalesce to the most invasive work in
+/// one document generation. Runtime actions never enter this seam.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ProjectionWork {
+    #[default]
+    InPlace,
+    Subtree,
+    FullStage,
+}
+impl ProjectionWork {
+    fn name(self) -> &'static str {
+        match self {
+            Self::InPlace => "in_place",
+            Self::Subtree => "subtree",
+            Self::FullStage => "full_stage",
+        }
+    }
+    fn progress_reason(self) -> &'static str {
+        match self {
+            Self::InPlace => "Applying authored USD edits",
+            Self::Subtree => "Rebuilding affected USD subtree",
+            Self::FullStage => "Rebuilding entire USD stage",
+        }
+    }
+}
+
+/// Record the actual affected scope at the structural owner, and update the
+/// existing edition hold rather than starting another lifecycle state machine.
+pub(crate) fn note_projection_work(
+    world: &mut World,
+    stage: AssetId<UsdStageAsset>,
+    work: ProjectionWork,
+    path: &str,
+) {
+    let Some(doc) = world
+        .get_resource::<lunco_usd_bevy_twin::DocBackedTwinScenes>()
+        .and_then(|backed| lunco_usd_bevy_twin::scene_document_for(backed, stage))
+    else {
+        return;
+    };
+    let Some(mut pending) = world.get_resource_mut::<PendingStageProjections>() else {
+        return;
+    };
+    let current = pending.work.entry(stage).or_default();
+    if *current >= work {
+        return;
+    }
+    *current = work;
+    if let Some(mut progress) = world.get_resource_mut::<lunco_core_runtime::SimulationProgress>() {
+        progress.update_reason(
+            lunco_core_runtime::SimulationProgressKey::usd_document_projection(doc.raw()),
+            format!("{}: {path}", work.progress_reason()),
+        );
+    }
+    use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
+    world.trigger(TelemetryEvent {
+        name: "usd.projection.work".into(),
+        source: 0,
+        severity: Severity::Info,
+        data: TelemetryValue::Map(BTreeMap::from([
+            ("doc_id".into(), TelemetryValue::U64(doc.raw())),
+            ("mode".into(), TelemetryValue::String(work.name().into())),
+            ("path".into(), TelemetryValue::String(path.into())),
+        ])),
+        timestamp: 0.0,
+        sim_secs: 0.0,
+        sim_tick: 0,
+    });
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct PendingStageProjections {
     stages: HashMap<AssetId<UsdStageAsset>, PendingStageProjection>,
+    work: HashMap<AssetId<UsdStageAsset>, ProjectionWork>,
 }
 
 impl PendingStageProjections {
     pub(crate) fn clear(&mut self) {
         self.stages.clear();
+        self.work.clear();
     }
 }
 
@@ -120,6 +193,7 @@ pub(crate) fn accumulate_pending_stage_changes(
 fn remove_pending_stage_projection(world: &mut World, stage_id: AssetId<UsdStageAsset>) {
     if let Some(mut pending) = world.get_resource_mut::<PendingStageProjections>() {
         pending.stages.remove(&stage_id);
+        pending.work.remove(&stage_id);
     }
 }
 
@@ -393,12 +467,27 @@ fn mark_stage_projected(
 /// its live entities were still being reconciled.
 fn publish_stage_projected(
     world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
     doc: lunco_doc::DocumentId,
     generation: u64,
     changed_prim_paths: &[String],
 ) {
     crate::twin_projection::release_document_projection_progress(world, doc, generation);
+    let work = world
+        .get_resource_mut::<PendingStageProjections>()
+        .and_then(|mut pending| pending.work.remove(&stage_id))
+        .unwrap_or_default();
+    let mode =
+        if work == ProjectionWork::InPlace && generation == 0 && changed_prim_paths.is_empty() {
+            "initial_load"
+        } else {
+            work.name()
+        };
     let mut data = BTreeMap::new();
+    data.insert(
+        "projection_mode".into(),
+        lunco_telemetry_core::TelemetryValue::String(mode.into()),
+    );
     data.insert(
         "doc_id".to_string(),
         lunco_telemetry_core::TelemetryValue::U64(doc.raw()),
@@ -479,10 +568,7 @@ pub(crate) fn publish_pending_stage_projections(world: &mut World) {
         })
         .unwrap_or_default();
     for (stage_id, message) in activity_errors {
-        world
-            .resource_mut::<PendingStageProjections>()
-            .stages
-            .remove(&stage_id);
+        remove_pending_stage_projection(world, stage_id);
         crate::twin_projection::report_stage_projection_reset_failure(world, stage_id, message);
     }
     for stage_id in ready {
@@ -501,8 +587,9 @@ pub(crate) fn publish_pending_stage_projections(world: &mut World) {
                 .changed_prim_paths
                 .into_iter()
                 .collect::<Vec<_>>();
-            publish_stage_projected(world, doc, generation, &changed_prim_paths);
+            publish_stage_projected(world, stage_id, doc, generation, &changed_prim_paths);
         } else {
+            remove_pending_stage_projection(world, stage_id);
             warn!(
                 "[usd-projection] document {} generation {} no longer owns stage {:?}; refusing to publish a stale projection event",
                 projection.doc, projection.generation, projection.stage_id
@@ -673,7 +760,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
             );
             if !accumulate_pending_stage_changes(world, id, changed_prim_paths.clone()) {
                 if let Some((doc, generation)) = mark_stage_projected(world, id) {
-                    publish_stage_projected(world, doc, generation, &changed_prim_paths);
+                    publish_stage_projected(world, id, doc, generation, &changed_prim_paths);
                     remove_pending_stage_projection(world, id);
                 }
             }
@@ -706,7 +793,7 @@ pub(crate) fn project_stage_changes(world: &mut World) {
         // not current" result instead of stale composed data.
         if !accumulate_pending_stage_changes(world, id, changed_prim_paths.clone()) {
             if let Some((doc, generation)) = mark_stage_projected(world, id) {
-                publish_stage_projected(world, doc, generation, &changed_prim_paths);
+                publish_stage_projected(world, id, doc, generation, &changed_prim_paths);
                 remove_pending_stage_projection(world, id);
             }
         }
@@ -1456,6 +1543,7 @@ fn reconcile_structural_projection(
         let live = find_projection_entity(world, id, path, scope, parents);
         match (exists, live) {
             (false, Some(entity)) => {
+                note_projection_work(world, id, ProjectionWork::Subtree, path);
                 crate::scene::despawn_usd_subtree(world, entity);
             }
             (true, None) => {
@@ -1503,6 +1591,8 @@ fn reconcile_structural_projection(
                         id,
                         format!("native prim `{path}` could not be inserted into its live parent"),
                     );
+                } else {
+                    note_projection_work(world, id, ProjectionWork::Subtree, path);
                 }
             }
             // ALREADY LIVE, AND RESYNCED — not "nothing to do".

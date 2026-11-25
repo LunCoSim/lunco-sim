@@ -8,7 +8,7 @@ const TITLE = "SPAWN FOLLOWS PHYSICS";
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [], entity_reads: [], entity_writes: [],
-       query_reads: ["ListSpawnCatalog", "ReadSessionInputStream"], required_inputs: [] }
+       query_reads: ["ListSpawnCatalog", "ReadSessionInputStream", "QueryUsdPrim"], required_inputs: [] }
 }
 
 fn fail(reason) {
@@ -18,7 +18,7 @@ fn fail(reason) {
 fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.spawn_requested = false;
-    this.runtime_admission = false;
+    this.generation = ();
     this.spawn_admission = ();
     this.spawn_root_gid = ();
     this.spawn_correlation_id = ();
@@ -63,6 +63,8 @@ fn on_tick(me, ctx) {
             return;
         }
 
+        let stage = query("QueryUsdPrim", #{path:"/SpawnFollowsPhysics"});
+        this.generation = stage.document_generation;
         let result = cmd("SpawnEntity", #{
             entry_id: "modelica_balloon",
             position: [0.0, 20.0, 0.0],
@@ -73,54 +75,51 @@ fn on_tick(me, ctx) {
             this.spawn_requested = true;
             let admission = if result.data == () { () } else { result.data["admission"] };
             if admission == () {
-                // A document-backed Twin records this edit through ApplyUsdOps;
-                // only raw-file scenes use the session-input spawn contract.
-                this.runtime_admission = false;
-                this.spawn_record_checked = true;
-            } else {
-                this.runtime_admission = true;
-                this.spawn_admission = admission;
-                this.spawn_root_gid = admission["spawned_root_gid"];
-                this.spawn_correlation_id = result.data["correlation_id"];
-                if type_of(admission["scene_generation"]) != "u64" ||
-                   type_of(admission["effective_tick"]) != "u64" ||
-                   type_of(admission["sequence"]) != "u64" ||
-                   type_of(admission["scene_root_gid"]) != "u64" ||
-                   type_of(admission["active_frame_gid"]) != "u64" ||
-                   type_of(this.spawn_root_gid) != "u64" ||
-                   admission["effective_tick"].to_int() <= sim_tick() {
-                    this.done = true;
-                    fail("SpawnEntity did not return a complete future-tick identity admission");
-                    return;
-                }
-                let invalid_rotation = cmd("SpawnEntity", #{
-                    entry_id: "modelica_balloon",
-                    position: [0.0, 25.0, 0.0],
-                    rotation: [1e308, 1e308, 1e308, 1e308],
-                });
-                let invalid_rotation_error = invalid_rotation.error;
-                let invalid_rotation_rejection =
-                    invalid_rotation_error.contains("non-finite pose") ||
-                    invalid_rotation_error.contains("finite, nonzero magnitude");
-                if invalid_rotation.ok ||
-                   invalid_rotation.status != "rejected" ||
-                   !invalid_rotation_rejection {
-                    this.done = true;
-                    fail("SpawnEntity did not reject a quaternion with an unrepresentable norm");
-                    return;
-                }
-                let supplied_actor_identity = cmd("SpawnEntity", #{
-                    entry_id: "modelica_balloon",
-                    position: [0.0, 25.0, 0.0],
-                    producer_id: 8181,
-                });
-                if supplied_actor_identity.ok ||
-                   supplied_actor_identity.status != "rejected" ||
-                   !supplied_actor_identity.error.contains("Twin Rhai SpawnEntity") {
-                    this.done = true;
-                    fail("Twin Rhai did not reject an explicit producer_id in favor of its stable actor identity");
-                    return;
-                }
+                this.done = true;
+                fail("default live spawn did not return its runtime admission");
+                return;
+            }
+            this.spawn_admission = admission;
+            this.spawn_root_gid = admission["spawned_root_gid"];
+            this.spawn_correlation_id = result.data["correlation_id"];
+            if type_of(admission["scene_generation"]) != "u64" ||
+               type_of(admission["effective_tick"]) != "u64" ||
+               type_of(admission["sequence"]) != "u64" ||
+               type_of(admission["scene_root_gid"]) != "u64" ||
+               type_of(admission["active_frame_gid"]) != "u64" ||
+               type_of(this.spawn_root_gid) != "u64" ||
+               admission["effective_tick"].to_int() <= sim_tick() {
+                this.done = true;
+                fail("SpawnEntity did not return a complete future-tick identity admission");
+                return;
+            }
+            let invalid_rotation = cmd("SpawnEntity", #{
+                entry_id: "modelica_balloon",
+                position: [0.0, 25.0, 0.0],
+                rotation: [1e308, 1e308, 1e308, 1e308],
+            });
+            let invalid_rotation_error = invalid_rotation.error;
+            let invalid_rotation_rejection =
+                invalid_rotation_error.contains("non-finite pose") ||
+                invalid_rotation_error.contains("finite, nonzero magnitude");
+            if invalid_rotation.ok ||
+               invalid_rotation.status != "rejected" ||
+               !invalid_rotation_rejection {
+                this.done = true;
+                fail("SpawnEntity did not reject a quaternion with an unrepresentable norm");
+                return;
+            }
+            let supplied_actor_identity = cmd("SpawnEntity", #{
+                entry_id: "modelica_balloon",
+                position: [0.0, 25.0, 0.0],
+                producer_id: 8181,
+            });
+            if supplied_actor_identity.ok ||
+               supplied_actor_identity.status != "rejected" ||
+               !supplied_actor_identity.error.contains("Twin Rhai SpawnEntity") {
+                this.done = true;
+                fail("Twin Rhai did not reject an explicit producer_id in favor of its stable actor identity");
+                return;
             }
         } else if this.elapsed > 30.0 {
             this.done = true;
@@ -138,7 +137,7 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    if this.runtime_admission && !this.spawn_record_checked {
+    if !this.spawn_record_checked {
         let stream = query("ReadSessionInputStream", #{});
         let matching_spawn = false;
         if stream["state"] == "recording" && type_of(stream["records"]) == "array" {
@@ -170,8 +169,7 @@ fn on_tick(me, ctx) {
             }
             return;
         }
-        if this.runtime_admission &&
-           this.balloon.to_string() != this.spawn_root_gid.to_string() {
+        if this.balloon.to_string() != this.spawn_root_gid.to_string() {
             this.done = true;
             fail("materialized runtime spawn did not retain its reserved GlobalEntityId");
             return;
@@ -223,6 +221,8 @@ fn on_tick(me, ctx) {
         checks.push(t_max(pose_error, 0.5,
             "render Transform diverged from the simulation Position"));
         checks.push(t_present(this.start_render, "initial render pose"));
+        let stage = query("QueryUsdPrim", #{path:"/SpawnFollowsPhysics"});
+        checks.push(t_true(stage.document_generation == this.generation, "default live spawn retains authored document generation"));
         let stopped = cmd("StopSessionInputCapture", #{});
         checks.push(t_true(stopped.ok && stopped.data["state"] == "complete",
             "session input capture did not complete after the committed spawn"));

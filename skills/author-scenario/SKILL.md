@@ -88,7 +88,7 @@ billboard text and visibility. For a group toggle, target the root once;
 its indexed composed descendants inherit the runtime opinion while retaining
 independent authored suppression. Group writes by target and submit changed
 values only. A live door, switch, conveyor or cart is not a USD authoring
-operation: use `TransformEntity` with `intent: "Interactive"`, native joint
+operation: use `TransformEntity` with its default live intent, native joint
 ports for physical drives, `SetColliderEnabled` for an admitted collider,
 and `SetSceneView` for presentation. Do not toggle attributes or add
 time samples to the USD document as the simulation runs. Read authored

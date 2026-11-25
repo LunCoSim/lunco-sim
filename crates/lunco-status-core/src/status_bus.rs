@@ -279,6 +279,11 @@ pub const CAMERA_SOURCE: &str = "camera";
 /// screenshot readiness gate must agree on the spelling, and a silent
 /// disagreement degrades into recordings that open on a half-spawned scene.
 pub const SCENE_SOURCE: &str = "scene";
+/// An authored USD update, distinct from loading a scene or live simulation.
+pub const USD_PROJECTION_SOURCE: &str = "USD edit";
+
+/// Runtime preparation holds that are neither scene loading nor USD edits.
+pub const SIMULATION_PREPARATION_SOURCE: &str = "Simulation preparation";
 
 /// The status source for scene geometry still being generated after structural
 /// projection has completed. Visual-readiness consumers still wait for it.
@@ -828,9 +833,9 @@ pub const TELEMETRY_SOURCE: &str = "Telemetry";
 /// domain events, domains never learn about the UI.
 ///
 /// `TelemetryEvent` is also the carrier for ordinary simulation events (zone
-/// entries, script `emit`, sensor faults) at `Debug`/`Info`; those would swamp
-/// the history and the bar, so they remain available to Console and API
-/// subscribers through the telemetry stream itself.
+/// entries, script `emit`, sensor faults) at `Debug`/`Info`; those remain in
+/// the telemetry stream. Explicit USD projection work and completion events
+/// are the only informational domain events mirrored into status history.
 pub fn surface_error_telemetry(
     trigger: On<lunco_telemetry_core::StampedTelemetryEvent>,
     mut bus: ResMut<StatusBus>,
@@ -838,6 +843,47 @@ pub fn surface_error_telemetry(
     use lunco_telemetry_core::{Severity, TelemetryValue};
 
     let ev = trigger.event();
+    // Only the projection owner's explicit work/result events enter history.
+    // Neither frame samples nor live poses/labels generate these events.
+    if matches!(
+        ev.name.as_str(),
+        "usd.projection.work" | "usd.document.projected"
+    ) {
+        if let TelemetryValue::Map(data) = &ev.data {
+            let started = ev.name == "usd.projection.work";
+            let mode_key = if started { "mode" } else { "projection_mode" };
+            if let Some(TelemetryValue::String(mode)) = data.get(mode_key) {
+                let message = match (started, mode.as_str()) {
+                    (true, "full_stage") => "Full USD stage rebuild started",
+                    (true, "subtree") => "Affected USD subtree update started",
+                    (false, "full_stage") => "Full USD stage rebuilt",
+                    (false, "subtree") => "Affected USD subtree updated",
+                    (false, "in_place") => "Authored USD edit applied in place",
+                    _ => return,
+                };
+                let detail = if started {
+                    data.get("path").and_then(|value| match value {
+                        TelemetryValue::String(path) => Some(path.clone()),
+                        _ => None,
+                    })
+                } else {
+                    data.get("generation").and_then(|value| match value {
+                        TelemetryValue::U64(generation) => Some(format!("revision {generation}")),
+                        _ => None,
+                    })
+                };
+                bus.push(
+                    USD_PROJECTION_SOURCE,
+                    StatusLevel::Info,
+                    detail.map_or_else(
+                        || message.to_owned(),
+                        |detail| format!("{message} — {detail}"),
+                    ),
+                );
+            }
+        }
+        return;
+    }
     let level = match ev.severity {
         Severity::Critical | Severity::Error => StatusLevel::Error,
         Severity::Warning => StatusLevel::Warn,

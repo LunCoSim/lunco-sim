@@ -75,9 +75,7 @@ fn on_tick(me, ctx) {
         // below, so an acknowledgement alone cannot make this test pass.
         let result = cmd("DetachJoint", #{
             target: this.hinge,
-            // This scene checks the live interactive action; persistence has
-            // its own authored-layer command contract.
-            intent: "Interactive",
+            // Omitted intent must release the live joint without authoring.
         });
         if !result.ok {
             fail_fast("DetachJoint rejected: " + result.error, "JOINT", "JOINT");

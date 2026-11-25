@@ -504,14 +504,19 @@ impl PendingDocumentProjectionAdmissions {
                 *target = (*target).max(generation);
                 progress.update_reason(
                     key,
-                    format!("Project USD document {doc} generation {}", *target),
+                    format!(
+                        "Applying authored USD edits to document {doc} generation {}",
+                        *target
+                    ),
                 );
             }
             None => {
                 self.generations.insert(doc, generation);
                 progress.acquire(
                     key,
-                    format!("Project USD document {doc} generation {generation}"),
+                    format!(
+                        "Applying authored USD edits to document {doc} generation {generation}"
+                    ),
                 );
             }
         }
@@ -3987,6 +3992,12 @@ fn refresh_scene_visuals_prepared(world: &mut World, scene_id: AssetId<UsdStageA
         return true;
     }
 
+    crate::live_consume::note_projection_work(
+        world,
+        scene_id,
+        crate::live_consume::ProjectionWork::FullStage,
+        "/",
+    );
     // `reinstantiate_entity` can only recursively despawn ordinary hierarchy
     // children. Camera mounting deliberately breaks that hierarchy for precision,
     // so first remove every non-root entity projected from this stage. This is the
@@ -4139,10 +4150,9 @@ fn reinstantiate_entity(world: &mut World, entity: Entity) {
 /// Re-instantiate only the subtree of the single prim at `path` in `scene_id`
 /// (the entity whose [`UsdPrimPath`] matches), leaving every other scene root
 /// untouched. Used for a geometry/xform attribute edit, whose visual effect is
-/// local to its own prim — unlike a material/shader edit, which fans out through
-/// `material:binding` to arbitrary meshes and needs the whole-scene refresh. This
-/// avoids re-instantiating unrelated roots (including live physics bodies) on
-/// every attribute edit.
+/// local to its own prim. Cross-subtree dependencies are assessed by the
+/// registered projection owners before replacing anything; ordinary material
+/// property edits use their in-place appearance owner.
 pub(crate) fn refresh_prim_subtree(
     world: &mut World,
     scene_id: AssetId<UsdStageAsset>,
@@ -4160,6 +4170,14 @@ pub(crate) fn refresh_prim_subtree(
         .resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>()
         .in_stage(scene_id, path)
         .to_vec();
+    if !entities.is_empty() {
+        crate::live_consume::note_projection_work(
+            world,
+            scene_id,
+            crate::live_consume::ProjectionWork::Subtree,
+            path,
+        );
+    }
     for entity in entities {
         reinstantiate_entity(world, entity);
     }
@@ -4230,6 +4248,12 @@ fn rebuild_scene_from_document(
         }
     };
     if rebuilt {
+        crate::live_consume::note_projection_work(
+            world,
+            scene_id,
+            crate::live_consume::ProjectionWork::FullStage,
+            "/",
+        );
         // The replacement's root notice enters native address admission before
         // the live consumer resets and reprojects stage-owned ECS state.
         true

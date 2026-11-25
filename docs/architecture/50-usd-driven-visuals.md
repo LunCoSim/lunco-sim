@@ -23,15 +23,42 @@ Three rules, in order of how often they are broken:
 
 ## Live values and saved settings
 
+Choose the operation by its intent, not by the current UI mode or whether the
+scene happens to have an open USD document.
+
+| Domain | Owner and lifecycle |
+|---|---|
+| Live simulation | Native physics, ports, animation and runtime view owners. Repeated actions update admitted objects without journaling, recomposing or projecting USD. |
+| Authored scene | USD document transaction and composed-stage projection. Dual-purpose commands require explicit `intent: "Persistent"`; dedicated USD commands are inherently authoring commands. Saving is a separate document action. |
+| View-only preview | Presentation owner and its scoped override lifetime. Cancel/retire clears the override, not the document. A USD transient layer is still a stage edit, not a per-frame runtime property. |
+
+The ordinary default for dual-purpose commands is `Interactive` (live).
+Editor authoring controls explicitly request `Persistent` or submit typed USD
+operations. The same script therefore behaves identically regardless of the
+editor's active panel.
+
+This follows OpenUSD's distinction between
+[changed-info-only notices and structural resyncs](https://openusd.org/release/api/class_usd_notice_1_1_objects_changed.html);
+even [session-layer opinions](https://openusd.org/release/api/class_usd_stage.html)
+are part of stage composition. Neither is an appropriate transport for live
+simulation state. Authored updates reconcile value/dependency owners in place
+when possible and reinstantiate only affected subtrees when necessary.
+The projection owner reports actual work in `usd.document.projected` via
+`projection_mode` (`initial_load`, `in_place`, `subtree`, `full_stage`).
+The status UI distinguishes initial scene loading, USD edits, simulation
+preparation and visual streaming. Live interactions produce no projection event.
+
 Use the current value's owner to choose the update path:
 
 | Value | Runtime path | Saved setting |
 |---|---|---|
 | Control or co-simulation input | `SetPorts` / `SetPortsBatch` through the named port owner at the fixed tick | Author the default or connection in USD |
 | Scene presentation property | `SetSceneView` through the registered property owner, or a direct typed ECS write inside that owner | Author the presentation configuration in USD |
-| Discrete live pose (e.g. a door or a cart) | `TransformEntity` with `intent: "Interactive"` in the active physics frame | `TransformEntity` with `intent: "Persistent"` |
+| Discrete live pose (e.g. a door or a cart) | `TransformEntity` (live by default) in the active physics frame | `TransformEntity` with `intent: "Persistent"` |
+| Runtime object creation, deletion or joint release | `SpawnEntity`, `DeleteEntity`, `DetachJoint` (live by default) | Explicit Persistent intent or typed USD composition edit |
+| Environment lighting | `SetEnvironmentLight` (live by default) | Explicit Persistent intent for supported USD lighting settings |
 | Contact participation of an admitted collider | `SetColliderEnabled` on the native collider entity | Author `PhysicsCollisionAPI` and `physics:collisionEnabled` |
-| Object appearance during interactive tuning | `SetObjectProperty` with `intent: "Interactive"` | Commit with `intent: "Persistent"` when the user accepts the setting |
+| Object appearance during interactive tuning | `SetObjectProperty` (live by default) | Commit with `intent: "Persistent"` when the user accepts the setting |
 | Topology, composition or authoring metadata | Commit typed USD operations and reconcile the affected projection | The same document transaction |
 
 `SetSceneView` takes a bounded batch of typed writes. The dispatcher resolves
@@ -77,7 +104,9 @@ opinions do not walk the subtree. `Clear` withdraws the root override, and
 retiring the publishing script clears its overrides. Do not walk the USD tree
 or split a group toggle into per-descendant commands in Rhai. A prim with
 time-sampled visibility retains its animation owner and rejects a direct
-independent visibility write. A transform-only animated prim may still have
+independent visibility write. The animation owner publishes the sampled opinion
+to the same subtree visibility resolver; an animated ancestor and runtime hide
+therefore compose using one visibility owner. A transform-only animated prim may still have
 independently controlled visibility. The runtime resolver uses native
 Imageable schema accessors to substitute the live ordinary visibility opinion;
 no USD layer is mutated. `SetObjectProperty(visible, Interactive)` is the

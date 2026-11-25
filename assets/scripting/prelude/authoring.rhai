@@ -15,7 +15,7 @@ fn __missing_document(kind) {
 fn spawn_robot(entry_id, position) {
     cmd("SpawnEntity", #{
         entry_id: entry_id,
-        position: position,
+        position: position, intent:"Persistent",
     })
 }
 

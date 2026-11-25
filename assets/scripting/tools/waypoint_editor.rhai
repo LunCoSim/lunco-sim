@@ -991,7 +991,7 @@ fn move_route_point(doc, route, point, position) {
         return #{ ok: false, retryable: true,
             error: "move target has no live scene projection" };
     }
-    let result = cmd("MoveEntity", #{ entity_id: entity_id, translation: position });
+    let result = cmd("MoveEntity", #{ entity_id: entity_id, translation: position, intent:"Persistent" });
     if result == () || result.ok != true {
         return failure(if result == () { "MoveEntity returned no result" } else { result.error });
     }

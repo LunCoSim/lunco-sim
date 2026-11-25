@@ -1250,7 +1250,7 @@ fn delete_waypoint_with_generic_command(me) {
     );
     this = expectation.state;
     if !expectation.ok { return; }
-    let deleted = cmd("DeleteEntity", #{ target: target });
+    let deleted = cmd("DeleteEntity", #{ target: target, intent:"Persistent" });
     if deleted == () || deleted.ok == false {
         this.failure = "generic DeleteEntity rejected the unpossessed route point: "
             + if deleted == () { "no command result" } else { deleted.error };

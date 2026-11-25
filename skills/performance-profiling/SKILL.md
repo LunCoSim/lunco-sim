@@ -971,7 +971,7 @@ Qualify the `modelica_observation_failure` negative as well as variable,
 metadata, clock and receipt gates. Run compiled-editor metadata through the
 windowed workbench command owner; the headless scene-test host covers runtime
 observation and fault gates. The
-[owner contract](../../docs/reviews/modelica-batched-observation-2026-10-24.md)
+[owner contract](../../docs/architecture/22-domain-cosim.md#names-bindings-and-numerical-exchange)
 records the single reader and the coupled SDK/application promotion boundary.
 Do not turn collection timing into a complete-worker or coupled-tick claim.
 Selected-output grouping belongs to `SolveRuntime`'s reusable request scratch.
@@ -1489,7 +1489,7 @@ one immutable asset recipe should bypass layer-byte cloning and comparison;
 asset reloads use a new recipe identity and still merge changed bytes. Path
 reconciliation and Rhai path lookups share the scene-owned stage/path index.
 Measure global, mount and document lookups separately with matching numbers
-of present and missing paths, and time inside the script to exclude transport. Raw-file spawn identity collision checks use
+of present and missing paths, and time inside the script to exclude transport. Runtime spawn identity collision checks use
 the lifecycle-maintained API identity registry and a hash set of queued roots,
 not a world scan or a walk of all pending inputs. Document projection waits only for
 references named by that edit's typed AddPrim operations; an unrelated

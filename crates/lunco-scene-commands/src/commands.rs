@@ -143,11 +143,8 @@ pub struct DetachJoint {
     /// Entity to detach. Joint state, when present, is retired through the
     /// physics lifecycle; ordinary entities use normal removal.
     pub target: Entity,
-    /// Persistent (default) authors the joint's removal into the scene's runtime
-    /// layer — removing runtime-only prims and deactivating base/composed prims
-    /// — so it journals, syncs, and survives reload. Interactive is a throwaway
-    /// live operation with no journal. See [`lunco_core::EditIntent`]. Omitted
-    /// by API callers → `Persistent`.
+    /// Interactive (default) detaches only the live joint; Persistent explicitly
+    /// authors the removal into the owning USD document's runtime layer.
     #[serde(default)]
     pub intent: lunco_core::EditIntent,
 }
@@ -156,7 +153,7 @@ impl Default for DetachJoint {
     fn default() -> Self {
         Self {
             target: Entity::PLACEHOLDER,
-            intent: lunco_core::EditIntent::Persistent,
+            intent: lunco_core::EditIntent::Interactive,
         }
     }
 }
@@ -495,14 +492,16 @@ pub fn on_spawn_entity_command(
         )));
     }
 
-    // A document-backed running scene is projected from USD. Author the spawn
-    // there and let that ONE projection instantiate it. This is also the one
-    // journal/network/reload path. Raw-file/headless scenes have no document to
-    // author into and therefore use the direct ECS + NetSpawn path below.
-    if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(
-        &admission.backed,
-        scene_root_prim.stage_handle.id(),
-    ) {
+    // Explicit authoring uses the document transaction. Live spawns use the
+    // ordered runtime admission boundary even in a document-backed scene.
+    if cmd.intent.is_persistent() {
+        let doc = lunco_usd_bevy_twin::scene_document_for(
+            &admission.backed,
+            scene_root_prim.stage_handle.id(),
+        )
+        .ok_or_else(|| {
+            Reject::InvalidOp("Persistent spawn requires a document-backed scene".into())
+        })?;
         let SpawnSource::UsdFile {
             source_uri: asset_path,
             ..
@@ -618,7 +617,7 @@ pub fn on_spawn_entity_command(
     ))
 }
 
-/// Apply an admitted raw-file runtime spawn at its assigned fixed tick. The
+/// Apply an admitted runtime spawn at its assigned fixed tick. The
 /// session coordinator has already revalidated the scene-root target and the
 /// referenced active-frame identity; this owner checks its spatial/catalog
 /// contracts, creates the root, and attaches the reserved identity before the
@@ -631,8 +630,7 @@ fn commit_runtime_spawn(
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     role: Res<lunco_core_session::NetworkRole>,
     entity_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    q_scene_root: Query<(Entity, &UsdPrimPath), With<UsdSceneRoot>>,
+    q_scene_root: Query<(), (With<UsdSceneRoot>, With<UsdPrimPath>)>,
     q_ids: Query<&lunco_core::GlobalEntityId>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
@@ -678,7 +676,8 @@ fn commit_runtime_spawn(
         );
         return;
     }
-    let Ok((scene_root, root_prim)) = q_scene_root.get(trigger.event().target()) else {
+    let scene_root = trigger.event().target();
+    if q_scene_root.get(scene_root).is_err() {
         reject(
             &mut commands,
             format!(
@@ -687,7 +686,7 @@ fn commit_runtime_spawn(
             ),
         );
         return;
-    };
+    }
     if q_ids.get(scene_root).ok().copied() != Some(record.target) {
         reject(
             &mut commands,
@@ -708,13 +707,6 @@ fn commit_runtime_spawn(
         reject(
             &mut commands,
             "runtime spawn active physics frame is not a BigSpace Grid".to_owned(),
-        );
-        return;
-    }
-    if lunco_usd_bevy_twin::scene_document_for(&backed, root_prim.stage_handle.id()).is_some() {
-        reject(
-            &mut commands,
-            "runtime spawn target became document-backed before its fixed-tick commit".to_owned(),
         );
         return;
     }
@@ -975,19 +967,32 @@ pub fn on_move_entity_command(
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
     bounds: Option<Res<lunco_physics::WorldBounds>>,
-) {
+    persistence: TransformPersistence,
+) -> Result<Ack, Reject> {
     let cmd = trigger.event();
     if cmd.translation.iter().any(|value| !value.is_finite()) {
         warn!(
             "MOVE_ENTITY: rejecting non-finite active-frame target for api_id={}",
             cmd.entity_id
         );
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable move target".into(),
+        ));
     }
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
         warn!("MOVE_ENTITY: no api_id={} in registry", cmd.entity_id);
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable move target".into(),
+        ));
+    };
+
+    let authored_destination = if cmd.intent.is_persistent() {
+        Some(persistence.target(target).ok_or_else(|| {
+            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
+        })?)
+    } else {
+        None
     };
     let target_abs = DVec3::from_array(cmd.translation);
     if q_grids.get(active_frame.0).is_err() {
@@ -995,20 +1000,24 @@ pub fn on_move_entity_command(
             active_frame = ?active_frame.0,
             "MOVE_ENTITY: active physics frame is not a BigSpace Grid"
         );
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable move target".into(),
+        ));
     }
     // Read and invert the complete hierarchy before taking mutable component
     // access. The command always speaks the active frame; storage may be a
     // plain parent-local Transform or a BigSpace `(CellCoord, Transform)` pair.
     // One canonical conversion owns both cases.
-    let (prev_abs, old_cell, new_cell, new_local) = {
+    let (prev_abs, old_cell, local_position, new_cell, new_local) = {
         let q_spatial = spatial.p0();
         let Ok((old_cell, _)) = q_spatial.get(target) else {
             warn!(
                 "MOVE_ENTITY: entity {:?} (api_id={}) has no Transform",
                 target, cmd.entity_id
             );
-            return;
+            return Err(Reject::InvalidOp(
+                "invalid or unavailable move target".into(),
+            ));
         };
         let Some((prev_abs, _)) = lunco_spatial::coords::pose_in_grid(
             target,
@@ -1022,24 +1031,35 @@ pub fn on_move_entity_command(
                 active_frame = ?active_frame.0,
                 "MOVE_ENTITY: entity is not connected to the active physics frame"
             );
-            return;
+            return Err(Reject::InvalidOp(
+                "invalid or unavailable move target".into(),
+            ));
         };
-        let Some((new_cell, new_local)) = lunco_spatial::coords::position_in_grid_to_parent_local(
-            target,
+        let parent = q_parents
+            .get(target)
+            .map_err(|_| Reject::InvalidOp("entity has no parent frame".into()))?
+            .parent();
+        let Some((local_position, _)) = lunco_spatial::coords::pose_in_parent_local(
             target_abs,
+            DQuat::IDENTITY,
+            parent,
             active_frame.0,
             &q_parents,
             &q_grids,
             &q_spatial,
         ) else {
-            warn!(
-                ?target,
-                active_frame = ?active_frame.0,
-                "MOVE_ENTITY: cannot express target in the entity parent frame"
-            );
-            return;
+            return Err(Reject::InvalidOp(
+                "translation cannot be expressed in the parent frame".into(),
+            ));
         };
-        (prev_abs, old_cell.copied(), new_cell, new_local)
+        let (new_cell, new_local) = checked_pose_storage(q_grids.get(parent).ok(), local_position)?;
+        (
+            prev_abs,
+            old_cell.copied(),
+            local_position,
+            new_cell,
+            new_local,
+        )
     };
     let delta = target_abs - prev_abs;
     if q_rb.contains(target)
@@ -1051,7 +1071,9 @@ pub fn on_move_entity_command(
             ?target,
             "entity move rejected: velocity exceeds the native solver range"
         );
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable move target".into(),
+        ));
     }
     let physics_body = q_rb
         .get(target)
@@ -1064,7 +1086,9 @@ pub fn on_move_entity_command(
                 cmd.entity_id,
                 MAX_MOVE_ENTITY_DISPLACEMENT,
             );
-            return;
+            return Err(Reject::InvalidOp(
+                "invalid or unavailable move target".into(),
+            ));
         }
         if bounds
             .as_deref()
@@ -1074,7 +1098,9 @@ pub fn on_move_entity_command(
                 "MOVE_ENTITY: rejecting physics-body target outside world bounds for api_id={} at {:?}",
                 cmd.entity_id, target_abs,
             );
-            return;
+            return Err(Reject::InvalidOp(
+                "invalid or unavailable move target".into(),
+            ));
         }
     }
     let mut writable = spatial.p1();
@@ -1083,7 +1109,9 @@ pub fn on_move_entity_command(
             "MOVE_ENTITY: entity {:?} (api_id={}) disappeared during move",
             target, cmd.entity_id
         );
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable move target".into(),
+        ));
     };
     tf.translation = new_local;
     if let Some(new_cell) = new_cell {
@@ -1131,10 +1159,22 @@ pub fn on_move_entity_command(
         angular_pulse: false,
     });
 
-    info!(
+    if let Some((doc, path)) = authored_destination {
+        commands.trigger(ApplyUsdOp {
+            doc_id: doc,
+            parent_gen: None,
+            op: UsdOp::SetTranslate {
+                edit_target: LayerId::runtime(),
+                path,
+                value: local_position.to_array(),
+            },
+        });
+    }
+    debug!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
         cmd.entity_id, cmd.translation[0], cmd.translation[1], cmd.translation[2]
     );
+    Ok(Ack::default())
 }
 
 /// Set an entity's world ORIENTATION — the rotational twin of [`MoveEntity`].
@@ -1173,6 +1213,10 @@ pub struct RotateEntity {
     /// names no orientation, and silently substituting identity would spin the
     /// body to an attitude the caller never asked for.
     pub rotation: [f64; 4],
+    /// Live by default; Persistent explicitly authors the accepted rotation.
+    #[serde(default)]
+    #[reflect(default)]
+    pub intent: lunco_core::EditIntent,
 }
 
 /// Observer for `RotateEntity`.
@@ -1191,21 +1235,34 @@ pub fn on_rotate_entity_command(
     q_grids: Query<&Grid>,
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
-) {
+    persistence: TransformPersistence,
+) -> Result<Ack, Reject> {
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
         warn!("ROTATE_ENTITY: no api_id={} in registry", cmd.entity_id);
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable rotation target".into(),
+        ));
+    };
+
+    let authored_destination = if cmd.intent.is_persistent() {
+        Some(persistence.target(target).ok_or_else(|| {
+            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
+        })?)
+    } else {
+        None
     };
     let q_in = DQuat::from_array(cmd.rotation);
-    if !q_in.is_finite() || q_in.length_squared() < 1e-12 {
+    if !q_in.is_finite() || !q_in.length_squared().is_finite() || q_in.length_squared() < 1e-12 {
         warn!(
             "ROTATE_ENTITY: {:?} (api_id={}) given a degenerate quaternion {:?} — \
              refusing rather than substituting identity",
             target, cmd.entity_id, cmd.rotation
         );
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable rotation target".into(),
+        ));
     }
     let q_in = q_in.normalize();
     let (previous_rotation, local_rotation) = {
@@ -1222,7 +1279,9 @@ pub fn on_rotate_entity_command(
                 active_frame = ?active_frame.0,
                 "ROTATE_ENTITY: entity is not connected to the active physics frame"
             );
-            return;
+            return Err(Reject::InvalidOp(
+                "invalid or unavailable rotation target".into(),
+            ));
         };
         let Some(local_rotation) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
             target,
@@ -1237,7 +1296,9 @@ pub fn on_rotate_entity_command(
                 active_frame = ?active_frame.0,
                 "ROTATE_ENTITY: entity is not connected to the active physics frame"
             );
-            return;
+            return Err(Reject::InvalidOp(
+                "invalid or unavailable rotation target".into(),
+            ));
         };
         (previous_rotation, local_rotation)
     };
@@ -1247,7 +1308,9 @@ pub fn on_rotate_entity_command(
             "ROTATE_ENTITY: entity {:?} (api_id={}) has no Transform",
             target, cmd.entity_id
         );
-        return;
+        return Err(Reject::InvalidOp(
+            "invalid or unavailable rotation target".into(),
+        ));
     };
     tf.rotation = local_rotation.as_quat();
     if let Some(mut angular_velocity) = angular_velocity {
@@ -1277,21 +1340,83 @@ pub fn on_rotate_entity_command(
         });
     }
 
-    info!(
+    if let Some((doc, path)) = authored_destination {
+        let (rx, ry, rz) = local_rotation.to_euler(EulerRot::XYZ);
+        commands.trigger(ApplyUsdOp {
+            doc_id: doc,
+            parent_gen: None,
+            op: UsdOp::SetRotate {
+                edit_target: LayerId::runtime(),
+                path,
+                value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+            },
+        });
+    }
+    debug!(
         "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
         cmd.entity_id, cmd.rotation[0], cmd.rotation[1], cmd.rotation[2], cmd.rotation[3]
     );
+    Ok(Ack::default())
 }
 
 /// Authored destination for the complete pose command. The live handler owns
 /// validation and is the only producer of the corresponding journal operation.
 #[derive(SystemParam)]
 pub struct TransformPersistence<'w, 's> {
-    usd_registry: Res<'w, DocumentRegistry<UsdDocument>>,
+    usd_registry: Option<Res<'w, DocumentRegistry<UsdDocument>>>,
     backed: Option<Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>>,
     canonical: Option<NonSend<'w, lunco_usd_bevy_stage::canonical::CanonicalStages>>,
     usd_assets: Option<Res<'w, Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
     q_prim: Query<'w, 's, &'static UsdPrimPath>,
+}
+
+impl TransformPersistence<'_, '_> {
+    fn target(&self, entity: Entity) -> Option<(lunco_doc::DocumentId, String)> {
+        lunco_scene_authoring::doc_resolve::authorable_prim(
+            entity,
+            &self.q_prim,
+            self.usd_registry.as_deref()?,
+            self.backed.as_deref(),
+            self.canonical.as_deref(),
+            self.usd_assets.as_deref(),
+        )
+    }
+}
+
+/// Convert an accepted f64 parent-local position at the native storage boundary.
+fn checked_pose_storage(
+    grid: Option<&Grid>,
+    local_position: DVec3,
+) -> Result<(Option<CellCoord>, Vec3), Reject> {
+    if !local_position.is_finite() {
+        return Err(Reject::InvalidOp(
+            "parent-local translation must be finite".into(),
+        ));
+    }
+    let (new_cell, new_translation) = if let Some(grid) = grid {
+        let (cell, translation) = grid.translation_to_grid(local_position);
+        // BigSpace's integer cell conversion saturates out-of-range input.
+        // Reject rather than publishing a pose in another cell.
+        let restored = grid.cell_to_float(&cell) + translation.as_dvec3();
+        let tolerance = f64::from(f32::EPSILON) * translation.abs().max_element().max(1.0) as f64
+            + f64::EPSILON * local_position.abs().max_element();
+        if (restored - local_position).abs().max_element() > tolerance {
+            return Err(Reject::InvalidOp(
+                "translation exceeds the grid cell range".into(),
+            ));
+        }
+        (Some(cell), translation)
+    } else {
+        (None, local_position.as_vec3())
+    };
+    // This is the native Transform representation boundary. The journal
+    // below uses the original f64 pose, not the narrowed local storage.
+    if !new_translation.is_finite() {
+        return Err(Reject::InvalidOp(
+            "translation exceeds native transform range".into(),
+        ));
+    }
+    Ok((new_cell, new_translation))
 }
 
 /// Validate and apply a complete live pose, optionally journaling the same pose.
@@ -1342,6 +1467,14 @@ pub fn on_transform_entity_command(
     let Some(target) = registry.resolve(&global_id) else {
         warn!("TRANSFORM_ENTITY: no api_id={}", cmd.entity_id);
         return Err(Reject::InvalidOp("unknown scene entity".into()));
+    };
+
+    let authored_destination = if cmd.intent.is_persistent() {
+        Some(persistence.target(target).ok_or_else(|| {
+            Reject::InvalidOp("Persistent pose edit requires an authorable USD prim".into())
+        })?)
+    } else {
+        None
     };
     let rotation = rotation.normalize();
     let target_position = DVec3::from_array(cmd.translation);
@@ -1405,30 +1538,8 @@ pub fn on_transform_entity_command(
         if !local_position.is_finite() || !new_rotation.is_finite() {
             return Err(Reject::InvalidOp("parent-local pose must be finite".into()));
         }
-        let (new_cell, new_translation) = if let Ok(grid) = q_grids.get(parent) {
-            let (cell, translation) = grid.translation_to_grid(local_position);
-            // BigSpace's integer cell conversion saturates out-of-range input.
-            // Reject rather than publishing a pose in another cell.
-            let restored = grid.cell_to_float(&cell) + translation.as_dvec3();
-            let tolerance = f64::from(f32::EPSILON)
-                * translation.abs().max_element().max(1.0) as f64
-                + f64::EPSILON * local_position.abs().max_element();
-            if (restored - local_position).abs().max_element() > tolerance {
-                return Err(Reject::InvalidOp(
-                    "translation exceeds the grid cell range".into(),
-                ));
-            }
-            (Some(cell), translation)
-        } else {
-            (None, local_position.as_vec3())
-        };
-        // This is the native Transform representation boundary. The journal
-        // below uses the original f64 pose, not the narrowed local storage.
-        if !new_translation.is_finite() {
-            return Err(Reject::InvalidOp(
-                "translation exceeds native transform range".into(),
-            ));
-        }
+        let (new_cell, new_translation) =
+            checked_pose_storage(q_grids.get(parent).ok(), local_position)?;
         (
             previous_position,
             previous_rotation,
@@ -1537,14 +1648,7 @@ pub fn on_transform_entity_command(
     // derives Avian Position/Rotation from it; never create a second Position
     // writer here.
     if cmd.intent.is_persistent() {
-        if let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
-            target,
-            &persistence.q_prim,
-            &persistence.usd_registry,
-            persistence.backed.as_deref(),
-            persistence.canonical.as_deref(),
-            persistence.usd_assets.as_deref(),
-        ) {
+        if let Some((doc, path)) = authored_destination {
             let (rx, ry, rz) = new_rotation.to_euler(EulerRot::XYZ);
             commands.trigger(ApplyUsdOps {
                 doc_id: doc,
@@ -1612,159 +1716,6 @@ pub fn on_set_collider_enabled(
                     result.map(|()| Ack::default()).map_err(Reject::InvalidOp),
                 );
         }
-    });
-}
-
-/// Persist a runtime move into the active USD document's **runtime** layer
-/// (Phase C4b producer). Observes `MoveEntity` alongside the physics handler
-/// [`on_move_entity_command`] but is fully decoupled from it — it touches no
-/// physics state.
-///
-/// Persistence is **guarded to authored-scene entities**: it resolves the
-/// owning USD document from the moved prim's stage, then checks that document's
-/// base, runtime, and composed-arc ownership before authoring. Palette/sim
-/// spawns and entities without a document-backed stage are skipped. The op
-/// targets the runtime layer, so the move round-trips through the owning Twin
-/// journal and renders via the composed view, while Save stays base-only.
-pub fn persist_move_to_runtime_layer(
-    trigger: On<MoveEntity>,
-    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else {
-        return;
-    };
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
-        target,
-        &q_prim,
-        &usd_registry,
-        Some(&backed),
-        canonical.as_deref(),
-        usd_assets.as_deref(),
-    ) else {
-        return;
-    };
-
-    let Some((cell, local)) = lunco_spatial::coords::position_in_grid_to_parent_local(
-        target,
-        DVec3::from_array(cmd.translation),
-        active_frame.0,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
-    ) else {
-        warn!(
-            ?target,
-            active_frame = ?active_frame.0,
-            "MOVE_ENTITY: authored entity is disconnected from the active physics frame; not persisting an ambiguous transform"
-        );
-        return;
-    };
-    // USD xformOps are authored relative to the prim's parent. A direct Grid
-    // child is internally split by BigSpace, so reassemble that one parent-local
-    // f64 value before authoring; a plain parent already returned its local value.
-    let parent = q_parents
-        .get(target)
-        .expect("coordinate conversion proved that the parent exists")
-        .parent();
-    let authored = match (cell, q_grids.get(parent).ok()) {
-        (Some(cell), Some(grid)) => {
-            grid.grid_position_double(&cell, &Transform::from_translation(local))
-        }
-        (None, None) => local.as_dvec3(),
-        _ => {
-            error!(
-                ?target,
-                ?parent,
-                "MOVE_ENTITY: coordinate conversion returned inconsistent Grid storage"
-            );
-            return;
-        }
-    };
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op: UsdOp::SetTranslate {
-            edit_target: LayerId::runtime(),
-            path,
-            value: authored.to_array(),
-        },
-    });
-}
-
-// ─────────────────────────────────────────────────────────────────────
-/// Persist an active-frame orientation using the same parent-local conversion
-/// as [`on_rotate_entity_command`]. USD owns the authored local xform; the
-/// active BigSpace grid is a runtime semantic frame and must never leak into
-/// that stored value.
-pub fn persist_rotation_to_runtime_layer(
-    trigger: On<RotateEntity>,
-    api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = api_registry.resolve(&global_id) else {
-        return;
-    };
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
-        target,
-        &q_prim,
-        &usd_registry,
-        backed.as_deref(),
-        canonical.as_deref(),
-        usd_assets.as_deref(),
-    ) else {
-        return;
-    };
-    let requested = DQuat::from_array(cmd.rotation);
-    if !requested.is_finite() || requested.length_squared() < 1.0e-12 {
-        return;
-    }
-    let Some(local) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
-        target,
-        requested.normalize(),
-        active_frame.0,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
-    ) else {
-        warn!(
-            ?target,
-            active_frame = ?active_frame.0,
-            "ROTATE_ENTITY: authored entity is disconnected from the active physics frame; not persisting an ambiguous transform"
-        );
-        return;
-    };
-    let (rx, ry, rz) = local.to_euler(EulerRot::XYZ);
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op: UsdOp::SetRotate {
-            edit_target: LayerId::runtime(),
-            path,
-            value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
-        },
     });
 }
 
@@ -2149,6 +2100,9 @@ pub fn persist_environment_light_to_runtime_layer(
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
+    if !cmd.intent.is_persistent() {
+        return;
+    }
     let Some(workspace) = workspace else { return };
     let Some(doc) = workspace.0.active_document else {
         return;
@@ -2247,7 +2201,7 @@ pub fn persist_environment_light_to_runtime_layer(
         // order-independent w.r.t. the live handler: a specified axis overrides
         // `cur`; an unspecified one the live handler leaves unchanged, so `cur`
         // is the same value either way.) Uses the runtime-overlay layer, exactly
-        // like `persist_move_to_runtime_layer` does for translate.
+        // as the pose command journals its accepted translation.
         if direction_changed {
             let (cur_yaw, cur_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
             let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
@@ -2552,8 +2506,6 @@ impl Plugin for SpawnCommandPlugin {
         app.add_observer(persist_detach_to_runtime_layer);
         app.add_observer(persist_delete_to_runtime_layer);
         // C4b: persist authored-scene moves into the active doc's runtime layer.
-        app.add_observer(persist_move_to_runtime_layer);
-        app.add_observer(persist_rotation_to_runtime_layer);
         // #14: persist a `SetEnvironmentLight` sun tweak (illuminance / colour /
         // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
         // the names the loader already reads back — so it round-trips + journals.
@@ -2595,6 +2547,7 @@ mod tests {
             position: [0.0; 3],
             rotation: None,
             producer_id: None,
+            intent: lunco_core::EditIntent::Interactive,
         };
         assert_eq!(cmd.entry_id, "test");
     }
@@ -2761,6 +2714,7 @@ mod tests {
 
         // Move it 100 m up, in grid-absolute terms: 3947 → 4047.
         app.world_mut().trigger(MoveEntity {
+            intent: lunco_core::EditIntent::Interactive,
             entity_id: 7,
             translation: [0.0, 4047.0, 0.0],
         });
@@ -2818,6 +2772,7 @@ mod tests {
             .assign(loose, lunco_core::GlobalEntityId::from_raw(9));
 
         app.world_mut().trigger(MoveEntity {
+            intent: lunco_core::EditIntent::Interactive,
             entity_id: 9,
             translation: [1.0, 2.0, 3.0],
         });
@@ -2862,6 +2817,7 @@ mod tests {
             .assign(body, lunco_core::GlobalEntityId::from_raw(10));
 
         app.world_mut().trigger(MoveEntity {
+            intent: lunco_core::EditIntent::Interactive,
             entity_id: 10,
             translation: [MAX_MOVE_ENTITY_DISPLACEMENT + 1.0, 0.0, 0.0],
         });
@@ -2910,6 +2866,7 @@ mod tests {
             .assign(body, lunco_core::GlobalEntityId::from_raw(11));
 
         app.world_mut().trigger(MoveEntity {
+            intent: lunco_core::EditIntent::Interactive,
             entity_id: 11,
             translation: [10.0, 0.0, 101.0],
         });
@@ -2956,6 +2913,7 @@ mod tests {
         let desired = DQuat::from_rotation_x(-0.35);
 
         app.world_mut().trigger(RotateEntity {
+            intent: lunco_core::EditIntent::Interactive,
             entity_id: 12,
             rotation: desired.to_array(),
         });
@@ -3012,6 +2970,7 @@ mod tests {
         // one. The pulse must follow the short +Y arc, not a nearly full turn.
         let desired = -DQuat::from_rotation_y(0.25);
         app.world_mut().trigger(RotateEntity {
+            intent: lunco_core::EditIntent::Interactive,
             entity_id: 13,
             rotation: desired.to_array(),
         });

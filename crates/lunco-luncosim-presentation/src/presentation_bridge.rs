@@ -972,6 +972,22 @@ fn report_scene_spawn_status(
     let Some(mut bus) = bus else { return };
     const SOURCE: &str = lunco_status_core::status_bus::SCENE_SOURCE;
     const VISUAL_SOURCE: &str = lunco_status_core::status_bus::SCENE_VISUAL_SOURCE;
+    const PROJECTION_SOURCE: &str = lunco_status_core::status_bus::USD_PROJECTION_SOURCE;
+    const PREPARATION_SOURCE: &str = lunco_status_core::status_bus::SIMULATION_PREPARATION_SOURCE;
+    let projection = progress.as_deref().and_then(|progress| {
+        use lunco_core_runtime::SimulationProgressOwner;
+        progress
+            .blockers()
+            .find(|blocker| blocker.key.owner == SimulationProgressOwner::UsdDocumentProjection)
+            .or_else(|| {
+                progress.blockers().find(|blocker| {
+                    blocker.key.owner == SimulationProgressOwner::UsdDocumentAuthoring
+                })
+            })
+    });
+    if projection.is_none() || in_flight.is_some() {
+        bus.remove_progress(PROJECTION_SOURCE);
+    }
     let pending = awaiting.iter().count();
     let projecting = projecting.iter().count();
     let pending_meshes = pending_meshes.iter().count();
@@ -979,11 +995,23 @@ fn report_scene_spawn_status(
         .iter()
         .filter(|ready| ready.is_none_or(|ready| !ready.complete_cover))
         .count();
-    if matches!(
+    let clearing = matches!(
         coordinator.active(),
         Some(lunco_core::SceneTransition::Clear)
-    ) {
+    );
+    if clearing
+        || in_flight.is_some()
+        || projection.is_some()
+        || pending > 0
+        || projecting > 0
+        || pending_meshes > 0
+        || pending_globes > 0
+    {
+        bus.remove_progress(PREPARATION_SOURCE);
+    }
+    if clearing {
         bus.remove_progress(VISUAL_SOURCE);
+        bus.remove_progress(PROJECTION_SOURCE);
         bus.set_progress(SOURCE, "unloading current scene", 0, 0);
         return;
     }
@@ -1010,11 +1038,15 @@ fn report_scene_spawn_status(
         // descendants can grow as each projected prim exposes its children.
         bus.remove_progress(VISUAL_SOURCE);
         bus.set_progress(SOURCE, message, 0, 0);
-    } else if pending > 0 {
+    } else if let Some(projection) = projection {
+        bus.remove_progress(SOURCE);
         bus.remove_progress(VISUAL_SOURCE);
+        bus.set_progress(PROJECTION_SOURCE, projection.reason.clone(), 0, 0);
+    } else if pending > 0 || projecting > 0 {
+        bus.remove_progress(SOURCE);
         bus.set_progress(
-            SOURCE,
-            format!("projecting scene ({projecting} queued, {pending} pending)"),
+            VISUAL_SOURCE,
+            format!("preparing live objects ({projecting} queued, {pending} pending)"),
             0,
             0,
         );
@@ -1028,12 +1060,13 @@ fn report_scene_spawn_status(
         bus.remove_progress(SOURCE);
     } else {
         bus.remove_progress(VISUAL_SOURCE);
+        bus.remove_progress(SOURCE);
         let Some(progress) = progress.as_deref() else {
-            bus.remove_progress(SOURCE);
+            bus.remove_progress(PREPARATION_SOURCE);
             return;
         };
         let Some(first) = progress.blockers().next() else {
-            bus.remove_progress(SOURCE);
+            bus.remove_progress(PREPARATION_SOURCE);
             return;
         };
         let count = progress.blockers().count();
@@ -1042,7 +1075,7 @@ fn report_scene_spawn_status(
         } else {
             format!("{} ({count} operations pending)", first.reason)
         };
-        bus.set_progress(SOURCE, message, 0, 0);
+        bus.set_progress(PREPARATION_SOURCE, message, 0, 0);
     }
 }
 

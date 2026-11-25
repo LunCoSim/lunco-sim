@@ -42,9 +42,9 @@ preserving metadata, samples, and namespace-dependent connections. Inspect the
 exact source document and property authorship before editing; composed values
 can originate in a different layer.
 
-**USD is the source of truth. The ECS is a projection of it.** Every entity you
-see is a rendering of a prim. Nothing is authoritative because it is in the
-world; it is in the world because it is in the document.
+**USD is the source of truth for authored scene facts.** ECS owns live
+simulation and view state, including runtime-only entities. An authored prim
+is projected into ECS; live changes do not write back implicitly.
 
 Apply that rule to authored facts. The current simulation and presentation
 values belong to their runtime owners. For example, use `SetSceneView` for a
@@ -52,7 +52,7 @@ billboard's computed text and `SetPortsBatch` for named simulation inputs.
 Use `ApplyUsdTransientOps` when an actual composed `@view@` prim or opinion
 is required.
 For moving interactive elements, use `TransformEntity` with
-`intent: "Interactive"` for discrete live poses, declared joint inputs for
+live intent (the default) for discrete live poses, declared joint inputs for
 continuous physical motion, `SetColliderEnabled` for a prepared collider,
 and `SetSceneView` with `property: "visibility"` and a `Bool` value for
 already admitted presentation geometry. Target the namespace root for a

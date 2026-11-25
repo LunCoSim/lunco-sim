@@ -1587,6 +1587,8 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
     lunco_status_core::status_bus::TERRAIN_SOURCE,
     lunco_status_core::status_bus::TERRAIN_BUILD_SOURCE,
     lunco_status_core::status_bus::SCENE_SOURCE,
+    lunco_status_core::status_bus::USD_PROJECTION_SOURCE,
+    lunco_status_core::status_bus::SIMULATION_PREPARATION_SOURCE,
     lunco_status_core::status_bus::SCENE_VISUAL_SOURCE,
     lunco_status_core::status_bus::DOME_SOURCE,
     lunco_status_core::status_bus::MODELICA_SOURCE,

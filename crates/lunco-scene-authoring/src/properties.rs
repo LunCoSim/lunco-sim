@@ -160,7 +160,7 @@ pub fn persist_wheel_to_runtime_layer(
 }
 
 /// Set a property on a scene object through its component owner. Use
-/// `Interactive` for continuous preview and `Persistent` to commit a
+/// `Interactive` (default) for live state and `Persistent` to explicitly author a
 /// document-backed setting.
 ///
 /// ```jsonc

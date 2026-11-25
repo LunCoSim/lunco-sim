@@ -14,21 +14,21 @@
   include the stable actor `GlobalEntityId`, but this general projection does not retain typed
   parameters, target, admitted generation, effective tick, or per-tick sequence.
   External API, application-Rhai, and direct typed `SimulateIntentEdge` submissions, external
-  held/released `SimulateIntent` changes for fixed-simulation targets, and raw-file runtime spawns
+  held/released `SimulateIntent` changes for fixed-simulation targets, and live runtime spawns
   share a bounded fixed-tick input queue. Admission assigns the committed scene generation,
   effective `SimTick`, and shared per-tick sequence before delivery; the owner validates generation
   and target again at commit. Edge acknowledgements, `CausalTrace`, and `intent.edge` retain edge
   correlation and admission; held-command acknowledgements and `intent.hold` retain the same
-  held-input correlation and stamp. Raw-file spawn records also retain their producer, scene root,
+  held-input correlation and stamp. Live spawn records also retain their producer, scene root,
   active frame, catalog entry, exact `f64` pose, correlation, and reserved root `GlobalEntityId`.
-  Document-backed Twin spawns instead record `ApplyUsdOps` in the document journal.
+  Explicit Persistent Twin spawns instead record `ApplyUsdOps` in the document journal.
   The fixed-step controller captures physical `ActionState<UserIntent>` as a by-value semantic
   frame. Admission requires the local input `SessionId`, target `GlobalEntityId`, and committed
   scene generation; it receives the current `SimTick` and a sequence from the shared per-tick
   allocator before control translation. Missing admission facts or duplicate target/session order
   keys hold the input with a structured runtime error instead of using world-local entity bits.
   When explicitly active, `SessionInputStream` retains bounded physical, semantic, Modelica-input,
-  and raw-spawn records with their typed producer identity, stable target, generation, tick,
+  and runtime spawn records with their typed producer identity, stable target, generation, tick,
   sequence, and payload. Live external `SetModelInput` and local UI writes carry the exact `f64`
   value and command correlation into the Modelica owner at their admitted fixed tick; producer
   provenance is retained as the stable caller id for API, direct, and actorless

@@ -766,6 +766,7 @@ pub fn on_scene_click_spawn(
     let (spawn_world, spawn_rotation) = placement_root_pose(fit, fp);
 
     commands.trigger(lunco_core::SpawnEntity {
+        intent: lunco_core::EditIntent::Persistent,
         entry_id: entry_id.clone(),
         position: spawn_world.0.to_array(),
         rotation: Some(spawn_rotation.as_dquat().to_array()),

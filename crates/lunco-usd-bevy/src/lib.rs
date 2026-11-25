@@ -3499,7 +3499,11 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
                 .filter(|entity| world.get::<UsdVisualVisibility>(*entity).is_some())
                 .collect();
             if !entities.is_empty() {
-                facts.push((UsdRead::effective_visibility(&view, &path), entities));
+                facts.push((
+                    UsdRead::effective_visibility(&view, &path),
+                    attr_has_time_samples(&view, &path, "visibility"),
+                    entities,
+                ));
             }
         }
         facts
@@ -3511,7 +3515,7 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
             .flat_map(|path| index.in_stage(stage_id, path.as_str()).iter().copied())
             .collect::<Vec<_>>()
     };
-    for (result, entities) in facts {
+    for (result, animated, entities) in facts {
         for entity in entities {
             let Ok(mut target) = world.get_entity_mut(entity) else {
                 continue;
@@ -3529,6 +3533,10 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
                     };
                     let previous_failure = state.failure.take();
                     state.authored = authored;
+                    state.animated = animated;
+                    if !animated {
+                        target.remove::<lunco_usd_bevy_scene::UsdSampledVisibility>();
+                    }
                     if previous_failure.as_ref().is_some_and(|message| {
                         target
                             .get::<UsdSceneProjectionFailed>()

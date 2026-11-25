@@ -74,8 +74,7 @@ fn on_tick(me, ctx) {
             let result = cmd("TransformEntity", #{
                 entity_id: this.target,
                 translation: TARGET_POSITION,
-                rotation: TARGET_ROTATION,
-                intent: "Interactive"
+                rotation: TARGET_ROTATION
             });
             if !result.ok { fail(this, "Interactive pose was rejected: " + result.error); return; }
             this.runtime_tested = true;
@@ -102,6 +101,15 @@ fn on_tick(me, ctx) {
                 rotation: TARGET_ROTATION, intent: "Persistent"
             });
             this.runtime_checks.push(t_true(!rejected.ok, "unrepresentable persistent pose is rejected"));
+            let moved = cmd("MoveEntity", #{entity_id:this.target, translation:[102.0,202.0,303.0]});
+            let rotated = cmd("RotateEntity", #{entity_id:this.target, rotation:[0.0,0.0,0.0,1.0]});
+            this.runtime_checks.push(t_true(moved.ok && rotated.ok && vec_error(world_pos(this.target), [102.0,202.0,303.0]) < MAX_POSITION_ERROR,
+                "partial pose commands also default to live state"));
+            let bad_move = cmd("MoveEntity", #{entity_id:this.target, translation:[1.0e60,0.0,0.0], intent:"Persistent"});
+            let bad_rotation = cmd("RotateEntity", #{entity_id:this.target, rotation:[0.0,0.0,0.0,0.0], intent:"Persistent"});
+            this.runtime_checks.push(t_true(!bad_move.ok && !bad_rotation.ok, "invalid persistent partial pose commands reject before journaling"));
+            let restored = cmd("TransformEntity", #{entity_id:this.target, translation:TARGET_POSITION, rotation:TARGET_ROTATION});
+            if !restored.ok { fail(this, "live pose restoration failed"); return; }
             this.rejection_tested = true;
             return;
         }
@@ -113,7 +121,7 @@ fn on_tick(me, ctx) {
         let result = cmd("TransformEntity", #{
             entity_id: this.target,
             translation: TARGET_POSITION,
-            rotation: TARGET_ROTATION,
+            rotation: TARGET_ROTATION, intent:"Persistent",
         });
         if !result.ok {
             fail(this, "TransformEntity was rejected: " + result.error);

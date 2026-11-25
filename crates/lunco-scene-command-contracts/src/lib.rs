@@ -53,7 +53,7 @@ pub struct SetSceneView {
 /// Move a scene entity to a translation in the active physics frame.
 ///
 /// The runtime resolves the stable API entity id and applies this as an
-/// authoritative scene edit. Physics bodies use the scene handler's bounded
+/// authoritative live update or explicit authored edit. Physics bodies use the scene handler's bounded
 /// kinematic move contract; the translation remains f64 across this boundary.
 #[Command(default)]
 pub struct MoveEntity {
@@ -61,6 +61,10 @@ pub struct MoveEntity {
     pub entity_id: u64,
     /// Target translation in the active physics frame, in f64 precision.
     pub translation: [f64; 3],
+    /// Live by default; Persistent explicitly authors the accepted translation.
+    #[serde(default)]
+    #[reflect(default)]
+    pub intent: EditIntent,
 }
 
 /// Set a scene entity's complete pose in the active physics frame.
@@ -76,7 +80,7 @@ pub struct TransformEntity {
     pub translation: [f64; 3],
     /// Target orientation in the active physics frame, `[x, y, z, w]`.
     pub rotation: [f64; 4],
-    /// Persistent commits an authored edit; Interactive changes only the live pose.
+    /// Interactive (default) changes only the live pose; Persistent authors the accepted pose.
     #[serde(default)]
     #[reflect(default)]
     pub intent: EditIntent,
@@ -103,7 +107,7 @@ pub struct SetColliderEnabled {
 pub struct DeleteEntity {
     /// Entity to remove.
     pub target: Entity,
-    /// `Persistent` (the default) authors the edit; `Interactive` is live-only.
+    /// `Interactive` (default) is live-only; `Persistent` authors the edit.
     #[serde(default)]
     #[reflect(default)]
     pub intent: EditIntent,
