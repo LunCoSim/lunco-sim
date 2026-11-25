@@ -9,7 +9,9 @@
 //! horizon self-shadowing. See the README for ownership and extension guidance.
 
 use avian3d::prelude::{ConstantLinearAcceleration, Position, RigidBody, Rotation};
+use bevy::camera::Exposure;
 use bevy::ecs::{change_detection::Tick, system::SystemChangeTick};
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
