@@ -26,6 +26,9 @@ retains the co-simulation construction profiles and first-ready workload
 snapshot in both modes. The windowed run also captures the first-ready image.
 
 Without `--startup-only`, the driver also qualifies a settled mission window.
+It requests High quality and uncapped rendering by default. Add `--desktop-pacing`
+to use the ordinary application vsync and focus policies at the same quality.
+The receipt includes the launch arguments and the modes the surface negotiated.
 This requires settled terrain, an optional authored handoff signal, five
 seconds of readiness, then ten seconds and at least 240 fresh simulation ticks.
 It rejects source changes, retired body identity, runtime faults, coupled-object
@@ -41,13 +44,25 @@ Receipts retain the starting frame count and the first-ready engine history so
 loading-frame count and recent stalls can be compared alongside wall-clock
 readiness. The engine history retains only 240 frames; it does not certify the
 maximum stall over a longer load.
-For 2K acceptance on Linux, use `--window-size 2560x1440 --min-fps 150`.
+For isolated native Linux presentation, install Weston with its headless, GL
+and kiosk modules and add `--private-wayland --window-size 2560x1440`.
+Each run owns a private compositor and a full-size application window. Its receipt
+records the compositor's DRM device and GL renderer, the application adapter
+and the negotiated surface modes. Inspect `weston.log` for DMA-BUF support.
+Use `--min-fps 150` to require the corresponding frame budget.
+For a separate diagnostic run, add `--compositor-timing` to record the private
+output's completed repaints during that measurement window. The driver pairs
+Weston's posted and finished output events and calculates intervals from the
+compositor's vblank timestamps. Compare `output_repaints.mean_hz` with
+`frame_summary.mean_fps`. The two rates can differ when the compositor selects
+among multiple submitted frames. Physical monitor scanout requires a desktop
+measurement.
 Use `--pointer-passthrough` on an interactive desktop to clear only the owned
 window's X11 input shape while preserving its visible shape and render target.
 The receipt records this setting; pointer events invalidate the isolated run.
-The optional sizing path requires `python3-xlib` and X11/XWayland. It resizes
-only the window whose native PID matches the owned process and verifies the
-active scene camera's physical target throughout the measured window. The FPS
+On an existing Wayland output the compositor determines the window geometry.
+On X11/XWayland, sizing uses `python3-xlib` to resize the owned PID's window.
+The driver verifies the active window camera's physical target throughout the measured window. The FPS
 gate requires both mean FPS and p95 frame time to meet the requested budget;
 receipts also report the percentage of frames within budget, the number over
 budget, p99 and the worst frame. Use `--measurement-seconds 60 --timeout 240`

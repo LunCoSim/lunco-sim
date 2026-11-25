@@ -2,6 +2,7 @@
 """Measure an owned production Twin load and a source-preserved settled window."""
 
 import argparse
+from contextlib import nullcontext
 import gzip
 import hashlib
 import json
@@ -12,6 +13,8 @@ import statistics
 import subprocess
 import sys
 import time
+
+from private_wayland import output_repaints, private_wayland
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 from runtime import (BINARY, ROOT, ProductionSession, assert_render_log_clean,
@@ -54,6 +57,12 @@ def check_load_budget(receipt, limit):
 
 def workloads():
     return subprocess.check_output(["ps", "-eo", "pid,pcpu,args", "--sort=-pcpu"], text=True).splitlines()[:12]
+
+
+def verify_camera_size(camera, size):
+    active = [row for row in camera["candidates"] if row.get("camera_active") and row.get("render_target") == "window"]
+    if len(active) != 1 or active[0]["physical_target_size"] != size:
+        raise RuntimeError(f"expected one active window camera at {size}, observed {active}")
 
 
 def capture_symbol_state(pid, output, phase):
@@ -145,6 +154,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--startup-only", action="store_true",
                         help="measure through first physics admission with default window pacing")
+    parser.add_argument("--desktop-pacing", action="store_true",
+                        help="measure the settled scene with the application's normal window pacing and vsync")
     parser.add_argument("--headless", action="store_true",
                         help="run the startup measurement without presentation")
     parser.add_argument("--symbols", action="store_true")
@@ -153,6 +164,10 @@ def main():
     parser.add_argument("--max-load-seconds", type=float,
                         help="require scene-open-to-physics readiness strictly below this limit")
     parser.add_argument("--window-size", help="require the active camera target size, e.g. 2560x1440")
+    parser.add_argument("--private-wayland", action="store_true",
+                        help="own a private Weston GL output at --window-size for native Linux presentation")
+    parser.add_argument("--compositor-timing", action="store_true",
+                        help="diagnose private Weston output repaint cadence during the settled window")
     parser.add_argument("--pointer-passthrough", action="store_true",
                         help="make the owned X11 window click-through; requires --window-size")
     parser.add_argument("--min-fps", type=float,
@@ -164,11 +179,19 @@ def main():
     args = parser.parse_args()
     if args.headless and not args.startup_only:
         parser.error("--headless requires --startup-only")
+    if args.desktop_pacing and args.headless:
+        parser.error("--desktop-pacing requires a window")
+    if args.compositor_timing and (not args.private_wayland or args.startup_only
+                                   or args.min_fps is not None or args.max_frame_ms is not None):
+        parser.error("--compositor-timing requires a settled --private-wayland diagnostic run without FPS budgets")
     if args.startup_only and any(
             value is not None for value in (args.handoff_property, args.min_fps, args.max_frame_ms)):
         parser.error("mission and frame budgets require the settled measurement window")
     if args.headless and (args.window_size or args.pointer_passthrough):
         parser.error("window sizing and pointer isolation require presentation")
+    if args.private_wayland and (not sys.platform.startswith("linux") or not args.window_size
+                                 or args.headless or args.pointer_passthrough):
+        parser.error("--private-wayland requires Linux, --window-size and a windowed session without X11 pointer isolation")
     if not math.isfinite(args.measurement_seconds) or args.measurement_seconds <= 0:
         parser.error("--measurement-seconds must be finite and greater than zero")
     if args.max_frame_ms is not None and (not math.isfinite(args.max_frame_ms) or args.max_frame_ms <= 0):
@@ -185,17 +208,21 @@ def main():
     if args.max_frame_ms is not None and args.tracy_port is not None:
         parser.error("frame stability acceptance requires a separate run without Tracy")
     window_size = None
+    use_x11_resize = False
     if args.window_size is not None:
         try:
             window_size = [int(value) for value in args.window_size.split("x")]
             assert len(window_size) == 2 and all(value > 0 for value in window_size)
         except (ValueError, AssertionError):
             parser.error("--window-size must contain two positive pixel dimensions, e.g. 2560x1440")
-        if not sys.platform.startswith("linux") or not os.environ.get("DISPLAY"):
-            parser.error("--window-size currently requires Linux with X11/XWayland and python3-xlib")
-        from Xlib.display import Display
-        os.environ.pop("WAYLAND_DISPLAY", None)
-        os.environ["WINIT_UNIX_BACKEND"] = "x11"
+        if not sys.platform.startswith("linux"):
+            parser.error("--window-size currently supports Linux native windows")
+        native_wayland = args.private_wayland or os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET")
+        use_x11_resize = args.pointer_passthrough or not native_wayland
+        if use_x11_resize:
+            if not os.environ.get("DISPLAY"):
+                parser.error("X11 sizing requires DISPLAY; use --private-wayland for an isolated native output")
+            from Xlib.display import Display
     if not os.environ.get("LUNCOSIM_BIN"):
         parser.error("set LUNCOSIM_BIN to the production executable")
     if not BINARY.is_file():
@@ -245,14 +272,27 @@ def main():
         bootstrap = ROOT / "assets/scenes/tests/twin_session_retirement/replacement/replacement.usda"
         extra_args = ["--scene", str(bootstrap)]
         if not args.startup_only:
-            extra_args += ["--no-throttle", "--no-vsync", "--render-quality", "high"]
-        with ProductionSession(args.port, windowed=not args.headless, extra_args=extra_args,
-                               log_path=output / "runtime.log") as session:
+            extra_args += ["--render-quality", "high"]
+            if not args.desktop_pacing:
+                extra_args += ["--no-throttle", "--no-vsync"]
+        receipt["launch_args"] = extra_args
+        display_context = (private_wayland(window_size, output, receipt, trace_repaints=args.compositor_timing)
+                           if args.private_wayland else nullcontext(None))
+        if use_x11_resize:
+            # X11 input shaping is an explicit request for an X11 client.
+            env = os.environ.copy()
+            env.pop("WAYLAND_DISPLAY", None)
+            env.pop("WAYLAND_SOCKET", None)
+            display_context = nullcontext(env)
+        with display_context as client_env, ProductionSession(
+            args.port, windowed=not args.headless, extra_args=extra_args,
+            log_path=output / "runtime.log", env=client_env,
+        ) as session:
             pid = session.process.pid
             receipt["pid"] = pid
             assert Path(f"/proc/{pid}/cwd").resolve() == ROOT
             assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
-            if window_size is not None:
+            if use_x11_resize:
                 display = Display()
                 try:
                     clients = display.screen().root.get_full_property(display.intern_atom("_NET_CLIENT_LIST"), 0)
@@ -347,6 +387,8 @@ def main():
                         session.capture_screenshot(output / "first-ready.png")
                         receipt["first_ready_capture_s"] = time.monotonic() - opened
                     if args.startup_only:
+                        if window_size is not None:
+                            verify_camera_size(command(session, "SceneCameraAudit"), window_size)
                         break
                 now = time.monotonic() - opened
                 ready = command(session, "GetReadiness")
@@ -409,17 +451,20 @@ def main():
                         measurement = time.monotonic()
                         measured_body = body
                         initial_frame = command(session, "EnginePerformance")["frame_sample_count"]
+                        if args.compositor_timing:
+                            repaint_log = output / "weston.log"
+                            repaint_start = repaint_log.stat().st_size
                         initial_tick = command(session, "SimulationTimingProfile")["fixed_tick"]["ticks_total"]
                         print("QUALIFIED", clear_since, flush=True)
                     if measurement is not None:
                         assert body == measured_body, "measured body lease changed"
                         camera = command(session, "SceneCameraAudit")
                         if window_size is not None:
-                            active = [row for row in camera["candidates"] if row.get("camera_active")]
-                            assert len(active) == 1, "expected exactly one active scene camera"
-                            assert active[0]["physical_target_size"] == window_size, active
+                            verify_camera_size(camera, window_size)
                         timing = command(session, "SimulationTimingProfile")
                         engine = command(session, "EnginePerformance")
+                        if args.compositor_timing:
+                            repaint_end = repaint_log.stat().st_size
                         last, history = engine["frame_sample_count"], engine["frame_time_samples_ms"]
                         frames.update({i: value for i, value in enumerate(history, last - len(history) + 1) if i > initial_frame})
                         receipt["samples"].append({"seconds": now, "PhysicsPerformance": physics,
@@ -428,6 +473,9 @@ def main():
                                                    "camera": camera,
                                                    "qualification": qualification})
                         if time.monotonic() - measurement >= args.measurement_seconds and timing["fixed_tick"]["ticks_total"] - initial_tick >= 240:
+                            if args.compositor_timing:
+                                receipt["output_repaints"] = output_repaints(
+                                    repaint_log, repaint_start, repaint_end)
                             break
                 time.sleep(0.25 if measurement is None else 0.5)
             else:
@@ -447,6 +495,19 @@ def main():
         receipt["source_after"] = source_snapshot(source_root)
         assert receipt["source_before"] == receipt["source_after"], "source changed during run"
         log = (output / "runtime.log").read_text(errors="replace")
+        if not args.headless:
+            receipt["surface_configurations"] = [
+                line.partition("Surface presentation configured: ")[2] for line in log.splitlines()
+                if "Surface presentation configured: " in line
+            ]
+            receipt["render_adapters"] = [
+                "AdapterInfo {" + line.partition("AdapterInfo {")[2] for line in log.splitlines()
+                if "bevy_render::renderer:" in line and "AdapterInfo {" in line
+            ]
+            if args.private_wayland and not (receipt["surface_configurations"] and receipt["render_adapters"]):
+                raise RuntimeError("private presentation measurement lacks renderer or surface configuration evidence in runtime.log")
+            if args.private_wayland and any("device_type: Cpu" in adapter for adapter in receipt["render_adapters"]):
+                raise RuntimeError("private presentation measurement selected a CPU rendering adapter")
         if args.pointer_passthrough:
             assert "name=scene.pointer," not in log, "pointer input entered the isolated measurement"
         assert not any(marker in log for marker in ("[rhai] on_tick() failed", "[rhai] on_start() failed", "[rhai] task leaf failed")), "authored script failed"

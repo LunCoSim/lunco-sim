@@ -485,7 +485,9 @@ to the same production scene fixture as the tutorial and observe its public
 `cmd:*` events, mission verdict, and live state. Count the mechanism that
 matters (`cmd:AcquireControl` plus a real port write, for example), then verify
 the resulting movement or value. Never make the observer send the same control
-commands as the lesson, and never accept `MISSION_COMPLETE` by itself.
+commands as the lesson, and never accept `MISSION_COMPLETE` by itself. A latched
+`SetPorts` level is not an interaction-clock heartbeat: observe the committed
+value and resulting motion rather than expecting repeated equal commands.
 
 This keeps tutorial regression tests in Rhai, where they can be edited and run
 without rebuilding the Rust core:

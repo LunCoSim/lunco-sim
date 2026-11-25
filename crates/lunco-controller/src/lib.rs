@@ -2045,8 +2045,8 @@ fn emit_intent_edges(
 /// Self-drive (the free avatar): drive the entity's OWN command surface from its
 /// OWN input via its OWN binding — the identical `SetPorts` path, no bespoke avatar
 /// movement code. Local & kinematic (`apply_fly` integrates the ports), so no
-/// seq/tick prediction bookkeeping. `resolve` writes every bound port (0 when idle),
-/// so a released key zeroes the port and motion stops.
+/// seq/tick prediction bookkeeping. The resolved input is persistent: a
+/// released key writes zero and stable admitted local levels need no new command.
 ///
 /// Runs in [`lunco_time::InteractionSchedule`] — the constant-rate, never-paused
 /// presentation step — so pausing the SIMULATION does not paralyse the user. Nothing
@@ -2057,7 +2057,19 @@ fn emit_intent_edges(
 /// avatar that possesses a vessel is no longer a self-driver, so its input goes back
 /// on the sim tick and freezes with the sim, as pause is meant to.
 fn drive_self_drivers(
-    q_self: Query<(Entity, &ActionState<UserIntent>, &ControlBinding), Without<ControlLink>>,
+    q_self: Query<
+        (
+            Entity,
+            &ActionState<UserIntent>,
+            &ControlBinding,
+            Option<&lunco_port_core::InputPorts>,
+            Has<lunco_embodiment_core::roles::LocalEmbodiment>,
+            Has<lunco_cosim_core::SimComponent>,
+        ),
+        Without<ControlLink>,
+    >,
+    holds: Option<Res<lunco_cosim_core::PortHolds>>,
+    diagnostics: Option<Res<lunco_cosim_core::CosimDiagnostics>>,
     egui_focus: Option<Res<lunco_control_core::EguiFocus>>,
     input_focus: Option<Res<bevy::input_focus::InputFocus>>,
     sim_intents: Option<Res<SimulatedIntents>>,
@@ -2067,7 +2079,7 @@ fn drive_self_drivers(
     let egui_keyboard =
         lunco_control_core::keyboard_input_captured(egui_focus.as_deref(), input_focus.as_deref());
     let sim_intents = sim_intents.as_deref();
-    for (entity, intents, binding) in q_self.iter() {
+    for (entity, intents, binding, ports, local, simulated) in q_self.iter() {
         let physical = PhysicalIntentFrame::capture(binding, intents, egui_keyboard);
         // A self-driver IS its own vessel, so it is its own intent subject.
         emit_intent_edges(
@@ -2079,6 +2091,30 @@ fn drive_self_drivers(
             &mut commands,
         );
         let writes = binding.resolve(|intent| intent_held(entity, intent, &physical, sim_intents));
+        // The local kinematic map and committed operator hold are authoritative.
+        // Reissue after release, another writer, a port edit or a fault; never
+        // infer successful admission merely from the previous sampled input.
+        if local
+            && !simulated
+            && let (Some(ports), Some(holds), Some(diagnostics)) =
+                (ports, holds.as_deref(), diagnostics.as_deref())
+            && writes.iter().all(|(name, value)| {
+                ports
+                    .values
+                    .get(name)
+                    .is_some_and(|live| live.to_bits() == value.to_bits())
+                    && holds
+                        .control_level(entity, name)
+                        .is_some_and(|live| live.to_bits() == value.to_bits())
+                    && diagnostics
+                        .landed
+                        .get(&entity)
+                        .is_some_and(|names| names.contains(name.as_str()))
+                    && !diagnostics.has_fault(entity, name)
+            })
+        {
+            continue;
+        }
         commands.trigger(lunco_cosim_core::commands::SetPorts {
             target: entity,
             writes,
@@ -3827,6 +3863,87 @@ mod tests {
             Some((1.0, -1.0, 1.0, 1.0)),
             "thrust and W/A/Q must reach the lander's command surface together"
         );
+    }
+
+    #[test]
+    fn local_self_driver_reuses_committed_levels_until_invalidated() {
+        use lunco_cosim_core::{PortHolds, commands::SetPorts};
+        use lunco_embodiment_core::roles::{Embodiment, LocalEmbodiment};
+        use lunco_port_core::InputPorts;
+        use lunco_time::InteractionSchedule;
+        #[derive(Resource, Default)]
+        struct CommandCount(usize);
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            lunco_time::TimePlugin,
+            lunco_cosim::CoSimPlugin,
+        ));
+        app.init_resource::<lunco_core::ActiveCommandId>();
+        app.init_resource::<CommandCount>();
+        app.add_systems(InteractionSchedule, drive_self_drivers);
+        app.add_observer(|_: On<SetPorts>, mut count: ResMut<CommandCount>| count.0 += 1);
+        let mut intents = ActionState::<UserIntent>::default();
+        intents.press(&UserIntent::MoveForward);
+        let target = app
+            .world_mut()
+            .spawn((
+                Embodiment,
+                LocalEmbodiment,
+                intents,
+                InputPorts::new(&["forward"]),
+                ControlBinding {
+                    binds: vec![(UserIntent::MoveForward, "forward".into(), 1.0)],
+                },
+            ))
+            .id();
+        let step = |app: &mut App| {
+            app.world_mut().run_schedule(InteractionSchedule);
+            app.world().resource::<CommandCount>().0
+        };
+        assert_eq!(step(&mut app), 1);
+        assert_eq!(
+            app.world()
+                .get::<InputPorts>(target)
+                .unwrap()
+                .cmd("forward"),
+            1.0
+        );
+        assert_eq!(step(&mut app), 1, "stable committed input needs no command");
+        app.world_mut()
+            .resource_mut::<PortHolds>()
+            .release(target, "forward");
+        assert_eq!(
+            step(&mut app),
+            2,
+            "an explicitly released hold must be re-admitted"
+        );
+        app.world_mut()
+            .get_mut::<InputPorts>(target)
+            .unwrap()
+            .values
+            .insert("forward".into(), 0.25);
+        assert_eq!(step(&mut app), 3, "another writer must invalidate reuse");
+        assert_eq!(
+            app.world()
+                .get::<InputPorts>(target)
+                .unwrap()
+                .cmd("forward"),
+            1.0
+        );
+        app.world_mut()
+            .get_mut::<ActionState<UserIntent>>(target)
+            .unwrap()
+            .release(&UserIntent::MoveForward);
+        assert_eq!(step(&mut app), 4, "key release emits the neutral level");
+        assert_eq!(
+            app.world()
+                .get::<InputPorts>(target)
+                .unwrap()
+                .cmd("forward"),
+            0.0
+        );
+        assert_eq!(step(&mut app), 4);
     }
 
     /// Pausing the SIM must not paralyse the USER: the free avatar's self-drive rides

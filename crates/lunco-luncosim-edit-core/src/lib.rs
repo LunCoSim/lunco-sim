@@ -81,6 +81,7 @@ impl Plugin for SceneEditPlugin {
         // picking backend cannot hit open terrain. Feed the same PointerClick
         // pipeline from the analytic GridSurfaceQuery instead of adding a second
         // click path to every terrain-aware tool.
+        app.init_scene_resource::<terrain_picking::TerrainPickCache>();
         app.add_systems(
             PreUpdate,
             terrain_picking::emit_terrain_hits.in_set(bevy::picking::PickingSystems::Backend),

@@ -836,6 +836,10 @@ row state through the existing lifecycle callback.
 
 ### 5c. Shared hierarchy presentation
 
+The entity hierarchy panel admits topology snapshots only while its dock tab is
+visible. Hiding it invalidates in-flight work and releases derived rows; opening
+it rebuilds from the current scene, including changes made while hidden.
+
 `lunco-workbench-widgets::tree::{branch, leaf}` is the single presentation owner for
 hierarchy rows rendered by workbench panels. It provides the common disclosure
 control, themed tree text, full-width row allocation, persistent expansion

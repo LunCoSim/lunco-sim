@@ -347,11 +347,13 @@ fn runtime_ui_facts(
     visibility_mode: &str,
     authored_programs: &[AuthoredRuntimeProgram],
     public_output_names: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
+    participant_ids: &[Entity],
+    participant_snapshots: &mut HashMap<Entity, (u32, Arc<ParticipantFacts>)>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, Ref<SimComponent>)>,
     q_paused: &Query<&lunco_core::SimulationObjectPaused>,
     q_inputs: &Query<&InputPorts>,
     q_parents: &Query<&ChildOf>,
@@ -455,43 +457,46 @@ fn runtime_ui_facts(
         })
         .unwrap_or_else(|| HookValue::Array(Vec::new()));
 
-    let mut participants = Vec::new();
-    if let Some(root) = root {
-        for (entity, sim) in q_sim.iter() {
-            if !is_owned_by_vessel(entity, root, q_parents) {
+    let mut participants = Vec::with_capacity(participant_ids.len());
+    for &entity in participant_ids {
+        let Ok((_, sim)) = q_sim.get(entity) else {
+            continue;
+        };
+        let tick = sim.last_changed().get();
+        if let Some((cached_tick, cached)) = participant_snapshots.get(&entity) {
+            if *cached_tick == tick && !sim.is_changed() {
+                participants.push(Arc::clone(cached));
                 continue;
             }
-            let path = q_paths
-                .get(entity)
-                .map(|(_, path)| path.path.clone())
-                .unwrap_or_default();
-            let public_names = cached_public_output_names(public_output_names, entity, || {
-                authored_output_names(entity, q_paths, stages, canonical)
-            });
-            let outputs = OutputSamples::capture(&sim.outputs, public_names);
-            let (status, error) = sim_status_facts(&sim.status);
-            let gid = q_gid
-                .get(entity)
-                .ok()
-                .map(|gid| HookValue::Int(gid.get() as i64))
-                .unwrap_or(HookValue::Unit);
-            participants.push((
-                path.clone(),
-                ParticipantFacts {
-                    fields: [
-                        ("entity_gid", gid),
-                        ("path", HookValue::str(path)),
-                        ("model", HookValue::str(sim.model_name.clone())),
-                        ("status", HookValue::str(status)),
-                        ("error", error.map_or(HookValue::Unit, HookValue::str)),
-                        ("inputs", scalar_hook_map(&sim.inputs)),
-                    ],
-                    outputs,
-                },
-            ));
         }
+        let path = q_paths
+            .get(entity)
+            .map(|(_, path)| path.path.clone())
+            .unwrap_or_default();
+        let public_names = cached_public_output_names(public_output_names, entity, || {
+            authored_output_names(entity, q_paths, stages, canonical)
+        });
+        let outputs = OutputSamples::capture(&sim.outputs, public_names);
+        let (status, error) = sim_status_facts(&sim.status);
+        let gid = q_gid
+            .get(entity)
+            .ok()
+            .map(|gid| HookValue::Int(gid.get() as i64))
+            .unwrap_or(HookValue::Unit);
+        let facts = Arc::new(ParticipantFacts {
+            fields: [
+                ("entity_gid", gid),
+                ("path", HookValue::str(path)),
+                ("model", HookValue::str(sim.model_name.clone())),
+                ("error", error.map_or(HookValue::Unit, HookValue::str)),
+                ("inputs", scalar_hook_map(&sim.inputs)),
+            ],
+            status,
+            outputs,
+        });
+        participant_snapshots.insert(entity, (tick, Arc::clone(&facts)));
+        participants.push(facts);
     }
-    participants.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     let telemetry = telemetry
         .iter()
@@ -552,7 +557,7 @@ fn runtime_ui_facts(
                 ),
             ),
         ],
-        participants: participants.into_iter().map(|(_, facts)| facts).collect(),
+        participants,
         programs,
         inputs,
     }
@@ -563,7 +568,7 @@ fn runtime_ui_facts(
 /// refreshes the owning runtime-surface cache.
 fn runtime_program_facts(
     authored_programs: &[AuthoredRuntimeProgram],
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, Ref<SimComponent>)>,
 ) -> Vec<HookValue> {
     authored_programs
         .iter()
@@ -620,19 +625,19 @@ impl OutputSamples {
 
 #[derive(Clone, PartialEq)]
 struct ParticipantFacts {
-    fields: [(&'static str, HookValue); 6],
+    fields: [(&'static str, HookValue); 5],
+    status: String,
     outputs: OutputSamples,
 }
 
 impl ParticipantFacts {
     fn hook_value(&self) -> HookValue {
         let (outputs, public_outputs) = self.outputs.hook_maps();
-        HookValue::map(
-            self.fields
-                .iter()
-                .cloned()
-                .chain([("outputs", outputs), ("public_outputs", public_outputs)]),
-        )
+        HookValue::map(self.fields.iter().cloned().chain([
+            ("status", HookValue::str(self.status.clone())),
+            ("outputs", outputs),
+            ("public_outputs", public_outputs),
+        ]))
     }
 }
 
@@ -643,7 +648,7 @@ enum ProjectionFacts {
     Ready(HookValue),
     Runtime {
         fields: Vec<(&'static str, HookValue)>,
-        participants: Vec<ParticipantFacts>,
+        participants: Vec<Arc<ParticipantFacts>>,
         programs: Vec<HookValue>,
         inputs: HookValue,
     },
@@ -659,12 +664,25 @@ impl ProjectionFacts {
                 programs,
                 inputs,
             } => {
+                // The generic summary is derived from the same immutable
+                // participant facts; authored policies still receive all ports.
+                let mut statuses = std::collections::BTreeMap::new();
+                for participant in participants {
+                    let status = participant.status.as_str();
+                    *statuses.entry(status).or_insert(0i64) += 1;
+                }
+                let status_counts = HookValue::map(
+                    statuses
+                        .into_iter()
+                        .map(|(status, count)| (status, HookValue::Int(count))),
+                );
                 let participants = participants
                     .iter()
-                    .map(ParticipantFacts::hook_value)
+                    .map(|facts| facts.hook_value())
                     .collect();
                 std::borrow::Cow::Owned(HookValue::map(fields.iter().cloned().chain([
                     ("participants", HookValue::Array(participants)),
+                    ("participant_status_counts", status_counts),
                     ("programs", HookValue::Array(programs.clone())),
                     ("inputs", inputs.clone()),
                 ])))
@@ -1101,27 +1119,23 @@ fn is_owned_by_vessel(entity: Entity, vessel: Entity, q_parents: &Query<&ChildOf
     false
 }
 
-fn resolve_authored_telemetry(
+struct AuthoredTelemetryChannel {
+    signal: SignalRef,
+    label: String,
+    unit: Option<String>,
+}
+
+fn authored_telemetry_channels(
     vessel: Entity,
-    signals: &SignalRegistry,
     q_parents: &Query<&ChildOf>,
     q_channels: &Query<(
         Entity,
         &lunco_telemetry_core::Parameter,
         Option<&lunco_core::markers::Callsign>,
     )>,
-) -> Vec<PublicTelemetryValue> {
-    // `Parameter` is the existing authored recording declaration. It is the
-    // complete, domain-neutral boundary for USD telemetry channels and for
-    // channels authored through the generic command/script API. Modelica's
-    // runtime catalog is intentionally not included: it is inspection state
-    // until an author promotes a value through a `Parameter` declaration.
-    //
-    // The registry is still the sole value/history source. This query only
-    // selects which authored declarations belong to the driven vessel; it
-    // never reads a domain output map or interprets a producer name.
+) -> Vec<AuthoredTelemetryChannel> {
     let mut seen = HashSet::new();
-    let mut values = q_channels
+    let mut channels = q_channels
         .iter()
         .filter_map(|(channel_entity, parameter, callsign)| {
             let callsign = callsign?;
@@ -1134,32 +1148,47 @@ fn resolve_authored_telemetry(
             {
                 return None;
             }
-            let signal = SignalRef::new(measured, parameter.name.clone());
-            if signals.signal_type(&signal) != Some(SignalType::Scalar)
-                || !signals.is_active(&signal)
+            Some(AuthoredTelemetryChannel {
+                signal: SignalRef::new(measured, parameter.name.clone()),
+                label: callsign.0.clone(),
+                unit: (!parameter.unit.is_empty()).then_some(parameter.unit.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+    channels.sort_by(|a, b| a.label.cmp(&b.label));
+    channels
+}
+
+fn resolve_authored_telemetry(
+    channels: &[AuthoredTelemetryChannel],
+    signals: &SignalRegistry,
+) -> Vec<PublicTelemetryValue> {
+    // Parameter owns membership; the registry remains the only live value,
+    // availability and fallback unit source, including after pause or reload.
+    channels
+        .iter()
+        .filter_map(|channel| {
+            if signals.signal_type(&channel.signal) != Some(SignalType::Scalar)
+                || !signals.is_active(&channel.signal)
             {
                 return None;
             }
             let value = signals
-                .scalar_history(&signal)
+                .scalar_history(&channel.signal)
                 .and_then(lunco_signal::ScalarHistory::back)?
                 .value;
-            let unit = (!parameter.unit.is_empty())
-                .then_some(parameter.unit.clone())
-                .or_else(|| signals.meta(&signal).and_then(|meta| meta.unit.clone()));
+            let unit = channel.unit.clone().or_else(|| {
+                signals
+                    .meta(&channel.signal)
+                    .and_then(|meta| meta.unit.clone())
+            });
             Some(PublicTelemetryValue {
-                // `ui:displayName` is the standard USD human-facing label and
-                // is projected onto the channel as Callsign. It also makes
-                // membership in this deliberately compact operator view
-                // explicit; a channel without it remains in the full catalog.
-                label: callsign.0.clone(),
+                label: channel.label.clone(),
                 value,
                 unit,
             })
         })
-        .collect::<Vec<_>>();
-    values.sort_by(|a, b| a.label.cmp(&b.label));
-    values
+        .collect()
 }
 
 /// Resolve the vessel the local avatar is driving, or `None` in free flight.
@@ -1751,6 +1780,41 @@ type DrivenExposureChanges = Or<(
     Changed<InputPorts>,
 )>;
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct SurfaceInventoryChanges<'w, 's> {
+    changed: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<ChildOf>,
+            Added<SimComponent>,
+            Changed<GlobalEntityId>,
+            Changed<lunco_usd_bevy_scene::UsdPrimPath>,
+            Changed<lunco_telemetry_core::Parameter>,
+            Changed<lunco_core::markers::Callsign>,
+        )>,
+    >,
+    parents: RemovedComponents<'w, 's, ChildOf>,
+    participants: RemovedComponents<'w, 's, SimComponent>,
+    ids: RemovedComponents<'w, 's, GlobalEntityId>,
+    paths: RemovedComponents<'w, 's, lunco_usd_bevy_scene::UsdPrimPath>,
+    parameters: RemovedComponents<'w, 's, lunco_telemetry_core::Parameter>,
+    callsigns: RemovedComponents<'w, 's, lunco_core::markers::Callsign>,
+}
+
+impl SurfaceInventoryChanges<'_, '_> {
+    fn changed(&mut self) -> bool {
+        let removals = self.parents.read().count()
+            + self.participants.read().count()
+            + self.ids.read().count()
+            + self.paths.read().count()
+            + self.parameters.read().count()
+            + self.callsigns.read().count();
+        removals != 0 || !self.changed.is_empty()
+    }
+}
+
 pub(crate) fn mark_exposure_dirty(
     driven_changes: Query<(), DrivenExposureChanges>,
     q_bodies: Query<(), Or<(Added<CelestialBody>, Changed<CelestialBody>)>>,
@@ -1761,7 +1825,13 @@ pub(crate) fn mark_exposure_dirty(
     scene_mount: Res<SceneMountState>,
     overlays: RuntimeOverlayInputs,
     mut refresh: ResMut<ExposureRefresh>,
+    mut inventory: ResMut<RuntimeSurfaceRootCache>,
+    mut inventory_changes: SurfaceInventoryChanges,
 ) {
+    if inventory_changes.changed() {
+        inventory.invalidate_inventory();
+        refresh.control_dirty = true;
+    }
     let driven_changed = !driven_changes.is_empty();
 
     let schema_changed = selected.is_changed();
@@ -1891,7 +1961,7 @@ pub(crate) struct ExposureQueries<'w, 's> {
     ids: Query<'w, 's, (Entity, &'static GlobalEntityId)>,
     wheels: Query<'w, 's, (Entity, &'static WheelRaycast, &'static Transform)>,
     com: Query<'w, 's, &'static ComputedCenterOfMass>,
-    sim: Query<'w, 's, (Entity, &'static SimComponent)>,
+    sim: Query<'w, 's, (Entity, Ref<'static, SimComponent>)>,
     object_pause: Query<'w, 's, &'static lunco_core::SimulationObjectPaused>,
     inputs: Query<'w, 's, &'static InputPorts>,
     channels: Query<
@@ -1972,6 +2042,9 @@ pub(crate) fn publish_exposure(
         let RuntimeSurfaceRootCache {
             roots,
             public_output_names,
+            participant_inventory,
+            participant_snapshots,
+            telemetry_inventory,
             retired_surface_ids,
             ..
         } = &mut *runtime_surface_roots;
@@ -1999,6 +2072,9 @@ pub(crate) fn publish_exposure(
                 &runtime.canonical,
                 roots,
                 public_output_names,
+                participant_inventory,
+                participant_snapshots,
+                telemetry_inventory,
                 retired_surface_ids,
                 &runtime.sessions,
                 runtime.local_session.0,
@@ -2502,6 +2578,9 @@ pub(crate) struct RuntimeSurfaceRootCache {
     initialized: bool,
     roots: Vec<AuthoredRuntimeSurface>,
     public_output_names: HashMap<Entity, Option<Arc<HashSet<String>>>>,
+    participant_inventory: HashMap<Entity, Vec<Entity>>,
+    participant_snapshots: HashMap<Entity, (u32, Arc<ParticipantFacts>)>,
+    telemetry_inventory: HashMap<Entity, Vec<AuthoredTelemetryChannel>>,
     retired_surface_ids: Vec<String>,
 }
 
@@ -2524,6 +2603,13 @@ struct AuthoredRuntimeProgram {
 }
 
 impl RuntimeSurfaceRootCache {
+    fn invalidate_inventory(&mut self) {
+        self.participant_inventory.clear();
+        self.participant_snapshots.clear();
+        self.telemetry_inventory.clear();
+        self.public_output_names.clear();
+    }
+
     fn refresh(
         &mut self,
         revision: Option<u64>,
@@ -2557,7 +2643,7 @@ impl RuntimeSurfaceRootCache {
         );
         self.roots
             .sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
-        self.public_output_names.clear();
+        self.invalidate_inventory();
         let current = self
             .roots
             .iter()
@@ -2582,7 +2668,7 @@ fn queue_runtime_surfaces(
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, Ref<SimComponent>)>,
     q_paused: &Query<&lunco_core::SimulationObjectPaused>,
     signals: &SignalRegistry,
     q_channels: &Query<(
@@ -2601,6 +2687,9 @@ fn queue_runtime_surfaces(
     canonical: &CanonicalStages,
     roots: &[AuthoredRuntimeSurface],
     public_output_names: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
+    participant_inventory: &mut HashMap<Entity, Vec<Entity>>,
+    participant_snapshots: &mut HashMap<Entity, (u32, Arc<ParticipantFacts>)>,
+    telemetry_inventory: &mut HashMap<Entity, Vec<AuthoredTelemetryChannel>>,
     retired_surface_ids: &[String],
     sessions: &lunco_core_session::SessionRegistry,
     local_session: lunco_command_contracts::SessionId,
@@ -2628,8 +2717,26 @@ fn queue_runtime_surfaces(
             .unwrap_or("none");
         let telemetry = {
             let _span = bevy::log::info_span!("exposure_runtime_surface_telemetry").entered();
-            resolve_authored_telemetry(root.entity, signals, q_parents, q_channels)
+            let channels = telemetry_inventory
+                .entry(root.entity)
+                .or_insert_with(|| authored_telemetry_channels(root.entity, q_parents, q_channels));
+            resolve_authored_telemetry(channels, signals)
         };
+        let participant_ids = participant_inventory.entry(root.entity).or_insert_with(|| {
+            let mut ids = q_sim
+                .iter()
+                .filter_map(|(entity, _)| {
+                    is_owned_by_vessel(entity, root.entity, q_parents).then_some(entity)
+                })
+                .collect::<Vec<_>>();
+            ids.sort_by_key(|&entity| {
+                q_paths
+                    .get(entity)
+                    .map(|(_, path)| path.path.clone())
+                    .unwrap_or_default()
+            });
+            ids
+        });
         queue_runtime_surface(
             exposures,
             preparation,
@@ -2641,6 +2748,8 @@ fn queue_runtime_surfaces(
             &root.visibility_mode,
             &root.programs,
             public_output_names,
+            participant_ids,
+            participant_snapshots,
             telemetry,
             q_name,
             q_callsign,
@@ -2676,12 +2785,14 @@ fn queue_runtime_surface(
     visibility_mode: &str,
     authored_programs: &[AuthoredRuntimeProgram],
     public_output_names: &mut HashMap<Entity, Option<Arc<HashSet<String>>>>,
+    participant_ids: &[Entity],
+    participant_snapshots: &mut HashMap<Entity, (u32, Arc<ParticipantFacts>)>,
     telemetry: Vec<PublicTelemetryValue>,
     q_name: &Query<&Name>,
     q_callsign: &Query<&lunco_core::markers::Callsign>,
     q_catalog_id: &Query<&lunco_core::CatalogEntryId>,
     q_gid: &Query<&GlobalEntityId>,
-    q_sim: &Query<(Entity, &SimComponent)>,
+    q_sim: &Query<(Entity, Ref<SimComponent>)>,
     q_paused: &Query<&lunco_core::SimulationObjectPaused>,
     q_inputs: &Query<&InputPorts>,
     q_parents: &Query<&ChildOf>,
@@ -2708,6 +2819,8 @@ fn queue_runtime_surface(
             visibility_mode,
             authored_programs,
             public_output_names,
+            participant_ids,
+            participant_snapshots,
             q_name,
             q_callsign,
             q_catalog_id,

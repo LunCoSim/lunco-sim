@@ -24,6 +24,7 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_core::{AppSceneExt, SceneResource};
 use lunco_environment::SunRenderState;
 use lunco_environment::horizon::{
     HorizonMap, HorizonShadowCache, HorizonShadowCacheConfig, SunQuery, TerrainSunProjectionCache,
@@ -151,6 +152,7 @@ pub(crate) fn build(app: &mut App) {
         },
     );
     app.init_resource::<HorizonShadowCacheConfig>();
+    app.init_scene_resource::<BlueprintBindingState>();
     app.init_resource::<lunco_render::RenderingQualitySettings>();
     app.add_systems(
         Update,
@@ -551,6 +553,13 @@ fn wire_non_terrain_sun_uniforms<'a>(
     }
 }
 
+#[derive(Resource, Default)]
+struct BlueprintBindingState {
+    applied: Option<(Vec3, Vec3, Vec4)>,
+    handles: HashSet<AssetId<ShaderMaterial>>,
+}
+impl SceneResource for BlueprintBindingState {}
+
 /// Keep Cartesian blueprint lines in the authored active terrain frame.
 ///
 /// BigSpace deliberately exposes camera-relative `GlobalTransform` values to
@@ -562,14 +571,27 @@ fn wire_non_terrain_sun_uniforms<'a>(
 /// Reading the finalized transform is important: re-projecting the semantic
 /// pose through the WorldGrid would round the same nested hierarchy a second,
 /// different way and make periodic lines move at large coordinates.
+#[allow(private_interfaces)]
 pub fn wire_blueprint_origin(
     origin: Query<(&CellCoord, &Grid), With<lunco_spatial::OriginAnchor>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     frame_render: Query<&GlobalTransform>,
     shader_mats: Option<ResMut<Assets<ShaderMaterial>>>,
     meshes: Query<&MeshMaterial3d<ShaderMaterial>, Without<RenderLayers>>,
+    changed_meshes: Query<
+        (),
+        (
+            Changed<MeshMaterial3d<ShaderMaterial>>,
+            Without<RenderLayers>,
+        ),
+    >,
+    mut removed_layers: RemovedComponents<RenderLayers>,
+    mut removed_materials: RemovedComponents<MeshMaterial3d<ShaderMaterial>>,
+    added_layers: Query<(), (Added<RenderLayers>, With<MeshMaterial3d<ShaderMaterial>>)>,
+    mut binding: ResMut<BlueprintBindingState>,
 ) {
     let Some(mut shader_mats) = shader_mats else {
+        binding.clear_scene();
         return;
     };
     let offset = origin
@@ -588,6 +610,9 @@ pub fn wire_blueprint_origin(
     // the precision loss BigSpace avoids.
     if let Some(active_frame) = active_frame {
         let Ok(frame_render) = frame_render.get(active_frame.0) else {
+            // No projection is admitted; rebuild membership on recovery even
+            // if changed-component and removal windows have expired.
+            binding.clear_scene();
             return;
         };
         let (_, render_rotation, render_position) = frame_render.to_scale_rotation_translation();
@@ -596,6 +621,24 @@ pub fn wire_blueprint_origin(
         frame_rotation = Vec4::from_array(render_rotation.inverse().to_array());
     }
 
+    let next = (blueprint_origin, frame_origin, frame_rotation);
+    let layers_removed = removed_layers.read().count() != 0;
+    let materials_removed = removed_materials.read().count() != 0;
+    let membership_changed = binding.applied.is_none()
+        || !changed_meshes.is_empty()
+        || !added_layers.is_empty()
+        || layers_removed
+        || materials_removed;
+    if membership_changed {
+        binding.handles.clear();
+        binding
+            .handles
+            .extend(meshes.iter().map(|handle| handle.0.id()));
+    }
+    if binding.applied == Some(next) && !shader_mats.is_changed() && !membership_changed {
+        return;
+    }
+    binding.applied = Some(next);
     let values = [
         (
             "blueprint_origin",
@@ -610,13 +653,10 @@ pub fn wire_blueprint_origin(
             ParamValue::Vec4(frame_rotation.to_array()),
         ),
     ];
-    let mut written: HashSet<AssetId<ShaderMaterial>> = HashSet::default();
-
-    for handle in &meshes {
-        if !written.insert(handle.0.id()) {
-            continue;
-        }
-        let Some(material) = shader_mats.get(&handle.0) else {
+    // Asset edits may change schema eligibility, but do not require another
+    // scene-mesh walk. Re-check only the retained unique material identities.
+    for &handle in &binding.handles {
+        let Some(material) = shader_mats.get(handle) else {
             continue;
         };
         if values
@@ -637,7 +677,7 @@ pub fn wire_blueprint_origin(
         if unchanged {
             continue;
         }
-        if let Some(mut material) = shader_mats.get_mut(&handle.0) {
+        if let Some(mut material) = shader_mats.get_mut(handle) {
             material.set_many(values.iter().map(|(name, value)| (*name, *value)));
         }
     }
@@ -823,6 +863,53 @@ mod tests {
 
         assert_eq!(actual, expected);
         assert_ne!(actual, Vec3::new(5.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn blueprint_binding_rebuilds_after_missing_frame_projection() {
+        use std::sync::Arc;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<ShaderMaterial>()
+            .init_scene_resource::<BlueprintBindingState>()
+            .add_systems(Update, wire_blueprint_origin);
+        let projection = GlobalTransform::from(Transform::from_xyz(3.0, 2.0, 1.0));
+        let frame = app.world_mut().spawn(projection).id();
+        app.insert_resource(lunco_spatial::ActivePhysicsFrame(frame));
+        app.update();
+        app.world_mut()
+            .entity_mut(frame)
+            .remove::<GlobalTransform>();
+        let schema = lunco_materials::ParamSchema::parse(
+            "struct Material { blueprint_origin: vec3<f32>, blueprint_frame_origin: vec3<f32>, blueprint_frame_rotation: vec4<f32>, }",
+        ).unwrap();
+        let mut material = ShaderMaterial::default();
+        material.set_schema(Arc::new(schema));
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderMaterial>>()
+            .add(material);
+        app.world_mut()
+            .spawn(MeshMaterial3d::<ShaderMaterial>(handle.clone()));
+        app.update();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<BlueprintBindingState>()
+                .applied
+                .is_none()
+        );
+        app.world_mut().entity_mut(frame).insert(projection);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Assets<ShaderMaterial>>()
+                .get(&handle)
+                .unwrap()
+                .get_vec3("blueprint_frame_origin"),
+            Some(Vec3::new(3.0, 2.0, 1.0))
+        );
     }
 
     #[test]

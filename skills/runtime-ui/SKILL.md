@@ -201,7 +201,10 @@ properties through the ordinary `engine-health` namespace; do not add a HUD
 reader for `DiagnosticsStore`, an Avian timing query, or another source-specific
 bridge. Native UI, HUI, API, telemetry, and recording consumers all read the
 common publication. For scalar participant state, use the shared
-`PortRegistry`; do not create a parallel port reader for a HUD.
+`PortRegistry`; do not create a parallel port reader for a HUD. For status
+summaries use the typed `participant_status_counts` map derived from the same
+participant capture; keep the complete `participants` array for policies that
+need individual inputs and outputs.
 
 `SimulationProgress` owner and reason facts are projected into each authored
 runtime surface as typed `simulation_progress` data. Let the active Rhai policy

@@ -2554,6 +2554,15 @@ pub struct LodMeshCache {
     retired: HashMap<AssetId<Mesh>, usize>,
     /// All live tile handles plus handles admitted or reused this publication frame.
     protected: HashSet<AssetId<Mesh>>,
+    accounting: std::sync::OnceLock<MeshAccounting>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct MeshAccounting {
+    total: u64,
+    resident: u64,
+    cached: u64,
+    retired: u64,
 }
 
 impl LodMeshCache {
@@ -2570,7 +2579,9 @@ impl LodMeshCache {
         let now = self.tick();
         let entry = self.map.get_mut(key)?;
         entry.last_used = now;
-        self.protected.insert(entry.mesh.id());
+        if self.protected.insert(entry.mesh.id()) {
+            self.accounting.take();
+        }
         Some((entry.mesh.clone(), entry.origin_y, entry.draw_bounds))
     }
 
@@ -2583,6 +2594,7 @@ impl LodMeshCache {
         bytes: usize,
     ) {
         let now = self.tick();
+        self.accounting.take();
         self.protected.insert(mesh.id());
         if let Some(old) = self.map.insert(
             key,
@@ -2601,9 +2613,11 @@ impl LodMeshCache {
     /// Invalidated cache identities remain accounted while geometry owns them.
     fn retain_entries(&mut self, mut keep: impl FnMut(&MeshCacheKey) -> bool) {
         let retired = &mut self.retired;
+        let accounting = &mut self.accounting;
         self.map.retain(|key, entry| {
             let kept = keep(key);
             if !kept {
+                accounting.take();
                 retired.insert(entry.mesh.id(), entry.bytes);
             }
             kept
@@ -2640,23 +2654,44 @@ impl LodMeshCache {
 
     /// Capture every live view's mesh identities, including retiring tiles.
     fn begin_frame(&mut self, live: HashSet<AssetId<Mesh>>) {
-        self.protected = live;
+        if self.protected != live {
+            self.protected = live;
+            self.accounting.take();
+        }
+        let before = self.retired.len();
         self.retired.retain(|id, _| self.protected.contains(id));
+        if self.retired.len() != before {
+            self.accounting.take();
+        }
     }
 
-    fn unique_meshes(&self) -> HashMap<AssetId<Mesh>, usize> {
-        let mut unique = self.retired.clone();
-        for entry in self.map.values() {
-            unique.insert(entry.mesh.id(), entry.bytes);
-        }
-        unique
+    fn accounting(&self) -> &MeshAccounting {
+        self.accounting.get_or_init(|| {
+            let mut unique = self.retired.clone();
+            let mut cached = HashSet::new();
+            for entry in self.map.values() {
+                unique.insert(entry.mesh.id(), entry.bytes);
+                cached.insert(entry.mesh.id());
+            }
+            let mut totals = MeshAccounting::default();
+            for (id, bytes) in unique {
+                let bytes = bytes as u64;
+                totals.total += bytes;
+                if self.protected.contains(&id) {
+                    totals.resident += bytes;
+                }
+                if cached.contains(&id) {
+                    totals.cached += bytes;
+                } else {
+                    totals.retired += bytes;
+                }
+            }
+            totals
+        })
     }
 
     fn accounted_bytes(&self) -> u64 {
-        self.unique_meshes()
-            .values()
-            .map(|bytes| *bytes as u64)
-            .sum()
+        self.accounting().total
     }
 
     /// Retire only unused cache handles. Actual global residents and handles
@@ -2679,6 +2714,7 @@ impl LodMeshCache {
                 break;
             }
             if let Some(entry) = self.map.remove(&key) {
+                self.accounting.take();
                 debug_assert!(!self.protected.contains(&entry.mesh.id()));
             }
         }
@@ -2697,29 +2733,12 @@ impl LodMeshCache {
     }
 
     fn publish_accounting(&self, status: &mut TerrainStreamStatus, byte_cap: u64) {
-        let unique = self.unique_meshes();
-        let cached = self
-            .map
-            .values()
-            .map(|entry| entry.mesh.id())
-            .collect::<HashSet<_>>();
-        status.mesh_accounted_bytes = unique.values().map(|bytes| *bytes as u64).sum();
-        status.mesh_cpu_bytes = status.mesh_accounted_bytes;
-        status.mesh_resident_bytes = unique
-            .iter()
-            .filter(|(id, _)| self.protected.contains(id))
-            .map(|(_, bytes)| *bytes as u64)
-            .sum();
-        status.mesh_cached_bytes = unique
-            .iter()
-            .filter(|(id, _)| cached.contains(id))
-            .map(|(_, bytes)| *bytes as u64)
-            .sum();
-        status.mesh_retired_bytes = unique
-            .iter()
-            .filter(|(id, _)| !cached.contains(id))
-            .map(|(_, bytes)| *bytes as u64)
-            .sum();
+        let accounting = self.accounting();
+        status.mesh_accounted_bytes = accounting.total;
+        status.mesh_cpu_bytes = accounting.total;
+        status.mesh_resident_bytes = accounting.resident;
+        status.mesh_cached_bytes = accounting.cached;
+        status.mesh_retired_bytes = accounting.retired;
         status.mesh_byte_limit = byte_cap;
     }
 }
@@ -10902,6 +10921,11 @@ mod draw_partition_tests {
             4,
             "a settled cover within both budgets stays resident"
         );
+        let initial = cache.accounted_bytes();
+        assert!(cache.accounting.get().is_some());
+        cache.begin_frame(HashSet::from([handles[3].id()]));
+        assert!(cache.accounting.get().is_some());
+        assert_eq!(cache.accounted_bytes(), initial);
         // Touch 0 so 1 becomes the oldest unprotected entry.
         assert!(cache.get(&key(0)).is_some());
         // Trim to 2 entries; 3 stands in for the current frame's cover.

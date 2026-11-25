@@ -285,6 +285,15 @@ pub fn update_terrain_physics_frame_poses(
     }
 }
 
+/// Exact identity of all admitted analytic terrain oracles and their poses in
+/// the active frame. Used to reuse a certified ray result, never to approximate
+/// the current surface or floating-origin transform.
+#[derive(Clone, PartialEq)]
+pub struct TerrainRaySurfaceKey {
+    frame: Entity,
+    entries: Vec<(Entity, u64, DVec3, DQuat)>,
+}
+
 /// The analytic terrain surface, queried in the grid frame.
 ///
 /// See the module docs: this deliberately holds NO `GlobalTransform`.
@@ -330,6 +339,23 @@ impl GridSurfaceQuery<'_, '_> {
             .iter()
             .find(|(_, _, pose)| pose.frame == frame)
             .map(|(entity, height_field, _)| (entity, height_field.0.surface_key()))
+    }
+
+    /// Return a complete comparison key only when every analytic terrain has
+    /// its pose in the active physics frame. Missing or retired poses must go
+    /// through the normal ray-query diagnostic path, not a stale cache.
+    pub fn ray_surface_key(&self) -> Option<TerrainRaySurfaceKey> {
+        let (frame, _) = self.frame()?;
+        let entries = self
+            .terrains
+            .iter()
+            .filter(|(_, _, pose)| pose.frame == frame)
+            .map(|(entity, height, pose)| {
+                (entity, height.0.surface_key(), pose.position, pose.rotation)
+            })
+            .collect::<Vec<_>>();
+        (entries.len() == self.all_terrains.iter().count())
+            .then_some(TerrainRaySurfaceKey { frame, entries })
     }
 
     /// Capture the current immutable terrain oracles and their active-frame
@@ -1165,6 +1191,34 @@ mod tests {
             .expect("active terrain must expose a cache identity");
 
         assert_eq!(key.0, terrain);
+    }
+
+    #[test]
+    fn ray_surface_identity_requires_current_oracles_and_projected_poses() {
+        let (mut app, terrain) = world_with_terrain(SITE_ELEVATION);
+        let query = app
+            .world_mut()
+            .register_system(|q: GridSurfaceQuery| q.ray_surface_key());
+        let original = app.world_mut().run_system(query).unwrap().unwrap();
+        assert!(app.world_mut().run_system(query).unwrap().as_ref() == Some(&original));
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(DemHeightField(flat_dem_at(2.0, 500.0)));
+        let edited = app.world_mut().run_system(query).unwrap().unwrap();
+        assert!(edited != original);
+        app.world_mut()
+            .entity_mut(terrain)
+            .insert(Transform::from_translation(Vec3::Y));
+        let project = app
+            .world_mut()
+            .register_system(update_terrain_physics_frame_poses);
+        app.world_mut().run_system(project).unwrap();
+        let moved = app.world_mut().run_system(query).unwrap().unwrap();
+        assert!(moved != edited);
+        app.world_mut()
+            .entity_mut(terrain)
+            .remove::<TerrainPoseInPhysicsFrame>();
+        assert!(app.world_mut().run_system(query).unwrap().is_none());
     }
 
     #[test]

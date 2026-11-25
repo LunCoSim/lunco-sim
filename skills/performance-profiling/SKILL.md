@@ -70,9 +70,16 @@ to improve a timing.
   When timing a native external `OpenFile`, verify the loaded scene plan uses
   the owning Twin's mount. Compare it with an additive open inside the Twin,
   which prepares a document preview through the separate document lifetime.
-- The existing `scripts/perf/twin_startup.py` accepts
-  `--window-size 2560x1440 --min-fps 150` for an owned Linux X11/XWayland run
-  (`python3-xlib` required). Add `--pointer-passthrough` on an interactive
+- For native Linux presentation, run `scripts/perf/twin_startup.py` with
+  `--private-wayland --window-size 2560x1440` for an isolated Weston GL output.
+  Record its DRM device, GL renderer, application adapter, surface modes and
+  physical camera target. Xvfb and physical-desktop runs are separate cohorts.
+  Use `--desktop-pacing` to reproduce normal vsync and focus policies. Use
+  `--compositor-timing` in a private diagnostic run to measure completed output
+  repaints alongside application frames. Match both the requested presentation
+  mode and the compositor's effective output cadence when diagnosing FIFO waits.
+  Add `--min-fps 150` for a budget. X11 sizing uses `python3-xlib`.
+  Add `--pointer-passthrough` on an interactive X11
   desktop to isolate pointer input to the owned window without changing its
   visible shape or render target. It checks the active camera target throughout the
   window, rejects incomplete frame history, and requires mean FPS plus p95
@@ -951,16 +958,9 @@ steps with 2304 named observables and excludes input/parameter fields. Compare
 the same fixture and retain its exact-value and clock checks. Qualify the
 `modelica_variable_projection` and `modelica_variables_missing` production gates
 and the compiled-metadata editor scenario after changing this boundary.
-For worker-side collection, the ignored solver-owner
-`observation_diagnostics::named_and_visited_observation_collection` compares
-native named-map collection with the common ME host's checked visitor into
-shared canonical `VarName` rows. Run it with `cargo test --release --locked
--p lunco-modelica-solver --lib
-observation_diagnostics::named_and_visited_observation_collection -j 4 --
---ignored --nocapture`. It checks names, f64 bits and current inputs at five
-communication points, then times 512 reads per mode in alternating order.
-Construction and advancement are excluded. Compare independent before/after
-executables' `visited_ns` values to isolate a label-transport change. Preserve
+For worker-side collection, profile the current Rumoca `SimulationSession`
+observation owner separately from application result admission. Separate the
+construction and advancement zones from observation collection, and preserve
 native input overlays, shared label identity, reset/lifecycle rejection, output
 order and complete finite-sample checks. Worker labels use Rumoca's existing
 `VarName` owner; never add another name interner or intern names on each step.
@@ -971,8 +971,8 @@ Qualify the `modelica_observation_failure` negative as well as variable,
 metadata, clock and receipt gates. Run compiled-editor metadata through the
 windowed workbench command owner; the headless scene-test host covers runtime
 observation and fault gates. The
-[owner contract](../../docs/reviews/modelica-batched-observation-2026-10-24.md)
-records the single reader and the coupled SDK/application promotion boundary.
+[owner contract](../../docs/architecture/29-rumoca-runtime-contracts.md#bound-numerical-publication)
+records the canonical observation identity and numerical publication boundary.
 Do not turn collection timing into a complete-worker or coupled-tick claim.
 Selected-output grouping belongs to `SolveRuntime`'s reusable request scratch.
 Preserve ascending program order and original within-program request order,

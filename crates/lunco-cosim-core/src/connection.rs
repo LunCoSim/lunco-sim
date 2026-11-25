@@ -302,6 +302,12 @@ impl PortHolds {
         levels
     }
 
+    /// Read the operator layer without letting an equal program hold stand
+    /// in for an admitted operator level.
+    pub fn control_level(&self, entity: Entity, port: &str) -> Option<f64> {
+        self.holds.get(&entity)?.get(port)?.control
+    }
+
     /// Read one live intent by borrowed port name.
     #[inline]
     pub fn get(&self, entity: Entity, port: &str) -> Option<f64> {

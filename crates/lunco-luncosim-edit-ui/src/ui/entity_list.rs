@@ -731,9 +731,16 @@ fn derive_entity_tree_view(input: EntityTreeBuildInput) -> EntityTreeView {
     view
 }
 
-/// Harvest an invalidated source only when the worker slot is available.
-pub(crate) fn entity_tree_build_due(build: Res<EntityTreeBuildState>) -> bool {
-    build.dirty && build.task.is_none()
+fn entity_tree_visible(snapshot: Option<&lunco_workbench_core::WorkbenchSnapshot>) -> bool {
+    snapshot.is_none_or(|snapshot| snapshot.is_panel_visible(PanelId("entity_list")))
+}
+
+/// Harvest visible invalidated sources only when the worker slot is available.
+pub(crate) fn entity_tree_build_due(
+    build: Res<EntityTreeBuildState>,
+    snapshot: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+) -> bool {
+    entity_tree_visible(snapshot.as_deref()) && build.dirty && build.task.is_none()
 }
 
 /// Record a topology invalidation without entering the query-heavy snapshot
@@ -743,7 +750,12 @@ pub(crate) fn mark_entity_tree_view_dirty(
     mut build: ResMut<EntityTreeBuildState>,
     settings: Res<EntityListSettings>,
     scene: EntityTreeSceneQueries,
+    snapshot: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    mut view: ResMut<EntityTreeView>,
 ) {
+    if !entity_tree_visible(snapshot.as_deref()) {
+        lunco_core::SceneResource::clear_scene(&mut *view);
+    }
     build.observed_scope = Some(entity_tree_scope(&settings, &scene));
     build.invalidate();
 }
@@ -790,7 +802,31 @@ pub(crate) fn scene_topology_changed(
     new_names: Query<(), Added<Name>>,
     named_candidates: Query<EntityTreeNamedCandidate>,
     mut removals: EntityTreeRemovals,
+    snapshot: Option<Res<lunco_workbench_core::WorkbenchSnapshot>>,
+    mut was_hidden: Local<bool>,
 ) -> bool {
+    let hidden = !entity_tree_visible(snapshot.as_deref());
+    let previous_hidden = core::mem::replace(&mut *was_hidden, hidden);
+    if hidden {
+        // The hidden tree has no consumer. Drain all event readers, invalidate
+        // the previous worker once, and rebuild from the live hierarchy when
+        // the panel becomes visible. No hidden source can become stale rows.
+        source_insertions.read().count();
+        removals.names.read().count();
+        removals.children.read().count();
+        removals.meshes.read().count();
+        removals.selectables.read().count();
+        removals.callsigns.read().count();
+        removals.catalog_ids.read().count();
+        removals.usd_paths.read().count();
+        removals.scene_roots.read().count();
+        removals.preview_roots.read().count();
+        removals.system_managed.read().count();
+        removals.cameras.read().count();
+        inserted_parents.clear();
+        admitted_candidates.clear();
+        return !previous_hidden;
+    }
     let scope = entity_tree_scope(&settings, &scene);
     let active_scene_root = scope.active_scene_root;
     admitted_candidates.clear();
@@ -951,7 +987,8 @@ pub(crate) fn scene_topology_changed(
         .boundary_changes
         .iter()
         .any(|entity| view.candidate_hierarchy_entities.contains(&entity));
-    let invalidated = build.observed_scope.as_ref() != Some(&scope)
+    let invalidated = previous_hidden
+        || build.observed_scope.as_ref() != Some(&scope)
         || named_changed
         || scene_hierarchy_changed
         || scene_boundary_changed
