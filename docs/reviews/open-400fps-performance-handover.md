@@ -725,3 +725,42 @@ photometry and transport, wall thermal dynamics, tank depletion and thrust.
 The full Rumoca evaluator suite passed all 620 tests. The production Rhai
 engine-out, fuel-exhaustion and oxidizer-exhaustion scenarios passed at ticks
 242, 213 and 125, matching the previous solver.
+
+The final release replays ran consecutively on logical CPU 12, after the
+desktop session exited. A full step includes input admission, integration,
+and reading all 3,295 observations. The phase CPU measurement uses the Linux
+process user and system counters between solver initialization and the last
+step. The host one-minute load averaged about 29 at the start of the baseline
+flight and 18 at the start of the updated flight.
+
+| Same 24 s descent | Previous | Updated |
+|---|---:|---:|
+| Mean full step in flight | 69.94 ms | 6.44 ms |
+| Mean integration in flight | 52.53 ms | 4.64 ms |
+| Mean full step after touchdown | 29.58 ms | 3.62 ms |
+| Mean integration after touchdown | 25.81 ms | 3.10 ms |
+| Replay process CPU time | 96.97 s | 9.09 s |
+
+The updated solver repeated at 7.49 and 9.41 ms per full flight step in two
+earlier runs under build load. The prior pin has also measured 27.90 ms in
+flight on a quieter host. The projection call counts and numerical comparisons
+were repeatable across runs.
+
+Separate full-Twin headless runs recorded identical ten-input maps, vehicle
+mass and engine-one thrust for every accepted step. At 24 s the vehicle
+mass was 3,936.629725705765 kg. During concurrent builds and runtime tests,
+physics admission took 56.75 s with the prior pin and 209.99 s with the new
+pin. Those runs establish live behavior. Isolated solver preparation,
+including the benchmark's separate plan inspection, used 9.52 and 8.46
+process CPU-seconds respectively.
+
+The integrated native release ran on the RTX 5060 Laptop GPU using Vulkan,
+a private Wayland output, 1600×1000 High quality and the authored tracking
+camera. The rendered lander reached touchdown. The settled window recorded
+480 frames at 31.54 mean application FPS, with 30.95 ms median and 47.47 ms
+p95 frame times. Physics advanced at 26.48 ticks/s. MainPropulsion averaged
+14.09 ms of worker time over 1,997 samples from mission start, and the
+runtime reported zero errors. Four concurrent compiler processes appeared
+in the workload snapshot at landing. These host conditions differ from the
+earlier native measurements, so the FPS change attributable to Rumoca is
+unresolved.
