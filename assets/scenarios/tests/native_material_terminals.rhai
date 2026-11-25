@@ -24,9 +24,17 @@ fn material_connect(path, source) {
 }
 fn material_prepare(doc) {
     let root = material_root(); let mat = root + "/Mat";
+    let alternate = root + "/Alternate"; let alternate_shader = alternate + "/Preview";
     let result = cmd("ApplyUsdOps", #{doc_id: doc, parent_gen: (), label: "Native material graph", ops: [
         material_add("/World", "NativeMaterialTerminal", "Scope"),
         material_add(root, "Shape", "Cube"),
+        material_add(root, "Unrelated", "Cube"),
+        material_add(root, "Alternate", "Material"),
+        material_add(alternate, "Preview", "Shader"),
+        material_attr(alternate_shader, "info:id", "token", "\"UsdPreviewSurface\""),
+        material_attr(alternate_shader, "inputs:diffuseColor", "color3f", "(0.8,0.2,0.1)"),
+        material_attr(alternate_shader, "outputs:surface", "token", "\"surface\""),
+        material_connect(alternate, alternate_shader),
         #{SetApiSchemas: #{edit_target: "@root@", path: material_shape(), schemas: ["MaterialBindingAPI"]}},
         material_add(root, "Mat", "Material"),
         material_add(mat, "Preview", "Shader"),
@@ -48,7 +56,10 @@ fn material_valid(doc) {
     if shape < 0 { print("MATERIAL_PENDING"); return; }
     let look = get(shape, "PbrLook");
     if get(shape, "Mesh3d") == () || look == () { print("MATERIAL_PENDING"); return; }
-    let topology = query("QueryUsdPrim", #{doc_id: doc, path: material_shape(), topology: true}).topology;
+    let inspected=query("QueryUsdPrim",#{doc_id:doc,path:material_shape(),topology:true});
+    if inspected==() || inspected.topology==() {print("MATERIAL_PENDING");return;}
+    let topology=inspected.topology;
+    if abs(look.base_color.red-0.2)>0.001 {print("MATERIAL_PENDING");return;}
     report_verdict([
         t_true(topology.parts[0].materials.shader == material_shader(),
             "inspection resolves the native Shader through the NodeGraph"),
@@ -57,6 +68,63 @@ fn material_valid(doc) {
         t_true(abs(look.perceptual_roughness - 0.3) < 0.001,
             "PBR consumer uses the terminal shader roughness")
     ], "NATIVE MATERIAL TERMINAL", "NATIVE_MATERIAL_TERMINAL");
+}
+fn material_binding_change(doc, alternate) {
+    let shape=material_entity(doc);
+    let unrelated=find_path(material_root()+"/Unrelated");
+    if !set(shape,"Transform.translation.x",3.0) || !set(unrelated,"Transform.translation.y",5.0) {
+        throw("runtime state probes could not be set");
+    }
+    let destination=material_root()+(if alternate {"/Alternate"} else {"/Mat"});
+    let result=cmd("ApplyUsdOp",#{doc_id:doc,parent_gen:(),
+        op:#{SetRelationship:#{edit_target:"@root@",path:material_shape(),name:"material:binding",targets:[destination]}}});
+    if result.ok!=true || result.status!="applied" {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_rebind(doc) {material_binding_change(doc,true);}
+fn material_restore(doc) {material_binding_change(doc,false);}
+fn material_rebound(doc) {
+    let shape=material_entity(doc);
+    let look=get(shape,"PbrLook");
+    if look==() || abs(look.base_color.red-0.8)>0.001 {print("MATERIAL_PENDING");return;}
+    let unrelated=find_path(material_root()+"/Unrelated");
+    report_verdict([
+        t_true(abs(look.base_color.green-0.2)<0.001 && abs(look.base_color.blue-0.1)<0.001,
+            "rebound geometry uses the new material"),
+        t_true(get(shape,"Transform.translation.x")==3.0 && get(unrelated,"Transform.translation.y")==5.0,
+            "material binding edits preserve runtime state of affected and unrelated geometry"),
+        t_true(get(shape,"Mesh3d")!=() && get(unrelated,"Mesh3d")!=(),
+            "material binding edits retain prepared geometry")
+    ],"NATIVE MATERIAL REBIND","NATIVE_MATERIAL_REBIND");
+}
+fn material_roughness_write(doc, value) {
+    let result=cmd("ApplyUsdOp",#{doc_id:doc,parent_gen:(),
+        op:material_attr(material_shader(),"inputs:roughness","float",value)});
+    if result.ok!=true || result.status!="applied" {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_bad_input(doc) { material_roughness_write(doc,"1.5"); }
+fn material_bad_input_verdict(doc) {
+    let shape=material_entity(doc);
+    let err=get(shape,"UsdSceneProjectionFailed");
+    if err==() {print("MATERIAL_PENDING");return;}
+    report_verdict([
+        t_true(err.to_string().contains("inputs:roughness") && get(shape,"Visibility").to_string().contains("Hidden"),
+            "a malformed live input is diagnosed and withheld"),
+        t_true(get(shape,"Transform.translation.x")==3.0 && abs(get(shape,"PbrLook").perceptual_roughness-0.3)<0.001,
+            "malformed material input retains admitted pose and previous material intent")
+    ],"NATIVE MATERIAL BAD INPUT","NATIVE_MATERIAL_BAD_INPUT");
+}
+fn material_repair_input(doc) { material_roughness_write(doc,"0.3"); }
+fn material_repaired_input(doc) {
+    let shape=material_entity(doc);
+    if get(shape,"UsdSceneProjectionFailed")!=() {print("MATERIAL_PENDING");return;}
+    report_verdict([
+        t_true(!get(shape,"Visibility").to_string().contains("Hidden") && get(shape,"Mesh3d")!=(),
+            "valid replacement input restores the already admitted visual"),
+        t_true(get(shape,"Transform.translation.x")==3.0 && get(find_path(material_root()+"/Unrelated"),"Transform.translation.y")==5.0,
+            "material repair does not reset geometry or unrelated runtime state")
+    ],"NATIVE MATERIAL INPUT REPAIR","NATIVE_MATERIAL_INPUT_REPAIR");
 }
 fn material_edit(doc) {
     let result = cmd("SetObjectProperty", #{entity_id: material_entity(doc), property: "roughness", value: "0.7"});

@@ -84,6 +84,61 @@ pub struct FrozenForReadiness {
     collider: bool,
 }
 
+/// A native collider disabled by a live control command. This ownership is
+/// independent of readiness and escape containment.
+#[derive(Component)]
+pub struct RuntimeColliderDisabled;
+
+/// Toggle one already admitted native collider without rebuilding its shape,
+/// body, or joint topology. Other disable owners cannot be cleared by this
+/// command; readiness must finish before collision can be changed.
+pub fn set_runtime_collider_enabled(
+    world: &mut World,
+    entity: Entity,
+    enabled: bool,
+) -> Result<(), String> {
+    if world.get::<Collider>(entity).is_none() {
+        return Err(format!("{entity:?} has no admitted native collider"));
+    }
+    let mut ancestor = entity;
+    for depth in 0..lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH {
+        if world.get::<crate::PhysicsObjectPaused>(ancestor).is_some() {
+            return Err(format!("{entity:?} is paused by physics containment"));
+        }
+        if world.get::<HeldForReadiness>(ancestor).is_some()
+            || world.get::<FrozenForReadiness>(ancestor).is_some()
+        {
+            return Err(format!("{entity:?} is held for physics readiness"));
+        }
+        let Some(parent) = world.get::<ChildOf>(ancestor) else {
+            break;
+        };
+        if depth + 1 == lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH {
+            return Err(format!(
+                "{entity:?} has excessive or cyclic collider ancestry"
+            ));
+        }
+        ancestor = parent.parent();
+    }
+    let runtime_disabled = world.get::<RuntimeColliderDisabled>(entity).is_some();
+    let disabled = world.get::<ColliderDisabled>(entity).is_some();
+    if disabled && !runtime_disabled {
+        return Err(format!("{entity:?} is disabled by another physics owner"));
+    }
+    if enabled {
+        if runtime_disabled {
+            world
+                .entity_mut(entity)
+                .remove::<(RuntimeColliderDisabled, ColliderDisabled)>();
+        }
+    } else if !runtime_disabled {
+        world
+            .entity_mut(entity)
+            .insert((RuntimeColliderDisabled, ColliderDisabled));
+    }
+    Ok(())
+}
+
 /// Marks a joint that readiness disabled along with its owning subtree.
 ///
 /// Avian keeps joints in the same simulation-island bookkeeping as bodies. A
@@ -127,6 +182,7 @@ pub(crate) fn reconcile_frozen_subtrees(
     >,
     frozen: Query<(Entity, &FrozenForReadiness)>,
     object_paused: Query<(), With<crate::escape::PhysicsObjectPaused>>,
+    runtime_disabled: Query<(), With<RuntimeColliderDisabled>>,
     mut commands: Commands,
 ) {
     let mut joints_to_freeze = Vec::new();
@@ -199,7 +255,8 @@ pub(crate) fn reconcile_frozen_subtrees(
         if record.body && !object_paused.contains(entity) {
             e.try_remove::<RigidBodyDisabled>();
         }
-        if record.collider && !object_paused.contains(entity) {
+        if record.collider && !object_paused.contains(entity) && !runtime_disabled.contains(entity)
+        {
             e.try_remove::<ColliderDisabled>();
         }
         e.try_remove::<FrozenForReadiness>();

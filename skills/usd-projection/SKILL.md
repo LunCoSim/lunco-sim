@@ -50,7 +50,16 @@ Apply that rule to authored facts. The current simulation and presentation
 values belong to their runtime owners. For example, use `SetSceneView` for a
 billboard's computed text and `SetPortsBatch` for named simulation inputs.
 Use `ApplyUsdTransientOps` when an actual composed `@view@` prim or opinion
-is required. See the
+is required.
+For moving interactive elements, use `TransformEntity` with
+`intent: "Interactive"` for discrete live poses, declared joint inputs for
+continuous physical motion, `SetColliderEnabled` for a prepared collider,
+and `SetSceneView` with `property: "visibility"` and a `Bool` value for
+already admitted presentation geometry. Target the namespace root for a
+subtree toggle; the runtime visibility owner preserves authored descendant and
+purpose opinions. Store the current interaction state
+in the runtime owner, not `@runtime@` or `@view@`. The live commands do not
+publish a USD notice or advance document generation. See the
 [live update routes](../../docs/architecture/50-usd-driven-visuals.md#live-values-and-saved-settings).
 
 For live physical mount edits, follow the notice-driven owner in
@@ -194,6 +203,18 @@ its error result. The SDK applies overall subtree pruning and standard
 `VisibilityAPI` purpose opinions. A failed read terminates and hides visual
 projection; inspect `UsdSceneProjectionFailed` through the shared reflection
 surface and use document topology diagnostics for failed composed reads.
+Initially invisible geometry stays prepared. Authored visibility notices
+refresh only the affected projected descendants in place. Runtime visibility
+is a local override, cleared on script retirement; visibility-sampled
+animation retains its own authority. Standard surface and UV texture input
+notices refresh the actual recorded producer dependencies, and direct
+standard PBR binding changes preserve geometry and native physics.
+Standalone analytic collision-primitive dimension changes update the same
+Avian collider through its native change-detection path and replace the
+related shared mesh. The `collision_enabled` production gate checks these
+identities and the new shape bounds; compound-body and joint topology edits
+still require their graph-safe owner.
+
 The focused production gate is `lunco://scenarios/tests/native_visibility.rhai`,
 attached to the settled replacement fixture through `RunScenarioAsset`. Require
 the visible-guide, ancestor-edit, malformed-type rejection, and native-read

@@ -50,7 +50,8 @@ use bevy::pbr::{
     wireframe::Wireframe,
 };
 use bevy::prelude::*;
-use bevy::render::{ExtractSchedule, RenderApp};
+use bevy::render::material_bind_groups::RenderMaterialBindings;
+use bevy::render::{ExtractSchedule, Render, RenderApp, RenderSystems};
 use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
 use lunco_usd_bevy_scene::UsdPrimDisplayMode;
 
@@ -155,6 +156,8 @@ impl Plugin for LuncoRenderPlugin {
             .register_type::<PbrLook>()
             .register_type::<bevy::camera::visibility::RenderLayers>()
             .add_observer(bind_pbr_look)
+            .add_observer(reject_default_usd_material)
+            .add_observer(retire_pending_pbr_look)
             .add_systems(
                 Update,
                 (
@@ -176,6 +179,13 @@ impl Plugin for LuncoRenderPlugin {
             render_app.configure_sets(
                 ExtractSchedule,
                 MeshExtractionSystems.after(MaterialExtractionSystems),
+            );
+            render_app.add_systems(
+                Render,
+                reconcile_cpu_material_bindings
+                    .after(RenderSystems::PrepareAssets)
+                    .before(RenderSystems::Specialize)
+                    .before(RenderSystems::Queue),
             );
             app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default())
                 // Run after scene projection, animation, and authored visibility
@@ -230,6 +240,43 @@ impl Plugin for LuncoRenderPlugin {
 
     fn cleanup(&self, app: &mut App) {
         local_light_shadow_relevance::finish(app);
+    }
+}
+
+/// The native CPU extractor runs before GPU material preparation. A newly
+/// prepared material can therefore be queueable this frame while its mesh
+/// instance still contains the previous/default slot. Reconcile the native
+/// instance's slot from the allocator's committed association before any phase
+/// specializes, queues or packs the instance. GPU mesh building already waits
+/// for this association at its own native preparation boundary.
+fn reconcile_cpu_material_bindings(
+    materials: Option<Res<bevy::pbr::RenderMaterialInstances>>,
+    bindings: Option<Res<RenderMaterialBindings>>,
+    instances: Option<Res<bevy::pbr::RenderMeshInstances>>,
+) {
+    let (Some(materials), Some(bindings), Some(instances)) = (materials, bindings, instances)
+    else {
+        return;
+    };
+    if !bindings.is_changed() {
+        return;
+    }
+    let bevy::pbr::RenderMeshInstances::CpuBuilding(instances) = &*instances else {
+        return;
+    };
+    for (entity, instance) in instances.iter() {
+        let Some(material) = materials.instances.get(entity) else {
+            continue;
+        };
+        // The native queue cannot submit an unprepared material. Only the
+        // allocator's actual published slot is eligible, never a guessed zero.
+        let Some(binding) = bindings.get(&material.asset_id) else {
+            continue;
+        };
+        let current = instance.material_bindings_index();
+        if current.group != binding.group || current.slot != binding.slot {
+            instance.set_material_bindings_index(*binding);
+        }
     }
 }
 
@@ -555,17 +602,110 @@ fn material_for(
     cache.resolve(look, materials, |look| standard_material(look, profile))
 }
 
+/// A changed appearance is awaiting one or more explicitly authored images.
+/// The previously bound material (if any) remains the active presentation.
+#[derive(Component)]
+struct PendingPbrLook;
+
+/// Inspect only the texture dependencies of this actual rendering profile.
+fn pbr_images_ready(
+    look: &PbrLook,
+    profile: RenderProfile,
+    images: &Assets<Image>,
+    server: &AssetServer,
+) -> Result<bool, String> {
+    if profile.is_fast() {
+        return Ok(true);
+    }
+    let textures = &look.textures;
+    let mut ready = true;
+    for handle in [
+        &textures.base_color,
+        &textures.emissive,
+        &textures.metallic_roughness,
+        &textures.normal_map,
+        &textures.occlusion,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if images.get(handle).is_some() {
+            continue;
+        }
+        match server.get_load_state(handle.id()) {
+            Some(bevy::asset::LoadState::Loaded) => continue,
+            Some(bevy::asset::LoadState::Failed(error)) => {
+                return Err(format!(
+                    "PBR texture {:?} failed to load: {error}",
+                    handle.id()
+                ));
+            }
+            _ => ready = false,
+        }
+    }
+    Ok(ready)
+}
+
+/// Wait only for unresolved look dependencies; never substitute a debug
+/// material. A terminal load failure remains visible through diagnostics.
+fn admit_pbr_look(
+    entity: Entity,
+    result: Result<bool, String>,
+    was_pending: bool,
+    commands: &mut Commands,
+) -> bool {
+    match result {
+        Ok(true) => {
+            if was_pending {
+                commands.entity(entity).try_remove::<PendingPbrLook>();
+            }
+            true
+        }
+        Ok(false) => {
+            if !was_pending {
+                commands.entity(entity).try_insert(PendingPbrLook);
+            }
+            false
+        }
+        Err(message) => {
+            if was_pending {
+                commands.entity(entity).try_remove::<PendingPbrLook>();
+            }
+            warn!("PBR appearance for {entity:?} rejected: {message}");
+            lunco_core::trigger_runtime_error(commands, "pbr-texture-load-failed", message);
+            false
+        }
+    }
+}
+
+/// A retired appearance no longer owns preparation work.
+fn retire_pending_pbr_look(removed: On<Remove<PbrLook>>, mut commands: Commands) {
+    commands
+        .entity(removed.entity)
+        .try_remove::<PendingPbrLook>();
+}
+
 /// `On<Add<PbrLook>>` — the moment intent appears, give it a material.
 fn bind_pbr_look(
     add: On<Add<PbrLook>>,
     looks: Query<&PbrLook>,
     profile: Res<RenderProfile>,
+    images: Res<Assets<Image>>,
+    server: Res<AssetServer>,
     mut cache: ResMut<PbrLookCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
     let e = add.entity;
     let Ok(look) = looks.get(e) else { return };
+    if !admit_pbr_look(
+        e,
+        pbr_images_ready(look, *profile, &images, &server),
+        false,
+        &mut commands,
+    ) {
+        return;
+    }
     let handle = material_for(look, *profile, &mut cache, &mut materials);
     let binding = PbrLookBinding {
         material_id: handle.id(),
@@ -587,6 +727,48 @@ fn bind_pbr_look(
     // marker in place would silently exclude a normal surface from every
     // shadow map, even though its new `PbrLook` allows casting.
     apply_shadow_flag(&mut commands, e, look);
+}
+
+/// Bevy deliberately assigns a bright magenta debug material to the default
+/// StandardMaterial handle. A projected surface without a resolved look must
+/// not submit that handle as an intermediate render state. The actual look
+/// owner will bind a concrete material when it is available.
+fn reject_default_usd_material(
+    inserted: On<Insert<MeshMaterial3d<StandardMaterial>>>,
+    materials: Query<&MeshMaterial3d<StandardMaterial>>,
+    projected: Query<
+        (),
+        Or<(
+            With<lunco_usd_bevy_scene::UsdPrimPath>,
+            With<lunco_usd_bevy_scene::UsdVisualShaderBound>,
+            With<PbrLook>,
+        )>,
+    >,
+    mut commands: Commands,
+) {
+    let entity = inserted.entity;
+    if !projected.contains(entity)
+        || !materials
+            .get(entity)
+            .is_ok_and(|material| material.0.id() == Handle::<StandardMaterial>::default().id())
+    {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        let Ok(mut target) = world.get_entity_mut(entity) else {
+            return;
+        };
+        // A real material may have been bound in the same command batch.
+        if target
+            .get::<MeshMaterial3d<StandardMaterial>>()
+            .is_some_and(|material| material.0.id() == Handle::<StandardMaterial>::default().id())
+        {
+            target.remove::<MeshMaterial3d<StandardMaterial>>();
+            if let Some(mut look) = target.get_mut::<PbrLook>() {
+                look.set_changed();
+            }
+        }
+    });
 }
 
 /// Re-bind when a look is edited in place (the Inspector or a script), and repair
@@ -613,17 +795,30 @@ fn rebind_changed_pbr_look(
             Option<&PbrLookBinding>,
             Has<MeshMaterial3d<ShaderMaterial>>,
             Has<NotShadowCaster>,
+            Has<PendingPbrLook>,
         ),
-        Or<(Changed<PbrLook>, Changed<Mesh3d>)>,
+        Or<(Changed<PbrLook>, Changed<Mesh3d>, With<PendingPbrLook>)>,
     >,
     profile: Res<RenderProfile>,
+    images: Res<Assets<Image>>,
+    server: Res<AssetServer>,
     mut cache: ResMut<PbrLookCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
-    for (e, look_ref, current, binding, has_shader_material, has_not_shadow_caster) in &changed {
-        let look_changed = look_ref.is_changed();
+    for (e, look_ref, current, binding, has_shader_material, has_not_shadow_caster, was_pending) in
+        &changed
+    {
+        let look_changed = look_ref.is_changed() || was_pending;
         let look = &*look_ref;
+        if !admit_pbr_look(
+            e,
+            pbr_images_ready(look, *profile, &images, &server),
+            was_pending,
+            &mut commands,
+        ) {
+            continue;
+        }
         // Mesh identity and material identity are independent. Most meshes that
         // enter this branch already have the correct PBR binding; leave it
         // untouched so a geometry refresh cannot manufacture a material change
@@ -776,6 +971,57 @@ mod tests {
             app.world().entity(camera).get::<ShadowFilteringMethod>(),
             Some(&ShadowFilteringMethod::Hardware2x2),
             "Graphics edits update filters supplied by the Graphics settings"
+        );
+    }
+
+    #[test]
+    fn pending_texture_keeps_previous_material_until_ready() {
+        let mut app = material_app();
+        let entity = app.world_mut().spawn(PbrLook::default()).id();
+        app.update();
+        let before = app
+            .world()
+            .get::<MeshMaterial3d<StandardMaterial>>(entity)
+            .unwrap()
+            .0
+            .clone();
+        let image = app.world().resource::<Assets<Image>>().reserve_handle();
+        app.world_mut()
+            .get_mut::<PbrLook>(entity)
+            .unwrap()
+            .textures
+            .base_color = Some(image.clone());
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .unwrap()
+                .0
+                .id(),
+            before.id()
+        );
+        assert!(app.world().get::<PendingPbrLook>(entity).is_some());
+        app.world_mut()
+            .resource_mut::<Assets<Image>>()
+            .insert(image.id(), Image::default())
+            .unwrap();
+        app.update();
+        assert!(app.world().get::<PendingPbrLook>(entity).is_none());
+        let bound = app
+            .world()
+            .get::<MeshMaterial3d<StandardMaterial>>(entity)
+            .unwrap();
+        assert_ne!(bound.0.id(), before.id());
+        assert_eq!(
+            app.world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(&bound.0)
+                .unwrap()
+                .base_color_texture
+                .as_ref()
+                .unwrap()
+                .id(),
+            image.id()
         );
     }
 

@@ -81,14 +81,8 @@ pub(crate) fn wheel_param(name: &str) -> Option<&'static WheelParam> {
     WHEEL_PARAMS.iter().find(|p| p.name == name)
 }
 
-/// Persist a `SetObjectProperty` **wheel-dynamics** or **visibility** tune into
-/// the active USD document's runtime overlay — the
-/// counterpart of the shader-parameter authoring path for the property classes
-/// it skips. Fully decoupled + disjoint: it authors wheel-param names (via
-/// [`wheel_param`]) or `visible` (standard USD `token visibility`). PBR intent
-/// is authored by the command handler through the canonical UsdPreviewSurface
-/// path below; keeping it out of this observer avoids two USD representations for
-/// one property.
+/// Persist wheel-dynamics and suspension parameters through their USD owner.
+/// Appearance and visibility use their validated command-handler transaction.
 pub fn persist_wheel_to_runtime_layer(
     trigger: On<SetObjectProperty>,
     api_registry: Res<lunco_api::registry::ApiEntityRegistry>,
@@ -130,14 +124,6 @@ pub fn persist_wheel_to_runtime_layer(
             .parse::<f32>()
             .ok()
             .map(|v| (usd_attr.to_string(), "float", v.to_string()))
-    } else if cmd.property == "visible" {
-        // Visibility → standard USD `token visibility`, which the prim
-        // instantiator already reads back (`inherited` / `invisible`), so a
-        // hide survives reload instead of being a live-only ECS `Visibility`
-        // write. A `token` literal is QUOTED in USD.
-        let hidden = matches!(cmd.value.trim(), "false" | "0" | "hidden");
-        let tok = if hidden { "invisible" } else { "inherited" };
-        Some(("visibility".to_string(), "token", format!("\"{tok}\"")))
     } else {
         None
     };
@@ -193,7 +179,7 @@ pub fn persist_wheel_to_runtime_layer(
 ///   `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
 ///   (requires `shader` set first, or a USD shader material). The shader's
 ///   reflected schema resolves the type; colours are `r,g,b`.
-/// - `visible` → `true`/`false` toggles `Visibility`.
+/// - `visible` → `true`/`false` through the same namespace visibility owner as `SetSceneView`.
 /// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
 ///   `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
 ///   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
@@ -565,7 +551,6 @@ pub fn on_set_object_property(
     active_command: Res<lunco_core::ActiveCommandId>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     mut q_shader_look: Query<&mut ShaderLook>,
-    mut q_vis: Query<&mut Visibility>,
     mut q_wheel: Query<&mut lunco_mobility::WheelRaycast>,
     mut q_susp: Query<&mut lunco_mobility::Suspension>,
     mut commands: Commands,
@@ -573,7 +558,18 @@ pub fn on_set_object_property(
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
-        warn!("SET_PROPERTY: no api_id={} in registry", cmd.entity_id);
+        let message = format!("SET_PROPERTY: no api_id={} in registry", cmd.entity_id);
+        warn!("{message}");
+        let command_id = active_command.get();
+        commands.queue(move |world: &mut World| {
+            lunco_api::executor::finish_command_result(
+                world,
+                command_id,
+                None,
+                Err::<lunco_command_contracts::Ack, _>(message),
+                lunco_api_core::ApiErrorCode::CommandRejected,
+            );
+        });
         return;
     };
 
@@ -667,16 +663,57 @@ pub fn on_set_object_property(
             info!("SET_PROPERTY: {} shader = {}", cmd.entity_id, cmd.value);
         }
         "visible" => {
-            let Ok(mut vis) = q_vis.get_mut(target) else {
-                warn!("SET_PROPERTY: entity {} has no Visibility", cmd.entity_id);
-                return;
-            };
-            let v = cmd.value.trim();
-            *vis = if matches!(v, "false" | "0" | "hidden") {
-                Visibility::Hidden
-            } else {
-                Visibility::Visible
-            };
+            let command_id = active_command.get();
+            let origin = active_command.origin();
+            let intent = cmd.intent;
+            let value = cmd.value.trim().parse::<bool>();
+            commands.queue(move |world: &mut World| {
+                use lunco_usd_bevy_scene::visibility::{
+                    presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
+                    write_runtime_visibility,
+                };
+                let result: Result<lunco_command_contracts::Ack, String> = (|| {
+                    let visible = value.map_err(|_| "visible requires true or false".to_owned())?;
+                    validate_runtime_visibility(world, target)?;
+                    if intent.is_persistent() {
+                        let doc = crate::doc_resolve::resolve_doc_for_entity(world, target)
+                            .ok_or("persistent visibility requires a USD document")?;
+                        let path = world
+                            .get::<UsdPrimPath>(target)
+                            .ok_or("visibility target has no USD identity")?
+                            .path
+                            .clone();
+                        let token = if visible { "inherited" } else { "invisible" };
+                        world.trigger(ApplyUsdOp {
+                            doc_id: doc,
+                            parent_gen: None,
+                            op: UsdOp::SetAttribute {
+                                edit_target: LayerId::runtime(),
+                                path,
+                                name: "visibility".into(),
+                                type_name: "token".into(),
+                                value: format!("\"{token}\""),
+                            },
+                        });
+                    } else {
+                        let script = presentation_actor(world, origin)?;
+                        if write_runtime_visibility(world, target, Some(visible), script) {
+                            reconcile_runtime_visibility(world, &[target]);
+                        }
+                    }
+                    Ok(lunco_command_contracts::Ack::default())
+                })();
+                if let Err(message) = &result {
+                    warn!("SET_PROPERTY: {message}");
+                }
+                lunco_api::executor::finish_command_result(
+                    world,
+                    command_id,
+                    None,
+                    result,
+                    lunco_api_core::ApiErrorCode::CommandRejected,
+                );
+            });
         }
         // PBR properties — for props/rovers on a plain surface rather than a custom
         // shader. Explicit arm ([`PBR_LOOK_KEYS`]) so these names never get stolen by

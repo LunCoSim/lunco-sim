@@ -3,13 +3,19 @@
 use bevy::prelude::*;
 use lunco_command_contracts::{Ack, Reject};
 use lunco_core::{
-    ActiveCommandId, CommandOrigin, CommandResults, GlobalEntityId, RuntimeScope, SceneMountState,
-    SceneTransitionCoordinator, on_command,
+    ActiveCommandId, CommandOrigin, CommandResults, GlobalEntityId, SceneMountState, on_command,
 };
 use lunco_scene_command_contracts::{SceneViewBatch, SceneViewValue, SetSceneView};
 use lunco_scripting_bridge_core::ScriptInstanceRetired;
 use lunco_usd_bevy_scene::billboard::{BillboardViewText, UsdBillboard};
-use std::collections::{HashMap, HashSet};
+use lunco_usd_bevy_scene::{
+    RuntimeVisibilityOverride,
+    visibility::{
+        presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
+        write_runtime_visibility,
+    },
+};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Register an owner for a named presentation property. Validation reads the
 /// current world. Application publishes only that property's runtime state and
@@ -18,12 +24,15 @@ use std::collections::{HashMap, HashSet};
 pub struct SceneViewProperties(HashMap<&'static str, SceneViewProperty>);
 
 /// Publish a validated presentation value with its optional script owner.
-pub type ApplySceneViewProperty = fn(&mut World, Entity, SceneViewValue, Option<GlobalEntityId>);
+/// Return whether the value changed and needs derived presentation reconciliation.
+pub type ApplySceneViewProperty =
+    fn(&mut World, Entity, SceneViewValue, Option<GlobalEntityId>) -> bool;
 
 #[derive(Clone, Copy)]
 struct SceneViewProperty {
     validate: fn(&World, Entity, &SceneViewValue) -> Result<(), String>,
     apply: ApplySceneViewProperty,
+    reconcile: Option<fn(&mut World, &[Entity])>,
 }
 
 impl SceneViewProperties {
@@ -33,10 +42,15 @@ impl SceneViewProperties {
         name: &'static str,
         validate: fn(&World, Entity, &SceneViewValue) -> Result<(), String>,
         apply: ApplySceneViewProperty,
+        reconcile: Option<fn(&mut World, &[Entity])>,
     ) {
         match self.0.entry(name) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(SceneViewProperty { validate, apply });
+                entry.insert(SceneViewProperty {
+                    validate,
+                    apply,
+                    reconcile,
+                });
             }
             std::collections::hash_map::Entry::Occupied(_) => {
                 panic!("duplicate scene view property: {name}");
@@ -48,13 +62,26 @@ impl SceneViewProperties {
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<SceneViewProperties>()
         .add_observer(retire_script_billboards)
-        .add_systems(lunco_core::SceneTeardown, clear_billboard_views);
+        .add_observer(retire_script_visibility)
+        .add_systems(
+            lunco_core::SceneTeardown,
+            (clear_billboard_views, clear_visibility_views),
+        );
     app.world_mut()
         .resource_mut::<SceneViewProperties>()
         .register(
             "billboard.text",
             validate_billboard_text,
             apply_billboard_text,
+            None,
+        );
+    app.world_mut()
+        .resource_mut::<SceneViewProperties>()
+        .register(
+            "visibility",
+            validate_visibility,
+            apply_visibility,
+            Some(reconcile_runtime_visibility),
         );
 }
 
@@ -108,26 +135,7 @@ fn apply_writes(
     batches: Vec<SceneViewBatch>,
 ) -> Result<(), String> {
     let _span = bevy::log::info_span!("apply_scene_view", entities = batches.len()).entered();
-    let script = match origin {
-        Some(CommandOrigin::Network { .. }) => {
-            return Err("SetSceneView changes only the local scene view".into());
-        }
-        Some(CommandOrigin::Rhai { context, actor, .. }) => {
-            if let Some(route) = context
-                .route
-                .filter(|route| route.scope == RuntimeScope::Twin)
-                && route.generation != 0
-                && world
-                    .get_resource::<SceneTransitionCoordinator>()
-                    .and_then(SceneTransitionCoordinator::completed_generation)
-                    != Some(route.generation)
-            {
-                return Err("SetSceneView source belongs to a retired scene generation".into());
-            }
-            actor
-        }
-        _ => None,
-    };
+    let script = presentation_actor(world, origin)?;
     let mounts = world
         .get_resource::<SceneMountState>()
         .ok_or_else(|| "SetSceneView requires a mounted scene".to_owned())?;
@@ -154,13 +162,25 @@ fn apply_writes(
             let (&name, owner) = property;
             (owner.validate)(world, target, &write.value)?;
             last_write.insert((target, name), prepared.len());
-            prepared.push((target, name, owner.apply, write.value));
+            prepared.push((target, name, owner.apply, owner.reconcile, write.value));
         }
     }
-    for (index, (target, name, apply, value)) in prepared.into_iter().enumerate() {
+    let mut reconcile_by_owner = BTreeMap::new();
+    for (index, (target, name, apply, reconcile, value)) in prepared.into_iter().enumerate() {
         if last_write[&(target, name)] == index {
-            apply(world, target, value, script);
+            if apply(world, target, value, script)
+                && let Some(reconcile) = reconcile
+            {
+                reconcile_by_owner
+                    .entry(name)
+                    .or_insert_with(|| (reconcile, Vec::new()))
+                    .1
+                    .push(target);
+            }
         }
+    }
+    for (_, (reconcile, targets)) in reconcile_by_owner {
+        reconcile(world, &targets);
     }
     Ok(())
 }
@@ -173,6 +193,9 @@ fn validate_billboard_text(
     if world.get::<UsdBillboard>(target).is_none() {
         return Err(format!("{target:?} has no enabled billboard"));
     }
+    if !matches!(value, SceneViewValue::Text { .. } | SceneViewValue::Clear) {
+        return Err("billboard.text requires Text or Clear".into());
+    }
     if matches!(value, SceneViewValue::Text { value } if value.len() > 4096) {
         return Err("billboard.text accepts at most 4096 UTF-8 bytes".into());
     }
@@ -184,7 +207,7 @@ fn apply_billboard_text(
     target: Entity,
     value: SceneViewValue,
     script: Option<GlobalEntityId>,
-) {
+) -> bool {
     let mut entity = world.entity_mut(target);
     match value {
         SceneViewValue::Text { value } => {
@@ -193,18 +216,24 @@ fn apply_billboard_text(
                 script,
             };
             if let Some(mut text) = entity.get_mut::<BillboardViewText>() {
-                text.set_if_neq(next);
+                text.set_if_neq(next)
             } else {
                 entity.insert(next);
+                true
             }
         }
+        SceneViewValue::Bool { .. } => unreachable!("validated billboard text"),
         SceneViewValue::Clear => {
             if script.is_none()
                 || entity
                     .get::<BillboardViewText>()
                     .is_some_and(|text| text.script == script)
             {
+                let changed = entity.contains::<BillboardViewText>();
                 entity.remove::<BillboardViewText>();
+                changed
+            } else {
+                false
             }
         }
     }
@@ -226,4 +255,74 @@ fn clear_billboard_views(mut commands: Commands, targets: Query<Entity, With<Bil
     for target in &targets {
         commands.entity(target).try_remove::<BillboardViewText>();
     }
+}
+
+/// Validate a local presentation visibility write without admitting new geometry.
+fn validate_visibility(
+    world: &World,
+    target: Entity,
+    value: &SceneViewValue,
+) -> Result<(), String> {
+    if !matches!(value, SceneViewValue::Bool { .. } | SceneViewValue::Clear) {
+        return Err("visibility requires Bool or Clear".into());
+    }
+    validate_runtime_visibility(world, target)
+}
+
+/// Apply the runtime override; clearing it restores the current composed value.
+fn apply_visibility(
+    world: &mut World,
+    target: Entity,
+    value: SceneViewValue,
+    script: Option<GlobalEntityId>,
+) -> bool {
+    let value = match value {
+        SceneViewValue::Bool { value } => Some(value),
+        SceneViewValue::Clear => None,
+        SceneViewValue::Text { .. } => unreachable!("validated visibility"),
+    };
+    write_runtime_visibility(world, target, value, script)
+}
+
+/// Restore authored visibility when the publishing scenario retires.
+fn retire_script_visibility(
+    retired: On<ScriptInstanceRetired>,
+    targets: Query<(Entity, &RuntimeVisibilityOverride)>,
+    mut commands: Commands,
+) {
+    let owner = retired.script;
+    let roots = targets
+        .iter()
+        .filter_map(|(entity, value)| (value.script == Some(owner)).then_some(entity))
+        .collect::<Vec<_>>();
+    if roots.is_empty() {
+        return;
+    }
+    commands.queue(move |world: &mut World| {
+        for &entity in &roots {
+            if world
+                .get::<RuntimeVisibilityOverride>(entity)
+                .is_some_and(|value| value.script == Some(owner))
+            {
+                world
+                    .entity_mut(entity)
+                    .remove::<RuntimeVisibilityOverride>();
+            }
+        }
+        reconcile_runtime_visibility(world, &roots);
+    });
+}
+
+/// Clear scene-local presentation overrides at teardown.
+fn clear_visibility_views(world: &mut World) {
+    let roots = world
+        .query_filtered::<Entity, With<RuntimeVisibilityOverride>>()
+        .iter(world)
+        .collect::<Vec<_>>();
+    for &entity in &roots {
+        world
+            .entity_mut(entity)
+            .remove::<RuntimeVisibilityOverride>();
+    }
+    reconcile_runtime_visibility(world, &roots);
 }

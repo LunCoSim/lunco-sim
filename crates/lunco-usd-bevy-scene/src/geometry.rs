@@ -59,6 +59,18 @@ pub fn read_mesh_collision_approximation(
     }
 }
 
+/// Shape-only dimension attributes that do not change a primitive's frame or
+/// topology. Visual and native collider owners use the same schema classifier.
+pub fn primitive_dimension_attribute(prim_type: &str, attribute: &str) -> bool {
+    match prim_type {
+        "Cube" => attribute == "size",
+        "Sphere" => attribute == "radius",
+        "Cylinder" | "Cone" | "Capsule" => matches!(attribute, "radius" | "height"),
+        "Plane" => matches!(attribute, "width" | "length"),
+        _ => false,
+    }
+}
+
 /// Canonical dimensions of a USD primitive shape, in metres.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ShapeDims {

@@ -381,6 +381,24 @@ Keep full raw logs available, but make the actionable path, consequence, and
 next action primary. Graphics-driver warnings must not hide a dropped control
 wire.
 
+### P1 — Local scene reconciliation and live interaction — partially delivered
+
+Use the [live scene update contract](../architecture/50-usd-driven-visuals.md#live-values-and-saved-settings):
+pose, contact participation and presentation are runtime-owner actions, not
+USD transactions. The root visibility owner scopes composed descendants by
+stage and mounted instance; a group toggle is one typed write. Native material
+and visibility edit failures can recover in place after a valid correction.
+The transform, collision, native material and native visibility production gates
+cover rejected commands, retained entity/mesh identity, and corrective edits.
+
+The remaining architectural boundary is graph-dependent structural editing.
+Reference/composition changes, custom/inherited binding ownership transitions
+and coupled physics topology still require their graph owners to reconcile the
+affected dependency closure; they may reset the stage today. Initial projection
+failure recovery (as distinct from an invalid edit of an already admitted
+surface) and animation/instance lifecycle stress coverage also remain open.
+Do not remove the dependency safety fence merely to suppress a visible reload.
+
 ## Twin package responsibilities
 
 The Twin owns the vehicle facts and mission policy. The shared tooling

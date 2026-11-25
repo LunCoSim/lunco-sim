@@ -23,6 +23,9 @@ fn on_start(me, ctx) {
     this.elapsed = 0.0;
     this.done = false;
     this.sent = false;
+    this.runtime_tested = false;
+    this.rejection_tested = false;
+    this.runtime_checks = [];
     this.target = find(TARGET_PATH);
     this.before = ();
     print("[transform-entity] -- active-frame nested-pose contract --");
@@ -58,9 +61,55 @@ fn on_tick(me, ctx) {
     }
 
     if !this.sent {
-        this.before = world_pos(this.target);
+        if this.before == () { this.before = world_pos(this.target); }
         if this.before == () { return; }
 
+        if !this.runtime_tested {
+            let authored = query("QueryUsdPrim", #{path:TARGET_PATH, attrs:["xformOp:translate"]});
+            if authored == () || authored.attrs == () { return; }
+            this.initial_authored = authored.attrs["xformOp:translate"];
+            this.generation = authored.document_generation;
+            this.visual = find_path(TARGET_PATH + "/Visual");
+            if this.visual < 0 { return; }
+            let result = cmd("TransformEntity", #{
+                entity_id: this.target,
+                translation: TARGET_POSITION,
+                rotation: TARGET_ROTATION,
+                intent: "Interactive"
+            });
+            if !result.ok { fail(this, "Interactive pose was rejected: " + result.error); return; }
+            this.runtime_tested = true;
+            return;
+        }
+        if !this.rejection_tested {
+            let live = world_pos(this.target);
+            let authored = query("QueryUsdPrim", #{path:TARGET_PATH, attrs:["xformOp:translate"]});
+            this.runtime_checks.push(t_max(vec_error(live, TARGET_POSITION), MAX_POSITION_ERROR,
+                "interactive pose changes the live active-frame position"));
+            this.runtime_checks.push(t_true(authored.document_generation == this.generation &&
+                authored.attrs["xformOp:translate"] == this.initial_authored &&
+                find_path(TARGET_PATH + "/Visual") == this.visual,
+                "interactive pose retains authored USD generation and visual identity"));
+            let invalid = cmd("TransformEntity", #{
+                entity_id: this.target, translation: TARGET_POSITION,
+                rotation: [0.0, 0.0, 0.0, 0.0], intent: "Interactive"
+            });
+            this.runtime_checks.push(t_true(!invalid.ok &&
+                query("QueryUsdPrim", #{path:TARGET_PATH}).document_generation == this.generation,
+                "a degenerate runtime pose is rejected without editing USD"));
+            let rejected = cmd("TransformEntity", #{
+                entity_id: this.target, translation: [1.0e60, 0.0, 0.0],
+                rotation: TARGET_ROTATION, intent: "Persistent"
+            });
+            this.runtime_checks.push(t_true(!rejected.ok, "unrepresentable persistent pose is rejected"));
+            this.rejection_tested = true;
+            return;
+        }
+        let unchanged = query("QueryUsdPrim", #{path:TARGET_PATH, attrs:["xformOp:translate"]});
+        this.runtime_checks.push(t_true(unchanged.document_generation == this.generation &&
+            unchanged.attrs["xformOp:translate"] == this.initial_authored &&
+            vec_error(world_pos(this.target), TARGET_POSITION) < MAX_POSITION_ERROR,
+            "rejected persistent transform neither authors nor changes the live pose"));
         let result = cmd("TransformEntity", #{
             entity_id: this.target,
             translation: TARGET_POSITION,
@@ -108,7 +157,7 @@ fn on_tick(me, ctx) {
     let position_error = vec_error(position, TARGET_POSITION);
     let authored_error = vec_error(attrs["xformOp:translate"], expected_local);
     let rotation_dot = quat_abs_dot(rotation, TARGET_ROTATION);
-    let checks = [];
+    let checks = this.runtime_checks;
     checks.push(t_moved(distance_from(this.before, position), 1.0,
         "TransformEntity did not move the target"));
     checks.push(t_max(position_error, MAX_POSITION_ERROR,

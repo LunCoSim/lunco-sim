@@ -29,6 +29,8 @@ Use the current value's owner to choose the update path:
 |---|---|---|
 | Control or co-simulation input | `SetPorts` / `SetPortsBatch` through the named port owner at the fixed tick | Author the default or connection in USD |
 | Scene presentation property | `SetSceneView` through the registered property owner, or a direct typed ECS write inside that owner | Author the presentation configuration in USD |
+| Discrete live pose (e.g. a door or a cart) | `TransformEntity` with `intent: "Interactive"` in the active physics frame | `TransformEntity` with `intent: "Persistent"` |
+| Contact participation of an admitted collider | `SetColliderEnabled` on the native collider entity | Author `PhysicsCollisionAPI` and `physics:collisionEnabled` |
 | Object appearance during interactive tuning | `SetObjectProperty` with `intent: "Interactive"` | Commit with `intent: "Persistent"` when the user accepts the setting |
 | Topology, composition or authoring metadata | Commit typed USD operations and reconcile the affected projection | The same document transaction |
 
@@ -38,6 +40,65 @@ registered owners, and publishes the last submitted value for each property and
 entity. Owners apply changes to their own components. This command does not
 advance document generation or publish a USD stage change. Use the ordinary
 document path if the new value needs to participate in USD composition.
+
+Opening a physical door is a runtime action, not a document edit.
+Read its authored initial state, limits, travel, or hinge configuration from
+USD; keep the current open/closed state in the scenario or actuator owner.
+Use joint input ports for continuously simulated hinges and sliders.
+For discrete placement of an already admitted object, `TransformEntity`
+with interactive intent uses the same active-frame pose and BigSpace/Avian
+bridge as the editor, without journaling a USD opinion. Both intents share
+one validated f64 parent-local pose; a rejected pose never reaches the journal. The fixed bridge
+updates physical descendant poses from their changed hierarchy; it does not
+recreate their colliders. Use `SetColliderEnabled` only for an existing native
+collider. It does not cook a disabled authored shape or override a readiness
+hold or a physics-containment pause. Motion and collision control are distinct
+from presentation visibility.
+
+```rhai
+cmd("TransformEntity", #{entity_id: leaf, translation: target_position,
+    rotation: target_rotation, intent: "Interactive"});
+cmd("SetColliderEnabled", #{target: panel, enabled: false});
+cmd("SetSceneView", #{batches: [
+    #{target: lamp, writes: [
+        #{property: "visibility", value: #{Bool: #{value: true}}}
+    ]}
+]});
+```
+
+`visibility` changes an already projected prim's presentation only. Initially
+hidden geometry remains prepared. Target the group root once: the scene
+visibility owner reconciles only its indexed composed namespace instance. A
+root reveal removes that root's blocking ordinary visibility opinion without
+revealing independently hidden descendants or purpose-suppressed guides.
+An invisible ancestor still dominates a descendant reveal. All writes in a
+batch are applied before derived visibility is reconciled; repeated unchanged
+opinions do not walk the subtree. `Clear` withdraws the root override, and
+retiring the publishing script clears its overrides. Do not walk the USD tree
+or split a group toggle into per-descendant commands in Rhai. A prim with
+time-sampled visibility retains its animation owner and rejects a direct
+independent visibility write. A transform-only animated prim may still have
+independently controlled visibility. The runtime resolver uses native
+Imageable schema accessors to substitute the live ordinary visibility opinion;
+no USD layer is mutated. `SetObjectProperty(visible, Interactive)` is the
+same visibility owner, not a direct Bevy component write; persistent visibility
+edits author the document and leave independent scene-view opinions intact.
+
+Do not use `ApplyUsdOps`, `ApplyUsdTransientOps`, or authored time samples
+to record live door toggles, equipment status, or continuously changing cart
+poses. Those are document transactions and can invoke projection. The runtime
+pose, contact and presentation paths above neither advance document generation
+nor issue a USD stage notice.
+
+Authored visibility changes reconcile the affected native composed descendants
+in place, keeping the ECS entities, meshes, and physics state. A direct standard
+PBR material binding on concrete geometry likewise changes its appearance
+intent rather than rebuilding the geometry. Standard material producer
+changes refresh the surfaces whose resolved shader/texture dependencies
+include that producer. Custom shader ownership changes, inherited/collection
+bindings and coarse composition or coupled-physics changes still require their
+topology-owner reconciliation; do not use these authoring paths for runtime
+interaction.
 
 ```rhai
 cmd("SetSceneView", #{batches: [

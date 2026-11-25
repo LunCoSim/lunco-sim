@@ -126,6 +126,18 @@ package checks after changing skill metadata or packaging.
   the shared asset layer may expose the tutorial catalog/source to consumers.
 - Every new mechanism must identify its authoritative owner, real consumer, and
   production-level test.
+- **Live interaction is not USD authoring.** Current motion, door/switch
+  state, actuator inputs, collision participation, and presentation visibility
+  belong to runtime owners. Use declared ports, `TransformEntity` with
+  `Interactive` intent for discrete poses, `SetColliderEnabled` for admitted
+  colliders, and `SetSceneView` for presentation. Do not update a USD layer or
+  advance document generation to implement live behavior. Genuine authored
+  edits reconcile only their affected consumers; a whole-stage reset remains
+  reserved for genuinely stage-wide or graph-dependent changes until the
+  owning graph can safely reconcile its local dependency closure. Never
+  bypass a physics topology guard to make an edit appear faster. Render
+  preparation must not show the debug material while its actual binding is
+  pending. See `docs/architecture/50-usd-driven-visuals.md`.
 - USD owns scene facts and standard fields (`doc`, `metersPerUnit`, `UsdShade`,
   `UsdPhysics`). Use composed USD reads for runtime behavior and authored-layer
   reads for authoring/document questions. A composed stage is inert: it does not
