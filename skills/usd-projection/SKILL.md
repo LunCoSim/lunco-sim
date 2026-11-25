@@ -149,11 +149,13 @@ must supply their authored knots and reject insufficient data. Do not infer
 knots during import or add an application knot generator.
 
 Native `UsdGeomXformable` owns transform evaluation. Static projection and
-animation use the shared `local_transform_at` reader, including matrix,
+animation use native ordered queries, including matrix,
 quaternion, Euler, inverse, and reset-stack operations. Do not add a rotation
 decoder or select an unordered transform attribute as an alternate pose.
 The immutable snapshot derives its render transform and `f64` geometry matrix
-from one native composition. Preserve both conversion orders: decompose and
+from one native composition. The live canonical stage retains native `XformQuery`
+handles for animation, invalidates them on committed stage edits, and derives
+the render pose and grid translation from one sample. Preserve both conversion orders: decompose and
 narrow before convention conversion for rendering, and convert the full matrix
 without narrowing for geometry. Do not derive geometry from a render transform.
 Animation topology helpers identify sampled channels; they do not evaluate

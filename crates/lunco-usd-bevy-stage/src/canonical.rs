@@ -17,7 +17,9 @@
 //! and captures change notices. Initial asset projection uses the immutable
 //! prepared plan; this stage owns authoring and incremental re-projection.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -66,6 +68,12 @@ impl RawStageChange {
 /// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
 pub struct CanonicalStage {
     stage: Stage,
+    // Retained non-Send OpenUSD queries, owned by this exact stage lifetime.
+    animated_transforms: RefCell<(
+        u64,
+        HashMap<SdfPath, crate::transform::NativeTransformQuery>,
+    )>,
+    committed_revision: Rc<Cell<u64>>,
     /// Original authored root identity; its extension selects the native codec.
     pub scene_layer: String,
     /// Sink inbox drained by the projection system each tick.
@@ -166,7 +174,10 @@ impl CanonicalStage {
         let sink_inbox = inbox.clone();
         let modified_layers = Arc::new(Mutex::new(HashSet::new()));
         let sink_modified_layers = modified_layers.clone();
+        let committed_revision = Rc::new(Cell::new(0u64));
+        let sink_revision = committed_revision.clone();
         let sink_id = stage.add_sink(move |_stage: &Stage, change: &CommittedChange<'_>| {
+            sink_revision.set(sink_revision.get().wrapping_add(1));
             sink_modified_layers
                 .lock()
                 .expect("canonical modified-layer lock poisoned")
@@ -192,6 +203,8 @@ impl CanonicalStage {
         });
         Self {
             stage,
+            animated_transforms: RefCell::new((0, HashMap::new())),
+            committed_revision,
             scene_layer: scene_layer.into(),
             inbox,
             modified_layers,
@@ -232,6 +245,34 @@ impl CanonicalStage {
     /// A [`StageView`] over the live composed stage for typed reads.
     pub fn view(&self) -> StageView<'_> {
         StageView::with_native_paths(&self.stage, self.native_asset_paths())
+    }
+
+    /// Sample an animated transform through a retained native ordered stack.
+    /// Stage metadata reads settle pending OpenUSD changes before consulting the
+    /// cache, and the stage sink invalidates topology before a changed stack is
+    /// sampled. A replacement owns an entirely new query cache.
+    pub fn sample_animated_transform(
+        &self,
+        path: &SdfPath,
+        time: f64,
+    ) -> Result<Option<crate::AnimatedTransformSample>, crate::TransformReadError> {
+        let view = self.view();
+        let convention = crate::stage_convention(&view).map_err(|_| crate::TransformReadError {
+            prim: path.to_string(),
+        })?;
+        let revision = self.committed_revision.get();
+        let mut cache = self.animated_transforms.borrow_mut();
+        if cache.0 != revision {
+            cache.0 = revision;
+            cache.1.clear();
+        }
+        let query = match cache.1.entry(path.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(crate::transform::NativeTransformQuery::new(&view, path)?)
+            }
+        };
+        query.sample(path, time, convention)
     }
 
     /// Identity of this canonical stage lifetime, independent of its asset id.

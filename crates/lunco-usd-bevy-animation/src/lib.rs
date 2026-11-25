@@ -20,9 +20,7 @@ use lunco_usd_bevy_stage::read::{
     attr_has_time_samples, read_primvar_vec3_at, read_token_at, read_vec3_f64_at,
     stage_time_codes_per_second,
 };
-use lunco_usd_bevy_stage::{
-    UsdReadObject, UsdStageAsset, grid_translation_d_at, local_transform_at, stage_convention,
-};
+use lunco_usd_bevy_stage::{UsdReadObject, UsdStageAsset};
 
 /// Install the USD animation planner and samplers.
 ///
@@ -392,55 +390,43 @@ pub fn sample_usd_animation(
             continue;
         };
         let time = time_secs * plan.time_codes_per_second;
-        let Ok(convention) = stage_convention(reader) else {
-            error!(
-                "[usd-animation] animated prim {} has invalid stage convention metadata; refusing sample",
-                plan.path.as_str()
-            );
-            continue;
-        };
         if matches!(plan.xform, XformDrive::OpOrder) {
-            if let Ok(Some(local)) = local_transform_at(reader, &plan.path, time) {
-                let grid_pose = parent
-                    .and_then(|parent| grids.get(parent.parent()).ok())
-                    .and_then(
-                        |grid| match grid_translation_d_at(reader, &plan.path, time) {
-                            Ok(Some(position)) => Some(Ok(grid.translation_to_grid(position))),
-                            Ok(None) => None,
-                            Err(error) => Some(Err(error)),
-                        },
-                    );
-                if let Some(Err(error)) = grid_pose.as_ref() {
-                    error_once!(
-                        "[usd-animation] {} has a double-precision translation that cannot be represented by its authored xform stack: {}",
-                        plan.path.as_str(),
-                        error
+            let sampled_transform = match stage.sample_animated_transform(&plan.path, time) {
+                Ok(Some(sample)) => sample,
+                Ok(None) => {
+                    reject_animation_projection(
+                        &mut commands,
+                        entity,
+                        format!("missing animated transform stack at {}", plan.path),
                     );
                     continue;
                 }
-                let local = convention.local_transform(local);
-                let mut next = Transform {
-                    translation: local.translation,
-                    rotation: local.rotation,
-                    scale: local.scale,
+                Err(error) => {
+                    reject_animation_projection(&mut commands, entity, error.to_string());
+                    continue;
+                }
+            };
+            let mut next = sampled_transform.pose;
+            let grid_pose = parent
+                .and_then(|parent| grids.get(parent.parent()).ok())
+                .zip(sampled_transform.grid_translation)
+                .map(|(grid, position)| grid.translation_to_grid(position));
+            if let Some((next_cell, local_translation)) = grid_pose {
+                let Some(mut cell) = cell else {
+                    error_once!(
+                        "[usd-animation] {} is a grid-direct animated double3 transform without CellCoord",
+                        plan.path.as_str()
+                    );
+                    continue;
                 };
-                if let Some(Ok((next_cell, local_translation))) = grid_pose {
-                    let Some(mut cell) = cell else {
-                        error_once!(
-                            "[usd-animation] {} is a grid-direct animated double3 transform without CellCoord",
-                            plan.path.as_str()
-                        );
-                        continue;
-                    };
-                    if *cell != next_cell {
-                        *cell = next_cell;
-                    }
-                    next.translation = local_translation;
+                if *cell != next_cell {
+                    *cell = next_cell;
                 }
-                animation.pose_time_code = time;
-                if *transform != next {
-                    *transform = next;
-                }
+                next.translation = local_translation;
+            }
+            animation.pose_time_code = time;
+            if *transform != next {
+                *transform = next;
             }
         }
         if plan.visibility

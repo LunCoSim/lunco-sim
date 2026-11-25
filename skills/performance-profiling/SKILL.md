@@ -27,6 +27,16 @@ to improve a timing.
 
 ## Required separation
 
+- For long USD animation tracks, compare `sample_usd_animation` on the actual
+  scene through a settled native desktop capture. Retain the canonical stage's
+  native `XformQuery` handles across frames; stage edits invalidate the cache,
+  and stage replacement retires it. The same native matrix supplies the render
+  pose and optional f64 grid position, with one stage-convention conversion per
+  output. Qualify `native_xform_animation.rhai`, including order retirement,
+  restoration and rejected malformed order. Nested-display `surface_present`
+  stalls are separate from native application costs; use the normal display
+  for product FPS acceptance.
+
 - Immutable API pose reads use the physics gate's World-owned query metadata;
   each short `SimulationPoseReadState` lease samples live values. Preserve
   frame/tick/readiness rejection and non-blocking lease failure. Name/path and

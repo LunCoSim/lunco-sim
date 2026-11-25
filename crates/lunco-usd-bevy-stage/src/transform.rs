@@ -49,29 +49,100 @@ pub fn grid_translation_d_at(
     path: &SdfPath,
     time: f64,
 ) -> Result<Option<DVec3>, TransformReadError> {
-    use openusd_schemas::geom::XformOpKind;
     let Some(matrix) = reader.local_transform_matrix_d_at(path, time)? else {
         return Ok(None);
     };
-    let has_translation = read_xform_op_order(reader, path).is_some_and(|order| {
-        order
-            .iter()
-            .rev()
-            .take_while(|op| op.as_str() != "!resetXformStack!")
-            .any(|op| {
-                matches!(
-                    XformOpKind::from_attr_name(op.strip_prefix("!invert!").unwrap_or(op)),
-                    Some(
-                        XformOpKind::Translate
-                            | XformOpKind::TranslateX
-                            | XformOpKind::TranslateY
-                            | XformOpKind::TranslateZ
-                            | XformOpKind::Transform
-                    )
-                )
-            })
-    });
+    let has_translation =
+        read_xform_op_order(reader, path).is_some_and(|order| ordered_translation(&order));
     Ok(has_translation.then(|| matrix.w_axis.truncate()))
+}
+
+fn ordered_translation(order: &[String]) -> bool {
+    use openusd_schemas::geom::XformOpKind;
+    order
+        .iter()
+        .rev()
+        .take_while(|op| op.as_str() != "!resetXformStack!")
+        .any(|op| {
+            matches!(
+                XformOpKind::from_attr_name(op.strip_prefix("!invert!").unwrap_or(op)),
+                Some(
+                    XformOpKind::Translate
+                        | XformOpKind::TranslateX
+                        | XformOpKind::TranslateY
+                        | XformOpKind::TranslateZ
+                        | XformOpKind::Transform
+                )
+            )
+        })
+}
+
+/// One native evaluation at the render projection boundary. The optional
+/// parent-local translation retains f64 for direct BigSpace grid placement.
+pub struct AnimatedTransformSample {
+    pub pose: Transform,
+    pub grid_translation: Option<DVec3>,
+}
+
+/// A native ordered transform stack with retained OpenUSD attribute queries.
+/// Its lifetime is bounded by the canonical stage's committed revision.
+pub(crate) struct NativeTransformQuery {
+    query: openusd_schemas::geom::XformQuery,
+    has_order: bool,
+    has_translation: bool,
+}
+
+impl NativeTransformQuery {
+    pub(crate) fn new(reader: &StageView<'_>, path: &SdfPath) -> Result<Self, TransformReadError> {
+        use openusd_schemas::geom::{XformQuery, Xformable};
+        let order = validated_live_xform_op_order(reader, path)?;
+        let prim = reader
+            .stage()
+            .prim(path)
+            .map_err(|_| malformed_transform(path))?;
+        let query = XformQuery::new(&Xformable::from_prim_unchecked(prim))
+            .map_err(|_| malformed_transform(path))?;
+        let has_translation = order.as_deref().is_some_and(ordered_translation);
+        Ok(Self {
+            query,
+            has_order: order.is_some(),
+            has_translation,
+        })
+    }
+
+    fn matrix(&self, path: &SdfPath, time: f64) -> Result<Option<DMat4>, TransformReadError> {
+        if !self.has_order {
+            return Ok(None);
+        }
+        let matrix = self
+            .query
+            .local_transform(openusd::usd::TimeCode::new(time))
+            .map_err(|_| malformed_transform(path))?;
+        native_matrix_d(matrix, path).map(Some)
+    }
+
+    /// Both the render pose and grid translation come from the same evaluation.
+    pub(crate) fn sample(
+        &self,
+        path: &SdfPath,
+        time: f64,
+        convention: ConventionTransform,
+    ) -> Result<Option<AnimatedTransformSample>, TransformReadError> {
+        let Some(matrix) = self.matrix(path, time)? else {
+            return Ok(None);
+        };
+        let pose = convention.local_transform(project_transform_matrix_d(matrix, path)?);
+        let grid_translation = self.has_translation.then(|| {
+            convention
+                .canonical_local_matrix_d(matrix)
+                .w_axis
+                .truncate()
+        });
+        Ok(Some(AnimatedTransformSample {
+            pose,
+            grid_translation,
+        }))
+    }
 }
 
 /// Compose a live OpenUSD transform through the shared reader contract.
@@ -105,32 +176,27 @@ pub(crate) fn prepare_transform_at(
     time: f64,
     active: bool,
 ) -> Result<PreparedTransform, TransformReadError> {
-    use openusd_schemas::geom::{XformQuery, Xformable};
-    let order = validated_live_xform_op_order(reader, path)?;
-    let prim = reader
-        .stage()
-        .prim(path)
-        .map_err(|_| malformed_transform(path))?;
-    let query = XformQuery::new(&Xformable::from_prim_unchecked(prim))
-        .map_err(|_| malformed_transform(path))?;
-    let local = if active && order.is_some() {
-        let matrix = query
-            .local_transform(openusd::usd::TimeCode::new(time))
-            .map_err(|_| malformed_transform(path))?;
-        let matrix = native_matrix_d(matrix, path)?;
-        let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
-        let raw = project_transform_matrix_d(matrix, path)?;
-        Some((
-            convention.local_transform(raw),
-            convention.canonical_local_matrix_d(matrix),
-        ))
+    let query = NativeTransformQuery::new(reader, path)?;
+    let local = if active {
+        match query.matrix(path, time)? {
+            Some(matrix) => {
+                let convention = stage_convention(reader).map_err(|_| malformed_transform(path))?;
+                let raw = project_transform_matrix_d(matrix, path)?;
+                Some((
+                    convention.local_transform(raw),
+                    convention.canonical_local_matrix_d(matrix),
+                ))
+            }
+            None => None,
+        }
     } else {
         None
     };
     Ok(PreparedTransform {
         local,
-        resets_stack: query.resets_xform_stack(),
+        resets_stack: query.query.resets_xform_stack(),
         might_vary: query
+            .query
             .transform_might_be_time_varying()
             .map_err(|_| malformed_transform(path))?,
     })
@@ -492,6 +558,69 @@ def Xform "Vehicle"
             grid_translation_d_at(&stage.view(), &path, 5.0).expect("valid stack"),
             Some(DVec3::new(149_597_870_700.25, 0.0, 0.0))
         );
+    }
+
+    #[test]
+    fn retained_animation_query_tracks_committed_stack_and_sample_edits() {
+        let stage = crate::canonical::CanonicalStage::from_recipe(&StageRecipe::from_source(
+            "sampled.usda",
+            r#"#usda 1.0
+(metersPerUnit = 0.01, upAxis = "Z")
+def Xform "Part" {
+    double3 xformOp:translate.timeSamples = {0: (100, 200, 300), 10: (300, 400, 500)}
+    double xformOp:rotateZ = 90
+    uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateZ"]
+}
+"#,
+        ))
+        .unwrap();
+        let path = SdfPath::new("/Part").unwrap();
+        let verify = |time| {
+            let sample = stage
+                .sample_animated_transform(&path, time)
+                .unwrap()
+                .unwrap();
+            let view = stage.view();
+            let expected = local_transform_at(&view, &path, time).unwrap().unwrap();
+            assert!(
+                sample
+                    .pose
+                    .translation
+                    .abs_diff_eq(expected.translation, 1e-6)
+            );
+            assert!(sample.pose.rotation.abs_diff_eq(expected.rotation, 1e-6));
+            assert!(sample.pose.scale.abs_diff_eq(expected.scale, 1e-6));
+            assert_eq!(
+                sample.grid_translation,
+                grid_translation_d_at(&view, &path, time).unwrap()
+            );
+            sample
+        };
+        let first = verify(5.0).pose.translation;
+        verify(2.0);
+        verify(9.0);
+        let prim = stage.stage().prim(&path).unwrap();
+        prim.attribute("xformOp:translate")
+            .set_at(
+                openusd::sdf::Value::Vec3d(openusd::gf::vec3d(900.0, 800.0, 700.0)),
+                openusd::usd::TimeCode::new(5.0),
+            )
+            .unwrap();
+        let edited = verify(5.0).pose.translation;
+        assert_ne!(edited, first);
+        prim.attribute("xformOpOrder")
+            .set(openusd::sdf::Value::TokenVec(vec![
+                "xformOp:rotateZ".into(),
+                "xformOp:translate".into(),
+            ]))
+            .unwrap();
+        assert_ne!(verify(5.0).pose.translation, edited);
+        prim.attribute("xformOpOrder")
+            .set(openusd::sdf::Value::TokenVec(vec![
+                "xformOp:rotateZ".into(),
+            ]))
+            .unwrap();
+        assert_eq!(verify(5.0).grid_translation, None);
     }
 
     #[test]
