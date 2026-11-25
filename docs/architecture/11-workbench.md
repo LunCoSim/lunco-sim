@@ -1145,7 +1145,7 @@ UI surfaces the same resource three ways — a named Settings submenu row
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
 three converge on the same persisted resource.
 
-LunCoSim's Settings ▸ HUD submenu is the discoverable view for the shipped
+LunCoSim's View ▸ HUDs submenu is the discoverable view for the shipped
 visibility controls. Its Telemetry graphs row calls `SetGraphHud` over
 `lunco-viz`'s registered scene resource. A searchable Parameters picker selects
 up to four measured channels through the shared native grid mutation owner;
@@ -1157,26 +1157,44 @@ commands. No document or tab opens and no additional history is recorded.
 `GraphHuds` owns independent HUD identities, each with its own grid, parameter
 selection, visibility and measured native window geometry. `CreateGraphHud`
 allocates another instance; `RemoveGraphHud` releases only its grid and plots.
-The title-bar **×** dispatches removal; Settings → HUD visibility toggles retain
+The title-bar **×** dispatches removal; View → HUDs visibility toggles retain
 the instance and selection. The picker dismisses only on Done or an outside click.
 The native egui window owns move/resize gestures; typed measurements publish
 actual dimensions before queued user intents so a size preset remains pending.
 Each instance scopes its picker cache and UI identity separately. Scene teardown
 releases every HUD-owned grid and plot, including while hidden. These native
 windows use the measured View scene area and exclude offline capture.
-Settings → HUD includes **+ Add camera view** with the current view count and
+View → HUDs includes **+ Add camera view** with the current view count and
 eight-view limit, so the first view can be opened without an existing camera
 window. The action uses `CreateCameraFeed`; the new view then uses its toolbar
-to select a live camera. The automatic-HUD inventory is collapsed until
-requested, keeping user-controlled settings in view.
-The submenu also edits the existing `OverlaySettings`, `PerfHudSettings`,
-and `InputOverlaySettings` resources and the active Twin's generic
-`ui.camera_status` value. It also removes the `celestial-view` entry from the
-existing `RuntimeSurfaceLayouts` resource when the user requests a position
-reset; it does not add a parallel visibility or layout store. HUDs whose
-visibility is inherently automatic — authored subject-scoped surfaces,
-controls, terrain or download progress, tutorials, notifications, and blackout
-state — are listed with their owner but remain lifecycle-controlled.
+to select a live camera. The same menu lists current guided cards and authored
+runtime HUDs.
+Each provider reports user permission and current eligibility through
+`lunco_workbench_core::HudVisibility`. A checked but unavailable row says
+**Unavailable here** rather than implying pixels are currently visible. Camera
+and time menus contain domain controls, not duplicate visibility toggles.
+Camera-status uses the runtime HUD permission and its authored Twin setting
+remains a separate project eligibility rule, not a menu toggle. This works
+without editing a read-only Twin. The celestial switcher application setting
+is its single user visibility owner. Native camera view rows retain their allocated feed
+and geometry when hidden, and the existing close button releases the feed.
+The menu edits native persisted settings at their owners and scene-local
+preferences for guidance, general authored runtime HUDs and camera windows.
+**Show all HUDs / Hide all HUDs** broadcasts one typed event to the owners
+of current HUDs; showing does not override their authored eligibility.
+Essential overlays and modal/dock-panel workflow surfaces remain
+lifecycle-controlled. Guidance cards share one content renderer and action
+lease between their floating card and the **Guidance** dock, with minimize,
+hide and float/dock controls. Opening the first right-side dock in a
+scene-only perspective materializes the scene viewport as its own central
+leaf and splits the inspector beside it; the guidance panel cannot become
+a full-window replacement for the scene. Floating or hiding the final docked
+card closes the now-unused singleton through the shell's pending layout
+request boundary. Closing the dock leaves the card accessible as
+a floating HUD; switching perspectives still respects its authored scope.
+Named guidance and HTML surfaces may supply human-readable titles separately
+from their stable identities. Native interaction acceptance uses measured
+landmarks in `InspectGuidedHud` and `scripts/api/test_hud_visibility.py`.
 
 Settings submenus are content-sized in both axes, capped at 640 logical px in
 width and 24 interaction rows in height. They become vertically scrollable

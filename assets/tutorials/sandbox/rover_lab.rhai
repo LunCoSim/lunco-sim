@@ -6,7 +6,7 @@ fn simulation_dependencies(me, ctx) {
     let rover = find_path("/RoverLab/Rover");
     if rover < 0 { throw "Lunar Rover Lab requires its training rover"; }
     #{modelica_entities: [rover], entity_reads: vessel_descendants(find_path("/RoverLab")),
-      entity_writes: [rover], query_reads: ["QueryPhysicsState", "QueryUsdPrim",
+      entity_writes: [rover, find_path("/RoverLab/Flag")], query_reads: ["QueryPhysicsState", "QueryUsdPrim",
         "SensorOccupants", "ListOpenDocuments", "InspectUsdDocument", "ListTelemetryChannels", "QueryTelemetryHistory"], required_inputs: []}
 }
 
@@ -50,15 +50,24 @@ fn lab_show(s) {
         "5/6 · Move the orange block into the blue bay", "6/6 · Save your personal Twin"];
     let text = labels[s.phase] + "\n\n";
     let actions = [];
+    if s.phase <= 1 {
+        let role = controller(s.rover);
+        if role == () {
+            text += "Rover control: not assigned. Click Take control of rover below.\n";
+            actions.push(lab_button("control", "Take control of rover"));
+        } else {
+            text += "Rover control: active (" + role + "). Camera selection is separate.\n";
+            actions.push(lab_button("release", "Release rover control"));
+        }
+        text += "\n";
+    }
     if s.phase == 0 {
-        text += "Take control. Drive with " + input_hint("forward") + "/" + input_hint("backward")
+        text += "Drive with " + input_hint("forward") + "/" + input_hint("backward")
             + ", steer with " + input_hint("left") + "/" + input_hint("right")
             + ", and brake with " + input_hint("brake") + ". Stop inside the green marker, then check your stop.";
-        actions.push(lab_button("control", "Take control"));
         actions.push(lab_button("check_stop", "Check my stop"));
     } else if s.phase == 1 {
         text += "Open the speed graph. Find a non-zero sample from your drive, then check the signal. Speed is measured in m/s.";
-        actions.push(lab_button("control", "Take control"));
         actions.push(lab_button("graph", "Open speed graph"));
         actions.push(lab_button("check_signal", "Check my signal"));
     } else if s.phase == 2 {
@@ -115,9 +124,13 @@ fn on_start(me, ctx) {
     }
     hud_perspectives("lunar_rover_lab", []);
     if !is_unattended() {
-        lab_require(cmd("SetGuidedHudLayout", #{hud: "lunar_rover_lab", width: 440.0, text_scale: 1.15}));
+        lab_require(cmd("SetGuidedHudLayout", #{hud: "lunar_rover_lab", title: "Lunar Rover Lab", width: 360.0, text_scale: 1.0, draggable: true}));
         lab_require(cmd("ActivatePerspective", #{id: "sandbox_view"}));
         lab_camera(this.doc);
+        let marker = find_path("/RoverLab/Flag");
+        lab_require(cmd("SetSceneView", #{batches: [#{target: marker, writes: [
+            #{property: "billboard.text", value: #{Text: #{value: "Goal: stop inside the green marker"}}}
+        ]}]}));
     }
     // Existing contact is authoritative too; startup does not replay old enters.
     let occupancy = query("SensorOccupants", #{sensor: this.sensor});
@@ -149,6 +162,10 @@ fn on_event(me, evt, ctx) {
         this.projected_generation = evt.value.generation;
     }
     if sensor_entered(evt, this.sensor) && lab_within(evt.value, this.rover) { this.arrived = true; }
+    if this.phase <= 1 && ["cmd:AcquireControl", "cmd:ReleaseControlSource", "cmd:ClaimControl"].contains(evt.name) {
+        lab_show(this);
+        return;
+    }
     if evt.name != "tutorial.action" || !string_is(evt.value) || !evt.value.starts_with("rover_lab:") { return; }
     let action = evt.value.sub_string(10);
     this.message = "";
@@ -156,14 +173,25 @@ fn on_event(me, evt, ctx) {
     else if action == "recover" && !this.running {
         lab_require(cmd("RecoverVessel", #{entity_id: this.rover}));
         this.message = "The rover was righted at its current location. Your lesson progress remains.";
-    } else if action == "control" && this.phase <= 1 { lab_require(possess(this.rover)); }
-    else if action == "check_stop" && this.phase == 0 {
+    } else if action == "control" && this.phase <= 1 {
+        lab_require(possess(this.rover));
+        notify_kind("Rover control acquired. Use " + input_hint("cancel") + " to release control.", "success");
+    } else if action == "release" && this.phase <= 1 {
+        lab_require(cmd("ReleaseControlSource", #{source: find_path("/RoverLab/Avatar")}));
+        notify_kind("Released your driving controls.", "info");
+    } else if action == "check_stop" && this.phase == 0 {
         let occupancy = query("SensorOccupants", #{sensor: this.sensor});
         let inside = false;
         for entity in occupancy.entrants { if lab_within(entity, this.rover) { inside = true; } }
         if inside && this.arrived && controller(this.rover) != () && lab_speed(this.rover) < 0.15 {
             this.phase = 1;
-        } else { this.message = "Take control of this rover, enter the green marker, and brake to below 0.15 m/s. Selection alone does not give driving control."; }
+        } else if controller(this.rover) == () {
+            this.message = "Click Take control of rover first; selecting the rover alone does not give you driving control.";
+        } else if !inside || !this.arrived {
+            this.message = "You are not inside the green marker yet. Drive into the marked area, then stop.";
+        } else {
+            this.message = "You are inside the marker but still moving. Brake until the speed is below 0.15 m/s, then check again.";
+        }
     } else if action == "graph" && this.phase == 1 {
         let channel = lab_signal(this.rover);
         if !is_unattended() {
@@ -195,7 +223,7 @@ fn on_event(me, evt, ctx) {
         if !is_unattended() { lab_require(cmd("ActivatePerspective", #{id: "rover_build"})); }
     } else if action == "save" && this.phase == 5 { lab_require(cmd("SaveAsTwin", #{})); }
     else if action == "help" {
-        this.message = "Driving: take control, then use the displayed bindings. Lost view: Return camera. Rolled over: Right rover. Build: enter X 9, Y 0.5, Z 3 in the block's translation. Saving: choose a new empty folder.";
+        this.message = "Driving: click Take control of rover, then use the displayed keys. Minimize or hide this card at any time; reopen it using View → HUDs. Lost view: Return camera. Rolled over: Right rover. Build: enter X 9, Y 0.5, Z 3 in the block's translation. Saving: choose a new empty folder.";
     } else if action == "checkpoints" && !this.running {
         hint("lunar_rover_lab", "Instructor practice: begin at a lesson checkpoint in this yard. Earlier tasks remain unassessed. Restart whole lab discards unsaved practice edits.");
         guided_hud_actions("lunar_rover_lab", "tutorials", "action", [

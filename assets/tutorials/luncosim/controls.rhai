@@ -45,7 +45,7 @@ fn authority_release(me) {
 
 fn on_start(me, ctx) {
     focus_panel("command_deck");
-    hint("Select the rover, open Command Deck, and take control. Watch the status change before releasing it again.");
+    hint("Click the rover to select it, then open Command Deck and click Possess. Watch the status change before releasing it again.");
     spotlight("panel.command_deck", "The Command Deck is the authoritative handoff surface.");
     notify_kind("Tutorial: Authority Handoff", "info");
 }

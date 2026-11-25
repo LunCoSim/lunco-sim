@@ -75,7 +75,7 @@ fn on_start(me, ctx) {
     this.projected_generation = usd_document_generation(this.doc);
     this.continuation = [];
     hud_perspectives("lunar_rover_lab", []);
-    if !is_unattended() { cmd("SetGuidedHudLayout", #{hud: "lunar_rover_lab", width: 440.0, text_scale: 1.15}); }
+    if !is_unattended() { cmd("SetGuidedHudLayout", #{hud: "lunar_rover_lab", title: "Lunar Rover Lab", width: 440.0, text_scale: 1.15}); }
 }
 
 fn on_event(me, evt, ctx) {

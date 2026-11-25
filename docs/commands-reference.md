@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**336 commands** across **62** crates. All documented.
+**337 commands** across **62** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -130,7 +130,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (6 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
-- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (4 commands)
+- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (5 commands)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (11 commands)
 
@@ -4635,6 +4635,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `hud` | `String` |   |
+| `title` | `Option < String >` |  Human-readable title shown in the card and HUD menu. |
 | `width` | `Option < f32 >` |   |
 | `text_scale` | `Option < f32 >` |   |
 | `draggable` | `Option < bool >` |   |
@@ -4721,6 +4722,13 @@ actually call, with the fields the deserializer actually accepts. See the
 | `enabled` | `bool` |  `true` enables the HUD; `false` hides it. |
 
 ### `lunco-workbench-runtime-ui` <a id="lunco-workbench-runtime-ui"></a>
+
+#### `InspectRuntimeHuds`
+
+ Inspect user permission, current eligibility and actual retained HUD visibility.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+- *fields:* none — call with `InspectRuntimeHuds` (no params)
 
 #### `InspectRuntimeUiForm`
 

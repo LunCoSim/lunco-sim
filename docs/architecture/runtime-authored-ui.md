@@ -323,6 +323,7 @@ The fields are:
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values. `css: true` explicitly projects a binding into a CSS custom property; prose stays in template text. |
 | `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host; other identifiers become the typed `runtime.ui.action` event for Rhai policy. |
+| `title` | Optional nonblank human-readable HUD menu label. The stable identity is still `id`. |
 | `visible_in_perspective` | Optional workbench perspective id or array of 1–32 distinct nonempty ids. The same filter gates interactive rendering and capture readiness; omission means unrestricted. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
@@ -332,7 +333,7 @@ The fields are:
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
 | `modal` | Requires an interactive viewport surface and makes its visible root claim the full-window scene-pick gate. This is the generic simple-modal primitive, not a rich dialog queue. |
 | `dismiss_action` | Optional authored semantic action emitted by Escape while the surface is visible. Rhai owns what dismissal means. |
-| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in Settings ▸ HUD. |
+| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in View ▸ HUDs. |
 | `resizable` | Allows a `window` surface root to resize from a descendant tagged `tag:ui_resize_handle="true"`. The runtime clamps the minimum and live-target size and stores it with the Twin's existing layout override. |
 | `resize_min_size` | Optional `[width, height]` logical minimum for a resizable window; defaults to `[320, 200]` and cannot exceed the authored window size. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
@@ -368,7 +369,7 @@ second UI persistence store. A double click on the drag handle restores the
 authored anchor and removes the override. Dragging uses Bevy picking events on the retained HUI
 tree and the existing pointer propagation path; it does not add a parallel
 egui hit-test or per-frame correction loop. The shipped `celestial-view` surface
-uses a top-centre authored default; Settings ▸ HUD removes only its override,
+uses a top-centre authored default; View ▸ HUDs removes only its override,
 leaving the shared layout store and other draggable surfaces unchanged.
 
 Resizable windows use the same retained pointer path. A descendant tagged
@@ -486,8 +487,25 @@ transient session state. The correct split for the shipped surfaces is:
 | schema, terrain, tutorial, notification, and performance state | their existing authoritative lifecycle/resources |
 | user preferences and window overrides | existing settings/workspace owners |
 
-The workbench's **Settings ▸ HUD** submenu remains a presentation over existing
-settings/workspace owners. It does not become a second visibility registry.
+The workbench's **View ▸ HUDs** submenu combines native and authored
+visibility owners through the shared `HudVisibility` contract. User
+permission and actual authored eligibility are independent: a checked HUD
+can be unavailable in the current scene or perspective. Runtime surfaces
+accept a human-readable `title`, independent of their stable `id`.
+An unchecked ordinary HUD is scene-locally suppressed without changing its
+exposure, authored perspective, gate or Twin setting; mounting and capture
+honor that permission. Modal, dock-panel and essential surfaces declaring
+`user_dismissible: false` remain lifecycle-controlled. The camera-status Twin setting remains an authored eligibility rule; the
+runtime permission is its only user visibility row. The celestial-view
+application preference is its only user visibility row.
+Scene-local overrides retire with the scene and never persist into another Twin.
+`InspectRuntimeHuds` reports the user permission, authored eligibility, actual
+retained root visibility, actual rectangle and measured menu row for each
+dismissible surface. A window placement may opt into `"region":"scene_viewport"`;
+its authored anchor and saved user override then stay within the measured
+main viewport leaf, or the full render target in a scene-only layout. Camera
+status and the celestial view switcher use this region so their HTML input
+regions cannot occupy the Guidance dock.
 
 Surface policy is authored in Twin Rhai where it is project-specific. Do not
 persist live progress, current selection, or network state in the Twin merely
@@ -1144,7 +1162,7 @@ unresolvable or ambiguous site frame publishes coordinates as unavailable.
 
 ### Mission card layout and camera windows
 
-Named guided HUD cards use `SetGuidedHudLayout` for bounded width, text scale
+Named guided HUD cards use `SetGuidedHudLayout` for an authored title, bounded width, text scale
 and dragging. Their native context menu submits this same command; layout and
 content are scene owned and inspectable through `InspectGuidedHud`. Group
 selection and persisted Twin preferences remain authored Rhai policy. See

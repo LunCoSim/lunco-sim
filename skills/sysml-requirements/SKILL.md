@@ -920,7 +920,9 @@ Read the three status dimensions separately; they answer different questions:
   emitted.
 - **Test execution** is per linked scene test. `PASS`, `FAIL`, `INCONCLUSIVE`,
   and `ERROR` are authored standard verdicts; `PARTIAL` means some linked tests passed while others still
-  need results. `NOT RUN` means mapped tests have no current result; `RUNNING`
+  need results. `NOT RUN` means mapped tests have no current result. If evidence
+  already passed, Requirement details directs the user to **Run mapped test**.
+  `RUNNING`
   includes elapsed time; `CANCELLED` has no verdict; `STALE` belongs to an older
   source revision; `NO VERDICT` means the runner finished without a verdict;
   `RUN ERROR` means the runner failed or the report/source revisions did not

@@ -510,6 +510,28 @@ pub(super) fn render_layout(
                     ui.close();
                 }
                 ui.separator();
+                if !menus.hud_menu.is_empty() {
+                    let huds = ui.menu_button("HUDs", |ui| {
+                        for (label, visible) in [("Show all HUDs", true), ("Hide all HUDs", false)] {
+                            let button = ui.button(label);
+                            anchor_rects.push((Cow::Borrowed(if visible { "menu.huds.show_all" } else { "menu.huds.hide_all" }), button.rect));
+                            if button.clicked() {
+                                lunco_workbench_core::trigger_or_defer(
+                                    world, lunco_workbench_core::SetAllHudVisibility(visible),
+                                );
+                            }
+                        }
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .max_height((ui.ctx().viewport_rect().height() * 0.65).max(100.0))
+                            .show(ui, |ui| {
+                                for (_, callback) in &menus.hud_menu {
+                                    run_menu_callback(ui, world, callback.as_ref());
+                                }
+                            });
+                    });
+                    anchor_rects.push((Cow::Borrowed("menu.huds"), huds.response.rect));
+                }
                 crate::navigation::render_menu(ui, world);
                 ui.separator();
                 // Panels are grouped into workflow submenus using the category

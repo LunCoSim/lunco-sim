@@ -251,6 +251,13 @@ struct PendingLayoutRequests(Vec<LayoutRequest>);
 #[derive(Resource, Default)]
 struct PendingTabRequests(Vec<TabRequest>);
 
+fn request_close_panel(
+    event: On<lunco_workbench_core::RequestClosePanel>,
+    mut pending: ResMut<PendingLayoutRequests>,
+) {
+    pending.0.push(LayoutRequest::RemoveSingleton(event.0));
+}
+
 fn drain_pending_tab_requests(
     layout: Option<ResMut<WorkbenchLayout>>,
     mut pending: ResMut<PendingTabRequests>,
@@ -323,13 +330,14 @@ fn drain_pending_layout_requests(
                 {
                     continue;
                 }
+                let preserve_empty_center = layout.center.contains(&id);
                 layout.side_browser.retain(|panel| *panel != id);
                 layout.side_browser_bottom.retain(|panel| *panel != id);
                 layout.center.retain(|panel| *panel != id);
                 layout.right_inspector.retain(|panel| *panel != id);
                 layout.right_inspector_bottom.retain(|panel| *panel != id);
                 layout.bottom.retain(|panel| *panel != id);
-                layout.remove_panel_from_dock(id);
+                layout.remove_panel_from_dock(id, preserve_empty_center);
             }
         }
     }
@@ -894,6 +902,7 @@ impl Plugin for WorkbenchPlugin {
             .init_resource::<CurrentSceneName>()
             .init_resource::<CurrentScenePath>()
             .add_observer(on_open_tab_preserve_focus)
+            .add_observer(request_close_panel)
             .add_observer(twin_settings::clear_on_twin_closed)
             .add_systems(
                 Update,

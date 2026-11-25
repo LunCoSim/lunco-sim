@@ -496,8 +496,25 @@ fn selected_entries(ctx: &PanelCtx<'_>, hud: &GraphHud) -> Result<Vec<SignalGrid
         .collect()
 }
 
-/// Shared Settings → HUD entry. Parameter selection lives on the viewport card.
-pub fn graph_hud_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx<'_>) {
+/// Apply the global permission without reallocating the graph's data or geometry.
+pub(crate) fn set_all_graph_hud_visibility(
+    event: On<lunco_workbench_core::SetAllHudVisibility>,
+    mut huds: ResMut<GraphHuds>,
+) {
+    let mut changed = false;
+    for hud in huds.instances.values_mut() {
+        if hud.visible != event.0 {
+            hud.visible = event.0;
+            changed = true;
+        }
+    }
+    if changed {
+        huds.revision = huds.revision.wrapping_add(1);
+    }
+}
+
+/// Shared View → HUDs entry. Parameter selection lives on the viewport card.
+pub fn graph_hud_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx<'_>, available: bool) {
     let Some(huds) = ctx.resource::<GraphHuds>() else {
         return;
     };
@@ -508,18 +525,21 @@ pub fn graph_hud_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx<'_>) {
         .collect();
     ui.label(egui::RichText::new("Telemetry graphs").strong());
     if rows.is_empty() {
-        let mut enabled = false;
-        if ui.checkbox(&mut enabled, "Show graph HUD").changed() {
+        if let Some(enabled) = (lunco_workbench_core::HudVisibility {
+            enabled: false,
+            available,
+        })
+        .menu_row(ui, "Show graph HUD")
+        {
             ctx.trigger(SetGraphHud {
                 visible: Some(enabled),
                 ..Default::default()
             });
         }
     }
-    for (id, mut visible) in rows {
-        if ui
-            .checkbox(&mut visible, format!("Telemetry {id}"))
-            .changed()
+    for (id, enabled) in rows {
+        if let Some(visible) = (lunco_workbench_core::HudVisibility { enabled, available })
+            .menu_row(ui, format!("Telemetry {id}"))
         {
             ctx.trigger(SetGraphHud {
                 hud: Some(id),

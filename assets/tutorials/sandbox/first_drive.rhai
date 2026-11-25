@@ -11,9 +11,9 @@ hud_perspectives([]);
 fn on_start(me, ctx) {
     // The catalog-selected scene is mounted before this script starts. This script
     // only teaches and verifies the rover actions in that world.
-    hint("Click Take control below, then drive to the green marker. The marker and rover are both visible from the opening camera.");
+    hint("Click the Take control of rover button below, then drive to the green marker. The marker and rover are both visible from the opening camera.");
     guided_hud_actions("tutorials", "action", [
-        #{id: "first_drive:control", label: "Take control", enabled: true},
+        #{id: "first_drive:control", label: "Take control of rover", enabled: true},
         #{id: "first_drive:recover", label: "Right rover", enabled: true},
         #{id: "first_drive:camera", label: "Return camera", enabled: true},
     ]);
@@ -114,7 +114,7 @@ fn mission(me, ctx) {
         // Step 1 — take control. A request is not success; live controller state
         // must show that this rover is actually owned.
         objective("possess", #{
-            text: "Click Take control to drive the training rover",
+            text: "Click the Take control of rover button to drive the training rover",
             done: |m| first_drive_controlled(m, rover),
             on_complete: Fn("first_drive_possessed"),
         }),

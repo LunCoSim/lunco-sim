@@ -242,6 +242,10 @@ pub struct InspectRuntimeUiForm {
     pub form_id: String,
 }
 
+/// Inspect user permission, current eligibility and actual retained HUD visibility.
+#[lunco_core::Command(default)]
+pub struct InspectRuntimeHuds {}
+
 /// Origin lifetime of semantic UI input. A deferred event cannot acquire the
 /// next Twin or scene merely because its handler runs after a reset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1339,6 +1343,9 @@ impl RuntimeUiPerspectiveFilter {
 pub struct RuntimeUiSurfaceDefinition {
     /// Stable identity used to validate and reconcile an authored surface.
     pub id: String,
+    /// Human-readable title for the HUD menu, independent of its stable id.
+    #[serde(default)]
+    pub title: Option<String>,
     pub template: String,
     pub stylesheet: String,
     pub namespace: String,
@@ -1383,6 +1390,10 @@ pub struct RuntimeUiSurfaceDefinition {
     pub setting_default: bool,
     #[serde(default)]
     pub interactive: bool,
+    /// Whether a free-standing surface can be suppressed through View → HUDs.
+    /// Essential workflow overlays can explicitly opt out.
+    #[serde(default = "default_user_dismissible")]
+    pub user_dismissible: bool,
     /// A modal surface owns the full window while visible and may provide an
     /// authored semantic dismissal action for Escape.
     #[serde(default)]
@@ -1543,10 +1554,23 @@ pub enum RuntimeUiPlacementDefinition {
     Window {
         anchor: RuntimeUiWindowAnchor,
         #[serde(default)]
+        region: RuntimeUiWindowRegion,
+        #[serde(default)]
         offset: [f32; 2],
         width: f32,
         height: f32,
     },
+}
+
+/// Logical region in which an authored window is anchored and constrained.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeUiWindowRegion {
+    /// The full application render target.
+    #[default]
+    Application,
+    /// The measured main scene leaf, or the full target in a scene-only layout.
+    SceneViewport,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
@@ -1660,6 +1684,9 @@ impl RuntimeUiManifest {
 
         for surface in &self.surfaces {
             require_non_empty("surface id", &surface.id)?;
+            if let Some(title) = &surface.title {
+                require_non_empty("surface title", title)?;
+            }
             require_non_empty("surface namespace", &surface.namespace)?;
             require_asset_path("surface template", &surface.template)?;
             require_asset_path("surface stylesheet", &surface.stylesheet)?;
@@ -2228,7 +2255,10 @@ impl Plugin for RuntimeUiPlugin {
                 ));
             });
         accessibility::install(app);
-        app.add_observer(dispatch_runtime_ui_press)
+        app.add_systems(Startup, register_runtime_hud_menu)
+            .add_observer(set_runtime_hud_visibility)
+            .add_observer(set_all_runtime_hud_visibility)
+            .add_observer(dispatch_runtime_ui_press)
             .init_resource::<RuntimeSurfaceLayouts>()
             .init_resource::<RuntimeUiRenderState>()
             .init_resource::<RuntimeUiPresentationGeneration>()
@@ -2379,17 +2409,227 @@ pub struct RuntimeUiManifestState {
     error: Option<String>,
     applied: Option<u64>,
     rebuild_pending: bool,
+    user_hidden_huds: HashSet<String>,
 }
 impl lunco_core::SceneResource for RuntimeUiManifestState {
     fn clear_scene(&mut self) {
         self.manifest = None;
+        self.user_hidden_huds.clear();
         self.applied = None;
         self.error = None;
         self.rebuild_pending = true;
     }
 }
 
+/// Free-standing HUDs can be hidden without dismissing a modal or disabling
+/// a docked workbench panel or an application-critical overlay.
+fn default_user_dismissible() -> bool {
+    true
+}
+
+fn dismissible_hud(surface: &RuntimeUiSurfaceDefinition) -> bool {
+    surface.user_dismissible
+        && !surface.modal
+        && !matches!(
+            &surface.placement,
+            RuntimeUiPlacementDefinition::DockPanel { .. }
+        )
+}
+
+#[derive(Event)]
+struct SetRuntimeHudVisibility {
+    id: String,
+    visible: bool,
+    revision: Option<u64>,
+    twin: Option<TwinId>,
+}
+
+fn set_runtime_hud_visibility(
+    event: On<SetRuntimeHudVisibility>,
+    mut state: ResMut<RuntimeUiManifestState>,
+) {
+    if state.applied != event.revision
+        || state.selected != event.twin
+        || !state.manifest().is_some_and(|manifest| {
+            manifest
+                .surfaces
+                .iter()
+                .any(|surface| surface.id == event.id && dismissible_hud(surface))
+        })
+    {
+        return;
+    }
+    if event.visible {
+        state.user_hidden_huds.remove(&event.id);
+    } else {
+        state.user_hidden_huds.insert(event.id.clone());
+    }
+}
+
+fn set_all_runtime_hud_visibility(
+    event: On<lunco_workbench_core::SetAllHudVisibility>,
+    mut state: ResMut<RuntimeUiManifestState>,
+) {
+    if event.0 {
+        state.user_hidden_huds.clear();
+    } else {
+        state.user_hidden_huds = state
+            .manifest()
+            .into_iter()
+            .flat_map(|manifest| manifest.surfaces.iter())
+            .filter(|surface| dismissible_hud(surface))
+            .map(|surface| surface.id.clone())
+            .collect();
+    }
+}
+
+fn register_runtime_hud_menu(world: &mut World) {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
+        return;
+    };
+    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::Runtime, |ui, ctx| {
+        let Some(state) = ctx.resource::<RuntimeUiManifestState>() else {
+            return;
+        };
+        let Some(manifest) = state.manifest() else {
+            return;
+        };
+        let revision = state.applied;
+        let twin = state.selected;
+        let layout = ctx.resource::<WorkbenchSnapshot>();
+        let gates = ctx.resource::<RuntimeUiGates>();
+        let workspace = ctx.resource::<lunco_workspace::WorkspaceResource>();
+        let exposures = ctx.resource::<EngineExposures>();
+        let rows: Vec<_> = manifest
+            .surfaces
+            .iter()
+            .filter(|surface| dismissible_hud(surface))
+            .map(|surface| {
+                let visibility = exposures.map_or(
+                    lunco_workbench_core::HudVisibility {
+                        enabled: state.user_allows_hud(&surface.id),
+                        available: false,
+                    },
+                    |exposures| state.hud_visibility(surface, exposures, layout, gates, workspace),
+                );
+                (
+                    surface.id.clone(),
+                    surface.title.clone().unwrap_or_else(|| "Scene HUD".into()),
+                    visibility,
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        ui.label("Runtime HUDs");
+        for (id, title, visibility) in rows {
+            let row = ui.push_id(&id, |ui| visibility.menu_row(ui, title));
+            let rect = row.response.rect.intersect(ui.clip_rect());
+            if rect.is_positive() {
+                ctx.landmark(format!("hud.runtime.{id}"), rect);
+            }
+            if let Some(visible) = row.inner {
+                ctx.trigger(SetRuntimeHudVisibility {
+                    id,
+                    visible,
+                    revision,
+                    twin,
+                });
+            }
+        }
+    });
+}
+
+#[lunco_core::on_command(InspectRuntimeHuds)]
+fn on_inspect_runtime_huds(
+    _: On<InspectRuntimeHuds>,
+    state: Res<RuntimeUiManifestState>,
+    exposures: Res<EngineExposures>,
+    layout: Option<Res<WorkbenchSnapshot>>,
+    gates: Option<Res<RuntimeUiGates>>,
+    workspace: Option<Res<WorkspaceResource>>,
+    anchors: Option<Res<lunco_workbench_core::presentation::HelpAnchors>>,
+    roots: Query<(&RuntimeUiSurface, &Visibility)>,
+) -> Result<Ack, String> {
+    let rows = state
+        .manifest()
+        .into_iter()
+        .flat_map(|manifest| &manifest.surfaces)
+        .filter(|surface| dismissible_hud(surface))
+        .map(|surface| {
+            let visibility = state.hud_visibility(
+                surface,
+                &exposures,
+                layout.as_deref(),
+                gates.as_deref(),
+                workspace.as_deref(),
+            );
+            let visible_root = roots.iter().find(|(root, rendered)| {
+                root.layout_id == surface.id && root.mounted && **rendered == Visibility::Visible
+            });
+            let rect = visible_root
+                .and_then(|(root, _)| root.applied_placement)
+                .map_or(HookValue::Unit, |placement| {
+                    let rect = placement.rect;
+                    HookValue::Array(
+                        [rect.min.x, rect.min.y, rect.width(), rect.height()]
+                            .into_iter()
+                            .map(|value| HookValue::Float(f64::from(value)))
+                            .collect(),
+                    )
+                });
+            let menu = anchors
+                .as_ref()
+                .and_then(|anchors| anchors.get(&format!("hud.runtime.{}", surface.id)))
+                .map_or(HookValue::Unit, |rect| {
+                    HookValue::Array(
+                        [rect.min.x, rect.min.y, rect.width(), rect.height()]
+                            .into_iter()
+                            .map(|value| HookValue::Float(f64::from(value)))
+                            .collect(),
+                    )
+                });
+            HookValue::map([
+                ("id", HookValue::str(&surface.id)),
+                (
+                    "title",
+                    HookValue::str(surface.title.as_deref().unwrap_or("Scene HUD")),
+                ),
+                ("enabled", HookValue::Bool(visibility.enabled)),
+                ("available", HookValue::Bool(visibility.available)),
+                ("rendered", HookValue::Bool(visible_root.is_some())),
+                ("rect", rect),
+                ("menu", menu),
+            ])
+        })
+        .collect();
+    Ok(Ack::with_data(
+        OpId::new(),
+        HookValue::map([("huds", HookValue::Array(rows))]),
+    ))
+}
+
 impl RuntimeUiManifestState {
+    fn user_allows_hud(&self, id: &str) -> bool {
+        !self.user_hidden_huds.contains(id)
+    }
+
+    fn hud_visibility(
+        &self,
+        surface: &RuntimeUiSurfaceDefinition,
+        exposures: &EngineExposures,
+        layout: Option<&WorkbenchSnapshot>,
+        gates: Option<&RuntimeUiGates>,
+        workspace: Option<&lunco_workspace::WorkspaceResource>,
+    ) -> lunco_workbench_core::HudVisibility {
+        lunco_workbench_core::HudVisibility {
+            enabled: self.user_allows_hud(&surface.id),
+            available: runtime_surface_available(surface, exposures, layout, gates, workspace),
+        }
+    }
+
     pub fn manifest(&self) -> Option<&RuntimeUiManifest> {
         self.manifest.as_ref()
     }
@@ -2585,6 +2825,7 @@ enum RuntimeUiPlacement {
     },
     Window {
         anchor: RuntimeUiWindowAnchor,
+        region: RuntimeUiWindowRegion,
         offset: Vec2,
         width: f32,
         height: f32,
@@ -2601,11 +2842,13 @@ impl From<&RuntimeUiPlacementDefinition> for RuntimeUiPlacement {
             },
             RuntimeUiPlacementDefinition::Window {
                 anchor,
+                region,
                 offset,
                 width,
                 height,
             } => Self::Window {
                 anchor: *anchor,
+                region: *region,
                 offset: Vec2::from_array(*offset),
                 width: *width,
                 height: *height,
@@ -3040,13 +3283,15 @@ fn update_runtime_ui_recording_contract(
         .surfaces
         .iter()
         .filter(|surface| {
-            capture_surface_is_visible(
-                surface,
-                &exposures,
-                layout.as_deref(),
-                gates.as_deref(),
-                workspace.as_deref(),
-            )
+            manifest_state
+                .hud_visibility(
+                    surface,
+                    &exposures,
+                    layout.as_deref(),
+                    gates.as_deref(),
+                    workspace.as_deref(),
+                )
+                .visible()
         })
         .map(|surface| HookValue::str(surface.id.clone()))
         .collect();
@@ -3090,13 +3335,16 @@ fn update_runtime_ui_recording_contract(
             contract.required_namespaces.clear();
             return;
         };
-        if !capture_surface_is_visible(
-            surface,
-            &exposures,
-            layout.as_deref(),
-            gates.as_deref(),
-            workspace.as_deref(),
-        ) {
+        if !manifest_state
+            .hud_visibility(
+                surface,
+                &exposures,
+                layout.as_deref(),
+                gates.as_deref(),
+                workspace.as_deref(),
+            )
+            .visible()
+        {
             contract.error = Some(format!("recording policy selected hidden surface `{id}`"));
             contract.required_namespaces.clear();
             return;
@@ -3548,6 +3796,7 @@ fn retire_runtime_ui_manifest(event: On<TwinClosed>, mut state: ResMut<RuntimeUi
     state.scopes.remove(&Some(event.twin));
     state.revision += 1;
     if state.selected == Some(event.twin) {
+        state.user_hidden_huds.clear();
         state.manifest = None;
         state.applied = None;
     }
@@ -3589,6 +3838,9 @@ fn sync_runtime_ui_manifest(
             Ok(manifest)
         });
     let keep_application = state.applied_application == Some(state.application_revision);
+    if state.selected != selected {
+        state.user_hidden_huds.clear();
+    }
     state.selected = selected;
     state.applied = Some(state.revision);
     state.applied_application = application
@@ -3637,6 +3889,15 @@ fn sync_runtime_ui_manifest(
         .map(|surface| surface.id.clone())
         .collect::<HashSet<_>>();
     surface_layouts.retain_ids(&ids);
+    let dismissible_ids: HashSet<_> = manifest
+        .surfaces
+        .iter()
+        .filter(|surface| dismissible_hud(surface))
+        .map(|surface| surface.id.as_str())
+        .collect();
+    state
+        .user_hidden_huds
+        .retain(|id| dismissible_ids.contains(id.as_str()));
     for surface in &manifest.surfaces {
         for action in &surface.actions {
             register_action(
@@ -3704,7 +3965,8 @@ pub fn mount_runtime_ui_surfaces(
         .map(|(_, surface, _)| surface.layout_id.clone())
         .collect();
     for definition in &manifest.surfaces {
-        if existing_ids.contains(&definition.id) {
+        if existing_ids.contains(&definition.id) || !manifest_state.user_allows_hud(&definition.id)
+        {
             continue;
         }
         let namespace = definition
@@ -3734,6 +3996,7 @@ pub fn mount_runtime_ui_surfaces(
             continue;
         };
         if !exposure.visible
+            || !manifest_state.user_allows_hud(&surface.layout_id)
             || !runtime_ui_is_allowed(
                 &surface,
                 layout.as_deref(),
@@ -3798,7 +4061,7 @@ fn runtime_ui_visibility_allows(
     perspective_visible && gate_visible && setting_visible
 }
 
-fn capture_surface_is_visible(
+fn runtime_surface_available(
     surface: &RuntimeUiSurfaceDefinition,
     exposures: &EngineExposures,
     layout: Option<&WorkbenchSnapshot>,
@@ -4299,14 +4562,18 @@ fn apply_runtime_ui_exposures(
             resolve_surface_placement(&surface, &surface_layouts, rects.as_deref(), target, window);
         let placement_changed = surface.applied_placement != placement;
         let exposure = exposures.surfaces.get(&surface.namespace);
-        let should_be_visible = exposure.is_some_and(|exposure| exposure.visible)
-            && runtime_ui_is_allowed(
-                &surface,
-                layout.as_deref(),
-                gates.as_deref(),
-                workspace.as_deref(),
-            )
-            && placement.is_some();
+        let visibility_state = lunco_workbench_core::HudVisibility {
+            enabled: manifest_state.user_allows_hud(&surface.layout_id),
+            available: exposure.is_some_and(|exposure| exposure.visible)
+                && runtime_ui_is_allowed(
+                    &surface,
+                    layout.as_deref(),
+                    gates.as_deref(),
+                    workspace.as_deref(),
+                )
+                && placement.is_some(),
+        };
+        let should_be_visible = visibility_state.visible();
         // Only recording surfaces need to wait for the cross-world render
         // acknowledgement. Ordinary runtime UI remains a live presentation
         // surface once its exposure, placement, and authored visibility rules
@@ -5317,6 +5584,28 @@ pub fn runtime_ui_input_rect(
         .then(|| egui::Rect::from_min_max(egui::pos2(min.x, min.y), egui::pos2(max.x, max.y)))
 }
 
+/// Convert the workbench's physical viewport measurement at the existing
+/// logical UI boundary. A scene-only perspective has no explicit dock leaf.
+fn runtime_window_region(
+    region: RuntimeUiWindowRegion,
+    rects: Option<&PanelRects>,
+    scale: f32,
+    window_size: Vec2,
+) -> (Vec2, Vec2) {
+    if region == RuntimeUiWindowRegion::SceneViewport
+        && let Some(panel) =
+            rects.and_then(|rects| rects.get(lunco_workbench_core::viewport::VIEWPORT_PANEL_ID))
+    {
+        let origin =
+            (panel.origin.as_vec2() / scale).min((window_size - Vec2::ONE).max(Vec2::ZERO));
+        let size = (panel.size.as_vec2() / scale)
+            .min(window_size - origin)
+            .max(Vec2::ONE);
+        return (origin, size);
+    }
+    (Vec2::ZERO, window_size)
+}
+
 fn resolve_surface_placement(
     surface: &RuntimeUiSurface,
     layouts: &RuntimeSurfaceLayouts,
@@ -5331,7 +5620,12 @@ fn resolve_surface_placement(
     if !surface.draggable && !surface.resizable {
         return Some(placement);
     }
-    let (_, target_size) = logical_target_dimensions(target, window)?;
+    let (scale, window_size) = logical_target_dimensions(target, window)?;
+    let region = match &surface.placement {
+        RuntimeUiPlacement::Window { region, .. } => *region,
+        _ => RuntimeUiWindowRegion::Application,
+    };
+    let (target_origin, target_size) = runtime_window_region(region, rects, scale, window_size);
     let authored_size = Vec2::new(placement.rect.width(), placement.rect.height());
     let mut size = if surface.resizable {
         layout
@@ -5344,8 +5638,8 @@ fn resolve_surface_placement(
         authored_size.min(target_size)
     };
     size = size.min(target_size);
-    let max_origin = (target_size - size).max(Vec2::ZERO);
-    let origin = Vec2::new(layout.left, layout.top).clamp(Vec2::ZERO, max_origin);
+    let max_origin = target_origin + (target_size - size).max(Vec2::ZERO);
+    let origin = Vec2::new(layout.left, layout.top).clamp(target_origin, max_origin);
     Some(ResolvedRuntimeUiPlacement {
         rect: egui::Rect::from_min_size(egui::pos2(origin.x, origin.y), egui::vec2(size.x, size.y)),
     })
@@ -5398,6 +5692,7 @@ fn resolve_placement(
         }
         RuntimeUiPlacement::Window {
             anchor,
+            region,
             offset,
             width,
             height,
@@ -5406,21 +5701,23 @@ fn resolve_placement(
             // escape the render target. Shrink it to the live target and clamp
             // its anchored origin so every authored control remains reachable
             // after a resize, on a small display, or under a larger DPI scale.
-            let size = Vec2::new(width.max(1.0), height.max(1.0)).min(window_size);
+            let (region_origin, region_size) =
+                runtime_window_region(*region, rects, scale, window_size);
+            let size = Vec2::new(width.max(1.0), height.max(1.0)).min(region_size);
             let base = match anchor {
                 RuntimeUiWindowAnchor::TopLeft => Vec2::ZERO,
-                RuntimeUiWindowAnchor::TopCenter => Vec2::new((window_size.x - size.x) * 0.5, 0.0),
-                RuntimeUiWindowAnchor::TopRight => Vec2::new(window_size.x - size.x, 0.0),
-                RuntimeUiWindowAnchor::BottomLeft => Vec2::new(0.0, window_size.y - size.y),
+                RuntimeUiWindowAnchor::TopCenter => Vec2::new((region_size.x - size.x) * 0.5, 0.0),
+                RuntimeUiWindowAnchor::TopRight => Vec2::new(region_size.x - size.x, 0.0),
+                RuntimeUiWindowAnchor::BottomLeft => Vec2::new(0.0, region_size.y - size.y),
                 RuntimeUiWindowAnchor::BottomCenter => {
-                    Vec2::new((window_size.x - size.x) * 0.5, window_size.y - size.y)
+                    Vec2::new((region_size.x - size.x) * 0.5, region_size.y - size.y)
                 }
                 RuntimeUiWindowAnchor::BottomRight => {
-                    Vec2::new(window_size.x - size.x, window_size.y - size.y)
+                    Vec2::new(region_size.x - size.x, region_size.y - size.y)
                 }
             };
-            let max_origin = (window_size - size).max(Vec2::ZERO);
-            let origin = (base + *offset).clamp(Vec2::ZERO, max_origin);
+            let max_origin = (region_size - size).max(Vec2::ZERO);
+            let origin = region_origin + (base + *offset).clamp(Vec2::ZERO, max_origin);
             Some(ResolvedRuntimeUiPlacement {
                 rect: egui::Rect::from_min_size(egui_pos2(origin), egui_vec2(size)),
             })
@@ -5467,7 +5764,8 @@ lunco_core::register_commands!(
     on_set_runtime_ui_form_values,
     on_set_runtime_ui_data_source,
     on_set_runtime_ui_form_status,
-    on_inspect_runtime_ui_form
+    on_inspect_runtime_ui_form,
+    on_inspect_runtime_huds,
 );
 
 fn register_runtime_ui_form_commands(app: &mut App) {
@@ -6790,6 +7088,70 @@ mod tests {
     }
 
     #[test]
+    fn user_hud_override_preserves_authored_eligibility_and_retires_with_scene() {
+        let manifest: RuntimeUiManifest = serde_json::from_str(
+            r#"{"surfaces":[
+            {"id":"optional","namespace":"hud","template":"ui/a.html","stylesheet":"ui/a.css",
+             "overlay":true,"placement":{"mode":"viewport"}},
+            {"id":"essential","namespace":"notice","template":"ui/a.html","stylesheet":"ui/a.css",
+             "user_dismissible":false,"placement":{"mode":"viewport"}}
+            ]}"#,
+        )
+        .unwrap();
+        let mut app = App::new();
+        app.insert_resource(RuntimeUiManifestState {
+            manifest: Some(manifest),
+            applied: Some(1),
+            ..Default::default()
+        })
+        .add_observer(set_runtime_hud_visibility)
+        .add_observer(set_all_runtime_hud_visibility);
+        app.world_mut()
+            .trigger(lunco_workbench_core::SetAllHudVisibility(false));
+        let state = app.world().resource::<RuntimeUiManifestState>();
+        assert!(!state.user_allows_hud("optional"));
+        assert!(state.user_allows_hud("essential"));
+
+        app.world_mut().trigger(SetRuntimeHudVisibility {
+            id: "optional".into(),
+            visible: true,
+            revision: Some(0),
+            twin: None,
+        });
+        assert!(
+            !app.world()
+                .resource::<RuntimeUiManifestState>()
+                .user_allows_hud("optional")
+        );
+        app.world_mut().trigger(SetRuntimeHudVisibility {
+            id: "optional".into(),
+            visible: true,
+            revision: Some(1),
+            twin: None,
+        });
+        let state = app.world().resource::<RuntimeUiManifestState>();
+        assert!(state.user_allows_hud("optional"));
+        assert!(!runtime_surface_available(
+            &state.manifest().unwrap().surfaces[0],
+            &EngineExposures::default(),
+            None,
+            None,
+            None,
+        ));
+        app.world_mut()
+            .trigger(lunco_workbench_core::SetAllHudVisibility(false));
+        lunco_core::SceneResource::clear_scene(
+            &mut *app.world_mut().resource_mut::<RuntimeUiManifestState>(),
+        );
+        assert!(
+            app.world()
+                .resource::<RuntimeUiManifestState>()
+                .user_hidden_huds
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn recording_candidates_follow_perspective_without_an_exposure_change() {
         install_runtime_ui_recording_test_policy();
         let manifest: RuntimeUiManifest = serde_json::from_str(
@@ -6823,7 +7185,8 @@ mod tests {
             })
             .insert_resource(RuntimeUiCaptureState { active: true })
             .init_resource::<RuntimeUiRecordingContract>()
-            .add_systems(Update, update_runtime_ui_recording_contract);
+            .add_systems(Update, update_runtime_ui_recording_contract)
+            .add_observer(set_all_runtime_hud_visibility);
         for perspective in ["drive", "analysis", "drive"] {
             app.world_mut().resource_mut::<WorkbenchSnapshot>().replace(
                 Some(lunco_workbench_core::PerspectiveId::new(perspective)),
@@ -6843,6 +7206,18 @@ mod tests {
             );
             assert_eq!(app.world().resource::<EngineExposures>().revision, revision);
         }
+        for visible in [false, true] {
+            app.world_mut()
+                .trigger(lunco_workbench_core::SetAllHudVisibility(visible));
+            app.update();
+            let contract = app.world().resource::<RuntimeUiRecordingContract>();
+            assert!(contract.error.is_none(), "{:?}", contract.error);
+            assert_eq!(
+                contract.required_namespaces.contains("capture-surface"),
+                visible
+            );
+            assert_eq!(app.world().resource::<EngineExposures>().revision, revision);
+        }
     }
 
     #[test]
@@ -6857,10 +7232,10 @@ mod tests {
         let mut exposures = EngineExposures::default();
         exposures.writer("capture-surface").visible(true);
         let mut gates = RuntimeUiGates::default();
-        assert!(!capture_surface_is_visible(
+        assert!(!runtime_surface_available(
             &surface, &exposures, None, None, None
         ));
-        assert!(!capture_surface_is_visible(
+        assert!(!runtime_surface_available(
             &surface,
             &exposures,
             None,
@@ -6869,7 +7244,7 @@ mod tests {
         ));
         gates.set("ready", true);
         // An eligible surface remains required before its retained root mounts.
-        assert!(capture_surface_is_visible(
+        assert!(runtime_surface_available(
             &surface,
             &exposures,
             None,
@@ -6877,7 +7252,7 @@ mod tests {
             None
         ));
         surface.setting_default = false;
-        assert!(!capture_surface_is_visible(
+        assert!(!runtime_surface_available(
             &surface,
             &exposures,
             None,
@@ -6886,7 +7261,7 @@ mod tests {
         ));
         surface.setting_default = true;
         exposures.writer("capture-surface").visible(false);
-        assert!(!capture_surface_is_visible(
+        assert!(!runtime_surface_available(
             &surface,
             &exposures,
             None,
@@ -7255,6 +7630,7 @@ mod tests {
                     presentation_generation: 0,
                     placement: RuntimeUiPlacement::Window {
                         anchor: RuntimeUiWindowAnchor::TopCenter,
+                        region: RuntimeUiWindowRegion::Application,
                         offset: Vec2::ZERO,
                         width: 200.0,
                         height: 100.0,
@@ -7361,6 +7737,7 @@ mod tests {
                     presentation_generation: 0,
                     placement: RuntimeUiPlacement::Window {
                         anchor: RuntimeUiWindowAnchor::TopLeft,
+                        region: RuntimeUiWindowRegion::Application,
                         offset: Vec2::ZERO,
                         width: 200.0,
                         height: 100.0,
@@ -7767,77 +8144,84 @@ mod tests {
     }
 
     #[test]
-    fn mounted_surface_is_fully_despawned_when_exposure_turns_off() {
-        let mut app = App::new();
-        let mut exposures = EngineExposures::default();
-        {
-            let mut terrain = exposures.writer("terrain-progress");
-            terrain.visible(false);
+    fn mounted_surface_is_fully_despawned_when_exposure_or_user_visibility_turns_off() {
+        for user_hidden in [false, true] {
+            let mut app = App::new();
+            let mut exposures = EngineExposures::default();
+            {
+                let mut terrain = exposures.writer("terrain-progress");
+                terrain.visible(user_hidden);
+            }
+            let revision = exposures.revision;
+            app.insert_resource(exposures)
+                .init_resource::<RuntimeSurfaceLayouts>()
+                .insert_resource(RuntimeUiManifestState {
+                    applied: Some(1),
+                    rebuild_pending: false,
+                    user_hidden_huds: if user_hidden {
+                        ["terrain-progress".to_owned()].into()
+                    } else {
+                        HashSet::new()
+                    },
+                    ..Default::default()
+                });
+            app.world_mut().spawn((Window::default(), PrimaryWindow));
+            let root = app
+                .world_mut()
+                .spawn((
+                    Node::default(),
+                    HtmlNode(Handle::default()),
+                    Styled::Inherited,
+                    InlineStyle::default(),
+                    TemplateProperties::default(),
+                    RuntimeUiSurface {
+                        owner: RuntimeUiSurfaceOwner::Workspace,
+                        overlay: false,
+                        layout_id: "terrain-progress".to_owned(),
+                        namespace: "terrain-progress".to_owned(),
+                        workspace: None,
+                        active_workspace_page: None,
+                        template: Handle::default(),
+                        stylesheet: Handle::default(),
+                        bindings: HashMap::new(),
+                        base_collections: Vec::new(),
+                        collections: Vec::new(),
+                        visible_in_perspective: None,
+                        gate: None,
+                        setting: None,
+                        setting_default: false,
+                        interactive: false,
+
+                        modal: false,
+                        dismiss_action: None,
+                        draggable: false,
+                        resizable: false,
+                        resize_min_size: Vec2::new(320.0, 200.0),
+                        mounted: true,
+                        presentation_ready: false,
+                        presentation_visible: false,
+                        presentation_generation: 0,
+                        placement: RuntimeUiPlacement::Viewport,
+                        has_projected_exposure: true,
+                        applied_revision: revision,
+                        applied_placement: None,
+                    },
+                    Visibility::Visible,
+                ))
+                .id();
+            let child = app.world_mut().spawn((Node::default(), ChildOf(root))).id();
+            let grandchild = app
+                .world_mut()
+                .spawn((Node::default(), ChildOf(child)))
+                .id();
+
+            app.add_systems(Update, apply_runtime_ui_exposures);
+            app.update();
+
+            assert!(app.world().get_entity(root).is_err());
+            assert!(app.world().get_entity(child).is_err());
+            assert!(app.world().get_entity(grandchild).is_err());
         }
-        let revision = exposures.revision;
-        app.insert_resource(exposures)
-            .init_resource::<RuntimeSurfaceLayouts>()
-            .insert_resource(RuntimeUiManifestState {
-                applied: Some(1),
-                rebuild_pending: false,
-                ..Default::default()
-            });
-        app.world_mut().spawn((Window::default(), PrimaryWindow));
-        let root = app
-            .world_mut()
-            .spawn((
-                Node::default(),
-                HtmlNode(Handle::default()),
-                Styled::Inherited,
-                InlineStyle::default(),
-                TemplateProperties::default(),
-                RuntimeUiSurface {
-                    owner: RuntimeUiSurfaceOwner::Workspace,
-                    overlay: false,
-                    layout_id: "terrain-progress".to_owned(),
-                    namespace: "terrain-progress".to_owned(),
-                    workspace: None,
-                    active_workspace_page: None,
-                    template: Handle::default(),
-                    stylesheet: Handle::default(),
-                    bindings: HashMap::new(),
-                    base_collections: Vec::new(),
-                    collections: Vec::new(),
-                    visible_in_perspective: None,
-                    gate: None,
-                    setting: None,
-                    setting_default: false,
-                    interactive: false,
-
-                    modal: false,
-                    dismiss_action: None,
-                    draggable: false,
-                    resizable: false,
-                    resize_min_size: Vec2::new(320.0, 200.0),
-                    mounted: true,
-                    presentation_ready: false,
-                    presentation_visible: false,
-                    presentation_generation: 0,
-                    placement: RuntimeUiPlacement::Viewport,
-                    has_projected_exposure: true,
-                    applied_revision: revision,
-                    applied_placement: None,
-                },
-                Visibility::Visible,
-            ))
-            .id();
-        let child = app.world_mut().spawn((Node::default(), ChildOf(root))).id();
-        let grandchild = app
-            .world_mut()
-            .spawn((Node::default(), ChildOf(child)))
-            .id();
-
-        app.add_systems(Update, apply_runtime_ui_exposures);
-        app.update();
-
-        assert!(app.world().get_entity(root).is_err());
-        assert!(app.world().get_entity(child).is_err());
-        assert!(app.world().get_entity(grandchild).is_err());
     }
 
     #[test]
@@ -7915,6 +8299,7 @@ mod tests {
         let window = Window::default();
         let placement = RuntimeUiPlacement::Window {
             anchor: RuntimeUiWindowAnchor::BottomRight,
+            region: RuntimeUiWindowRegion::Application,
             offset: Vec2::new(-4.0, -8.0),
             width: 240.0,
             height: 80.0,
@@ -7933,6 +8318,7 @@ mod tests {
         let window = Window::default();
         let placement = RuntimeUiPlacement::Window {
             anchor: RuntimeUiWindowAnchor::TopCenter,
+            region: RuntimeUiWindowRegion::Application,
             offset: Vec2::new(0.0, 50.0),
             width: 350.0,
             height: 58.0,
@@ -7957,6 +8343,7 @@ mod tests {
         };
         let placement = RuntimeUiPlacement::Window {
             anchor: RuntimeUiWindowAnchor::TopCenter,
+            region: RuntimeUiWindowRegion::Application,
             offset: Vec2::new(0.0, 34.0),
             width: 900.0,
             height: 232.0,
@@ -7977,6 +8364,7 @@ mod tests {
         };
         let placement = RuntimeUiPlacement::Window {
             anchor: RuntimeUiWindowAnchor::BottomRight,
+            region: RuntimeUiWindowRegion::Application,
             offset: Vec2::new(400.0, -400.0),
             width: 120.0,
             height: 80.0,
