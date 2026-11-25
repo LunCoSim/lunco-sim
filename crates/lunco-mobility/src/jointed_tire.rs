@@ -16,7 +16,6 @@ use lunco_port_core::Port;
 use crate::wheel_kinematics::body_point_velocity;
 use crate::{
     TireLateralStiffnessGraph, jointed_contact_plane_basis, solve_axle_step_with_roundoff,
-    tire_patch_force,
 };
 
 /// Authored tire parameters and topology for one Avian-backed wheel body.
@@ -25,18 +24,21 @@ use crate::{
 /// its authored revolute joint. It contains no alternate coefficients: the
 /// same values are fed to [`WheelRaycast`] through `WheelParams` and to this
 /// contact realization.
-#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[derive(Component, Debug, Clone, Reflect)]
+#[require(crate::WheelForceSample)]
 #[reflect(Component)]
 pub struct JointedWheelTire {
     /// Authored revolute joint entity connecting the wheel to its chassis.
     pub drive_joint: Entity,
     /// Wheel radius, m.
     pub radius: f64,
+    pub width: f64,
+    pub soil_side_force_curve: crate::SoilSideForceCurve,
     /// Complete authored tire and drivetrain assembly inertia, kg m².
     pub axle_inertia: f64,
     /// Longitudinal force per dimensionless slip, N.
     pub slip_stiffness: f64,
-    /// Standard PhysX lateral stiffness graph evaluated at contact load.
+    /// Standard PhysX lateral stiffness graph evaluated at the full wheel load.
     pub lateral_stiffness_graph: TireLateralStiffnessGraph,
     /// Lower edge of the authored measured cornering-speed envelope, m/s.
     pub min_validated_speed: f64,
@@ -84,6 +86,7 @@ struct TireContact {
     v_long: f64,
     v_lat: f64,
     relative_velocity: DVec3,
+    soil: Option<lunco_physics::support::WheelSoil>,
 }
 
 fn add_external_support_load(
@@ -169,18 +172,22 @@ pub fn apply_jointed_tire_forces(
         )>,
         Query<lunco_physics::AvianForceState>,
     )>,
-    q_tires: Query<
+    mut q_tires: Query<
         (
             Entity,
             Option<&lunco_physics::PhysicsOrderKey>,
             &JointedWheelTire,
             Option<&crate::WheelHeatPorts>,
             Option<&ComputedMass>,
+            &mut crate::WheelForceSample,
         ),
         Without<lunco_core::SimulationObjectPaused>,
     >,
     q_joints: Query<(&JointTorqueActuator, &RevoluteJoint)>,
-    q_body_modes: Query<(Entity, &RigidBody, Has<RigidBodyDisabled>)>,
+    (q_body_modes, soils): (
+        Query<(Entity, &RigidBody, Has<RigidBodyDisabled>)>,
+        crate::soil_tire::SoilSurfaces,
+    ),
     mut q_ports: ParamSet<(Query<&Port>, Query<&mut Port>)>,
     q_inputs: Query<&InputPorts>,
     islands: Res<lunco_physics::DynamicJointIslandMasses>,
@@ -202,7 +209,9 @@ pub fn apply_jointed_tire_forces(
         return;
     }
     let wheel_order = match lunco_physics::ordered_physics_entities(
-        q_tires.iter().map(|(entity, key, _, _, _)| (entity, key)),
+        q_tires
+            .iter()
+            .map(|(entity, key, _, _, _, _)| (entity, key)),
         "jointed wheel tire force",
     ) {
         Ok(order) => order,
@@ -224,7 +233,7 @@ pub fn apply_jointed_tire_forces(
     let (force_scratch, brake_states) = &mut *scratch;
     brake_states.clear();
     for wheel in &wheel_order {
-        let Ok((_, _, tire, _, _)) = q_tires.get(*wheel) else {
+        let Ok((_, _, tire, _, _, _)) = q_tires.get(*wheel) else {
             continue;
         };
         let Ok((motor, _)) = q_joints.get(tire.drive_joint) else {
@@ -262,7 +271,7 @@ pub fn apply_jointed_tire_forces(
     // contacts cannot support their own joint island.
     let mut tire_islands = std::collections::HashSet::new();
     let mut loads: std::collections::HashMap<Entity, Vec<f64>> = std::collections::HashMap::new();
-    for (wheel, _, tire, _, _) in &q_tires {
+    for (wheel, _, tire, _, _, _) in &q_tires {
         if !q_body_modes
             .get(wheel)
             .is_ok_and(|(_, body, disabled)| *body == RigidBody::Dynamic && !disabled)
@@ -336,9 +345,11 @@ pub fn apply_jointed_tire_forces(
             {
                 continue;
             }
-            let Ok((_, _, tire, heat_ports, wheel_mass)) = q_tires.get(wheel) else {
+            let Ok((_, _, tire, heat_ports, wheel_mass, mut sample)) = q_tires.get_mut(wheel)
+            else {
                 continue;
             };
+            *sample = Default::default();
             let Some(wheel_mass) = admitted_wheel_mass(
                 wheel_mass,
                 wheel,
@@ -452,6 +463,13 @@ pub fn apply_jointed_tire_forces(
                             v_long,
                             v_lat,
                             relative_velocity,
+                            soil: soils
+                                .get(if wheel_is_body1 {
+                                    pair.collider2
+                                } else {
+                                    pair.collider1
+                                })
+                                .copied(),
                         });
                     }
                 }
@@ -516,25 +534,43 @@ pub fn apply_jointed_tire_forces(
                 continue;
             }
 
-            let patch = |contact: &TireContact, w: f64| {
-                let tread_speed = (w + housing_speed) * tire.radius;
-                tire_patch_force(
-                    tire.slip_stiffness * contact.normal_force / total_normal_force,
-                    tread_speed - contact.v_long,
-                    contact.v_long.abs().max(tread_speed.abs()).max(
-                        tire.longitudinal_slip_denominators
-                            .minimum(drive_torque != 0.0 || (braking && motor.brake_torque > 0.0)),
-                    ),
+            let responses: Vec<_> = contacts
+                .iter()
+                .map(|contact| {
+                    crate::soil_tire::PatchResponse::new(
+                        tire.lateral_stiffness_graph,
+                        &tire.soil_side_force_curve,
+                        contact.soil.as_ref(),
+                        contact.normal_force,
+                        total_normal_force,
+                        tire.radius,
+                        tire.width,
+                        contact.v_long,
+                        contact.v_lat,
+                        tire.min_validated_speed,
+                    )
+                })
+                .collect();
+            let angle = |contact: &TireContact, tread: f64| {
+                (-contact.v_lat).atan2(
                     contact
                         .v_long
                         .abs()
-                        .max(tread_speed.abs())
+                        .max(tread.abs())
                         .max(tire.min_validated_speed),
-                    contact.v_lat,
-                    contact.normal_force,
-                    tire.friction_mu,
-                    tire.lateral_stiffness_graph,
                 )
+            };
+            let patch = |i: usize, w: f64| {
+                let contact = &contacts[i];
+                let tread = (w + housing_speed) * tire.radius;
+                let denom = contact.v_long.abs().max(tread.abs()).max(
+                    tire.longitudinal_slip_denominators
+                        .minimum(drive_torque != 0.0 || (braking && motor.brake_torque > 0.0)),
+                );
+                let long = tire.slip_stiffness
+                    * (contact.normal_force / total_normal_force)
+                    * ((tread - contact.v_long) / denom);
+                responses[i].force(long, angle(contact, tread), tire.friction_mu)
             };
             let step = match solve_axle_step_with_roundoff(
                 omega,
@@ -547,7 +583,8 @@ pub fn apply_jointed_tire_forces(
                 |w| {
                     contacts
                         .iter()
-                        .map(|contact| patch(contact, w).0 * tire.radius)
+                        .enumerate()
+                        .map(|(i, _)| patch(i, w).0 * tire.radius)
                         .sum()
                 },
                 |w| {
@@ -558,7 +595,8 @@ pub fn apply_jointed_tire_forces(
                     // force floor: the bound scales with authored force laws.
                     contacts
                         .iter()
-                        .map(|contact| {
+                        .enumerate()
+                        .map(|(i, contact)| {
                             let tread = (w + housing_speed) * tire.radius;
                             let velocity_scale = tire.radius * (w.abs() + housing_speed.abs())
                                 + contact.v_long.abs();
@@ -572,9 +610,7 @@ pub fn apply_jointed_tire_forces(
                                 .abs()
                                 .max(tread.abs())
                                 .max(tire.min_validated_speed);
-                            let lateral_gain = tire
-                                .lateral_stiffness_graph
-                                .stiffness_at_load(contact.normal_force);
+                            let lateral_gain = responses[i].angular_gain_bound();
                             let lateral_error = if lateral_gain == 0.0 || contact.v_lat == 0.0 {
                                 0.0
                             } else {
@@ -612,8 +648,10 @@ pub fn apply_jointed_tire_forces(
                 }
             };
             let island = islands.get(wheel);
+            sample.normal_n = total_normal_force;
+            sample.drive_torque_nm = drive_torque;
             let mut tire_heat = 0.0;
-            for contact in &contacts {
+            for (i, contact) in contacts.iter().enumerate() {
                 let static_hold = if braking
                     && motor.brake_torque > drive_torque.abs()
                     && let (Some(island), Ok(gravity)) = (island, q_gravity.get(wheel))
@@ -649,9 +687,15 @@ pub fn apply_jointed_tire_forces(
                 } else {
                     None
                 };
+                let share = contact.normal_force / total_normal_force;
+                sample.sinkage_m += share * responses[i].sinkage_m;
+                sample.lateral_speed_mps += share * contact.v_lat;
                 let mut force = DVec3::ZERO;
                 for interval in step.intervals.iter().filter(|s| s.duration > 0.0) {
                     let fraction = interval.duration / full_dt;
+                    sample.slip_angle_rad += share
+                        * fraction
+                        * angle(contact, (interval.speed + housing_speed) * tire.radius);
                     if let Some(hold) = static_hold
                         && interval.start_speed == 0.0
                         && interval.speed == 0.0
@@ -659,7 +703,7 @@ pub fn apply_jointed_tire_forces(
                         force += hold * fraction;
                         tire_heat -= hold.dot(contact.relative_velocity) * fraction;
                     } else {
-                        let (long, lat) = patch(contact, interval.speed);
+                        let (long, lat) = patch(i, interval.speed);
                         force += (contact.forward * long + contact.right * lat) * fraction;
                         tire_heat += fraction
                             * (long
@@ -670,6 +714,9 @@ pub fn apply_jointed_tire_forces(
                 }
                 // The axle owner wakes the island when the brake changes.
                 // A held brake supplies a passive contact reaction on both bodies.
+                sample.longitudinal_n += force.dot(contact.forward);
+                sample.lateral_n += force.dot(contact.right);
+                sample.lateral_dissipation_w -= force.dot(contact.right) * contact.v_lat;
                 pending.push(lunco_physics::BodyForce {
                     local_force: DVec3::ZERO,
                     body: wheel,

@@ -76,6 +76,7 @@ pub(crate) fn update_wheel_spin(
     q_child_of: Query<&ChildOf>,
     q_inputs: Query<&InputPorts>,
     q_collider_owners: Query<&ColliderOf>,
+    soils: crate::soil_tire::SoilSurfaces,
     // THE FIXED CLOCK BY TYPE, NOT BY PLACEMENT. This integrator is only correct
     // on a fixed step (the implicit grip solve and the `τ = I·ω/dt` servo/brake
     // targets are all written against a constant `dt`), so it asks for
@@ -245,24 +246,28 @@ pub(crate) fn update_wheel_spin(
         } else {
             0.0
         };
+        let response = crate::soil_tire::PatchResponse::new(
+            wheel.lateral_stiffness_graph,
+            &wheel.soil_side_force_curve,
+            contact.and_then(|hit| soils.get(hit.entity)),
+            load,
+            load,
+            r,
+            wheel.wheel_width,
+            v_long,
+            v_lat,
+            wheel.min_validated_speed,
+        );
         let patch = |omega: f64| {
-            crate::tire_patch_force(
-                k_slip,
-                omega * r - v_long,
-                v_long.abs().max((omega * r).abs()).max(
-                    wheel
-                        .longitudinal_slip_denominators
-                        .minimum(tau_drive != 0.0 || (braking && wheel.brake_torque_max > 0.0)),
-                ),
-                v_long
-                    .abs()
-                    .max((omega * r).abs())
-                    .max(wheel.min_validated_speed),
-                v_lat,
-                load,
-                friction_mu,
-                wheel.lateral_stiffness_graph,
-            )
+            let tread = omega * r;
+            let denom = v_long.abs().max(tread.abs()).max(
+                wheel
+                    .longitudinal_slip_denominators
+                    .minimum(tau_drive != 0.0 || (braking && wheel.brake_torque_max > 0.0)),
+            );
+            let angle =
+                (-v_lat).atan2(v_long.abs().max(tread.abs()).max(wheel.min_validated_speed));
+            response.force(k_slip * ((tread - v_long) / denom), angle, friction_mu)
         };
         let step = crate::solve_axle_step(
             wheel.spin_velocity,
@@ -470,6 +475,7 @@ mod tests {
                     max_stiffness: 4_000.0,
                     rest_load: 400.0,
                 },
+                soil_side_force_curve: Default::default(),
                 min_validated_speed: 0.0,
                 longitudinal_slip_denominators: crate::LongitudinalSlipDenominators::default(),
                 brake_torque_max: 0.0,
@@ -573,6 +579,7 @@ mod tests {
                         max_stiffness: 4_000.0,
                         rest_load: 400.0,
                     },
+                    soil_side_force_curve: Default::default(),
                     min_validated_speed: 0.0,
                     longitudinal_slip_denominators: crate::LongitudinalSlipDenominators::default(),
                     brake_torque_max: 1500.0,

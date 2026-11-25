@@ -705,6 +705,9 @@ fn refresh_layered_terrain_layers(
             // from which the canonical owner can build one — skip this update.
             continue;
         };
+        if !project_wheel_soil(&cs.view(), &sdf, entity, prim_path, &mut commands) {
+            continue;
+        }
         let stack = parse_terrain_layer_stack(&cs.view(), &sdf, &registry);
         // Despawn-safe: a scene reload can despawn this terrain between queue
         // time and apply_deferred — no-op instead of panicking.
@@ -1348,6 +1351,9 @@ fn refresh_docbacked_terrain_from_doc(
         // that produces the new terrain stack. Bypass change detection: this is a
         // document projection, not a new local spec edit.
         sync_obstacle_spec_from_usd(&reader, &sdf, obstacle_spec.bypass_change_detection());
+        if !project_wheel_soil(&reader, &sdf, entity, prim_path, &mut commands) {
+            continue;
+        }
         let stack = parse_terrain_layer_stack(&reader, &sdf, &parser);
         // Despawn-safe: a scene reload can despawn this terrain between queue
         // time and apply_deferred — no-op instead of panicking.
@@ -1915,6 +1921,48 @@ fn bridge_usd_dem_terrain(
     }
 }
 
+/// Read the same surface material on first admission and after document/stage edits.
+fn project_wheel_soil<R: UsdRead>(
+    reader: &R,
+    sdf: &openusd::sdf::Path,
+    entity: Entity,
+    prim_path: &lunco_usd_bevy_scene::UsdPrimPath,
+    commands: &mut Commands,
+) -> bool {
+    if reader.has_api_schema(sdf, "LunCoSoilAPI") {
+        let read = |name| reader.real(sdf, name).filter(|x| x.is_finite());
+        let soil = (|| {
+            let soil = lunco_terrain_surface::collider_ring::WheelSoil {
+                pressure_gradient: read("lunco:soil:pressureGradient")?,
+                cohesion: read("lunco:soil:cohesion")?,
+                friction_angle: read("lunco:soil:frictionAngleDeg")?.to_radians(),
+                unit_weight: read("lunco:soil:unitWeight")?,
+                shear_length: read("lunco:soil:shearLength")?,
+            };
+            (soil.pressure_gradient > 0.0
+                && soil.cohesion >= 0.0
+                && (0.0..std::f64::consts::FRAC_PI_2).contains(&soil.friction_angle)
+                && soil.unit_weight > 0.0
+                && soil.shear_length > 0.0)
+                .then_some(soil)
+        })();
+        let Some(soil) = soil else {
+            reject_local_surface(
+                commands,
+                prim_path,
+                "invalid or incomplete LunCoSoilAPI parameters",
+            );
+            return false;
+        };
+        commands.entity(entity).try_insert(soil);
+    } else {
+        commands
+            .entity(entity)
+            .try_remove::<lunco_terrain_surface::collider_ring::WheelSoil>();
+    }
+    true
+}
+
 /// The DEM-bridge read body, over the selected composed read surface ([`UsdRead`]) —
 /// reads the authored `lunco:assetMode` / child-layer / anchor attributes and
 /// attaches the terrain request + composed stack + georef. Split out of
@@ -1942,6 +1990,9 @@ fn bridge_dem_prim_read<R: UsdRead>(
     // layer supplies the heightmap source + window; the rest stamp/scatter/shade.
     let asset_mode = reader.text(sdf, "lunco:assetMode");
     let has_terrain_api = reader.has_api_schema(sdf, "LunCoTerrainAPI");
+    if !project_wheel_soil(reader, sdf, entity, prim_path, commands) {
+        return;
+    }
     if has_terrain_api {
         commands.entity(entity).try_insert(TerrainTile);
     }

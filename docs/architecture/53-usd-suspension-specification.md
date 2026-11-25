@@ -531,3 +531,27 @@ if let Some(compliance) = compliance_opt {
 ```
 
 This design keeps the compliance properties fully isolated and modular, allowing the loader to attach them only when authored, without adding complexity to the core physics or standard visual updates.
+
+## Rolling curves and wheel-soil contact
+
+A jointed tire evaluates its standard stiffness graph at the whole wheel's normal
+load. Each contact receives a share proportional to its normal reaction. Its
+tangent basis, slip, force application point and opposite support reaction remain
+local. Raycast and jointed wheels use the same force law for axle balance and
+applied force.
+
+A tire can author `lunco:tire:soilSideForceCurve` as angle in degrees and
+dimensionless side force per unit normal load. A `LunCoSoilAPI` surface supplies
+pressure gradient (Pa/m), cohesion (Pa), friction angle (degrees), unit weight
+(N/m³) and shear displacement scale (m). Streamed colliders resolve the material
+from their terrain owner. Rigid surfaces use the standard tire graph.
+
+The curve describes total side force for rolling. In slow turns a quasi-steady
+shallow footprint estimates sinkage from wheel load; mobilized soil shear shares
+the drive friction limit, with passive lateral earth pressure added separately.
+The solver blends the two *total* force predictions with hub speed up to the
+tire's minimum validated rolling speed. Beyond the last measured angle it
+transitions to soil resistance by 90°. Rigid contact still owns normal support.
+The diagnostic sinkage describes the reduced model and does not cut a rut into
+the DEM. Jointed wheels publish the applied master-step forces and drive torque
+in `WheelForceSample`.

@@ -257,8 +257,8 @@ pub struct PendingColliderBakes(
 /// children of the big_space **grid** (each carries its own `CellCoord`), so they
 /// don't die with the terrain entity; [`despawn_orphaned_collider_tiles`] reaps
 /// them when the owner is gone (twin reload).
-#[derive(Component)]
-pub struct ColliderTileOf(pub Entity);
+pub use lunco_physics::support::ColliderTileOf;
+pub use lunco_physics::support::WheelSoil;
 
 /// Sample the composed surface oracle over a tile `region` into Avian's
 /// heightfield layout (`Vec<Vec<f64>>` indexed `[x][z]`, paired with a
