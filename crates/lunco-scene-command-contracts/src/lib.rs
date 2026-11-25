@@ -13,6 +13,8 @@ use lunco_core::{Command, EditIntent, serde};
 pub enum SceneViewValue {
     /// UTF-8 presentation text.
     Text { value: String },
+    /// Boolean presentation value.
+    Bool { value: bool },
     /// Withdraw the runtime value and use the authored presentation again.
     Clear,
 }
@@ -63,16 +65,32 @@ pub struct MoveEntity {
 
 /// Set a scene entity's complete pose in the active physics frame.
 ///
-/// Translation and orientation are one authored edit, allowing live seating
-/// and document persistence to share one command and change-set boundary.
+/// Translation and orientation share one live pose mechanism. Persistent intent
+/// additionally journals an authored edit; interactive intent never edits USD.
 #[Command(default)]
 pub struct TransformEntity {
     /// API-stable global entity ID from `ListEntities`.
+    #[reflect(@lunco_core::AuthzTarget)]
     pub entity_id: u64,
     /// Target translation in the active physics frame.
     pub translation: [f64; 3],
     /// Target orientation in the active physics frame, `[x, y, z, w]`.
     pub rotation: [f64; 4],
+    /// Persistent commits an authored edit; Interactive changes only the live pose.
+    #[serde(default)]
+    #[reflect(default)]
+    pub intent: EditIntent,
+}
+
+/// Set the live contact participation of an already admitted native collider.
+/// This changes runtime physics state only; the authored shape is unchanged.
+#[Command]
+pub struct SetColliderEnabled {
+    /// Exact collider entity, not a source prim that has no native collider.
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub target: Entity,
+    /// Whether the collider participates in live contact detection.
+    pub enabled: bool,
 }
 
 /// Remove a scene entity, optionally persisting the edit to its USD document.

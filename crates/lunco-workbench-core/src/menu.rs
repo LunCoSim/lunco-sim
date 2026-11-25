@@ -92,6 +92,16 @@ trait MenuIntent: Send {
     fn apply(self: Box<Self>, world: &mut World);
 }
 
+struct MenuAnchorIntent(String, egui::Rect);
+
+impl MenuIntent for MenuAnchorIntent {
+    fn apply(self: Box<Self>, world: &mut World) {
+        if let Some(mut anchors) = world.get_resource_mut::<crate::presentation::HelpAnchors>() {
+            anchors.set(self.0, self.1);
+        }
+    }
+}
+
 struct SetResourceIntent<T>(T);
 
 impl<T: Resource<Mutability = bevy::ecs::component::Mutable>> MenuIntent for SetResourceIntent<T> {
@@ -172,6 +182,12 @@ impl<'w> MenuCtx<'w> {
         query.iter(self.world).next().is_some()
     }
 
+    /// Publish the measured bounds of a menu landmark after painting.
+    pub fn landmark(&mut self, key: impl Into<String>, rect: egui::Rect) {
+        self.intents
+            .push(Box::new(MenuAnchorIntent(key.into(), rect)));
+    }
+
     /// Queue replacement of an existing resource after painting.
     pub fn set_resource<T: Resource<Mutability = bevy::ecs::component::Mutable>>(
         &mut self,
@@ -231,11 +247,56 @@ pub type CustomMenu = (String, MenuCallback);
 /// Callback that reports undo/redo availability for a domain.
 pub type UndoProbe = Arc<dyn Fn(&UndoProbeCtx) -> Option<(bool, bool)> + Send + Sync>;
 
+/// A HUD's independent user preference and current presentation eligibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HudVisibility {
+    /// Whether the user permits this HUD to appear.
+    pub enabled: bool,
+    /// Whether the current perspective, scene, and authored rules permit presentation.
+    pub available: bool,
+}
+
+impl HudVisibility {
+    /// Effective visibility, shared by presentation and menu consumers.
+    pub fn visible(self) -> bool {
+        self.enabled && self.available
+    }
+
+    /// Render the common visibility control without changing the availability rules.
+    /// A checked but unavailable HUD will appear when its owner permits it.
+    pub fn menu_row(self, ui: &mut Ui, title: impl Into<egui::WidgetText>) -> Option<bool> {
+        let mut enabled = self.enabled;
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            changed = ui.checkbox(&mut enabled, title).changed();
+            if !self.available {
+                ui.label(egui::RichText::new("Unavailable here").weak().small())
+                    .on_hover_text("This HUD needs a different perspective or scene state.");
+            }
+        });
+        changed.then_some(enabled)
+    }
+}
+
+/// User preference for all currently registered user-controlled HUDs.
+#[derive(bevy::prelude::Event)]
+pub struct SetAllHudVisibility(pub bool);
+
+/// Stable ordering of the HUD menu's independently owned sections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HudMenuGroup {
+    Guidance,
+    Native,
+    Runtime,
+}
+
 /// Registry of menu contributions owned by the workbench contract layer.
 #[derive(Resource, Default, Clone)]
 pub struct WorkbenchMenuRegistry {
     /// Settings submenus grouped by their label.
     pub settings_submenus: Vec<SettingsSubmenu>,
+    /// HUD visibility rows under View → HUDs.
+    pub hud_menu: Vec<(HudMenuGroup, MenuCallback)>,
     /// Edit-menu callbacks.
     pub edit_menu: Vec<MenuCallback>,
     /// Undo/redo availability probes.
@@ -389,6 +450,15 @@ impl WorkbenchMenuRegistry {
             self.settings_submenus
                 .push((label, vec![Arc::new(callback)]));
         }
+    }
+
+    /// Register an independently owned HUD visibility menu contribution.
+    pub fn register_hud_menu<F>(&mut self, group: HudMenuGroup, callback: F)
+    where
+        F: Fn(&mut Ui, &mut MenuCtx) + Send + Sync + 'static,
+    {
+        self.hud_menu.push((group, Arc::new(callback)));
+        self.hud_menu.sort_by_key(|(group, _)| *group);
     }
 
     /// Register an Edit-menu contribution.

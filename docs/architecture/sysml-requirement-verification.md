@@ -137,7 +137,9 @@ and all mapped tests pass. `FAILED` is reserved for an observed standard fail;
 `INCONCLUSIVE` means evidence is insufficient, `ERROR` means evaluation failed,
 and `RUN ERROR` means the runner could not establish a trustworthy result.
 `INVALID MODEL`, `STALE`, `RUNNING`, and `INCOMPLETE` keep source diagnostics,
-old evidence, active work, and missing proof visible. This is a summary of
+old evidence, active work, and missing proof visible. When current evidence
+passes but linked tests have not run, Requirement details points directly to
+the existing **Run mapped test** action. This is a summary of
 authored criteria, emitted evidence, and linked tests; it is not full KerML
 constraint execution.
 

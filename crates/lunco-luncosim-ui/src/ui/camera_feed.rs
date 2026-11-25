@@ -19,7 +19,7 @@ use lunco_workbench_state::{
     WorkspaceCameraViewState, WorkspaceGraphSignalState, WorkspaceGraphViewState,
     WorkspaceRuntimeViewSnapshot, WorkspaceStateViewProvider,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Open live image controls. Omitted source follows the selected main camera.
 #[Command(default)]
@@ -32,6 +32,8 @@ pub(super) fn install(app: &mut App) {
     app.init_resource::<PendingRuntimeViewRestore>()
         .init_resource::<SignalDescriptorRestoreCursor>()
         .add_systems(Update, restore_pending_runtime_views)
+        .add_observer(set_camera_hud_visibility)
+        .add_observer(set_all_camera_hud_visibility)
         .add_observer(request_camera_view_restore_on_identity)
         .add_observer(request_camera_view_restore_on_projection)
         .add_observer(reset_runtime_view_restore_after_transition)
@@ -465,9 +467,79 @@ pub(super) struct CameraFeedUiState {
     main_open: bool,
     main_source: Option<GlobalEntityId>,
     layouts: BTreeMap<u64, CameraFeedWindowLayout>,
+    hidden: BTreeSet<u64>,
     revision: u64,
 }
 impl SceneResource for CameraFeedUiState {}
+
+#[derive(Event)]
+struct SetCameraHudVisibility {
+    id: u64,
+    enabled: bool,
+}
+
+fn set_camera_hud_visibility(
+    event: On<SetCameraHudVisibility>,
+    feeds: Res<CameraFeeds>,
+    mut state: ResMut<CameraFeedUiState>,
+) {
+    if !feeds.instances.contains_key(&event.id) {
+        return;
+    }
+    if event.enabled {
+        state.hidden.remove(&event.id);
+    } else {
+        state.hidden.insert(event.id);
+    }
+}
+
+fn set_all_camera_hud_visibility(
+    event: On<lunco_workbench_core::SetAllHudVisibility>,
+    feeds: Res<CameraFeeds>,
+    mut state: ResMut<CameraFeedUiState>,
+) {
+    if event.0 {
+        state.hidden.clear();
+    } else {
+        state.hidden = feeds.instances.keys().copied().collect();
+    }
+}
+
+/// List existing camera HUDs without closing or reallocating their render feeds.
+pub(super) fn camera_hud_menu_ui(
+    ui: &mut egui::Ui,
+    ctx: &mut lunco_workbench_core::MenuCtx<'_>,
+    available: bool,
+) {
+    let Some(feeds) = ctx.resource::<CameraFeeds>() else {
+        return;
+    };
+    let Some(state) = ctx.resource::<CameraFeedUiState>() else {
+        return;
+    };
+    let rows: Vec<_> = feeds
+        .instances
+        .iter()
+        .map(|(id, feed)| {
+            let title = if feed.source.is_none() {
+                format!("Camera view {id}")
+            } else {
+                feed.label.clone()
+            };
+            (*id, title, !state.hidden.contains(id))
+        })
+        .collect();
+    for (id, title, enabled) in rows {
+        if let Some(enabled) = ui
+            .push_id(("camera_hud", id), |ui| {
+                lunco_workbench_core::HudVisibility { enabled, available }.menu_row(ui, title)
+            })
+            .inner
+        {
+            ctx.trigger(SetCameraHudVisibility { id, enabled });
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CameraFeedWindowLayout {
@@ -687,6 +759,7 @@ pub(super) fn draw_camera_feed(
     exposures: Query<&Exposure>,
     authored_images: Query<(&bevy_hui::prelude::Tags, &InheritedVisibility)>,
 ) {
+    state.hidden.retain(|id| feeds.instances.contains_key(id));
     let previous_layout_count = state.layouts.len();
     state
         .layouts
@@ -755,7 +828,7 @@ pub(super) fn draw_camera_feed(
         .collect();
     for (index, (id, feed)) in feeds.instances.iter().enumerate() {
         // An authored HUD owns presentation of this same native image.
-        if embedded.contains(id) {
+        if embedded.contains(id) || state.hidden.contains(id) {
             continue;
         }
         let target = feed.image.as_ref().and_then(|handle| {

@@ -5449,10 +5449,7 @@ fn sync_physics_body_admission_hold(
             progress.release(previous);
         }
         if let Some(key) = desired_key {
-            progress.acquire(
-                key,
-                "Waiting for the mounted scene's physical bodies and joints to be admitted",
-            );
+            progress.acquire(key, "Preparing physics for this scene (bodies and joints)");
         }
         *previous_progress_key = desired_key;
     }

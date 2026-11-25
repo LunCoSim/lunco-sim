@@ -3,7 +3,7 @@
 use crate::UsdPrimPath;
 use bevy::prelude::*;
 use lunco_usd_bevy_stage::UsdStageAsset;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Lifecycle-maintained lookup for every ECS projection of a USD path.
@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// reconcile every explicit preview lease through the same indexed candidates.
 #[derive(Resource, Default)]
 pub struct UsdPrimIndex {
-    by_stage: HashMap<AssetId<UsdStageAsset>, HashMap<Arc<str>, Vec<Entity>>>,
+    by_stage: HashMap<AssetId<UsdStageAsset>, BTreeMap<Arc<str>, Vec<Entity>>>,
     by_entity: HashMap<Entity, (AssetId<UsdStageAsset>, Arc<str>)>,
 }
 
@@ -23,6 +23,23 @@ impl UsdPrimIndex {
             .and_then(|paths| paths.get(path))
             .map(Vec::as_slice)
             .unwrap_or_default()
+    }
+
+    /// Indexed candidates beneath one exact composed namespace, including its root.
+    /// The separator excludes siblings with a matching name prefix.
+    pub fn in_subtree(&self, stage: AssetId<UsdStageAsset>, path: &str) -> Vec<Entity> {
+        let Some(paths) = self.by_stage.get(&stage) else {
+            return Vec::new();
+        };
+        let mut entities = self.in_stage(stage, path).to_vec();
+        let prefix = format!("{}/", path.trim_end_matches('/'));
+        for (candidate, members) in paths.range(Arc::<str>::from(prefix.as_str())..) {
+            if !candidate.starts_with(&prefix) {
+                break;
+            }
+            entities.extend(members.iter().copied());
+        }
+        entities
     }
 
     /// Candidates across all admitted stages. The caller supplies any ordering or mount policy.

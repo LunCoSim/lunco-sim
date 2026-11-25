@@ -119,6 +119,21 @@ input visualisation, and window preferences in `lunco-settings`. Missing Twin
 keys use the surface's authored default, so Rust does not grow a field for
 each new preference.
 
+## User visibility
+
+**View → HUDs** lists current guided cards, runtime HUDs and native HUD
+preferences. `HudVisibility` distinguishes user permission from current
+authored eligibility; a checked row may be unavailable here. Set an explicit
+human-readable `title` on HTML surfaces. Guided cards can minimize, hide,
+dock in Guidance or return to floating; content and callback bindings have one
+owner. Restore hidden cards from the menu. The global show/hide actions reach
+all current user-controlled HUD owners. Modal, dock-panel and essential overlay
+surfaces are not dismissible HUDs. Camera-status uses the runtime row without editing Twin policy, while
+celestial-view uses the native application preference, not a second hide bit. Inspect HTML HUD permission, eligibility, and root visibility with
+`InspectRuntimeHuds`. Window HUDs anchored to the scene may set
+`"region": "scene_viewport"` to constrain their authored and dragged rectangles
+to its measured dock leaf. Verify native interactions with `scripts/api/test_hud_visibility.py --port <free-port>`.
+
 ## Camera views and configurable mission cards
 
 Windowed LunCoSim supports up to eight live camera windows. Call
@@ -140,7 +155,7 @@ live depth/noise controls, follow [camera windows](../lunco-ui/SKILL.md#camera-w
 Run `scripts/api/test_camera_views.py --port <free-port>` for the windowed
 pixel and world-fixed-sky gate. Capture only after the view reports `ready`.
 
-Named guided cards accept `SetGuidedHudLayout { hud, width, text_scale,
+Named guided cards accept `SetGuidedHudLayout { hud, title, width, text_scale,
 draggable }`. Layout is scene scoped and exposed in `InspectGuidedHud`; invalid
 bounds reject before mutation. A card's context menu changes the same settings.
 Twin Rhai owns which telemetry lines to publish, and can retain chosen groups

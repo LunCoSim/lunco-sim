@@ -1467,7 +1467,8 @@ impl WorkbenchLayout {
     /// scratch. Used by the View menu's panel checkbox so toggling
     /// one tab doesn't wipe instance tabs (model views, etc.) that
     /// the perspective preset doesn't track. Picks a leaf based on
-    /// the panel's default slot; falls back to the focused leaf.
+    /// the panel's default slot; creates the missing side/inspector region
+    /// beside the active scene or center rather than covering it.
     /// Returns true if the panel was inserted.
     pub fn insert_panel_into_dock(&mut self, id: PanelId, slot: PanelSlot) -> bool {
         let tab = TabId::Singleton(id);
@@ -1505,17 +1506,45 @@ impl WorkbenchLayout {
         if self.dock.iter_all_tabs().any(|(_, t)| *t == tab) {
             return false;
         }
-        // Find an existing tab in the same slot to drop next to.
-        let neighbour: Option<PanelId> = match slot {
-            PanelSlot::SideBrowser => self.side_browser.first().copied(),
-            PanelSlot::Center => self
-                .center
+        // Scene-only perspectives paint the viewport without a dock. Opening
+        // the first side panel must materialize the registered viewport as
+        // its own central leaf, rather than replacing the entire scene with
+        // the newly focused panel.
+        if slot != PanelSlot::Center
+            && self.active_perspective_scene_visible_when_docked()
+            && self.scene_viewport_leaf().is_none()
+            && let Some(viewport) = self.scene_viewport_panel_id()
+            && viewport != id
+        {
+            self.add_panel_to_slot(viewport, PanelSlot::Center);
+            let viewport_tab = TabId::Singleton(viewport);
+            if !self
+                .dock
+                .main_surface()
                 .iter()
+                .any(|node| matches!(node, egui_dock::Node::Leaf(leaf) if !leaf.tabs.is_empty()))
+            {
+                self.dock = DockState::new(vec![viewport_tab]);
+            } else {
+                self.dock.main_surface_mut().split_left(
+                    NodeIndex::root(),
+                    0.72,
+                    vec![viewport_tab],
+                );
+            }
+        }
+        // Find an existing tab in the same slot to drop next to.
+        let existing = |ids: &[PanelId]| {
+            ids.iter()
                 .copied()
-                .find(|panel| self.dock.find_tab(&TabId::Singleton(*panel)).is_some()),
-            PanelSlot::RightInspector => self.right_inspector.first().copied(),
-            PanelSlot::RightInspectorBottom => self.right_inspector_bottom.first().copied(),
-            PanelSlot::Bottom => self.bottom.first().copied(),
+                .find(|panel| self.dock.find_tab(&TabId::Singleton(*panel)).is_some())
+        };
+        let neighbour: Option<PanelId> = match slot {
+            PanelSlot::SideBrowser => existing(&self.side_browser),
+            PanelSlot::Center => existing(&self.center),
+            PanelSlot::RightInspector => existing(&self.right_inspector),
+            PanelSlot::RightInspectorBottom => existing(&self.right_inspector_bottom),
+            PanelSlot::Bottom => existing(&self.bottom),
             PanelSlot::Hidden => None,
         };
         let main = self.dock.main_surface_mut();
@@ -1535,6 +1564,10 @@ impl WorkbenchLayout {
         if let Some(node) = target_node {
             main.set_focused_node(node);
             main.push_to_focused_leaf(tab);
+        } else if slot == PanelSlot::RightInspector && !main.is_empty() {
+            main.split_right(NodeIndex::root(), 0.76, vec![tab]);
+        } else if slot == PanelSlot::SideBrowser && !main.is_empty() {
+            main.split_left(NodeIndex::root(), 0.22, vec![tab]);
         } else if slot == PanelSlot::Bottom && !main.is_empty() {
             main.split_below(NodeIndex::root(), 0.7, vec![tab]);
         } else if slot == PanelSlot::RightInspectorBottom
@@ -1592,11 +1625,23 @@ impl WorkbenchLayout {
     }
 
     /// Remove a panel from the live dock without rebuilding from
-    /// scratch. Companion to [`insert_panel_into_dock`].
-    pub fn remove_panel_from_dock(&mut self, id: PanelId) -> bool {
+    /// scratch. Companion to [`insert_panel_into_dock`]. Only an explicitly
+    /// preserved central workspace keeps its empty leaf.
+    pub fn remove_panel_from_dock(&mut self, id: PanelId, preserve_empty_center: bool) -> bool {
         let tab = TabId::Singleton(id);
         let mut removed = self.floating_panels.iter().any(|p| p.tab == tab);
         self.floating_panels.retain(|p| p.tab != tab);
+        if !preserve_empty_center {
+            // The maintained dock API collapses an emptied leaf and expands its
+            // sibling. Removing the vector entry alone leaves a blank sidebar.
+            while let Some(path) = self.dock.find_tab(&tab) {
+                if self.dock.remove_tab(path).is_none() {
+                    break;
+                }
+                removed = true;
+            }
+            return removed;
+        }
         let main = self.dock.main_surface_mut();
         // Collect node indices to mutate.
         let mut hits: Vec<(NodeIndex, usize)> = Vec::new();
@@ -1991,7 +2036,7 @@ mod tests {
 
         assert!(layout.has_central_content());
         layout.center.retain(|panel| *panel != center);
-        assert!(layout.remove_panel_from_dock(center));
+        assert!(layout.remove_panel_from_dock(center, true));
         assert!(!layout.has_central_content());
         assert!(layout.dock.find_tab(&TabId::Singleton(browser)).is_some());
         assert!(layout.dock.find_tab(&TabId::Singleton(inspector)).is_some());
@@ -2144,7 +2189,7 @@ mod tests {
 
         let mut original = make_layout();
         original.center.clear();
-        original.remove_panel_from_dock(center);
+        original.remove_panel_from_dock(center, true);
         let saved = original.capture_perspective_docks();
 
         let mut restored = make_layout();

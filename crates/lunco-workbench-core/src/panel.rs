@@ -20,6 +20,11 @@ impl PanelId {
     }
 }
 
+/// Request removal of a closeable singleton through the shell's deferred
+/// layout mutation boundary.
+#[derive(bevy::prelude::Event)]
+pub struct RequestClosePanel(pub PanelId);
+
 fn intern(s: &str) -> &'static str {
     static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
     let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));

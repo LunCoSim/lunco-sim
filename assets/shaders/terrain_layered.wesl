@@ -215,21 +215,15 @@ var surface_annotations: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(17)
 var detail_albedo_tex: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(18)
-var detail_albedo_smp: sampler;
+var detail_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(19)
 var detail_normal_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(20)
-var detail_normal_smp: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(21)
 var detail_surface_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(22)
-var detail_surface_smp: sampler;
 // Regional reference-geometry reflectance: RGB is coverage-premultiplied in
 // linear light and alpha carries the measured-coverage fraction.
 @group(constants::MATERIAL_BIND_GROUP) @binding(25)
 var regional_albedo_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(26)
-var regional_albedo_smp: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
@@ -244,35 +238,25 @@ var height_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(10)
 var shadow_cache: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(11)
-var shadow_cache_sampler: sampler;
+var shadow_sampler: sampler;
 
 // Layer maps (filterable; `None` → Bevy fallback white, gated by weight_*).
 @group(constants::MATERIAL_BIND_GROUP) @binding(2)
 var albedo_tex: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3)
-var albedo_smp: sampler;
+var layer_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(4)
 var mineral_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(5)
-var mineral_smp: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(6)
 var surface_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(7)
-var surface_smp: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(8)
 var normal_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(9)
-var normal_smp: sampler;
 // Site maps are independent from the body-wide Albedo/Surface layers. The
 // collar blends these local DEM inputs into the material selected for the body.
 @group(constants::MATERIAL_BIND_GROUP) @binding(12)
 var continuation_albedo_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(13)
-var continuation_albedo_smp: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(14)
 var continuation_surface_tex: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(15)
-var continuation_surface_smp: sampler;
 
 // Blend shared random offsets at lattice corners. Adjacent cells use the
 // same corner samples, so a physical-scale detail map loses its visible square
@@ -323,7 +307,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     var regional_sample = vec4(0.0);
     @if((VERTEX_UVS_A)) if (mat.regional_albedo_on > 0.5) {
         let regional_uv = (in.uv - vec2(0.5)) * mat.regional_uv_scale + vec2(0.5);
-        regional_sample = textureSample(regional_albedo_tex, regional_albedo_smp, regional_uv);
+        regional_sample = textureSample(regional_albedo_tex, layer_sampler, regional_uv);
     }
     var local_color_weight = local_map_weight;
     @if((VERTEX_UVS_A)) if (mat.regional_albedo_on > 0.5) {
@@ -398,8 +382,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     @if((VERTEX_UVS_A)) let uv = in.uv;
     @if((VERTEX_UVS_A)) let site_grad = terrain_continuation_gradients(uv);
     @if((VERTEX_UVS_A)) let local_uv = clamp(uv, vec2(0.0), vec2(1.0));
-    @if((VERTEX_UVS_A)) var map_n = textureSampleGrad(normal_tex, normal_smp, local_uv, site_grad[0], site_grad[1]);
-    @if((VERTEX_UVS_A)) var map_s = textureSampleGrad(surface_tex, surface_smp, local_uv, site_grad[0], site_grad[1]);
+    @if((VERTEX_UVS_A)) var map_n = textureSampleGrad(normal_tex, layer_sampler, local_uv, site_grad[0], site_grad[1]);
+    @if((VERTEX_UVS_A)) var map_s = textureSampleGrad(surface_tex, layer_sampler, local_uv, site_grad[0], site_grad[1]);
     @if((VERTEX_UVS_A)) let map_footprint = pw / mat.map_texel_size_m;
     @if((VERTEX_UVS_A)) site_material_weight = terrain_continuation_weight(
         uv, mat.terrain_half_extent, mat.site_blend_widths_m);
@@ -423,14 +407,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // source-image illumination from local surface detail before writing this
     // sRGB-authored texture; this shader must not relight the source image.
     @if((VERTEX_UVS_A)) if (authored_albedo_weight > 0.0) {
-        let a = textureSampleGrad(albedo_tex, albedo_smp, local_uv, site_grad[0], site_grad[1]).rgb;
+        let a = textureSampleGrad(albedo_tex, layer_sampler, local_uv, site_grad[0], site_grad[1]).rgb;
         albedo = mix(albedo, a, authored_albedo_weight);
     }
     @if((VERTEX_UVS_A)) var continuation_color = mat.site_base_color.rgb;
     @if((VERTEX_UVS_A)) if (mat.site_weight_albedo > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
         let site_albedo = textureSampleGrad(
-            continuation_albedo_tex, continuation_albedo_smp, site_uv, site_grad[0], site_grad[1]).rgb;
+            continuation_albedo_tex, layer_sampler, site_uv, site_grad[0], site_grad[1]).rgb;
         continuation_color = mix(continuation_color, site_albedo, clamp(mat.site_weight_albedo, 0.0, 1.0));
     }
     @if((VERTEX_UVS_A)) albedo = mix(albedo, continuation_color, mat.site_base_color.a * site_material_weight);
@@ -448,7 +432,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     @if((VERTEX_UVS_A)) if (mat.site_weight_rough > 0.0 || mat.site_weight_ao > 0.0) {
         let site_uv = clamp(uv, vec2(0.0), vec2(1.0));
         let site_surface = textureSampleGrad(
-            continuation_surface_tex, continuation_surface_smp, site_uv, site_grad[0], site_grad[1]);
+            continuation_surface_tex, layer_sampler, site_uv, site_grad[0], site_grad[1]);
         roughness = clamp(mix(
             roughness,
             site_surface.r,
@@ -489,14 +473,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     let detail_dx = dpdx(detail_uv);
     let detail_dy = dpdy(detail_uv);
     if (mat.detail_albedo_weight > 0.0) {
-        let detail_color = sample_regolith_detail(detail_albedo_tex, detail_albedo_smp,
+        let detail_color = sample_regolith_detail(detail_albedo_tex, detail_sampler,
             detail_uv, detail_dx, detail_dy).rgb;
         let luminance = dot(detail_color, vec3(0.2126, 0.7152, 0.0722));
         let relative_tone = clamp(luminance / max(mat.detail_albedo_mean, 0.001), 0.25, 4.0);
         albedo *= mix(1.0, relative_tone, clamp(mat.detail_albedo_weight, 0.0, 1.0));
     }
     if (mat.detail_normal_strength > 0.0) {
-        let ts = sample_regolith_detail(detail_normal_tex, detail_normal_smp,
+        let ts = sample_regolith_detail(detail_normal_tex, detail_sampler,
             detail_uv, detail_dx, detail_dy).xyz * 2.0 - vec3(1.0);
         var axis_x = vec3(1.0, 0.0, 0.0);
         @if((VERTEX_UVS_A)) axis_x = normalize(mesh_functions::get_world_from_local(in.instance_index)[0].xyz);
@@ -506,7 +490,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         n = normalize(tangent * ts.x * strength + bitangent * ts.y * strength + n * max(ts.z, 0.05));
     }
     if (mat.detail_rough_weight > 0.0 || mat.detail_ao_weight > 0.0) {
-        let detail_surface = sample_regolith_detail(detail_surface_tex, detail_surface_smp,
+        let detail_surface = sample_regolith_detail(detail_surface_tex, detail_sampler,
             detail_uv, detail_dx, detail_dy);
         roughness = clamp(mix(roughness, detail_surface.r,
             clamp(mat.detail_rough_weight, 0.0, 1.0)), 0.05, 1.0);
@@ -569,7 +553,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     var sun_vis = 1.0;
     @if((VERTEX_UVS_A)) sun_vis = terrain_horizon_visibility(in.world_position.xyz, mat.csm_far,
-        shadow_cache, shadow_cache_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
+        shadow_cache, shadow_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
         mat.sun_tan_radius, mat.horizon_march, mat.hf_size, mat.hf_res);
     terrain_set_sun_response(
         &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, local_map_weight);
@@ -583,7 +567,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // map's own colour (e.g. the LROC slope classes), not an albedo tint:
     // its whole job is to stay readable where the light does not reach.
     @if((VERTEX_UVS_A)) if (mat.weight_mineral > 0.0) {
-        let m = textureSample(mineral_tex, mineral_smp, uv).rgb;
+        let m = textureSample(mineral_tex, layer_sampler, uv).rgb;
         color = vec4(mix(color.rgb, m, mat.weight_mineral * local_map_weight), color.a);
     }
 

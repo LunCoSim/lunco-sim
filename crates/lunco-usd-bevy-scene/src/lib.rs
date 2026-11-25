@@ -12,6 +12,7 @@ pub mod billboard;
 pub mod collision;
 mod geometry;
 pub mod prim_index;
+pub mod visibility;
 
 use bevy::asset::{AssetEvent, AssetId, AssetLoadFailedEvent};
 use bevy::ecs::hierarchy::ChildOf;
@@ -21,9 +22,9 @@ use lunco_usd_bevy_stage::{UsdInstanceRoot, UsdStageAsset};
 
 pub use geometry::{
     MeshCollisionApproximationError, ShapeDims, UsdGeomAxis, UsdMeshTopology,
-    read_geometry_orientation, read_mesh_collision_approximation, read_primitive_axis,
-    read_shape_dims, read_usd_mesh_indexed, read_usd_mesh_points, read_usd_mesh_topology,
-    usd_axis_to_dquat, usd_axis_to_quat, usd_plane_surface_vertices,
+    primitive_dimension_attribute, read_geometry_orientation, read_mesh_collision_approximation,
+    read_primitive_axis, read_shape_dims, read_usd_mesh_indexed, read_usd_mesh_points,
+    read_usd_mesh_topology, usd_axis_to_dquat, usd_axis_to_quat, usd_plane_surface_vertices,
 };
 
 /// Installs render-free USD scene lifecycle bookkeeping.
@@ -38,6 +39,18 @@ impl Plugin for UsdScenePlugin {
             app.add_plugins(prim_index::UsdPrimIndexPlugin);
         }
         app.register_type::<UsdSceneProjectionFailed>();
+        app.add_message::<visibility::VisibilityProjectionAdmitted>()
+            .add_observer(visibility::queue_visibility_projection)
+            .add_systems(
+                PostUpdate,
+                visibility::reconcile_new_visibility_projections
+                    .run_if(
+                        bevy::ecs::schedule::common_conditions::on_message::<
+                            visibility::VisibilityProjectionAdmitted,
+                        >,
+                    )
+                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+            );
         app.register_type::<billboard::UsdBillboard>();
         app.register_type::<billboard::BillboardViewText>();
         app.add_observer(retire_billboard_view_text);
@@ -247,6 +260,27 @@ pub struct UsdVisualProjectionSet;
 /// shader and simulation projections do not depend on the visual crate.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct UsdVisualMeshTarget(pub Entity);
+
+/// Composed visibility and the optional scene-local presentation override.
+/// Geometry remains admitted independently of visibility. The authored value
+/// is refreshed by the USD visual owner; the runtime value is owned by the
+/// publishing script (or the local application).
+#[derive(Component, Debug, Clone)]
+pub struct UsdVisualVisibility {
+    /// Current effective authored visibility, including ancestor opinions.
+    pub authored: Visibility,
+    /// Whether the authored animation sampler owns the visibility channel.
+    pub animated: bool,
+    /// A rejected visibility update withholds this presentation until corrected.
+    pub failure: Option<String>,
+}
+
+/// Scene-local visibility opinion on a single composed namespace root.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeVisibilityOverride {
+    pub visible: bool,
+    pub script: Option<lunco_core::GlobalEntityId>,
+}
 
 /// Marks a render target whose appearance is owned by a custom shader.
 ///

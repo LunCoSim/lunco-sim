@@ -36,6 +36,10 @@ def main():
             doc = next(int(item["doc_id"]) for item in documents if item.get("active") and item["kind"] == "usd")
             for prepare, verify, count in [
                 ("material_prepare", "material_valid", 3),
+                ("material_rebind", "material_rebound", 3),
+                ("material_restore", "material_valid", 3),
+                ("material_bad_input", "material_bad_input_verdict", 2),
+                ("material_repair_input", "material_repaired_input", 2),
                 ("material_edit", "material_edited", 3),
                 ("material_cycle", "material_invalid", 5),
             ]:
@@ -55,7 +59,7 @@ def main():
     except Exception as error:
         print(f"FAIL — {error}", file=sys.stderr)
         return 1
-    print("PASS — eleven authored checks; API Exit and port release verified")
+    print("PASS — twenty-one authored checks; API Exit and port release verified")
     return 0
 
 

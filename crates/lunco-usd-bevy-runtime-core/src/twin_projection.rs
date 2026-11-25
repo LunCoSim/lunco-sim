@@ -3867,7 +3867,10 @@ fn refresh_relationship_dependents(
     path: &str,
     name: &str,
 ) {
-    if name == "material:binding" {
+    if crate::live_consume::standard_pbr_binding_edit(world, scene_id, path, name) {
+        // The native notice publishes the affected geometry's new PBR intent.
+        // Neither its mesh nor its physical topology changes.
+    } else if name == "material:binding" {
         refresh_scene_visuals(world, scene_id);
     } else {
         refresh_prim_subtree(world, scene_id, path);

@@ -15,10 +15,10 @@ appearance is stated as data instead of as a material.
 
 | | what it is | where it lives | how many |
 |---|---|---|---|
-| **Parameter** | a scalar/vector uniform the shader reads | one opaque 256-byte uniform block | up to 64 `f32` scalars or 16 `vec4`s, subject to layout alignment |
-| **Texture layer** | a raster the shader samples | a bind-group entry | **9 named roles** |
+| **Parameter** | a scalar/vector uniform the shader reads | one opaque 512-byte uniform block | up to 128 `f32` scalars or 32 `vec4`s, subject to layout alignment |
+| **Texture layer** | a raster the shader samples | a bind-group entry | **14 named roles** |
 
-Parameters are cheap and open-ended. **Texture slots are the scarce resource.** Most
+Parameters are cheap and open-ended. **Texture and sampler bindings are the scarce resources.** Most
 "I need another layer" instincts should be spent on a *channel*, not a slot — see
 [Spend a channel before a slot](#spend-a-channel-before-a-slot).
 
@@ -106,7 +106,7 @@ of the reflected `ParamValue`. Geometry `primvars:` are reserved for standard
 `UsdGeom` primvars such as `primvars:displayColor`; they are not a generic
 shader-parameter namespace.
 
-The uniform block is deliberately **opaque**: the same 256 bytes are reinterpreted by
+The uniform block is deliberately **opaque**: the same 512 bytes are reinterpreted by
 each shader through its own `struct Material`. That is what makes the parameter set a
 property of the *asset*, not of the engine. A name that is not in the schema is
 dropped at pack time with a warning — it is never silently mis-packed into a
@@ -115,7 +115,7 @@ neighbouring field.
 ### Linked vertex stages share the material ABI
 
 `ShaderLook::vertex_shader` is an optional second stage of the same material, not a
-second parameter block. Both stages read `@binding(0)` from the one 256-byte block;
+second parameter block. Both stages read `@binding(0)` from the one 512-byte block;
 the fragment stage's reflected schema is the layout that gets packed. A linked vertex
 shader must therefore declare the same `Material` fields, order, and WESL types as its
 fragment shader. The terrain pair (`terrain_layered.wesl` + `terrain_geomorph.wesl`)
@@ -271,18 +271,42 @@ key exists.
 
 ---
 
-## Texture layers: six named slots
+## Texture layers: fourteen named roles
 
 ```rust
 pub enum TextureLayer {
-    Height,       // R32Float world heights (non-filterable) — ray-marched sun shadows
-    Albedo,       // colour raster, e.g. the NASA lunar mosaic
-    Mineral,      // class-id / composition raster, tinted through a palette LUT
-    Surface,      // PACKED SCALARS: R=roughness G=ambient-occlusion B=rock-density A=hazard
-    Normal,       // tangent/world-space normals — DEM relief the procedural FBM can't carry
-    ShadowCache,  // pre-baked sun visibility (R8Unorm)
+    Height,
+    Albedo,
+    Mineral,
+    Surface,
+    Normal,
+    ShadowCache,
+    ContinuationAlbedo,
+    RegionalAlbedo,
+    ContinuationSurface,
+    SurfaceAnnotations,
+    DetailAlbedo,
+    DetailNormal,
+    DetailSurface,
+    Displacement,
 }
 ```
+
+The material keeps one texture binding per role and four renderer-owned filtering samplers:
+
+| Binding | Profile | Addressing | Anisotropy |
+|---|---|---|---|
+| 3 | Raster | Clamp | Rendering quality |
+| 18 | Detail | Repeat | Rendering quality |
+| 5 | Globe | Repeat U, clamp V | Rendering quality |
+| 11 | Shadow cache | Clamp | 1 |
+
+Height, surface annotations and displacement are read with `textureLoad`.
+The render world caches the four samplers by the configured anisotropy.
+A change to that setting invalidates prepared material bind groups; image
+presence and image sampler descriptors do not select the material samplers.
+The `shadow_cache_sampling` graphics fixture checks all four profiles against
+known texel values outside the raster footprint, as well as shadow interpolation.
 
 ```rust
 let moon = ShaderLook::new("shaders/terrain_layered.wesl")
@@ -333,7 +357,7 @@ because R32Float is non-filterable and cannot be packed with filterable data).
 
 Terrain is tiled (CDLOD), and **each tile carries its own `ShaderLook`, hence its own
 texture handles**. So per-place quality is just: give the near tile a 2048² albedo and
-the far tile a 256² one. Same six slots, different images, per tile. The `ShaderLook`
+the far tile a 256² one. Same 14 roles, different images, per tile. The `ShaderLook`
 key includes the texture `AssetId`s, so the two tiles correctly get two materials —
 and tiles at the same quality still share one.
 
@@ -361,17 +385,17 @@ the frame budget on duplicate terrain geometry.
 
 ---
 
-## When six slots really are not enough
+## When the current texture roles are not enough
 
 In order of cost. Do not skip ahead.
 
 1. **Channel-pack.** See above. Almost always the right answer for a scalar.
 
-2. **Add a slot.** Six is a *conservative choice, not a hardware wall.* WebGL2/GLES3
-   guarantees ≥16 sampled textures per fragment stage; Bevy's view and mesh bind
-   groups consume some, leaving roughly 10–12 usable. Adding a named slot is a
-   one-line change to `TextureLayer` plus a binding in `ShaderMaterial`, and every
-   existing shader ignores it unless it declares the binding.
+2. **Add a role only after checking the full stage budget.** Account for sampled
+   textures and samplers in `ShaderMaterial` plus Bevy's view and mesh bind groups.
+   A new role needs a `TextureLayer`, a material texture binding, and shader
+   declarations where it is used. It must reuse one of the existing sampling
+   classes unless the renderer layout is deliberately redesigned.
 
 3. **`texture_2d_array`.** One binding, N layers, and `sampler2DArray` is core in
    GLES3 so it is WebGL2-safe. This is the right move for **many layers of the same

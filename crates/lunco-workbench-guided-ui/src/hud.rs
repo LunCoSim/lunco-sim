@@ -5,7 +5,10 @@ use bevy_egui::{EguiContexts, egui};
 use lunco_command_contracts::{Ack, OpId, Reject};
 use lunco_core::{AppSceneExt, Command, SceneResource, on_command, register_commands};
 use lunco_scripting_bridge_core::ToolHookBinding;
-use lunco_workbench_core::{PerspectiveId, WorkbenchSnapshot};
+use lunco_workbench_core::{
+    HudVisibility, Panel, PanelCtx, PanelId, PanelSlot, PerspectiveId, WorkbenchPanelAppExt,
+    WorkbenchSnapshot, presentation::HelpAnchors,
+};
 use std::collections::BTreeMap;
 
 /// Host default for the scene HUD's complete hint/objectives/action card.
@@ -47,12 +50,16 @@ fn card_owner(hud: &str, twin: Option<lunco_workspace::TwinId>) -> HudOwner {
 /// One independently scoped hint/objectives/action card.
 #[derive(Default, Clone, Debug)]
 struct HudCard {
+    title: Option<String>,
     hint: String,
     objectives: String,
     actions: Option<BoundActions>,
     // None uses the host default; Some([]) explicitly allows all perspectives.
     perspectives: Option<Vec<String>>,
     layout: HudLayout,
+    user_hidden: bool,
+    collapsed: bool,
+    docked: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -78,23 +85,28 @@ struct BoundActions {
 }
 
 impl HudCard {
-    fn interactive(&self, owner: &HudOwner) -> bool {
-        matches!(owner.id, HudId::Named(_))
-            || self
-                .actions
-                .as_ref()
-                .is_some_and(|actions| actions.items.iter().any(|action| action.enabled))
+    fn visible(&self, defaults: &GuidedHudVisibility, active: Option<&PerspectiveId>) -> bool {
+        self.visibility(defaults, active).visible()
     }
 
-    fn visible(&self, defaults: &GuidedHudVisibility, active: Option<&PerspectiveId>) -> bool {
-        match &self.perspectives {
-            Some(ids) => {
-                ids.is_empty() || active.is_some_and(|id| ids.iter().any(|v| v == id.as_str()))
-            }
-            None => defaults
-                .visible_in_perspective
-                .as_ref()
-                .is_none_or(|id| active == Some(id)),
+    fn visibility(
+        &self,
+        defaults: &GuidedHudVisibility,
+        active: Option<&PerspectiveId>,
+    ) -> HudVisibility {
+        let available = self.has_content()
+            && match &self.perspectives {
+                Some(ids) => {
+                    ids.is_empty() || active.is_some_and(|id| ids.iter().any(|v| v == id.as_str()))
+                }
+                None => defaults
+                    .visible_in_perspective
+                    .as_ref()
+                    .is_none_or(|id| active == Some(id)),
+            };
+        HudVisibility {
+            enabled: !self.user_hidden,
+            available,
         }
     }
 
@@ -198,9 +210,307 @@ fn clear_current_script_card(
     }
 }
 
+#[derive(Event)]
+struct SetCardVisibility {
+    owner: HudOwner,
+    visible: bool,
+}
+
+#[derive(Event)]
+struct ToggleCardCollapsed(HudOwner);
+
+const GUIDANCE_PANEL: PanelId = PanelId("tutorial_guidance");
+
+#[derive(Event)]
+struct SetCardDocked {
+    owner: HudOwner,
+    docked: bool,
+}
+
+fn has_docked_guidance(huds: &GuidedHuds) -> bool {
+    huds.cards
+        .values()
+        .any(|card| card.docked && !card.user_hidden && card.has_content())
+}
+
+fn focus_guidance(commands: &mut Commands) {
+    commands.trigger(lunco_workbench_core::commands::FocusPanel {
+        id: GUIDANCE_PANEL.as_str().into(),
+    });
+}
+
+fn close_guidance_if_empty(huds: &GuidedHuds, commands: &mut Commands) {
+    if !has_docked_guidance(huds) {
+        commands.trigger(lunco_workbench_core::RequestClosePanel(GUIDANCE_PANEL));
+    }
+}
+
+fn set_card_docked(event: On<SetCardDocked>, mut huds: ResMut<GuidedHuds>, mut commands: Commands) {
+    if let Some(card) = huds.cards.get_mut(&event.owner) {
+        card.docked = event.docked;
+        if event.docked {
+            focus_guidance(&mut commands);
+        } else {
+            close_guidance_if_empty(&huds, &mut commands);
+        }
+    }
+}
+
+/// The dock uses the same card contents and action lease as the floating HUD.
+struct GuidancePanel;
+impl Panel for GuidancePanel {
+    fn id(&self) -> PanelId {
+        GUIDANCE_PANEL
+    }
+    fn title(&self) -> String {
+        "Guidance".into()
+    }
+    fn default_slot(&self) -> PanelSlot {
+        PanelSlot::RightInspector
+    }
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut PanelCtx) {
+        let defaults = ctx
+            .resource::<GuidedHudVisibility>()
+            .cloned()
+            .unwrap_or_default();
+        let active = ctx
+            .resource::<WorkbenchSnapshot>()
+            .and_then(|s| s.active_perspective());
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
+        let Some(huds) = ctx.resource::<GuidedHuds>() else {
+            return;
+        };
+        let cards: Vec<_> = huds
+            .cards
+            .iter()
+            .filter(|(_, card)| card.docked && card.visible(&defaults, active.as_ref()))
+            .map(|(owner, card)| (owner.clone(), card.clone()))
+            .collect();
+        if cards.is_empty() {
+            ui.label("Dock an instruction card using its Dock button.");
+        }
+        for (owner, card) in cards {
+            ui.push_id(&owner, |ui| {
+                let (controls, pressed) = render_card_header(ui, &card, true);
+                ctx.resource_scope::<HelpAnchors, _>(|_, anchors| {
+                    publish_controls(anchors, &owner, controls)
+                });
+                match pressed {
+                    Some(HeaderAction::Collapse) => ctx.trigger(ToggleCardCollapsed(owner.clone())),
+                    Some(HeaderAction::Dock) => ctx.trigger(SetCardDocked {
+                        owner: owner.clone(),
+                        docked: false,
+                    }),
+                    Some(HeaderAction::Hide) => ctx.trigger(SetCardVisibility {
+                        owner: owner.clone(),
+                        visible: false,
+                    }),
+                    None => {}
+                }
+                if !card.collapsed {
+                    render_card_content(ui, &card, &theme, |event| {
+                        ctx.trigger(event);
+                    });
+                }
+                ui.separator();
+            });
+        }
+    }
+}
+
+fn set_card_visibility(
+    event: On<SetCardVisibility>,
+    mut huds: ResMut<GuidedHuds>,
+    defaults: Option<Res<GuidedHudVisibility>>,
+    snapshot: Option<Res<WorkbenchSnapshot>>,
+    mut commands: Commands,
+) {
+    if let Some(card) = huds.cards.get_mut(&event.owner) {
+        card.user_hidden = !event.visible;
+        if card.docked {
+            if !event.visible {
+                close_guidance_if_empty(&huds, &mut commands);
+            } else if defaults.as_ref().is_some_and(|defaults| {
+                card.visible(
+                    defaults,
+                    snapshot
+                        .as_ref()
+                        .and_then(|s| s.active_perspective())
+                        .as_ref(),
+                )
+            }) {
+                focus_guidance(&mut commands);
+            }
+        }
+    }
+}
+
+fn toggle_card_collapsed(event: On<ToggleCardCollapsed>, mut huds: ResMut<GuidedHuds>) {
+    if let Some(card) = huds.cards.get_mut(&event.0) {
+        card.collapsed = !card.collapsed;
+    }
+}
+
+fn set_all_card_visibility(
+    event: On<lunco_workbench_core::SetAllHudVisibility>,
+    mut huds: ResMut<GuidedHuds>,
+    defaults: Option<Res<GuidedHudVisibility>>,
+    snapshot: Option<Res<WorkbenchSnapshot>>,
+    mut commands: Commands,
+) {
+    let had_docked = has_docked_guidance(&huds);
+    for card in huds.cards.values_mut() {
+        card.user_hidden = !event.0;
+    }
+    if !event.0 && had_docked {
+        close_guidance_if_empty(&huds, &mut commands);
+    } else if event.0
+        && defaults.as_ref().is_some_and(|defaults| {
+            let active = snapshot.as_ref().and_then(|s| s.active_perspective());
+            huds.cards
+                .values()
+                .any(|card| card.docked && card.visible(defaults, active.as_ref()))
+        })
+    {
+        focus_guidance(&mut commands);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum HeaderAction {
+    Collapse,
+    Dock,
+    Hide,
+}
+
+fn card_anchor(owner: &HudOwner, control: &str) -> Option<String> {
+    match &owner.id {
+        HudId::Named(name) => Some(format!(
+            "hud.guidance.{}.{name}.{control}",
+            owner.twin.map(|twin| twin.raw()).unwrap_or(0)
+        )),
+        _ => None,
+    }
+}
+
+fn render_card_header(
+    ui: &mut egui::Ui,
+    card: &HudCard,
+    docked: bool,
+) -> ([(&'static str, egui::Rect); 3], Option<HeaderAction>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.strong(card_label(card));
+        let collapse = ui
+            .small_button(if card.collapsed { "+" } else { "−" })
+            .on_hover_text(if card.collapsed {
+                "Expand instructions"
+            } else {
+                "Minimize instructions"
+            });
+        let dock = ui
+            .small_button(if docked { "Float" } else { "Dock" })
+            .on_hover_text(if docked {
+                "Return to floating instructions"
+            } else {
+                "Move into the Guidance panel"
+            });
+        let hide = ui
+            .small_button("×")
+            .on_hover_text("Hide HUD · reopen using View → HUDs");
+        let pressed = if collapse.clicked() {
+            Some(HeaderAction::Collapse)
+        } else if dock.clicked() {
+            Some(HeaderAction::Dock)
+        } else if hide.clicked() {
+            Some(HeaderAction::Hide)
+        } else {
+            None
+        };
+        (
+            [
+                ("collapse", collapse.rect),
+                ("dock", dock.rect),
+                ("hide", hide.rect),
+            ],
+            pressed,
+        )
+    })
+    .inner
+}
+
+fn publish_controls(
+    anchors: &mut HelpAnchors,
+    owner: &HudOwner,
+    controls: [(&str, egui::Rect); 3],
+) {
+    for (control, rect) in controls {
+        if let Some(key) = card_anchor(owner, control) {
+            anchors.set(key, rect);
+        }
+    }
+}
+
+fn card_label(card: &HudCard) -> String {
+    card.title.clone().unwrap_or_else(|| "Instructions".into())
+}
+
+fn register_hud_menu(world: &mut World) {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
+        return;
+    };
+    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::Guidance, |ui, ctx| {
+        let Some(huds) = ctx.resource::<GuidedHuds>() else {
+            return;
+        };
+        let defaults = ctx
+            .resource::<GuidedHudVisibility>()
+            .cloned()
+            .unwrap_or_default();
+        let active = ctx
+            .resource::<WorkbenchSnapshot>()
+            .and_then(|s| s.active_perspective());
+        let rows: Vec<_> = huds
+            .cards
+            .iter()
+            .filter(|(_, card)| card.has_content())
+            .map(|(owner, card)| {
+                (
+                    owner.clone(),
+                    card_label(card),
+                    card.visibility(&defaults, active.as_ref()),
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        ui.label("Guidance");
+        for (owner, label, visibility) in rows {
+            let row = ui.push_id(&owner, |ui| visibility.menu_row(ui, label));
+            let rect = row.response.rect.intersect(ui.clip_rect());
+            if let Some(key) = card_anchor(&owner, "menu").filter(|_| rect.is_positive()) {
+                ctx.landmark(key, rect);
+            }
+            if let Some(visible) = row.inner {
+                ctx.trigger(SetCardVisibility { owner, visible });
+            }
+        }
+    });
+}
+
 pub(crate) fn install(app: &mut App) {
-    app.init_scene_resource::<GuidedHuds>()
+    app.register_panel(GuidancePanel)
+        .init_scene_resource::<GuidedHuds>()
         .init_resource::<GuidedHudVisibility>()
+        .add_systems(Startup, register_hud_menu)
+        .add_observer(set_card_visibility)
+        .add_observer(set_card_docked)
+        .add_observer(toggle_card_collapsed)
+        .add_observer(set_all_card_visibility)
         .add_observer(clear_twin_cards)
         .add_observer(clear_scene_cards)
         .add_observer(clear_script_card)
@@ -306,6 +616,8 @@ pub struct InspectGuidedHud {}
 #[Command(default)]
 pub struct SetGuidedHudLayout {
     pub hud: String,
+    /// Human-readable title shown in the card and HUD menu.
+    pub title: Option<String>,
     pub width: Option<f32>,
     pub text_scale: Option<f32>,
     pub draggable: Option<bool>,
@@ -331,8 +643,18 @@ fn on_set_guided_hud_layout(
             "HUD width must be 200..1000 and text scale 0.75..2".into(),
         ));
     }
+    if cmd
+        .title
+        .as_ref()
+        .is_some_and(|title| title.trim().is_empty())
+    {
+        return Err(Reject::InvalidOp("HUD title must not be blank".into()));
+    }
     let twin = publication_owner(owner.as_deref(), false).map_err(Reject::InvalidOp)?;
     huds.update_card(&cmd.hud, twin, false, |card| {
+        if let Some(title) = &cmd.title {
+            card.title = Some(title.trim().to_owned());
+        }
         if let Some(width) = cmd.width {
             card.layout.width = width;
         }
@@ -469,8 +791,14 @@ struct HudCardReport<'a> {
     actions: &'a [GuidedHudAction],
     perspectives: &'a Option<Vec<String>>,
     visible: bool,
+    available: bool,
     interactive: bool,
+    title: String,
+    docked: bool,
+    controls: BTreeMap<&'static str, [f32; 4]>,
     layout: &'a HudLayout,
+    user_hidden: bool,
+    collapsed: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -490,13 +818,45 @@ fn on_inspect_guided_hud(
     defaults: Res<GuidedHudVisibility>,
     snapshot: Option<Res<WorkbenchSnapshot>>,
     overlay: Res<crate::GuidedOverlay>,
+    anchors: Option<Res<HelpAnchors>>,
 ) -> Result<Ack, String> {
     let active = snapshot.as_ref().and_then(|s| s.active_perspective());
+    let rect_for = |key: &str| {
+        anchors
+            .as_ref()
+            .and_then(|a| a.get(key))
+            .map(|r| [r.min.x, r.min.y, r.width(), r.height()])
+    };
+    let menus: BTreeMap<_, _> = [
+        "menu.view",
+        "menu.huds",
+        "menu.huds.show_all",
+        "menu.huds.hide_all",
+    ]
+    .into_iter()
+    .filter_map(|key| rect_for(key).map(|rect| (key, rect)))
+    .collect();
+    let regions: BTreeMap<_, _> = [
+        ("viewport", "panel.workbench::viewport"),
+        ("guidance", "panel.tutorial_guidance"),
+    ]
+    .into_iter()
+    .filter_map(|(name, key)| rect_for(key).map(|rect| (name, rect)))
+    .collect();
     let cards: Vec<_> = hud
         .cards
         .iter()
         .map(|(owner, card)| {
-            let visible = card.has_content() && card.visible(&defaults, active.as_ref());
+            let visibility = card.visibility(&defaults, active.as_ref());
+            let docked = card.docked
+                && snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.is_panel_docked(GUIDANCE_PANEL));
+            let visible = visibility.visible()
+                && (!docked
+                    || snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.is_panel_visible(GUIDANCE_PANEL)));
             HudCardReport {
                 kind: match &owner.id {
                     HudId::Named(_) => "scene",
@@ -520,8 +880,21 @@ fn on_inspect_guided_hud(
                     .map_or(&[][..], |actions| actions.items.as_slice()),
                 perspectives: &card.perspectives,
                 visible,
-                interactive: visible && card.interactive(owner),
+                available: visibility.available,
+                interactive: visible,
+                title: card_label(card),
+                docked,
+                controls: ["collapse", "dock", "hide", "menu"]
+                    .into_iter()
+                    .filter_map(|key| {
+                        card_anchor(owner, key)
+                            .and_then(|name| rect_for(&name))
+                            .map(|rect| (key, rect))
+                    })
+                    .collect(),
                 layout: &card.layout,
+                user_hidden: card.user_hidden,
+                collapsed: card.collapsed,
             }
         })
         .collect();
@@ -530,6 +903,8 @@ fn on_inspect_guided_hud(
         lunco_api_core::api_value!({
             "active_perspective": active.as_ref().map(|id| id.as_str()),
             "default_perspective": defaults.visible_in_perspective.as_ref().map(|id| id.as_str()),
+            "regions": lunco_api_core::api_value_from_serializable(&regions).map_err(|e| e.to_string())?,
+            "menus": lunco_api_core::api_value_from_serializable(&menus).map_err(|e| e.to_string())?,
             "cards": lunco_api_core::api_value_from_serializable(&cards).map_err(|e| e.to_string())?,
             "tour": lunco_api_core::api_value_from_serializable(&overlay.tour.as_ref().map(|tour| TourReport {
                 twin: overlay.owner_twin.map(|id| id.raw()),
@@ -540,9 +915,71 @@ fn on_inspect_guided_hud(
     ))
 }
 
+/// Paint the card body identically in either presentation host.
+fn render_card_content(
+    ui: &mut egui::Ui,
+    hud: &HudCard,
+    theme: &lunco_theme::Theme,
+    mut dispatch: impl FnMut(GuidedHudActionRequested),
+) {
+    let show_objectives = !hud.objectives.is_empty();
+    let accent = theme.tokens.accent;
+    if show_objectives {
+        ui.label(
+            egui::RichText::new("OBJECTIVES")
+                .color(accent)
+                .text_style(lunco_theme::TypographyRole::Label.text_style())
+                .strong(),
+        );
+        ui.add_space(2.0);
+        for line in hud.objectives.lines() {
+            // Colour done/failed lines by their leading glyph.
+            let color = match line.chars().next() {
+                Some('✓') => theme.tokens.success,
+                Some('✗') => theme.tokens.error,
+                Some('▸') => theme.tokens.text,
+                _ => theme.tokens.text_subdued,
+            };
+            ui.label(
+                egui::RichText::new(line)
+                    .color(color)
+                    .text_style(lunco_theme::TypographyRole::Body.text_style()),
+            );
+        }
+    }
+    if !hud.hint.is_empty() {
+        if show_objectives {
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
+        ui.label(egui::RichText::new(&hud.hint).color(theme.tokens.text));
+    }
+    if let Some(actions) = &hud.actions {
+        if !hud.hint.is_empty() || show_objectives {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(6.0);
+        }
+        ui.push_id(actions.binding, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for action in &actions.items {
+                    let response = ui.add_enabled(action.enabled, egui::Button::new(&action.label));
+                    if response.clicked() {
+                        dispatch(GuidedHudActionRequested {
+                            binding: actions.binding,
+                            action: action.id.clone(),
+                        });
+                    }
+                }
+            })
+        });
+    }
+}
+
 /// Draw the persistent objectives/hint card and any authored action buttons,
-/// top-left below the menu bar. It only owns pointer input while buttons are
-/// present. Workbench menus and window controls are rendered in the higher
+/// anchored to the available viewport. Visible cards own pointer input for
+/// their content and user-owned visibility controls. Workbench menus and window controls are rendered in the higher
 /// egui `Foreground` order.
 pub(crate) fn draw_guided_hud(
     mut egui_ctx: EguiContexts,
@@ -550,6 +987,8 @@ pub(crate) fn draw_guided_hud(
     visibility: Res<GuidedHudVisibility>,
     snapshot: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
+    panels: Option<Res<lunco_workbench_core::viewport::PanelRects>>,
+    mut anchors: Option<ResMut<HelpAnchors>>,
     mut commands: Commands,
 ) {
     let active = snapshot.as_ref().and_then(|s| s.active_perspective());
@@ -562,88 +1001,80 @@ pub(crate) fn draw_guided_hud(
         .unwrap_or_else(lunco_theme::Theme::dark);
     let accent = theme.tokens.accent;
 
-    let mut top = screen.top() + 44.0;
+    let viewport = panels.as_ref().and_then(|panels| {
+        panels.egui_rect(lunco_workbench_core::viewport::VIEWPORT_PANEL_ID, ctx)
+    });
+    let bounds = viewport.unwrap_or(screen);
+    let mut top = bounds.top() + if viewport.is_some() { 12.0 } else { 44.0 };
     for (owner, hud) in &overlay.cards {
-        if !hud.has_content() || !hud.visible(&visibility, active.as_ref()) {
+        if !hud.visible(&visibility, active.as_ref()) {
             continue;
         }
-        let show_objectives = !hud.objectives.is_empty();
+        if hud.docked
+            && snapshot
+                .as_ref()
+                .is_some_and(|s| s.is_panel_docked(GUIDANCE_PANEL))
+        {
+            continue;
+        }
         let mut area = lunco_theme::HudTier::Specific
             .area(ctx, egui::Id::new(("lunco_guided_hud", owner)))
-            .interactable(hud.interactive(owner))
+            .constrain_to(bounds)
+            .interactable(true)
             .movable(hud.layout.draggable);
-        let position = egui::pos2(screen.left() + 16.0, top);
+        let position = egui::pos2(bounds.left() + 16.0, top);
         area = if hud.layout.draggable {
             area.default_pos(position)
         } else {
             area.fixed_pos(position)
         };
+        let body_height = (bounds.height() * 0.45).max(60.0);
         let response = area.show(ctx, |ui| {
-                    ui.set_max_width(hud.layout.width);
-                    for font in ui.style_mut().text_styles.values_mut() {font.size*=hud.layout.text_scale;}
-                    egui::Frame::new()
-                        .fill(theme.tokens.surface_raised)
-                        .corner_radius(10.0)
-                        .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.6)))
-                        .inner_margin(egui::Margin::symmetric(12, 10))
+            // Area remembers its last measured outer size. Restore the
+            // bounded available height before measuring expanded content,
+            // otherwise a minimized card can trap the scroll viewport
+            // at the collapsed height on every subsequent frame.
+            ui.set_max_height(body_height + 60.0);
+            ui.set_max_width(hud.layout.width.min((bounds.width() - 32.0).max(160.0)));
+            for font in ui.style_mut().text_styles.values_mut() {
+                font.size *= hud.layout.text_scale;
+            }
+            egui::Frame::new()
+                .fill(theme.tokens.surface_raised)
+                .corner_radius(10.0)
+                .stroke(egui::Stroke::new(1.0, accent.linear_multiply(0.6)))
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
+                    let (controls, pressed) = render_card_header(ui, hud, false);
+                    if let Some(anchors) = anchors.as_mut() {
+                        publish_controls(anchors, owner, controls);
+                    }
+                    match pressed {
+                        Some(HeaderAction::Collapse) => {
+                            commands.trigger(ToggleCardCollapsed(owner.clone()))
+                        }
+                        Some(HeaderAction::Dock) => commands.trigger(SetCardDocked {
+                            owner: owner.clone(),
+                            docked: true,
+                        }),
+                        Some(HeaderAction::Hide) => commands.trigger(SetCardVisibility {
+                            owner: owner.clone(),
+                            visible: false,
+                        }),
+                        None => {}
+                    }
+                    if hud.collapsed {
+                        return;
+                    }
+                    egui::ScrollArea::vertical()
+                        .max_height(body_height)
                         .show(ui, |ui| {
-                            if show_objectives {
-                                ui.label(
-                                    egui::RichText::new("OBJECTIVES")
-                                        .color(accent)
-                                        .text_style(lunco_theme::TypographyRole::Label.text_style())
-                                        .strong(),
-                                );
-                                ui.add_space(2.0);
-                                for line in hud.objectives.lines() {
-                                    // Colour done/failed lines by their leading glyph.
-                                    let color = match line.chars().next() {
-                                        Some('✓') => theme.tokens.success,
-                                        Some('✗') => theme.tokens.error,
-                                        Some('▸') => theme.tokens.text,
-                                        _ => theme.tokens.text_subdued,
-                                    };
-                                    ui.label(egui::RichText::new(line).color(color).text_style(
-                                        lunco_theme::TypographyRole::Body.text_style(),
-                                    ));
-                                }
-                            }
-                            if !hud.hint.is_empty() {
-                                if show_objectives {
-                                    ui.add_space(6.0);
-                                    ui.separator();
-                                    ui.add_space(4.0);
-                                }
-                                ui.label(egui::RichText::new(&hud.hint).color(theme.tokens.text));
-                            }
-                            if let Some(actions) = &hud.actions {
-                                if !hud.hint.is_empty() || show_objectives {
-                                    ui.add_space(8.0);
-                                    ui.separator();
-                                    ui.add_space(6.0);
-                                }
-                                ui.push_id(actions.binding, |ui| ui.horizontal_wrapped(|ui| {
-                                    for action in &actions.items {
-                                        let response = ui.add_enabled(
-                                            action.enabled,
-                                            egui::Button::new(&action.label),
-                                        );
-                                        if ui.input(|input| input.pointer.any_pressed() || input.pointer.any_released()) {
-                                            debug!(?owner, binding = ?actions.binding, action = %action.id,
-                                                rect = ?response.rect, hovered = response.hovered(), clicked = response.clicked(),
-                                                pointer = ?ui.input(|input| input.pointer.interact_pos()), "HUD pointer gesture");
-                                        }
-                                        if response.clicked() {
-                                            commands.trigger(GuidedHudActionRequested {
-                                                binding: actions.binding,
-                                                action: action.id.clone(),
-                                            });
-                                        }
-                                    }
-                                }));
-                            }
+                            render_card_content(ui, hud, &theme, |event| {
+                                commands.trigger(event);
+                            });
                         });
                 });
+        });
         if let HudId::Named(name) = &owner.id {
             response.response.context_menu(|ui| {
                 let mut layout = hud.layout.clone();
@@ -660,6 +1091,7 @@ pub(crate) fn draw_guided_hud(
                 if changed {
                     commands.trigger(SetGuidedHudLayout {
                         hud: name.clone(),
+                        title: None,
                         width: Some(layout.width),
                         text_scale: Some(layout.text_scale),
                         draggable: Some(layout.draggable),
@@ -683,6 +1115,40 @@ register_commands!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_visibility_and_collapse_preserve_guidance_and_authored_scope() {
+        let owner = card_owner("lesson", None);
+        let mut app = App::new();
+        app.init_resource::<GuidedHuds>()
+            .add_observer(set_card_visibility)
+            .add_observer(toggle_card_collapsed)
+            .add_observer(set_all_card_visibility);
+        {
+            let mut huds = app.world_mut().resource_mut::<GuidedHuds>();
+            let card = huds.cards.entry(owner.clone()).or_default();
+            card.hint = "Original instructions".into();
+            card.perspectives = Some(vec!["view".into()]);
+        }
+        app.world_mut().trigger(ToggleCardCollapsed(owner.clone()));
+        app.world_mut().trigger(SetCardVisibility {
+            owner: owner.clone(),
+            visible: false,
+        });
+        let default = GuidedHudVisibility::default();
+        let view = PerspectiveId::new("view");
+        let other = PerspectiveId::new("analysis");
+        let card = &app.world().resource::<GuidedHuds>().cards[&owner];
+        assert!(!card.visible(&default, Some(&view)));
+        assert!(card.collapsed);
+        assert_eq!(card.hint, "Original instructions");
+        app.world_mut()
+            .trigger(lunco_workbench_core::SetAllHudVisibility(true));
+        let card = &app.world().resource::<GuidedHuds>().cards[&owner];
+        assert!(card.visible(&default, Some(&view)));
+        assert!(!card.visible(&default, Some(&other)));
+        assert!(card.collapsed);
+    }
 
     #[test]
     fn scene_lifecycle_retires_cards_and_bindings_after_terminal_callbacks() {

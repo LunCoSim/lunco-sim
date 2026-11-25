@@ -506,6 +506,90 @@ fn prepare_physics_teardown(
     Ok(())
 }
 
+/// An already admitted standalone primitive has no compound-body shape
+/// dependency. Its dimension may be replaced on the same native collider;
+/// neither the rigid body nor any connected joint identity is retired.
+fn claims_standalone_primitive_dimension(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    path: &SdfPath,
+    attribute: &str,
+) -> bool {
+    reader
+        .type_name(path)
+        .is_some_and(|kind| lunco_usd_bevy_scene::primitive_dimension_attribute(&kind, attribute))
+        && reader.has_api_schema(path, ptok::PHYSICS_COLLISION_API)
+        && !reader.has_api_schema(path, ptok::PHYSICS_RIGID_BODY_API)
+        && !reader.has_api_schema(path, "LunCoTerrainAPI")
+        && !has_rigid_body_ancestor(reader, path)
+}
+
+/// Cook only the changed standalone shape from the committed native stage.
+/// Avian's Changed<Collider> path owns rescaling, broad phase, contact and
+/// mass-property invalidation without removing the body or collider entity.
+fn refresh_standalone_primitive_dimensions(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    paths: &[SdfPath],
+) {
+    let facts = {
+        let Some(stage) = world
+            .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+            .and_then(|stages| stages.get(stage_id))
+        else {
+            return;
+        };
+        let view = stage.view();
+        let index = world.resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>();
+        let mut facts = Vec::new();
+        for path in paths {
+            let entities: Vec<_> = index
+                .in_stage(stage_id, path.as_str())
+                .iter()
+                .copied()
+                .filter(|entity| world.get::<Collider>(*entity).is_some())
+                .collect();
+            if entities.is_empty() {
+                continue;
+            }
+            let result = build_collider_from_usd(&view, path).and_then(|outcome| match outcome {
+                ColliderBuildOutcome::Built(collider)
+                    if lunco_physics::avian_backend_collider_shape_is_valid(&collider) =>
+                {
+                    Ok(collider)
+                }
+                _ => Err(ColliderProjectionError::Backend {
+                    prim: path.to_string(),
+                    detail: "standalone primitive must produce a valid native collider".to_owned(),
+                }),
+            });
+            facts.push((path.clone(), entities, result));
+        }
+        facts
+    };
+    for (path, entities, result) in facts {
+        for entity in entities {
+            match &result {
+                Ok(collider) => {
+                    world.entity_mut(entity).insert(collider.clone());
+                }
+                Err(error) => {
+                    log_collider_projection_error(&path, error);
+                    world.resource_scope(|world, mut faults: Mut<lunco_core::RuntimeFaults>| {
+                        let mut holds = world.get_resource_mut::<lunco_physics::PhysicsHolds>();
+                        report_collider_projection_error(
+                            Some(&mut faults),
+                            holds.as_deref_mut(),
+                            entity,
+                            &path,
+                            error,
+                        );
+                    });
+                }
+            }
+        }
+    }
+}
+
 impl Plugin for UsdAvianPlugin {
     fn build(&self, app: &mut App) {
         // Whole-step timing is part of the shared physics contract. Install it
@@ -527,6 +611,14 @@ impl Plugin for UsdAvianPlugin {
                     prepare_stage_projection_reset,
                 ),
             );
+        app.world_mut()
+            .resource_mut::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
+            .register(lunco_usd_bevy_core::live_edit::UsdLiveEditOwner::new(
+                "usd-avian.standalone-primitive-dimensions",
+                claims_standalone_primitive_dimension,
+                None,
+                refresh_standalone_primitive_dimensions,
+            ));
         // Installs joints parked by `attach_joint` — the USD path attaches
         // authored joints, so this app must be able to land them.
         app.add_plugins(lunco_usd_avian_joints::JointAttachPlugin);

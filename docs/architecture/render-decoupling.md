@@ -264,6 +264,18 @@ The CPU instance builder reads the current visible entity's material
 association to pack its bindless slot. A mesh entering the view can otherwise
 sample slot zero and briefly show Bevy's pink default material.
 
+The CPU extractor also precedes GPU material preparation. If a material
+acquires its binding in the same render frame, the renderer reconciles the
+native CPU instance's slot after `PrepareAssets` and before specialization
+and queuing, gated by the material-binding resource change. The allocator's
+published slot is authoritative; an absent prepared material is not a
+renderable substitute. USD surfaces never deliberately bind Bevy's default
+debug material. The standard material binder waits for explicitly supplied
+image dependencies, retaining the previous valid binding while preparing a
+replacement. Missing authored material data reports a projection diagnostic
+instead of publishing the mesh with a debug surface.
+
+
 GPU-only output buffers allocate the shader array stride through
 `<[T; 1]>::SHADER_SIZE`, including alignment padding. Rust's native type layout
 does not determine the storage-buffer layout. This matters with scalar math,

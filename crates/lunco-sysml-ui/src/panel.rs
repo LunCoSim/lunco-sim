@@ -2420,6 +2420,9 @@ impl SysmlRequirementsState {
             .id_salt("sysml_requirement_details")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
+                // Size against the rendered dock, not the intrinsic width of
+                // a previous long evidence row or qualified name.
+                ui.set_max_width((ui.clip_rect().right() - ui.min_rect().left()).max(1.0));
                 let mut selected_source = None;
                 let mut open_requirement_source = false;
                 let source = view_model
@@ -2713,6 +2716,14 @@ impl SysmlRequirementsState {
                             execution.mapped, execution.linked
                         ),
                     );
+                    if rollup == RequirementRollupState::Incomplete
+                        && execution.state == ExecutionState::NotRun
+                        && evidence_state(requirement, view_model, runs) == EvidenceState::Pass
+                    {
+                        ui.add(egui::Label::new(
+                            "Evidence passed. Click Run mapped test below to complete test execution.",
+                        ).wrap());
+                    }
                 }
                 ui.separator();
                 ui.label("Model coverage")
@@ -2762,9 +2773,9 @@ impl SysmlRequirementsState {
                             let case_stale = case_result.is_some_and(|result| {
                                 Some(result.source_revision) != view_model.source_revision
                             });
+                            ui.add(egui::Label::new(verification).wrap())
+                                .on_hover_text(format!("Scene: {}", case.scene.display()));
                             ui.horizontal_wrapped(|ui| {
-                                ui.label(verification)
-                                    .on_hover_text(format!("Scene: {}", case.scene.display()));
                                 let (label, color) = if case_is_running {
                                     ("RUNNING", theme.tokens.text_subdued)
                                 } else if case_is_queued {
@@ -3624,88 +3635,99 @@ fn render_requirement_evidence(
         } else {
             ("PASS", theme.tokens.success)
         };
-        let label = format!(
-            "{} · {} checks · {} fail · {} inconclusive · {} unverified · {} error · {}",
-            evidence.channel,
-            evidence.checks,
-            evidence.failures,
-            evidence.inconclusive,
-            evidence.unverified,
-            evidence.errors,
-            state
-        );
-        ui.collapsing(egui::RichText::new(label).color(color), |ui| {
-            let verification = evidence
-                .verification
-                .as_deref()
-                .map_or_else(|| "verification not supplied".to_owned(), str::to_owned);
-            muted(
-                ui,
-                theme,
-                &format!(
-                    "{verification} · source revision {} · simulation tick {}",
-                    evidence.source_revision, evidence.sim_tick
-                ),
-            );
-            if evidence.details.is_empty() {
-                muted(
-                    ui,
-                    theme,
-                    "This channel emitted aggregate counts without check details.",
-                );
-                return;
+        let label = format!("{} · {}", evidence.channel, state);
+        ui.horizontal_wrapped(|ui| {
+            for (count, label) in [
+                (evidence.checks, "checks"),
+                (evidence.failures, "failed"),
+                (evidence.inconclusive, "inconclusive"),
+                (evidence.unverified, "unverified"),
+                (evidence.errors, "errors"),
+            ] {
+                ui.label(format!("{count} {label}"));
             }
-            for check in &evidence.details {
-                ui.horizontal_wrapped(|ui| {
-                    let (label, color) = match check.verdict {
-                        VerificationVerdict::Pass => ("PASS", theme.tokens.success),
-                        VerificationVerdict::Fail => ("FAIL", theme.tokens.error),
-                        VerificationVerdict::Inconclusive => ("INCONCLUSIVE", theme.tokens.warning),
-                        VerificationVerdict::Unverified => ("UNVERIFIED", theme.tokens.warning),
-                        VerificationVerdict::Error => ("ERROR", theme.tokens.error),
-                    };
-                    ui.colored_label(color, label);
-                    if let Some(id) = &check.id {
-                        ui.strong(id);
-                    }
-                    if let Some(kind) = &check.kind {
-                        ui.label(kind);
-                    }
-                    if let Some(component) = &check.component {
-                        muted(ui, theme, component);
-                    }
-                    if let Some(path) = &check.path {
-                        muted(ui, theme, path);
-                    }
-                    if check.verdict != VerificationVerdict::Pass
-                        && ui.small_button("Open source").clicked()
-                    {
-                        *open_requirement_source = true;
-                    }
-                });
-                if let Some(error) = &check.error {
-                    ui.colored_label(theme.tokens.error, error);
-                }
-                if let Some(actual) = &check.actual {
-                    muted(ui, theme, &format!("Actual: {actual}"));
-                }
-                if let Some(expected) = &check.expected {
-                    muted(ui, theme, &format!("Expected: {expected}"));
-                }
-            }
-            if u64::try_from(evidence.details.len()).is_ok_and(|details| details < evidence.checks)
-            {
+        });
+        egui::CollapsingHeader::new(egui::RichText::new(label).color(color))
+            .id_salt((
+                &evidence.channel,
+                &evidence.verification,
+                evidence.source_revision,
+            ))
+            .show(ui, |ui| {
+                let verification = evidence
+                    .verification
+                    .as_deref()
+                    .map_or_else(|| "verification not supplied".to_owned(), str::to_owned);
                 muted(
                     ui,
                     theme,
                     &format!(
-                        "Showing {} check details of {}; failed checks are retained first.",
-                        evidence.details.len(),
-                        evidence.checks
+                        "{verification} · source revision {} · simulation tick {}",
+                        evidence.source_revision, evidence.sim_tick
                     ),
                 );
-            }
-        });
+                if evidence.details.is_empty() {
+                    muted(
+                        ui,
+                        theme,
+                        "This channel emitted aggregate counts without check details.",
+                    );
+                    return;
+                }
+                for check in &evidence.details {
+                    ui.horizontal_wrapped(|ui| {
+                        let (label, color) = match check.verdict {
+                            VerificationVerdict::Pass => ("PASS", theme.tokens.success),
+                            VerificationVerdict::Fail => ("FAIL", theme.tokens.error),
+                            VerificationVerdict::Inconclusive => {
+                                ("INCONCLUSIVE", theme.tokens.warning)
+                            }
+                            VerificationVerdict::Unverified => ("UNVERIFIED", theme.tokens.warning),
+                            VerificationVerdict::Error => ("ERROR", theme.tokens.error),
+                        };
+                        ui.colored_label(color, label);
+                        if let Some(id) = &check.id {
+                            ui.strong(id);
+                        }
+                        if let Some(kind) = &check.kind {
+                            ui.label(kind);
+                        }
+                        if let Some(component) = &check.component {
+                            muted(ui, theme, component);
+                        }
+                        if let Some(path) = &check.path {
+                            muted(ui, theme, path);
+                        }
+                        if check.verdict != VerificationVerdict::Pass
+                            && ui.small_button("Open source").clicked()
+                        {
+                            *open_requirement_source = true;
+                        }
+                    });
+                    if let Some(error) = &check.error {
+                        ui.colored_label(theme.tokens.error, error);
+                    }
+                    if let Some(actual) = &check.actual {
+                        muted(ui, theme, &format!("Actual: {actual}"));
+                    }
+                    if let Some(expected) = &check.expected {
+                        muted(ui, theme, &format!("Expected: {expected}"));
+                    }
+                }
+                if u64::try_from(evidence.details.len())
+                    .is_ok_and(|details| details < evidence.checks)
+                {
+                    muted(
+                        ui,
+                        theme,
+                        &format!(
+                            "Showing {} check details of {}; failed checks are retained first.",
+                            evidence.details.len(),
+                            evidence.checks
+                        ),
+                    );
+                }
+            });
     }
 }
 

@@ -975,6 +975,7 @@ fn restore_gizmo_dynamic(
                     entity_id: gid.get(),
                     translation: drag.current_position.to_array(),
                     rotation: drag.current_rotation.to_array(),
+                    intent: lunco_core::EditIntent::Persistent,
                 });
             }
         }

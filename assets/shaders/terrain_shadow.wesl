@@ -74,7 +74,7 @@ var height_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(10)
 var shadow_cache: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(11)
-var shadow_cache_sampler: sampler;
+var shadow_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
@@ -107,7 +107,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
 
     var sun_vis = 1.0;
     @if((VERTEX_UVS_A)) sun_vis = terrain_horizon_visibility(in.world_position.xyz, mat.csm_far,
-        shadow_cache, shadow_cache_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
+        shadow_cache, shadow_sampler, mat.shadow_cache_on, height_map, in.uv, mat.sun_dir,
         mat.sun_tan_radius, mat.horizon_march, mat.hf_size, mat.hf_res);
     terrain_set_sun_response(
         &pbr_input, mat.sun_dir_world, lunar_k, sun_vis, 1.0);

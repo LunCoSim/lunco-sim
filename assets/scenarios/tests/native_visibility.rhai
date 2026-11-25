@@ -21,6 +21,15 @@ fn mesh(path) {
     track_entity_read(id);
     get(id, "Mesh3d")
 }
+fn hidden(path) {
+    let id = find(path);
+    if id < 0 { return false; }
+    track_entity_read(id);
+    return get(id, "Visibility").to_string().contains("Hidden");
+}
+fn visibility_write(id, value) {
+    #{target:id, writes:[#{property:"visibility", value:value}]}
+}
 fn on_start(me, ctx) {
     this.phase = 0; this.doc = (); this.pending = (); this.checks = [];
     this.started = sim_tick(); this.wait_until = 0;
@@ -59,6 +68,8 @@ fn on_tick(me, ctx) {
             add("/World", "NativeVisibility", "Xform"), add(ROOT, "Ordinary", "Cube"),
             add(ROOT, "Hidden", "Xform"), attr(ROOT + "/Hidden", "visibility", "invisible"),
             add(ROOT + "/Hidden", "Child", "Cube"), attr(ROOT + "/Hidden/Child", "visibility", "inherited"),
+            add(ROOT + "/Hidden", "LocallyHidden", "Cube"), attr(ROOT + "/Hidden/LocallyHidden", "visibility", "invisible"),
+            add(ROOT + "/Hidden", "SuppressedGuide", "Cube"), attr(ROOT + "/Hidden/SuppressedGuide", "purpose", "guide"),
             add(ROOT, "Guide", "Xform"), attr(ROOT + "/Guide", "purpose", "guide"),
             apis(ROOT + "/Guide"), attr(ROOT + "/Guide", "guideVisibility", "visible"),
             add(ROOT + "/Guide", "Shown", "Cube"),
@@ -73,17 +84,66 @@ fn on_tick(me, ctx) {
     if this.phase == 1 {
         if find(ROOT + "/Guide/Shown") < 0 { return; }
         this.checks.push(t_true(mesh(ROOT + "/Ordinary") != (), "ordinary geometry remains visible"));
-        this.checks.push(t_true(mesh(ROOT + "/Hidden/Child") == (), "ancestor invisibility prunes inherited children"));
+        this.checks.push(t_true(mesh(ROOT + "/Hidden/Child") != () && hidden(ROOT + "/Hidden/Child"),
+            "initially hidden children retain prepared geometry without rendering"));
         this.checks.push(t_true(mesh(ROOT + "/Guide/Shown") != (), "native guide visibility can explicitly show guide geometry"));
-        this.checks.push(t_true(mesh(ROOT + "/Guide/Suppressed") == (), "nearest purpose visibility can suppress a guide"));
-        this.checks.push(t_true(mesh(ROOT + "/Hidden/ShownGuide") == (), "overall invisibility dominates visible guide opinions"));
+        this.checks.push(t_true(mesh(ROOT + "/Guide/Suppressed") != () && hidden(ROOT + "/Guide/Suppressed"),
+            "nearest purpose visibility can suppress a guide without discarding geometry"));
+        this.checks.push(t_true(mesh(ROOT + "/Hidden/ShownGuide") != () && hidden(ROOT + "/Hidden/ShownGuide"),
+            "overall invisibility dominates visible guide opinions"));
+        this.child = find(ROOT + "/Hidden/Child");
+        this.child_mesh = mesh(ROOT + "/Hidden/Child").to_string();
+        this.unrelated = find(ROOT + "/Ordinary");
+        this.hidden_root = find(ROOT + "/Hidden");
+        track_entity_write(this.hidden_root);
+        track_entity_write(this.child);
+        let generation = assembly_edit::describe(this.doc).generation;
+        let reveal = cmd("SetSceneView", #{batches:[visibility_write(this.hidden_root, #{Bool:#{value:true}})]});
+        this.checks.push(t_true(reveal.ok && !hidden(ROOT + "/Hidden/Child") && !hidden(ROOT + "/Hidden/ShownGuide") &&
+            hidden(ROOT + "/Hidden/LocallyHidden") && hidden(ROOT + "/Hidden/SuppressedGuide"),
+            "one root reveal respects authored hidden descendants and native guide purpose"));
+        let hide = cmd("SetSceneView", #{batches:[visibility_write(this.hidden_root, #{Bool:#{value:false}}),
+            visibility_write(this.child, #{Bool:#{value:true}})]});
+        this.checks.push(t_true(hide.ok && hidden(ROOT + "/Hidden/Child") && hidden(ROOT + "/Hidden/ShownGuide"),
+            "a descendant override cannot punch through a hidden ancestor"));
+        let cleared = cmd("SetSceneView", #{batches:[visibility_write(this.hidden_root, "Clear"), visibility_write(this.child, "Clear")]});
+        this.checks.push(t_true(cleared.ok && hidden(ROOT + "/Hidden/Child") &&
+            assembly_edit::describe(this.doc).generation == generation && mesh(ROOT + "/Hidden/Child").to_string() == this.child_mesh,
+            "clearing a root override restores authored subtree visibility with no document edit or mesh replacement"));
         let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: (), op: attr(ROOT + "/Hidden", "visibility", "inherited")});
         if queued == () || queued.id == () { throw("visibility edit was not admitted"); }
         this.pending = queued.id; this.phase = 2; return;
     }
     if this.phase == 2 {
-        this.checks.push(t_true(mesh(ROOT + "/Hidden/Child") != () && mesh(ROOT + "/Hidden/ShownGuide") != (),
+        this.checks.push(t_true(!hidden(ROOT + "/Hidden/Child") && !hidden(ROOT + "/Hidden/ShownGuide"),
             "live ancestor visibility edit reveals ordinary and explicitly visible guide geometry"));
+        this.checks.push(t_true(find(ROOT + "/Hidden/Child") == this.child &&
+            mesh(ROOT + "/Hidden/Child").to_string() == this.child_mesh &&
+            find(ROOT + "/Ordinary") == this.unrelated,
+            "authored visibility retains the geometry and unrelated entity identities"));
+        let generation = assembly_edit::describe(this.doc).generation;
+        let rejected = cmd("SetSceneView", #{batches:[
+            visibility_write(this.child, #{Bool:#{value:false}}),
+            visibility_write(this.unrelated, #{Text:#{value:"invalid"}})
+        ]});
+        this.checks.push(t_true(rejected.ok == false && !hidden(ROOT + "/Hidden/Child"),
+            "an invalid visibility batch leaves all targets unchanged"));
+        let hidden_result = cmd("SetSceneView", #{batches:[visibility_write(this.child, #{Bool:#{value:false}})]});
+        this.checks.push(t_true(hidden_result.ok && hidden(ROOT + "/Hidden/Child") &&
+            mesh(ROOT + "/Hidden/Child").to_string() == this.child_mesh,
+            "runtime visibility hides immediately without replacing the mesh"));
+        let cleared = cmd("SetSceneView", #{batches:[visibility_write(this.child, "Clear")]});
+        this.checks.push(t_true(cleared.ok && !hidden(ROOT + "/Hidden/Child") &&
+            assembly_edit::describe(this.doc).generation == generation,
+            "clearing runtime visibility restores the authored value without editing USD"));
+        let generic_hide = cmd("SetObjectProperty", #{entity_id:this.hidden_root,property:"visible",value:"false",intent:"Interactive"});
+        let invalid_value = cmd("SetObjectProperty", #{entity_id:this.hidden_root,property:"visible",value:"maybe",intent:"Interactive"});
+        this.checks.push(t_true(generic_hide.ok && !invalid_value.ok && hidden(ROOT + "/Hidden/Child"),
+            "generic visibility uses the same root owner and rejects invalid boolean values"));
+        let clear_root = cmd("SetSceneView", #{batches:[visibility_write(this.hidden_root,"Clear")]});
+        this.checks.push(t_true(clear_root.ok && !hidden(ROOT + "/Hidden/Child") &&
+            assembly_edit::describe(this.doc).generation == generation,
+            "the typed view command clears the generic runtime opinion"));
         this.generation = assembly_edit::describe(this.doc).generation;
         let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: this.generation,
             op: #{SetAttribute: #{edit_target: "@root@", path: ROOT, name: "visibility", type_name: "bool", value: "true"}}});
@@ -109,6 +169,17 @@ fn on_tick(me, ctx) {
             "native visibility read failure terminates and hides visual projection"));
         this.checks.push(t_true(inspected.topology.diagnostics.len() > 0 && inspected.topology.parts[0].visual == (),
             "inspection preserves unknown visibility with its native diagnostic"));
+        this.failed_guide = failed;
+        let queued = cmd("ApplyUsdOp", #{doc_id: this.doc, parent_gen: (),
+            op: attr(ROOT + "/Guide", "guideVisibility", "visible")});
+        if queued == () || queued.id == () { throw("visibility repair was not admitted"); }
+        this.pending = queued.id; this.phase = 6; return;
+    }
+    if this.phase == 6 {
+        this.checks.push(t_true(find(ROOT + "/Guide") == this.failed_guide &&
+            get(this.failed_guide, "UsdSceneProjectionFailed") == () &&
+            !hidden(ROOT + "/Guide/Shown") && hidden(ROOT + "/Guide/Suppressed"),
+            "correcting an invalid live visibility opinion restores the same projected subtree"));
         report_verdict(this.checks, "NATIVE VISIBILITY", "NATIVE_VISIBILITY");
         this.phase = 99;
     }

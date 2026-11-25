@@ -25,6 +25,13 @@ Read [`author-scenario`](../author-scenario/SKILL.md) first, then use
 [`assets/tutorials/README.md`](../../assets/tutorials/README.md) and the
 examples under `assets/tutorials/`.
 
+## Instruction UX
+
+Describe the exact visible action and its location (for example, “Click the
+Take control of rover button below”). Report the specific unmet progression
+condition and distinguish control ownership from camera selection. Keep cards
+compact; learners can minimize or hide them and reopen them using **View → HUDs**.
+
 ## Add a lesson
 
 1. Add `assets/tutorials/<track>/<name>.rhai`.

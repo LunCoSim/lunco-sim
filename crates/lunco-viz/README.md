@@ -4,7 +4,7 @@ Domain-agnostic visualization framework for LunCoSim.
 
 ## Viewport telemetry HUD
 
-Turn on a graph HUD in **Settings → HUD → Telemetry graphs** in View. On the card, open
+Turn on a graph HUD in **View → HUDs → Telemetry graphs** in View. On the card, open
 **Parameters** to browse sources and component groups, optionally filter names,
 descriptions and source paths, and select up to four parameters. Selected
 parameters stay pinned above the groups. Each uses its own native plot,

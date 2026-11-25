@@ -1098,7 +1098,9 @@ pub(crate) fn refresh_edited_prims_live(
         if is_transform_attribute(attr) {
             continue;
         }
-        if standard_preview_surface_input_edit(world, id, prim, attr) {
+        if standard_surface_input_edit(world, id, prim, attr)
+            || standard_pbr_binding_edit(world, id, prim, attr)
+        {
             continue;
         }
         // Standard display primvars are appearance, even when authored on a
@@ -1191,7 +1193,7 @@ fn edit_confined_to_exempt_subtree(
 /// Standard `UsdPreviewSurface` values are re-read by the visual owner from
 /// `UsdSceneChangeBatch`; rebuilding the stage entities would also restart
 /// unrelated authored programs and simulation projections.
-fn standard_preview_surface_input_edit(
+fn standard_surface_input_edit(
     world: &mut World,
     stage_id: AssetId<UsdStageAsset>,
     prim: &str,
@@ -1209,7 +1211,73 @@ fn standard_preview_surface_input_edit(
         .is_some_and(|stage| {
             let view = stage.view();
             view.type_name(&path).as_deref() == Some("Shader")
-                && view.text(&path, "info:id").as_deref() == Some("UsdPreviewSurface")
+                && matches!(
+                    view.text(&path, "info:id").as_deref(),
+                    Some("UsdPreviewSurface" | "UsdUVTexture")
+                )
+        })
+}
+
+/// Standard direct bindings on concrete geometry only change its PBR look.
+/// A custom-shader ownership transition or an inherited/collection binding
+/// retains the corresponding topology owner's reconciliation boundary.
+pub(crate) fn standard_pbr_binding_edit(
+    world: &World,
+    stage_id: AssetId<UsdStageAsset>,
+    prim: &str,
+    attribute: &str,
+) -> bool {
+    if attribute != "material:binding" {
+        return false;
+    }
+    let Ok(path) = SdfPath::new(prim) else {
+        return false;
+    };
+    let Some(stage) = world
+        .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
+        .and_then(|stages| stages.get(stage_id))
+    else {
+        return false;
+    };
+    let view = stage.view();
+    if !matches!(
+        view.type_name(&path).as_deref(),
+        Some(
+            "Cube"
+                | "Sphere"
+                | "Cylinder"
+                | "Cone"
+                | "Capsule"
+                | "Plane"
+                | "Mesh"
+                | "NurbsPatch"
+                | "BasisCurves"
+                | "NurbsCurves"
+        )
+    ) {
+        return false;
+    }
+    let standard = match view.bound_shader(&path) {
+        Ok(None) => true,
+        Ok(Some(shader)) => {
+            view.text(&shader, "info:id").as_deref() == Some("UsdPreviewSurface")
+                && !view.has_authored_attribute(&shader, "info:wesl:sourceAsset")
+        }
+        Err(_) => false,
+    };
+    standard
+        && world.get_resource::<UsdPrimIndex>().is_some_and(|index| {
+            index.in_stage(stage_id, prim).iter().all(|entity| {
+                let visual = world
+                    .get::<lunco_usd_bevy_scene::UsdVisualMeshTarget>(*entity)
+                    .map_or(*entity, |target| target.0);
+                world
+                    .get::<lunco_usd_bevy_scene::UsdVisualShaderBound>(visual)
+                    .is_none()
+                    && world
+                        .get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(*entity)
+                        .is_none()
+            })
         })
 }
 

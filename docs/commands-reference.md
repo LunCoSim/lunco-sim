@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**335 commands** across **62** crates. All documented.
+**337 commands** across **62** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -114,7 +114,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
 - [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
-- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (4 commands)
+- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (5 commands)
 - [`lunco-scene-validation`](#lunco-scene-validation) (1 command)
 - [`lunco-scripting-rhai-runtime`](#lunco-scripting-rhai-runtime) (12 commands)
 - [`lunco-scripting-rhai-world`](#lunco-scripting-rhai-world) (2 commands)
@@ -130,7 +130,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (6 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
-- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (4 commands)
+- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (5 commands)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (11 commands)
 
@@ -3177,7 +3177,7 @@ actually call, with the fields the deserializer actually accepts. See the
    `wedge_count`, `cell_a`) → set that named value on the entity's `ShaderLook`
    (requires `shader` set first, or a USD shader material). The shader's
    reflected schema resolves the type; colours are `r,g,b`.
- - `visible` → `true`/`false` toggles `Visibility`.
+ - `visible` → `true`/`false` through the same namespace visibility owner as `SetSceneView`.
  - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
    `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
    `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
@@ -3295,6 +3295,18 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame, in f64 precision. |
 
+#### `SetColliderEnabled`
+
+ Set the live contact participation of an already admitted native collider.
+ This changes runtime physics state only; the authored shape is unchanged.
+
+- *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `target` | `Entity` |  Exact collider entity, not a source prim that has no native collider. |
+| `enabled` | `bool` |  Whether the collider participates in live contact detection. |
+
 #### `SetSceneView`
 
  Apply a batch of runtime presentation values to the mounted scene.
@@ -3312,8 +3324,8 @@ actually call, with the fields the deserializer actually accepts. See the
 
  Set a scene entity's complete pose in the active physics frame.
 
- Translation and orientation are one authored edit, allowing live seating
- and document persistence to share one command and change-set boundary.
+ Translation and orientation share one live pose mechanism. Persistent intent
+ additionally journals an authored edit; interactive intent never edits USD.
 
 - *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
 
@@ -3322,6 +3334,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `entity_id` | `u64` |  API-stable global entity ID from `ListEntities`. |
 | `translation` | `[f64 ; 3]` |  Target translation in the active physics frame. |
 | `rotation` | `[f64 ; 4]` |  Target orientation in the active physics frame, `[x, y, z, w]`. |
+| `intent` | `EditIntent` |  Persistent commits an authored edit; Interactive changes only the live pose. |
 
 ### `lunco-scene-validation` <a id="lunco-scene-validation"></a>
 
@@ -4622,6 +4635,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `hud` | `String` |   |
+| `title` | `Option < String >` |  Human-readable title shown in the card and HUD menu. |
 | `width` | `Option < f32 >` |   |
 | `text_scale` | `Option < f32 >` |   |
 | `draggable` | `Option < bool >` |   |
@@ -4708,6 +4722,13 @@ actually call, with the fields the deserializer actually accepts. See the
 | `enabled` | `bool` |  `true` enables the HUD; `false` hides it. |
 
 ### `lunco-workbench-runtime-ui` <a id="lunco-workbench-runtime-ui"></a>
+
+#### `InspectRuntimeHuds`
+
+ Inspect user permission, current eligibility and actual retained HUD visibility.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+- *fields:* none — call with `InspectRuntimeHuds` (no params)
 
 #### `InspectRuntimeUiForm`
 
@@ -4930,7 +4951,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 335 commands from the runtime schema; scanned 1112 .rs files for docs (0 parse failure(s) skipped).
+<!-- 336 commands from the runtime schema; scanned 1112 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

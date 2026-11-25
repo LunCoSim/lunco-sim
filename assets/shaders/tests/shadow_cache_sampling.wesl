@@ -5,7 +5,10 @@ import super::super::terrain_surface::{terrain_surface_occlusion, terrain_local_
 // A nodal shadow grid must interpolate at the CPU bake's endpoint coordinates.
 struct Material { unused: f32, }
 @group(constants::MATERIAL_BIND_GROUP) @binding(6) var cache: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(7) var cache_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var raster_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var globe_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(11) var cache_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(18) var detail_sampler: sampler;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -34,7 +37,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let derived_ao = terrain_surface_occlusion(surface, 1.0, 0.0);
     let authored_ao = terrain_surface_occlusion(surface, 1.0, 1.0);
     let zero_ao = terrain_surface_occlusion(surface, 0.0, 0.0);
-    let valid = all(dimensions == vec2(4, 3)) && abs(actual - expected) < 2.0 / 255.0
+    // The same raster must obey each independent sampling profile. Probe
+    // texel centers outside the footprint to distinguish clamp and repeat.
+    let u_probe = vec2(-0.125, 1.0 / 6.0);
+    let v_probe = vec2(0.125, -0.5);
+    let black = textureLoad(cache, vec2(0, 0), 0).r;
+    let white = textureLoad(cache, vec2(3, 0), 0).r;
+    let epsilon = 2.0 / 255.0;
+    let sampler_profiles_valid = abs(black - white) > 0.5
+        && abs(textureSampleLevel(cache, raster_sampler, u_probe, 0.0).r - black) < epsilon
+        && abs(textureSampleLevel(cache, raster_sampler, v_probe, 0.0).r - black) < epsilon
+        && abs(textureSampleLevel(cache, globe_sampler, u_probe, 0.0).r - white) < epsilon
+        && abs(textureSampleLevel(cache, globe_sampler, v_probe, 0.0).r - black) < epsilon
+        && abs(textureSampleLevel(cache, detail_sampler, u_probe, 0.0).r - white) < epsilon
+        && abs(textureSampleLevel(cache, detail_sampler, v_probe, 0.0).r - white) < epsilon
+        && abs(textureSampleLevel(cache, cache_sampler, u_probe, 0.0).r - black) < epsilon
+        && abs(textureSampleLevel(cache, cache_sampler, v_probe, 0.0).r - black) < epsilon;
+    let valid = sampler_profiles_valid && all(dimensions == vec2(4, 3)) && abs(actual - expected) < 2.0 / 255.0
         && night == 0.0 && unbound == 1.0
         && horizon_shadow_blend(1.0, 3000.0) == 0.0
         && horizon_shadow_blend(3000.0, 3000.0) == 1.0

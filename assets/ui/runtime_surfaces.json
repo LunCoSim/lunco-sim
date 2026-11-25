@@ -3,6 +3,7 @@
   "surfaces": [
     {
       "id": "lunica-schema",
+      "title": "Modelica schema",
       "template": "ui/lunica_schema.html",
       "stylesheet": "ui/lunica_schema.css",
       "namespace": "lunica-schema",
@@ -63,6 +64,7 @@
     },
     {
       "id": "vehicle-control-left",
+      "title": "Vehicle controls (left)",
       "setting": "ui.vehicle_controls",
       "setting_default": true,
       "template": "ui/vehicle_control_compact.html",
@@ -93,6 +95,7 @@
     },
     {
       "id": "vehicle-control-right",
+      "title": "Vehicle controls (right)",
       "setting": "ui.vehicle_controls",
       "setting_default": true,
       "template": "ui/vehicle_control_compact.html",
@@ -123,6 +126,7 @@
     },
     {
       "id": "vessel-hud",
+      "title": "Vehicle status",
       "template": "ui/vessel_hud.html",
       "stylesheet": "ui/vessel_hud.css",
       "namespace": "vessel-hud",
@@ -164,6 +168,7 @@
     },
     {
       "id": "program-browser",
+      "title": "Programs",
       "template": "ui/program_browser.html",
       "stylesheet": "ui/program_browser.css",
       "namespace": "program-browser",
@@ -191,6 +196,7 @@
     },
     {
       "id": "camera-status",
+      "title": "Camera status",
       "template": "ui/camera_status.html",
       "stylesheet": "ui/camera_status.css",
       "namespace": "camera-status",
@@ -221,6 +227,7 @@
       "draggable": true,
       "placement": {
         "mode": "window",
+        "region": "scene_viewport",
         "anchor": "top_right",
         "offset": [-12.0, 52.0],
         "width": 280.0,
@@ -229,6 +236,8 @@
     },
     {
       "id": "celestial-view",
+      "user_dismissible": false,
+      "title": "Surface view switcher",
       "template": "ui/view_mode.html",
       "stylesheet": "ui/view_mode.css",
       "namespace": "celestial-view",
@@ -316,6 +325,7 @@
       "draggable": true,
       "placement": {
         "mode": "window",
+        "region": "scene_viewport",
         "anchor": "top_center",
         "offset": [0.0, 34.0],
         "width": 444.0,
@@ -324,6 +334,7 @@
     },
     {
       "id": "terrain-progress",
+      "title": "Terrain preparation",
       "template": "ui/terrain_progress.html",
       "stylesheet": "ui/terrain_progress.css",
       "namespace": "terrain-progress",
@@ -351,6 +362,8 @@
     },
     {
       "id": "asset-consent",
+      "title": "Asset download approval",
+      "user_dismissible": false,
       "overlay": true,
       "template": "ui/asset_consent.html",
       "stylesheet": "ui/asset_consent.css",
@@ -387,6 +400,8 @@
     },
     {
       "id": "startup-assets",
+      "title": "Startup assets",
+      "user_dismissible": false,
       "owner": "application",
       "overlay": true,
       "template": "ui/startup_assets.html",
@@ -437,6 +452,7 @@
     },
     {
       "id": "scenario-download",
+      "title": "Scenario download",
       "template": "ui/scenario_download.html",
       "stylesheet": "ui/scenario_download.css",
       "namespace": "scenario-download",

@@ -36,7 +36,9 @@ a file picker does not complete an exercise.
 
 ## Controls and recovery
 
-The lesson displays the active semantic input bindings. **Take control**
+Minimize or hide the lesson card using its header controls, or choose **Dock** to move it into the Guidance panel. Choose **Float** to return it to the viewport. Restore hidden cards in **View → HUDs**.
+The lesson displays the active semantic input bindings.
+ **Take control of rover**
 acquires the training rover directly; selection and possession remain separate
 operations. **Right rover** uses the generic `RecoverVessel` command to right
 the vehicle and zero its velocities at the current location. It preserves
@@ -45,9 +47,9 @@ and destination in the same view. **More help** keeps actionable guidance on
 screen. HUD buttons also provide a mouse path through control, assessment and
 navigation; driving still uses the configured controller inputs.
 
-The workshop card remains visible in View, Analyze, Build, Editor and Lunica.
-Its named HUD has a larger text scale and bounded width; the existing HUD
-context menu lets an instructor adjust those presentation settings.
+The workshop card is available in View, Analyze, Build, Editor and Lunica.
+It has a compact, movable layout with bounded scrolling. Right-click the card
+to adjust width and text size, or minimize or hide it while working in a dock.
 
 **Instructor checkpoints** begins driving, telemetry, or comparison practice
 in the current yard. A jump explicitly marks earlier tasks as unassessed;

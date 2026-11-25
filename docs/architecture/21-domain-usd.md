@@ -571,6 +571,19 @@ Live undo/redo copies the authoritative document's transform property and
 order together through the generic layer patch; the native projection does
 not make a separate transform-history decision.
 
+Runtime actions never use authored layer edits as a state-update bus.
+`TransformEntity` with interactive intent, `SetColliderEnabled`, named
+simulation ports, and `SetSceneView` operate on live owners without a
+document revision. Authored visibility and direct standard material edits
+are reconciled on their existing projected consumers. A standalone analytic
+collider's dimension edit replaces its native shape in place and refreshes the
+related primitive mesh through the shared shape-dimension reader/cache, without
+retiring the body or unrelated scene state. See the
+[live update contracts](50-usd-driven-visuals.md#live-values-and-saved-settings).
+Coarse composition and graph-connected physical topology still use the
+graph-safe reset owner; eliminating that promotion requires a dependency-local
+teardown and readmission contract, not bypassing the physics guard.
+
 `ApplyUsdTransientOps` creates and edits explicitly composed `@view@` opinions,
 such as establishing a route ribbon prim with its USD material binding. It
 checks the document generation and advances the live projection, while leaving
