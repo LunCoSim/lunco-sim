@@ -339,7 +339,6 @@ fn runtime_spawn_ops(
     } else {
         format!("{parent_path}/{name}")
     };
-    let (rx, ry, rz) = rotation.to_euler(EulerRot::XYZ);
     let ops = vec![
         UsdOp::AddPrim {
             edit_target: LayerId::runtime(),
@@ -375,7 +374,7 @@ fn runtime_spawn_ops(
         UsdOp::SetRotate {
             edit_target: LayerId::runtime(),
             path: prim_path.clone(),
-            value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+            value: lunco_usd_document::document::usd_rotate_xyz_degrees(rotation),
         },
     ];
     (prim_path, ops)
@@ -1341,14 +1340,13 @@ pub fn on_rotate_entity_command(
     }
 
     if let Some((doc, path)) = authored_destination {
-        let (rx, ry, rz) = local_rotation.to_euler(EulerRot::XYZ);
         commands.trigger(ApplyUsdOp {
             doc_id: doc,
             parent_gen: None,
             op: UsdOp::SetRotate {
                 edit_target: LayerId::runtime(),
                 path,
-                value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+                value: lunco_usd_document::document::usd_rotate_xyz_degrees(local_rotation),
             },
         });
     }
@@ -1649,7 +1647,6 @@ pub fn on_transform_entity_command(
     // writer here.
     if cmd.intent.is_persistent() {
         if let Some((doc, path)) = authored_destination {
-            let (rx, ry, rz) = new_rotation.to_euler(EulerRot::XYZ);
             commands.trigger(ApplyUsdOps {
                 doc_id: doc,
                 parent_gen: None,
@@ -1663,7 +1660,7 @@ pub fn on_transform_entity_command(
                     UsdOp::SetRotate {
                         edit_target: LayerId::runtime(),
                         path,
-                        value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+                        value: lunco_usd_document::document::usd_rotate_xyz_degrees(new_rotation),
                     },
                 ],
             });
@@ -2207,18 +2204,13 @@ pub fn persist_environment_light_to_runtime_layer(
             let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
             let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
             let quat = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-            let (rx, ry, rz) = quat.to_euler(EulerRot::XYZ);
             commands.trigger(ApplyUsdOp {
                 doc_id: doc,
                 parent_gen: None,
                 op: UsdOp::SetRotate {
                     edit_target: LayerId::runtime(),
                     path: prim.path.clone(),
-                    value: [
-                        rx.to_degrees() as f64,
-                        ry.to_degrees() as f64,
-                        rz.to_degrees() as f64,
-                    ],
+                    value: lunco_usd_document::document::usd_rotate_xyz_degrees(quat.as_dquat()),
                 },
             });
         }

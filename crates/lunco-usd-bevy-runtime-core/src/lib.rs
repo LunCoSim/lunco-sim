@@ -19,6 +19,7 @@ use bevy::prelude::{App, IntoScheduleConfigs, Plugin};
 #[cfg(not(target_arch = "wasm32"))]
 mod dataset_requirements;
 mod live_consume;
+pub use live_consume::UsdProjectionVisuals;
 mod native_assets;
 mod native_references;
 pub mod scene;
@@ -79,7 +80,13 @@ impl Plugin for UsdSceneRuntimePlugin {
         app.init_resource::<lunco_core_runtime::SimulationProgress>();
         #[cfg(not(target_arch = "wasm32"))]
         dataset_requirements::install(app);
+        use lunco_core::AppSceneExt;
         app.init_resource::<live_consume::PendingStageProjections>();
+        app.init_scene_resource::<UsdProjectionVisuals>();
+        app.add_systems(
+            bevy::prelude::PostUpdate,
+            live_consume::settle_projection_visuals,
+        );
         app.init_resource::<native_assets::PendingNativeAssetPaths>();
         if !app.is_plugin_added::<lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin>() {
             app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);

@@ -227,6 +227,8 @@ pub struct UsdSceneChangeBatch {
     pub stage_generation: u64,
     /// Structurally resynced prim paths, including composed dependents.
     pub resynced_prim_paths: Vec<String>,
+    /// Exact property or prim paths from the coalesced non-structural notices.
+    pub info_paths: Vec<String>,
     /// Owning prim paths for authored, non-structural property changes.
     pub info_prim_paths: Vec<String>,
     /// Info-only prim paths whose changed properties are exclusively USD

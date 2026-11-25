@@ -7,7 +7,7 @@
 
 const TARGET_PATH = "/TransformCommandTest/Assembly/Target";
 const TARGET_POSITION = [101.0, 202.0, 303.0];
-const TARGET_ROTATION = [0.0, 0.1305261922, 0.0, 0.9914448614];
+const TARGET_ROTATION = [0.5, 0.5, 0.5, 0.5];
 const PARENT_POSITION = [10.0, 20.0, -30.0];
 const PARENT_INVERSE_ROTATION = [0.0, -0.3420201433, 0.0, 0.9396926208];
 const MAX_POSITION_ERROR = 0.0001;

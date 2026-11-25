@@ -7,13 +7,14 @@ import sys
 import time
 from pathlib import Path
 
-from runtime import BINARY, ROOT, POLL_INTERVAL_S, ProductionSession
+from runtime import BINARY, ROOT, POLL_INTERVAL_S, ProductionSession, run_authored_scenario
 from run_editor_scene_test import wait_for_scene, wait_for_scene_time_selection
 from test_native_trim_precision import execute, run, apply_fixture
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--offscreen", action="store_true", help="use the offscreen renderer")
     parser.add_argument("--port", type=int, default=4225)
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--log", type=Path, default=Path("/tmp/luncosim-native-material-terminals.log"))
@@ -21,7 +22,8 @@ def main():
     source = (ROOT / "assets/scenarios/tests/native_material_terminals.rhai").read_text()
     scene = ROOT / "assets/scenes/tests/twin_session_retirement/replacement/replacement.usda"
     try:
-        with ProductionSession(args.port, extra_args=("--no-throttle", "--scene", str(scene)),
+        render_args = ["--offscreen"] if args.offscreen else []
+        with ProductionSession(args.port, extra_args=("--no-throttle", "--scene", str(scene), *render_args),
                                log_path=args.log, windowed=True) as session:
             pid = session.process.pid
             if sys.platform.startswith("linux") and (
@@ -37,6 +39,7 @@ def main():
             for prepare, verify, count in [
                 ("material_prepare", "material_valid", 3),
                 ("material_rebind", "material_rebound", 3),
+                ("material_annotate", "material_annotated", 1),
                 ("material_restore", "material_valid", 3),
                 ("material_bad_input", "material_bad_input_verdict", 2),
                 ("material_repair_input", "material_repaired_input", 2),
@@ -56,10 +59,18 @@ def main():
                 print(output, flush=True)
                 if f"TESTS_OK {count}" not in output or "TESTS_FAIL" in output:
                     raise RuntimeError("authored material verdict failed")
+                if prepare == "material_prepare":
+                    twin = execute(session, "GetToolLibrary", name="runtime_ui")["active_twin"]
+                    run_authored_scenario(
+                        session, "lunco://scenarios/tests/usd_visual_completion.rhai",
+                        title="USD VISUAL COMPLETION", check_count=2, owner_twin_id=twin,
+                        params={"doc_id": doc, "mesh": "/World/NativeMaterialTerminal/Shape"},
+                        timeout_s=args.timeout,
+                    )
     except Exception as error:
         print(f"FAIL — {error}", file=sys.stderr)
         return 1
-    print("PASS — twenty-one authored checks; API Exit and port release verified")
+    print("PASS — authored material checks; API Exit and port release verified")
     return 0
 
 

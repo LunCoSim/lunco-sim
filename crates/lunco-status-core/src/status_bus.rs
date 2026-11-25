@@ -847,18 +847,22 @@ pub fn surface_error_telemetry(
     // Neither frame samples nor live poses/labels generate these events.
     if matches!(
         ev.name.as_str(),
-        "usd.projection.work" | "usd.document.projected"
+        "usd.projection.work"
+            | "usd.document.projected"
+            | "usd.projection.visuals_ready"
+            | "usd.projection.visuals_failed"
     ) {
         if let TelemetryValue::Map(data) = &ev.data {
             let started = ev.name == "usd.projection.work";
             let mode_key = if started { "mode" } else { "projection_mode" };
             if let Some(TelemetryValue::String(mode)) = data.get(mode_key) {
-                let message = match (started, mode.as_str()) {
-                    (true, "full_stage") => "Full USD stage rebuild started",
-                    (true, "subtree") => "Affected USD subtree update started",
-                    (false, "full_stage") => "Full USD stage rebuilt",
-                    (false, "subtree") => "Affected USD subtree updated",
-                    (false, "in_place") => "Authored USD edit applied in place",
+                let message = match (ev.name.as_str(), mode.as_str()) {
+                    ("usd.projection.work", "full_stage") => "Full USD stage rebuild started",
+                    ("usd.projection.work", "subtree") => "Affected USD subtree update started",
+                    ("usd.projection.visuals_ready", "full_stage") => "Full USD stage rebuilt",
+                    ("usd.projection.visuals_ready", "subtree") => "Affected USD subtree updated",
+                    ("usd.document.projected", "in_place") => "Authored USD edit applied in place",
+                    ("usd.projection.visuals_failed", _) => "USD visual update failed",
                     _ => return,
                 };
                 let detail = if started {
@@ -866,6 +870,8 @@ pub fn surface_error_telemetry(
                         TelemetryValue::String(path) => Some(path.clone()),
                         _ => None,
                     })
+                } else if let Some(TelemetryValue::String(detail)) = data.get("detail") {
+                    Some(detail.clone())
                 } else {
                     data.get("generation").and_then(|value| match value {
                         TelemetryValue::U64(generation) => Some(format!("revision {generation}")),
@@ -874,7 +880,11 @@ pub fn surface_error_telemetry(
                 };
                 bus.push(
                     USD_PROJECTION_SOURCE,
-                    StatusLevel::Info,
+                    if ev.severity == Severity::Error {
+                        StatusLevel::Error
+                    } else {
+                        StatusLevel::Info
+                    },
                     detail.map_or_else(
                         || message.to_owned(),
                         |detail| format!("{message} — {detail}"),

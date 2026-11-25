@@ -45,8 +45,17 @@ simulation state. Authored updates reconcile value/dependency owners in place
 when possible and reinstantiate only affected subtrees when necessary.
 The projection owner reports actual work in `usd.document.projected` via
 `projection_mode` (`initial_load`, `in_place`, `subtree`, `full_stage`).
-The status UI distinguishes initial scene loading, USD edits, simulation
+Document publication makes the composed revision available to scripts. For a
+subtree or full rebuild, the USD edit indicator stays active while prims,
+deferred children or meshes in its stage and namespace are pending. The
+projection owner publishes `usd.projection.visuals_ready` after those queues
+drain and `usd.projection.visuals_failed` for a failed visual. This presentation
+boundary runs independently of simulation admission. The status UI distinguishes initial scene loading, USD edits, simulation
 preparation and visual streaming. Live interactions produce no projection event.
+
+A shading annotation remains queryable on its material or shader. Only a network
+property, a composed schema property, or a registered live-edit owner can request
+projection work for a shading node.
 
 Use the current value's owner to choose the update path:
 
@@ -710,7 +719,6 @@ the value, not the pixels.
 | Approach | Why not |
 |---|---|
 | rhai drives the material | `set()` needs `register_type::<T>()` (auto-register is off workspace-wide) and `apply_dynamic` downcasts only scalars/vectors — no `LinearRgba`, no enums. `PbrLook` fails both gates. |
-| rhai drives visibility | `Visibility` is registered but is an enum; `apply_dynamic` has no enum arm. Scripts work around this by scaling to zero. |
 | `inventory` for the registry | Forces stateless bare `fn`s, adds link-time surface near the clang limit that already forced `reflect_auto_register` off, and `asset_sources.rs` steers explicitly toward a runtime resource for scriptable dispatch. |
 | `register_commands!` | Dispatches by type, needs a Rust type per id, gives no string key. |
 | A bespoke ray-beam attribute | One-off. The raw ray query owns the value; authored geometry and its driver own presentation. |

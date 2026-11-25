@@ -64,6 +64,17 @@ use bevy::prelude::Transform;
 use bevy::reflect::Reflect;
 use lunco_engineering_values::{Quantity, Unit, UnitError};
 
+/// Express a normalized local rotation in the fixed-axis degrees of USD's rotateXYZ operation.
+pub fn usd_rotate_xyz_degrees(rotation: DQuat) -> [f64; 3] {
+    let (x, y, z) = rotation.to_euler(EulerRot::XYZEx);
+    [x, y, z].map(f64::to_degrees)
+}
+
+fn usd_rotate_xyz_quaternion(degrees: [f64; 3]) -> DQuat {
+    let [x, y, z] = degrees.map(f64::to_radians);
+    DQuat::from_euler(EulerRot::XYZEx, x, y, z)
+}
+
 /// The stage's declared up axis. USD's default is `Y` (AOUSD); DCC/robotics
 /// stages (Omniverse, Isaac Sim, Blender, ROS) overwhelmingly author `Z`.
 #[derive(
@@ -769,18 +780,7 @@ impl ConventionTransform {
         if self.is_identity() {
             return deg;
         }
-        let q = Quat::from_euler(
-            EulerRot::XYZEx,
-            (deg[0] as f32).to_radians(),
-            (deg[1] as f32).to_radians(),
-            (deg[2] as f32).to_radians(),
-        );
-        let (x, y, z) = self.stage_rotation(q).to_euler(EulerRot::XYZEx);
-        [
-            x.to_degrees() as f64,
-            y.to_degrees() as f64,
-            z.to_degrees() as f64,
-        ]
+        usd_rotate_xyz_degrees(self.stage_rotation_d(usd_rotate_xyz_quaternion(deg)))
     }
 
     /// Convert a stage-local `xformOp:rotateXYZ` Euler triple to canonical
@@ -789,18 +789,7 @@ impl ConventionTransform {
         if self.is_identity() {
             return deg;
         }
-        let q = Quat::from_euler(
-            EulerRot::XYZEx,
-            (deg[0] as f32).to_radians(),
-            (deg[1] as f32).to_radians(),
-            (deg[2] as f32).to_radians(),
-        );
-        let (x, y, z) = self.rotation(q).to_euler(EulerRot::XYZEx);
-        [
-            x.to_degrees() as f64,
-            y.to_degrees() as f64,
-            z.to_degrees() as f64,
-        ]
+        usd_rotate_xyz_degrees(self.rotation_d(usd_rotate_xyz_quaternion(deg)))
     }
 
     /// Convert a canonical value for a standard USD xform attribute to the

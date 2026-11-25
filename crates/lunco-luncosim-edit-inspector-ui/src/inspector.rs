@@ -1151,12 +1151,8 @@ fn usd_preview_transform_section(
         return;
     };
     let mut translation = transform.translation.as_dvec3().to_array();
-    let euler = transform.rotation.to_euler(EulerRot::XYZ);
-    let mut rotation = [
-        f64::from(euler.0.to_degrees()),
-        f64::from(euler.1.to_degrees()),
-        f64::from(euler.2.to_degrees()),
-    ];
+    let mut rotation =
+        lunco_usd_document::document::usd_rotate_xyz_degrees(transform.rotation.as_dquat());
     let mut scale = transform.scale.as_dvec3().to_array();
     let mut translation_commit = false;
     let mut rotation_commit = false;

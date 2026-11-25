@@ -955,6 +955,7 @@ fn report_terrain_generation_status(
 /// both consumers on this shared mirror avoids dropping readiness signals.
 fn report_scene_spawn_status(
     in_flight: Option<Res<lunco_usd_bevy_runtime_core::scene::SceneLoadInFlight>>,
+    visuals: Option<Res<lunco_usd_bevy_runtime_core::UsdProjectionVisuals>>,
     roots: Option<Res<lunco_assets_core::TwinRoots>>,
     progress: Option<Res<lunco_core_runtime::SimulationProgress>>,
     awaiting: Query<(), With<lunco_usd_bevy_scene::UsdSceneAwaitingStage>>,
@@ -974,17 +975,24 @@ fn report_scene_spawn_status(
     const VISUAL_SOURCE: &str = lunco_status_core::status_bus::SCENE_VISUAL_SOURCE;
     const PROJECTION_SOURCE: &str = lunco_status_core::status_bus::USD_PROJECTION_SOURCE;
     const PREPARATION_SOURCE: &str = lunco_status_core::status_bus::SIMULATION_PREPARATION_SOURCE;
-    let projection = progress.as_deref().and_then(|progress| {
-        use lunco_core_runtime::SimulationProgressOwner;
-        progress
-            .blockers()
-            .find(|blocker| blocker.key.owner == SimulationProgressOwner::UsdDocumentProjection)
-            .or_else(|| {
-                progress.blockers().find(|blocker| {
-                    blocker.key.owner == SimulationProgressOwner::UsdDocumentAuthoring
+    let projection = progress
+        .as_deref()
+        .and_then(|progress| {
+            use lunco_core_runtime::SimulationProgressOwner;
+            progress
+                .blockers()
+                .find(|blocker| blocker.key.owner == SimulationProgressOwner::UsdDocumentProjection)
+                .or_else(|| {
+                    progress.blockers().find(|blocker| {
+                        blocker.key.owner == SimulationProgressOwner::UsdDocumentAuthoring
+                    })
                 })
-            })
-    });
+        })
+        .map(|blocker| blocker.reason.as_str());
+    let projection = visuals
+        .as_deref()
+        .and_then(|visuals| visuals.progress())
+        .or(projection);
     if projection.is_none() || in_flight.is_some() {
         bus.remove_progress(PROJECTION_SOURCE);
     }
@@ -1041,7 +1049,7 @@ fn report_scene_spawn_status(
     } else if let Some(projection) = projection {
         bus.remove_progress(SOURCE);
         bus.remove_progress(VISUAL_SOURCE);
-        bus.set_progress(PROJECTION_SOURCE, projection.reason.clone(), 0, 0);
+        bus.set_progress(PROJECTION_SOURCE, projection, 0, 0);
     } else if pending > 0 || projecting > 0 {
         bus.remove_progress(SOURCE);
         bus.set_progress(

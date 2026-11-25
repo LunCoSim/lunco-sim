@@ -2,6 +2,14 @@ use openusd::sdf::Path as SdfPath;
 
 use crate::view::StageView;
 
+/// UsdShade network properties that can change a terminal, its inputs or its implementation.
+pub fn is_shading_network_property(name: &str) -> bool {
+    matches!(
+        name.split_once(':'),
+        Some(("inputs" | "outputs" | "info", _))
+    )
+}
+
 /// Which purpose of a USD material binding to resolve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MaterialPurpose {

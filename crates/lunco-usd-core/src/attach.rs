@@ -458,7 +458,6 @@ pub fn resolve_mount_placement(
     socket: bevy::prelude::Transform,
     plug: bevy::prelude::Transform,
 ) -> Result<([f64; 3], [f64; 3]), String> {
-    use bevy::math::EulerRot;
     let p = socket.compute_affine() * plug.compute_affine().inverse();
     let (scale, rot, trans) = p.to_scale_rotation_translation();
     let scale_error = (scale - bevy::prelude::Vec3::ONE).abs().max_element();
@@ -479,13 +478,8 @@ pub fn resolve_mount_placement(
     {
         return Err("mount frame placement is non-finite".into());
     }
-    let (rx, ry, rz) = rot.to_euler(EulerRot::XYZ);
     let placement = [trans.x as f64, trans.y as f64, trans.z as f64];
-    let rotation = [
-        (rx as f64).to_degrees(),
-        (ry as f64).to_degrees(),
-        (rz as f64).to_degrees(),
-    ];
+    let rotation = lunco_usd_document::document::usd_rotate_xyz_degrees(rot.as_dquat());
     if placement.iter().any(|value| !value.is_finite())
         || rotation.iter().any(|value| !value.is_finite())
     {

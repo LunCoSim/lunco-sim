@@ -3632,14 +3632,28 @@ fn refresh_standard_surface_material_intents(
             continue;
         };
         let (reader, _) = canonical.reader_for(change.stage_id, stage_asset);
-        for path in &change.info_prim_paths {
-            if change.transform_only_prim_paths.contains(path) {
+        for info in &change.info_paths {
+            let (path, property) = info
+                .split_once('.')
+                .map_or((info.as_str(), None), |(path, attr)| (path, Some(attr)));
+            if change
+                .transform_only_prim_paths
+                .iter()
+                .any(|prim| prim == path)
+            {
                 continue;
             }
             let Ok(prim) = SdfPath::new(path) else {
                 continue;
             };
             match UsdRead::type_name(&reader, &prim).as_deref() {
+                Some("Shader" | "NodeGraph" | "Material")
+                    if property.is_some_and(|name| {
+                        !lunco_usd_bevy_stage::is_shading_network_property(name)
+                    }) =>
+                {
+                    continue;
+                }
                 Some("Shader")
                     if matches!(
                         UsdRead::text(&reader, &prim, "info:id").as_deref(),
@@ -3658,7 +3672,7 @@ fn refresh_standard_surface_material_intents(
                     edited_prims
                         .entry(change.stage_id)
                         .or_insert_with(std::collections::HashSet::new)
-                        .insert(path.clone());
+                        .insert(path.to_owned());
                 }
             }
         }

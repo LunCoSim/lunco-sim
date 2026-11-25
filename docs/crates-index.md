@@ -797,7 +797,7 @@ projection and all preview roots through one indexed projector; subtree refresh
 updates every stage/path instance. These are engine ownership invariants, not
 changeable selection policy. Installs scene admission, Twin-backed
 stage loading, live document-to-stage projection, coalesced stage-change
-path/generation publication, authored control/program projection, scene
+path/generation publication, stage- and subtree-scoped visual completion, authored control/program projection, scene
 commands, and the stage terminal-outcome contract.
 The scene runtime supplies the host's USD file-open route for mounted
 documents, external Twin selection, and asset scene addresses.

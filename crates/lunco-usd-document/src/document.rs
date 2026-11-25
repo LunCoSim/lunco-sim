@@ -74,6 +74,7 @@ use lunco_usd_authoring::author::{
     self, extract_edit_layer_data, parse_attribute_value, usda_to_data,
 };
 use lunco_usd_compose::recipe::StageRecipe;
+pub use lunco_usd_data::units::usd_rotate_xyz_degrees;
 use lunco_usd_data::units::{ConventionTransform, StageMetrics, UpAxis};
 use lunco_usd_data::usd_data::UsdDataExt;
 use openusd::sdf::{self, AbstractData, Path as SdfPath, SpecType};
@@ -3038,12 +3039,7 @@ impl<'a> UsdEditSession<'a> {
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 // Canonical in, stage on disk — see `SetTranslate`.
                 //
-                // Rotations convert through a quaternion (a Euler triple has no
-                // meaningful axis remap of its own), and that round-trip is `f32`
-                // while the op carries `f64`. So it is SKIPPED outright when the
-                // conversion is the identity — the canonical stages we author
-                // ourselves keep their authored digits exactly, and only genuinely
-                // non-canonical stages pay the precision of the remap they need.
+                // Convert the local rotation in double precision at the stage boundary.
                 let conv = self.composed_stage_convention()?;
                 let authored = conv.stage_euler_xyz_deg(value);
                 stage

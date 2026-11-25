@@ -97,6 +97,24 @@ fn material_rebound(doc) {
             "material binding edits retain prepared geometry")
     ],"NATIVE MATERIAL REBIND","NATIVE_MATERIAL_REBIND");
 }
+fn material_annotate(doc) {
+    let result = cmd("ApplyUsdOps", #{doc_id:doc, label:"Annotate shading network", ops:[
+        material_attr(material_root()+"/Alternate", "review:note", "string", "Checked"),
+        material_attr(material_graph(), "review:note", "string", "Checked"),
+        material_attr(material_shader(), "review:note", "string", "Checked")
+    ]});
+    if !result.ok {throw(result.to_string());}
+    print("FIXTURE_APPLIED");
+}
+fn material_annotated(doc) {
+    let mat = query("QueryUsdPrim", #{doc_id:doc,path:material_root()+"/Alternate",attrs:["review:note"]});
+    if mat.attrs == () || mat.attrs["review:note"] != "Checked" {print("MATERIAL_PENDING");return;}
+    report_verdict([
+        t_true(get(material_entity(doc),"Transform.translation.x")==3.0 &&
+            get(find_path(material_root()+"/Unrelated"),"Transform.translation.y")==5.0,
+            "shading annotations preserve bound and unrelated live poses")
+    ],"NATIVE MATERIAL ANNOTATION","NATIVE_MATERIAL_ANNOTATION");
+}
 fn material_roughness_write(doc, value) {
     let result=cmd("ApplyUsdOp",#{doc_id:doc,parent_gen:(),
         op:material_attr(material_shader(),"inputs:roughness","float",value)});

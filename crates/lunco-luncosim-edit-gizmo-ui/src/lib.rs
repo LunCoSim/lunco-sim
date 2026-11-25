@@ -812,11 +812,12 @@ fn restore_gizmo_dynamic(
                         });
                     }
                     if drag.current_rotation.dot(drag.original_rotation).abs() < 1.0 - 1.0e-12 {
-                        let (rx, ry, rz) = drag.current_rotation.to_euler(EulerRot::XYZ);
                         ops.push(lunco_usd_document::document::UsdOp::SetRotate {
                             edit_target: edit_target.clone(),
                             path: path.clone(),
-                            value: [rx.to_degrees(), ry.to_degrees(), rz.to_degrees()],
+                            value: lunco_usd_document::document::usd_rotate_xyz_degrees(
+                                drag.current_rotation,
+                            ),
                         });
                     }
                     if let (Some(current), Some(original)) =
