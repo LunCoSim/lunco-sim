@@ -388,12 +388,15 @@ that consumer and its negative cases.
 ## Ownership review
 
 All Rumoca dependencies pin commit
-`0eb1c376d76230e8949efb7fdcaeefb15ec1d13f` from
+`2a3716da596e18598e21a3683b1ff6d13ee650a0` from
 [LunCoSim/rumoca](https://github.com/LunCoSim/rumoca). It integrates upstream
-`e0a856feaf1c9e32e09b005a6564d5b77001e3e3`, which orders algebraic projection
-blocks by execution reads, with the fork’s prepared exact-assignment certificates
-and indexed projection diagnostics. LunCoSim stores
-checked DAE artifacts; each adaptive live or batch solver uses Rumoca's public
+`e0a856feaf1c9e32e09b005a6564d5b77001e3e3`, with the fork’s prepared exact-assignment
+certificates and indexed projection diagnostics. Rumoca orders algebraic
+projection stages by the values each output reads and the checks its program
+executes. A compact declaration moves as one stage. An ambiguous owner
+retains its issued order, and the solver checks the resulting execution schedule
+before using it. LunCoSim stores checked DAE artifacts. Each adaptive live
+or batch solver uses Rumoca's public
 `SimulationSession` API. Predicted models use Rumoca's public Model Exchange
 session and fixed RK4 integrator. Parsed AST fields are consumed by LunCoSim
 adapters that compose public Rumoca queries with source-coordinate and

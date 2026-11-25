@@ -656,14 +656,10 @@ all 3,295 observations with the prior fork and the upstream merge. Both took
 2,711 internal steps in the first 1,352 communication steps and another 176
 in the final 88. In the latter window each made 5,686,320 singleton visits.
 
-Upstream orders algebraic blocks by execution reads only when every projection
-stage is explicit. The Griffin plan contains 2,662 explicit stages and 14
-compact declaration runs, so this pass returns before it examines the reads.
-The first rejected plume dependency has its consumer at scalar block 119
-and its producer at 620. An extension should represent reads and writes of
-declaration runs in the ordering pass, preserve order within a run, and split
-it at a dependency boundary when necessary. Retain coupled-block and cycle
-semantics and compare accepted steps and the full observation stream again.
+At this pin the ordering pass stopped at the first compact declaration run.
+Griffin contained 2,662 explicit stages and 14 such runs. The first rejected
+dependency was a plume calculation at scalar block 119 reading its observation
+length from block 620.
 
 The four sequential release replays ran on logical CPU 12. Each entry is a
 mean per 1/60-second communication step in milliseconds. Full step includes
@@ -690,3 +686,42 @@ baseline averaged 77.11 FPS and 26.13 ticks/s with 2.7 other-simulator
 CPU-seconds. The fresh headful baseline lost its build and capture directory
 after scene readiness. The different contention levels prevent attributing
 the frame-rate difference to Rumoca.
+
+## Griffin main propulsion after mixed projection ordering
+
+Rumoca `2a3716da596e18598e21a3683b1ff6d13ee650a0` orders compact
+declaration runs alongside explicit blocks. A run moves as a unit. An explicit
+assignment reads its own output dependencies and the obligations executed
+by the source program. This distinction matters for the seven nozzle walls.
+Treating every array output as a reader of all sibling values creates a false
+cycle between the area fractions and zone radiation. The issued schedule now
+passes Rumoca's execution-order check for the algebraic, derivative, root and
+event refreshes. Each has 15 stages. The seven coupled valve and chamber
+blocks still perform their numerical solves.
+
+The comparison used the same checked DAE, 60 Hz communication points,
+1/180 s configured integration step, RK solver and `1e-6` tolerances. The
+baseline production Twin supplied all ten inputs at each of 1,440 consecutive
+steps from mission start through 24 s. Replaying that capture with the old
+release solver reproduced the previous full observation-stream SHA-256.
+Both solver versions took 2,711 internal steps during flight and 176 in the
+settled window.
+
+| Recorded descent work | Previous | Updated |
+|---|---:|---:|
+| Single-row projection calls, first 1,352 steps | 127,105,016 | 0 |
+| Single-row projection calls, final 88 steps | 5,686,320 | 0 |
+| Coupled-block calls, first 1,352 steps | 1,375,094 | 473,816 |
+| Coupled-block calls, final 88 steps | 56,287 | 29,071 |
+
+All 4,744,800 sampled binary64 values were numerically equal. Exactly 20,566
+zero values across 91 channels changed sign bit. Every nonzero value was
+bit-identical. A separate 24 s test exercised a throttle ramp, an engine
+shutdown and restart, RCS consumption and commanded cutoff. All values
+matched there too, with 91 signed-zero differences at the first step. Both
+tests included every public observation and retained the authored plume
+photometry and transport, wall thermal dynamics, tank depletion and thrust.
+
+The full Rumoca evaluator suite passed all 620 tests. The production Rhai
+engine-out, fuel-exhaustion and oxidizer-exhaustion scenarios passed at ticks
+242, 213 and 125, matching the previous solver.

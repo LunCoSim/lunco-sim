@@ -2,7 +2,7 @@
 
 ## Current owner contract
 
-The workspace pins Rumoca `0eb1c376d76230e8949efb7fdcaeefb15ec1d13f` in the official LunCoSim fork. That
+The workspace pins Rumoca `2a3716da596e18598e21a3683b1ff6d13ee650a0` in the official LunCoSim fork. That
 revision exposes Rumoca's parsed `StoredDefinition`, `Name`, and class queries,
 but it does not expose `compile::source_root_dependencies`.
 `lunco-modelica-ast::source_dependencies::required_source_roots` is the single
