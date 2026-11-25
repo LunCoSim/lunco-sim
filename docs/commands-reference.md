@@ -4977,7 +4977,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 339 commands from the runtime schema; scanned 1120 .rs files for docs (0 parse failure(s) skipped).
+<!-- 339 commands from the runtime schema; scanned 1119 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
      (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->
