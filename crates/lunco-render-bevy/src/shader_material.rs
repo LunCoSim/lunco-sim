@@ -19,7 +19,7 @@
 //! each object pick its own `.wesl`, we:
 //! 1. Store the per-object `Handle<Shader>` in the material (loaded from an
 //!    **asset path**, so editing the `.wesl` on disk hot-reloads).
-//! 2. Carry that handle into the pipeline key via `#[bind_group_data]`
+//! 2. Carry that handle into the pipeline key via `bind_group_data`
 //!    (`Handle<Shader>` is `Clone + Eq + Hash` — all a plain `Material` key needs;
 //!    `ExtendedMaterial` would additionally require `Copy`, which a handle isn't,
 //!    so we deliberately use a *plain* `Material`).
@@ -48,19 +48,31 @@
 //! @group(constants::MATERIAL_BIND_GROUP) @binding(1) var height_map: texture_2d<f32>;
 //! ```
 //! and optionally the pre-baked horizon shadow cache (filterable `R8Unorm`,
-//! sampled with `textureSampleLevel`):
+//! sampled with `textureSampleLevel` using the shadow sampler):
 //! ```wgsl
 //! @group(constants::MATERIAL_BIND_GROUP) @binding(10) var shadow_cache: texture_2d<f32>;
-//! @group(constants::MATERIAL_BIND_GROUP) @binding(11) var shadow_cache_sampler: sampler;
+//! @group(constants::MATERIAL_BIND_GROUP) @binding(11) var shadow_sampler: sampler;
 //! ```
+//! Raster, detail, globe and shadow samplers use bindings 3, 18, 5 and 11.
+//! The renderer owns these four profiles independently of image assets.
 //! A plain `Material` is unlit by default; the `.wesl` returns its own colour
 //! (it may shade using `VertexOutput.world_normal` if it wants form).
 
+use bevy::ecs::system::{SystemParamItem, lifetimeless::SRes};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
 use bevy::prelude::*;
-use bevy::render::render_resource::{
-    AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+use bevy::render::{
+    render_asset::RenderAssets,
+    render_resource::{
+        AsBindGroup, AsBindGroupError, BindGroupBuilder, BindGroupLayout, BindGroupLayoutEntry,
+        BindingType, BufferBindingType, BufferInitDescriptor, BufferUsages,
+        RenderPipelineDescriptor, Sampler, SamplerBindingType, ShaderStages, ShaderType,
+        SpecializedMeshPipelineError, TextureSampleType, TextureViewDimension,
+        UnpreparedBindingResource,
+    },
+    renderer::RenderDevice,
+    texture::{FallbackImage, GpuImage},
 };
 use bevy::shader::{Shader, ShaderDefVal, ShaderRef, Source as ShaderSource};
 use std::collections::BTreeMap;
@@ -80,21 +92,18 @@ use lunco_materials::{
 /// No parameter names/ranges/defaults are hardcoded in Rust. A fresh material
 /// has an empty schema (packs all-zero) until the reflect system derives one
 /// from its shader source.
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-#[bind_group_data(ShaderKey)]
+#[derive(Asset, TypePath, Debug, Clone)]
 pub struct ShaderMaterial {
     /// Opaque uniform block (512 bytes). Its field layout is the *shader's* —
     /// each `.wesl` reinterprets these bytes through its own `Material`
     /// struct. Built from [`values`](Self::values) via
     /// [`schema`](Self::schema); never edit directly, use `set*`.
-    #[uniform(0)]
     pub raw: [Vec4; dyn_params::BLOCK_VEC4S],
     /// Terrain heightfield (R32Float world heights) for ray-marched sun
     /// shadows, written by `lunco-environment`'s horizon system. Sampled
     /// with `textureLoad` — R32Float is non-filterable in core WebGPU.
     /// `None` binds Bevy's neutral image binding; shaders that don't declare the
     /// binding are unaffected.
-    #[texture(1, sample_type = "float", filterable = false)]
     pub height_map: Option<Handle<Image>>,
     /// **Layer maps** (terrain layered pipeline, `terrain_layered.wesl`). All
     /// `Option` + filterable float; `None` binds Bevy's neutral image binding, and a
@@ -104,26 +113,18 @@ pub struct ShaderMaterial {
     ///
     /// Albedo/colour layer — a real raster (e.g. the NASA lunar colour mosaic
     /// downloaded via `Assets.toml`) blended over the procedural regolith.
-    #[texture(2)]
-    #[sampler(3)]
     pub albedo_map: Option<Handle<Image>>,
     /// Mineral/classification layer — a class-id or composition raster tinted
     /// through a palette LUT in the shader (also serves science-zone overlays).
-    #[texture(4)]
-    #[sampler(5)]
     pub mineral_map: Option<Handle<Image>>,
     /// Packed scalar data layers in one RGBA to stay under WebGPU binding
     /// limits: **R=roughness G=ambient-occlusion B=rock-density A=hazard**.
     /// Channel routing lives in the layer stack (`ChannelMap`).
-    #[texture(6)]
-    #[sampler(7)]
     pub surface_map: Option<Handle<Image>>,
     /// Object-local normal layer — perturbs the procedural bump normal after
     /// the consuming shader transforms it through the mesh instance. Typically
     /// DEM-local ENU and DEM-derived (Sobel). This slot does not imply a tangent
     /// basis or a global/render-world coordinate frame.
-    #[texture(8)]
-    #[sampler(9)]
     pub normal_map: Option<Handle<Image>>,
     /// **Horizon shadow cache** (terrain shaders, `lunco-environment`'s horizon
     /// system). A filterable `R8Unorm` texture whose texels carry the pre-baked
@@ -134,41 +135,24 @@ pub struct ShaderMaterial {
     /// instead of the configured march loop. `None` binds Bevy's neutral image binding;
     /// shaders that don't declare the binding are unaffected (same contract as
     /// `height_map` / the layer maps). Sampled by planar UV (`in.uv`).
-    #[texture(10)]
-    #[sampler(11)]
     pub shadow_cache: Option<Handle<Image>>,
     /// Site-local continuation albedo. The lunar-surface continuation shader
     /// uses this alongside the independent body-wide `albedo_map`.
-    #[texture(12)]
-    #[sampler(13)]
     pub continuation_albedo_map: Option<Handle<Image>>,
     /// Site-local packed roughness/AO data, independent of the body's ordinary
     /// `surface_map`.
-    #[texture(14)]
-    #[sampler(15)]
     pub continuation_surface_map: Option<Handle<Image>>,
     /// Sparse surface annotation records; no filtering or sampler.
-    #[texture(16, sample_type = "float", filterable = false)]
     pub surface_annotations: Option<Handle<Image>>,
     /// Optional repeatable surface detail, separate from georeferenced maps.
-    #[texture(17)]
-    #[sampler(18)]
     pub detail_albedo_map: Option<Handle<Image>>,
     /// Tangent-space normal detail at the authored material scale.
-    #[texture(19)]
-    #[sampler(20)]
     pub detail_normal_map: Option<Handle<Image>>,
     /// Detail scalars: R=roughness, G=ambient occlusion.
-    #[texture(21)]
-    #[sampler(22)]
     pub detail_surface_map: Option<Handle<Image>>,
     /// Authored displacement raster. Linear scalar values retain native precision.
-    #[texture(23)]
-    #[sampler(24)]
     pub displacement_map: Option<Handle<Image>>,
     /// Regional reflectance with coverage-premultiplied RGB and alpha mask.
-    #[texture(25)]
-    #[sampler(26)]
     pub regional_albedo_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
@@ -361,6 +345,227 @@ impl From<&ShaderMaterial> for ShaderKey {
     }
 }
 
+fn image_for_binding<'a>(
+    handle: Option<&Handle<Image>>,
+    images: &'a RenderAssets<GpuImage>,
+    fallback: &'a GpuImage,
+) -> Result<&'a GpuImage, AsBindGroupError> {
+    match handle {
+        Some(handle) => images.get(handle).ok_or(AsBindGroupError::RetryNextUpdate),
+        None => Ok(fallback),
+    }
+}
+
+fn validate_filterable_image(
+    image: &GpuImage,
+    binding: u32,
+    render_device: &RenderDevice,
+) -> Result<(), AsBindGroupError> {
+    let Some(sample_type) = image
+        .texture_descriptor
+        .format
+        .sample_type(None, Some(render_device.features()))
+    else {
+        return Err(AsBindGroupError::InvalidSamplerType(
+            binding,
+            "None".to_string(),
+            "[Float { filterable: true }]".to_string(),
+        ));
+    };
+    if !matches!(sample_type, TextureSampleType::Float { filterable: true }) {
+        return Err(AsBindGroupError::InvalidSamplerType(
+            binding,
+            format!("{sample_type:?}"),
+            "[Float { filterable: true }]".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+// One table supplies both the layout and the texture resources.
+macro_rules! material_textures {
+    ($visit:ident) => {
+        $visit! {
+            (1, height_map, false),
+            (2, albedo_map, true),
+            (4, mineral_map, true),
+            (6, surface_map, true),
+            (8, normal_map, true),
+            (10, shadow_cache, true),
+            (12, continuation_albedo_map, true),
+            (14, continuation_surface_map, true),
+            (16, surface_annotations, false),
+            (17, detail_albedo_map, true),
+            (19, detail_normal_map, true),
+            (21, detail_surface_map, true),
+            (23, displacement_map, true),
+            (25, regional_albedo_map, true),
+        }
+    };
+}
+
+// Binding, U repeat, V repeat, use configured raster anisotropy.
+const SAMPLER_PROFILES: [(u32, bool, bool, bool); 4] = [
+    (3, false, false, true),
+    (18, true, true, true),
+    (5, true, false, true),
+    (11, false, false, false),
+];
+
+#[derive(Resource, Clone, Copy)]
+pub struct ShaderSamplerQuality(u16);
+
+fn extract_sampler_quality(
+    mut commands: Commands,
+    settings: bevy::render::Extract<Res<lunco_render::RenderingQualitySettings>>,
+) {
+    if settings.is_changed() {
+        commands.insert_resource(ShaderSamplerQuality(
+            settings.terrain_derived_texture_anisotropy,
+        ));
+    }
+}
+
+fn invalidate_sampler_quality(
+    settings: Res<lunco_render::RenderingQualitySettings>,
+    mut last: Local<Option<u16>>,
+    mut materials: ResMut<Assets<ShaderMaterial>>,
+) {
+    let current = settings.terrain_derived_texture_anisotropy;
+    if last
+        .replace(current)
+        .is_some_and(|previous| previous != current)
+    {
+        // Iterating mutably queues Modified events for all materials.
+        materials.iter_mut().for_each(|_| {});
+    }
+}
+
+impl AsBindGroup for ShaderMaterial {
+    type Data = ShaderKey;
+    type Param = (
+        SRes<RenderAssets<GpuImage>>,
+        SRes<FallbackImage>,
+        SRes<ShaderSamplerQuality>,
+        Local<'static, BTreeMap<u16, [Sampler; 4]>>,
+    );
+
+    fn label() -> &'static str {
+        "ShaderMaterial"
+    }
+
+    fn build_bind_group(
+        &self,
+        _layout: &BindGroupLayout,
+        render_device: &RenderDevice,
+        (images, fallback, quality, samplers): &mut SystemParamItem<'_, '_, Self::Param>,
+        _force_no_bindless: bool,
+        output: &mut BindGroupBuilder,
+    ) -> Result<(), AsBindGroupError> {
+        macro_rules! bind_textures {
+            ($(($binding:literal, $field:ident, $filterable:literal),)*) => {
+                $(
+                    let image = image_for_binding(self.$field.as_ref(), images, &fallback.d2)?;
+                    if $filterable {
+                        validate_filterable_image(image, $binding, render_device)?;
+                    }
+                    output.binding_resources.push((
+                        $binding,
+                        UnpreparedBindingResource::TextureView(
+                            TextureViewDimension::D2,
+                            image.texture_view.clone(),
+                        ),
+                    ));
+                )*
+            };
+        }
+        material_textures!(bind_textures);
+        let profiles = samplers.entry(quality.0).or_insert_with(|| {
+            SAMPLER_PROFILES.map(|(_, repeat_u, repeat_v, anisotropic)| {
+                use bevy::image::{ImageAddressMode, ImageSamplerDescriptor};
+                let mut descriptor = ImageSamplerDescriptor::linear();
+                if repeat_u {
+                    descriptor.address_mode_u = ImageAddressMode::Repeat;
+                }
+                if repeat_v {
+                    descriptor.address_mode_v = ImageAddressMode::Repeat;
+                }
+                if anisotropic {
+                    descriptor.set_anisotropic_filter(quality.0);
+                }
+                render_device.create_sampler(&descriptor.as_wgpu())
+            })
+        });
+        for ((binding, ..), sampler) in SAMPLER_PROFILES.iter().zip(profiles.iter()) {
+            output.binding_resources.push((
+                *binding,
+                UnpreparedBindingResource::Sampler(SamplerBindingType::Filtering, sampler.clone()),
+            ));
+        }
+        let mut uniform = bevy::render::render_resource::encase::UniformBuffer::new(Vec::new());
+        uniform.write(&self.raw).unwrap();
+        output.binding_resources.push((
+            0,
+            UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(
+                &BufferInitDescriptor {
+                    label: None,
+                    usage: BufferUsages::UNIFORM,
+                    contents: uniform.as_ref(),
+                },
+            )),
+        ));
+        Ok(())
+    }
+
+    fn bind_group_data(&self) -> Self::Data {
+        ShaderKey::from(self)
+    }
+
+    fn bind_group_layout_entries(
+        _render_device: &RenderDevice,
+        _force_no_bindless: bool,
+    ) -> Vec<BindGroupLayoutEntry> {
+        let mut entries = vec![BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT | ShaderStages::COMPUTE,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: Some(<[Vec4; dyn_params::BLOCK_VEC4S] as ShaderType>::min_size()),
+            },
+            count: None,
+        }];
+        macro_rules! texture_layout {
+            ($(($binding:literal, $field:ident, $filterable:literal),)*) => {
+                $(
+                    entries.push(BindGroupLayoutEntry {
+                        binding: $binding,
+                        visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                        ty: BindingType::Texture {
+                            sample_type: TextureSampleType::Float { filterable: $filterable },
+                            view_dimension: TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    });
+                )*
+            };
+        }
+        material_textures!(texture_layout);
+        entries.extend(
+            SAMPLER_PROFILES
+                .iter()
+                .map(|(binding, ..)| BindGroupLayoutEntry {
+                    binding: *binding,
+                    visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                }),
+        );
+        entries
+    }
+}
+
 impl Material for ShaderMaterial {
     /// Bevy folds this into the material's pipeline properties, so a `Blend`
     /// material sorts back-to-front and stops writing depth without anything here
@@ -484,7 +689,17 @@ pub struct ShaderMaterialPlugin;
 
 impl Plugin for ShaderMaterialPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<lunco_render::RenderingQualitySettings>();
         app.add_plugins(MaterialPlugin::<ShaderMaterial>::default());
+        app.add_systems(
+            PostUpdate,
+            invalidate_sampler_quality
+                .before(bevy::asset::AssetEventSystems)
+                .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
+        );
+        if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+            render_app.add_systems(bevy::render::ExtractSchedule, extract_sampler_quality);
+        }
         app.init_resource::<ShaderSchemas>();
         app.init_resource::<crate::shader_look::ShaderSourceCache>();
         app.init_resource::<ShaderCatalog>();

@@ -44,8 +44,8 @@
 //! Such a look must opt out with [`ShaderLook::unshared`], which gives it a private
 //! material the binder mutates in place instead of re-keying.
 //!
-//! Twelve texture roles stay within the portable sampled-texture floor. The sparse
-//! annotation role is non-filtered and needs no sampler. Roles are optional:
+//! Fourteen texture roles share four renderer-owned sampling profiles. Height and
+//! sparse annotations use texture loads. Roles are optional:
 //! shaders that do not declare a binding ignore it (`None` binds Bevy's neutral
 //! image binding). The two continuation roles let a site shader retain the
 //! Moon-wide appearance maps while blending the cropped DEM's local maps.

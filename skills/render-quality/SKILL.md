@@ -53,7 +53,8 @@ disabled and restored. Report edge width and scalloping separately. Include
 a second camera opened after a cell crossing, an off-axis horizon handoff
 and a scoped fill beside the Sun. `test_directional_light_response.py`
 checks the fill’s independent native response. The `shadow_cache_sampling`
-graphics gate exercises the horizon handoff and finite-disc boundary.
+graphics gate exercises the horizon handoff, finite-disc boundary and all four
+custom material sampler addressing profiles.
 See [directional shadow reference frames](../../docs/architecture/render-decoupling.md#directional-shadow-reference-frames).
 For instrument shade, run the `terrain_solar_visibility` production scene gate.
 It checks available electrical power for DEM shade and a moving compound blocker.

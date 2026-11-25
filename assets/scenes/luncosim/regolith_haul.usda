@@ -39,6 +39,7 @@ def Xform "World" (
     )
     {
         custom rel material:binding = </World/Regolith>
+        custom rel material:binding:physics = </World/PhysicsMaterials/Friction_1_0>
     }
     def Xform "Works" (
         prepend references = @lunco://scenes/luncosim/crater_cup.usda@</World/Works>
@@ -48,6 +49,10 @@ def Xform "World" (
         custom double3 xformOp:rotateXYZ = (0.0, 0.0, 0.0)
         over "PackingLine"
         {
+            custom double inputs:received_kg = 0.0 (
+                doc = "This visual haul demonstration has keyframed loads rather than a mass-transfer source. The packing line processes its own initial hopper charge with no external feed."
+            )
+            double inputs:received_kg.connect = None
             over "Callsign" (
                 active = false
             )
