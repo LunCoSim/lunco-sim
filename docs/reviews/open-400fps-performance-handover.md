@@ -664,3 +664,29 @@ and its producer at 620. An extension should represent reads and writes of
 declaration runs in the ordering pass, preserve order within a run, and split
 it at a dependency boundary when necessary. Retain coupled-block and cycle
 semantics and compare accepted steps and the full observation stream again.
+
+The four sequential release replays ran on logical CPU 12. Each entry is a
+mean per 1/60-second communication step in milliseconds. Full step includes
+input admission, integration and reading all observations.
+
+| Run order | Flight integration | Flight full step | Settled integration | Settled full step | Host load average, start to end |
+|---|---:|---:|---:|---:|---:|
+| Prior pin, first | 48.47 | 66.14 | 22.79 | 25.73 | 42.61 to 19.01 |
+| Upstream merge, first | 26.25 | 32.73 | 15.39 | 16.98 | 19.01 to 10.15 |
+| Upstream merge, second | 22.67 | 27.90 | 15.38 | 17.10 | 10.15 to 6.24 |
+| Prior pin, second | 24.43 | 30.36 | 15.97 | 17.64 | 6.24 to 3.77 |
+
+The last two runs give the closer comparison under lower host load. In every
+run the ordered observation stream had SHA-256
+`f9b17c3d55fba129cb4848af93776d569b3c75ec2f2d834b034cfb16bee89d9b`.
+The production engine-out, fuel-exhaustion and oxidizer-exhaustion scenes
+passed at ticks 242, 213 and 125 respectively.
+
+The updated 1600×1000 High, private-Wayland mission reached landing handoff.
+It averaged 49.41 application FPS, 15.83 authoritative ticks/s and 45.11 ms
+per settled MainPropulsion worker step. Other simulator activity consumed
+72.86 sampled CPU-seconds in the measured window. The earlier qualified
+baseline averaged 77.11 FPS and 26.13 ticks/s with 2.7 other-simulator
+CPU-seconds. The fresh headful baseline lost its build and capture directory
+after scene readiness. The different contention levels prevent attributing
+the frame-rate difference to Rumoca.
