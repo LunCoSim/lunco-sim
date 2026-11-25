@@ -2141,22 +2141,26 @@ shared AST and exact diagnostics through the FIFO. Its per-update budget covers
 installation, but one large index can still exceed the budget. Attribute that
 remaining tail before changing the index preparation boundary.
 For physics telemetry, `physics_telemetry_source_retention` separates registry
-retention from kinematics/contact collection and marks metadata discovery with
-`metadata_dirty`. Compare first discovery with settled sampling before changing
-the owner or its cadence.
-`physics_telemetry_channel_metadata` covers first or changed descriptions;
-`signal_scalar_channel_create` covers initial history/map publication, and
-`signal_scalar_history_tail_growth` identifies appends that need tail capacity
-after bounded eviction. The signal registry owns metadata values, and the
-physics producer retains a publication flag. Full history chunks take ownership
-of the existing tail allocation. Count growth spans nested on the same
-thread within each retention call. Report the largest group, its cumulative
-allocation time, and the producer's wall time. Include first publication and
-at least two chunk boundaries when comparing synchronous recorders. Registry
-slots spread chunk openings across recording ticks. Compare ordered samples,
-retention depth, resizing, and snapshots held through eviction.
-Enable these diagnostic spans with
-`RUST_LOG=info,lunco_modelica_core=debug,lunco_usd_sim_telemetry=debug,lunco_signal=debug`; they are
+retention from kinematics/contact collection. Compare first discovery and
+settled fixed-tick batches separately. `physics_telemetry_channel_metadata`
+covers new or changed descriptions; `signal_scalar_history_tail_growth`
+identifies appends that grow the bounded open tail. All hot span names are
+stable, without entity IDs, channel counts or capacities as span fields.
+The physics producer uses a static dense channel inventory, a reusable numeric
+sample buffer and retained registry recording bindings; settled writes do not
+resolve names, duplicate metadata or activate catalog entries. Refused channels
+retry only after capacity/membership changes. The shared history owns samples,
+including page allocations, immutable sealed chunks and retention. Keep exact
+fixed-tick timestamps, source values, sample rate and history semantics; do not
+spread one synchronized batch across presentation frames. Include first
+publication and at least two chunk boundaries when comparing synchronous
+recorders. Compare ordered samples, resizing and snapshots held through eviction.
+The ignored `settled_retention_benchmark` reports a digest of the complete
+retained histories, and `telemetry_recording_history.rhai` qualifies the live
+production recorder and missing-channel rejection. Supply `rate_hz`,
+`physics_name`, `physics_unit`, and `modelica_name` for steady channels in the
+actual admitted fixture. Enable the diagnostic spans
+with `RUST_LOG=info,lunco_usd_sim_telemetry=debug,lunco_signal=debug`; they are
 disabled by the ordinary info-level filter.
 
 When `system_commands` dominates after a producer, inspect the number and shape

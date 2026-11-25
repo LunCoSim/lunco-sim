@@ -1,4 +1,5 @@
 // Test-only observation of the production physics and Modelica recorders.
+// The caller supplies steady channel names, physics unit and configured rate.
 
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
@@ -31,7 +32,13 @@ fn verify_recorded_history(channel, history, label, rate) {
 
 fn on_start(me, ctx) {
     if ctx.rate_hz == () || ctx.rate_hz <= 0.0 { throw "the configured recording rate is required"; }
+    if ctx.physics_name == () || ctx.physics_unit == () || ctx.modelica_name == () {
+        throw "steady physics/modelica channel names and physics unit are required";
+    }
     this.rate = ctx.rate_hz;
+    this.physics_name = ctx.physics_name;
+    this.physics_unit = ctx.physics_unit;
+    this.modelica_name = ctx.modelica_name;
     this.done = false;
     this.attempts = 0;
 }
@@ -40,15 +47,14 @@ fn on_tick(me, ctx) {
     if this.done { return; }
     this.attempts += 1;
     if this.attempts % 20 != 0 { return; }
-    // The sandbox's physics masses and vacuum-balloon density are steady.
     // Exact channel discovery keeps the observer's input bounded.
-    let channels = query("ListTelemetryChannels", #{name: "mass"}).channels;
-    channels.append(query("ListTelemetryChannels", #{name: "airDensity"}).channels);
+    let channels = query("ListTelemetryChannels", #{name: this.physics_name}).channels;
+    channels.append(query("ListTelemetryChannels", #{name: this.modelica_name}).channels);
     let selected = #{};
     for channel in channels {
         let label = "";
-        if channel.name == "mass" { label = "physics"; }
-        if channel.model_class != () && channel.model_class != "" { label = "Modelica"; }
+        if channel.name == this.physics_name && channel.provenance == "avian" { label = "physics"; }
+        if channel.name == this.modelica_name && channel.model_class != () && channel.model_class != "" { label = "Modelica"; }
         if label != "" && !selected.contains(label) && channel.samples.to_float() >= 3.0 {
             let history = query("QueryTelemetryHistory", #{key: channel.key, limit: 10});
             if history_is_flat(history.samples) { selected[label] = #{channel: channel, history: history}; }
@@ -64,11 +70,11 @@ fn on_tick(me, ctx) {
             let item = selected[label];
             checks.append(verify_recorded_history(item.channel, item.history, label, this.rate));
             if label == "physics" {
-                checks.push(t_true(item.channel.unit == "kg" && item.channel.provenance == "avian",
-                    "physics mass keeps its owner metadata"));
+                checks.push(t_true(item.channel.unit == this.physics_unit && item.channel.provenance == "avian",
+                    "physics channel keeps its owner metadata"));
                 checks.push(t_true(item.channel.group_path != () && item.channel.group_path != "" &&
                                    item.channel.description != () && item.channel.description != "",
-                    "physics mass keeps its USD group and description"));
+                    "physics channel keeps its USD group and description"));
             }
             if label == "Modelica" {
                 checks.push(t_true(item.channel.provenance == "modelica" &&

@@ -402,12 +402,7 @@ impl ScalarHistory {
             SCALAR_HISTORY_CHUNK_SIZE
         };
         if self.tail.len() == self.tail.capacity() {
-            let _span = bevy::log::debug_span!(
-                "signal_scalar_history_tail_growth",
-                retained = self.len,
-                tail_capacity = self.tail.capacity()
-            )
-            .entered();
+            let _span = bevy::log::debug_span!("signal_scalar_history_tail_growth").entered();
             let mut allocation = chunk_size.min(self.capacity);
             if self.first_chunk_open {
                 // Start sparse histories small. Growing toward this slot's
@@ -704,6 +699,27 @@ impl SignalRegistry {
         Ok(())
     }
 
+    /// Apply the canonical rate and backward-time policy before appending.
+    fn sample_due(history: &mut ScalarHistory, sample: ScalarSample, rate_hz: Option<f64>) -> bool {
+        if let (Some(rate), Some(previous)) = (rate_hz, history.back()) {
+            if sample.time < previous.time {
+                history.clear();
+            } else if sample.time - previous.time < 1.0 / rate {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn append_history(history: &mut ScalarHistory, sample: ScalarSample, capacity: Option<usize>) {
+        if let Some(capacity) = capacity
+            && history.capacity != capacity.max(1)
+        {
+            history.set_capacity(capacity);
+        }
+        history.push(sample);
+    }
+
     fn append_scalar(
         &mut self,
         index: usize,
@@ -716,25 +732,16 @@ impl SignalRegistry {
         if let Some(history) = self.entries[index]
             .as_mut()
             .and_then(|entry| entry.history.as_mut())
-            && let (Some(rate), Some(previous)) = (rate_hz, history.back())
+            && !Self::sample_due(history, sample, rate_hz)
         {
-            if sample.time < previous.time {
-                history.clear();
-            } else if sample.time - previous.time < 1.0 / rate {
-                return false;
-            }
+            return false;
         }
         self.activate_scalar(index, capacity.unwrap_or_else(|| self.capacity_default()));
         let history = self.entries[index]
             .as_mut()
             .and_then(|entry| entry.history.as_mut())
             .expect("active scalar recorder");
-        if let Some(capacity) = capacity
-            && history.capacity != capacity.max(1)
-        {
-            history.set_capacity(capacity);
-        }
-        history.push(sample);
+        Self::append_history(history, sample, capacity);
         true
     }
 
@@ -749,18 +756,24 @@ impl SignalRegistry {
         rate_hz: f64,
         capacity: usize,
     ) -> Result<bool, &'static str> {
-        if !self.recording_is_current(binding) {
-            return Err("scalar recording binding is stale or belongs to another registry");
-        }
+        // Validate the exact lease and borrow the already-admitted history in
+        // one access. The streaming path never repeats catalog activation.
+        let history = self
+            .entries
+            .get_mut(binding.index)
+            .and_then(Option::as_mut)
+            .filter(|entry| entry.active && Arc::ptr_eq(&entry.lease, &binding.lease))
+            .and_then(|entry| entry.history.as_mut())
+            .ok_or("scalar recording binding is stale or belongs to another registry")?;
         if !time.is_finite() || !value.is_finite() || !rate_hz.is_finite() || rate_hz <= 0.0 {
             return Ok(false);
         }
-        Ok(self.append_scalar(
-            binding.index,
-            ScalarSample { time, value },
-            Some(capacity),
-            Some(rate_hz),
-        ))
+        let sample = ScalarSample { time, value };
+        if !Self::sample_due(history, sample, Some(rate_hz)) {
+            return Ok(false);
+        }
+        Self::append_history(history, sample, Some(capacity));
+        Ok(true)
     }
 
     /// Named admission for one-shot producers. Streaming producers retain a

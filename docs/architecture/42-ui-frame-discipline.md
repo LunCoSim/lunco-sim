@@ -469,9 +469,16 @@ The same rule applies below the UI boundary. The Modelica engine-sync pass is
 woken by the document registry revision and still compares document generations
 before dispatching work. Modelica and physics telemetry retain producer-owned
 model/fixed-time cursors while the shared signal registry remains the channel
-authority. Physics telemetry keeps static presentation labels borrowed while
-sampling and constructs owned signal metadata only when a channel is new or its
-metadata is dirty. Autopilot target paths are cached per behavior entity and
+authority. Physics telemetry extracts body components in one ECS query and
+uses compact, dense channel IDs with one static descriptor inventory. Each live
+source retains checked recording bindings indexed by those IDs; name resolution
+and owned metadata publication happen only on admission, owner or group changes.
+Capacity refusals wake on the registry membership revision or a cap change.
+The reusable sample buffer and registry history append preserve the same fixed
+sample time, values, order, rate and retention without scheduling work on render
+frames. Bound append validates the exact lease and writes directly into the
+admitted history, without catalog activation. History chunks own their allocation
+and snapshots share sealed chunks. Autopilot target paths are cached per behavior entity and
 invalidated by authored XML or active-frame ancestry changes. Celestial terrain
 curvature is reconciled only when its authoritative inputs change. Globe LOD
 caches the pure desired leaf selection separately from readiness and bounded

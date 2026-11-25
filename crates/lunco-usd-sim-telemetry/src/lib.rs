@@ -16,11 +16,12 @@ use lunco_core::{AppSceneExt, GlobalEntityId, SceneResource};
 use lunco_core_runtime::SimTick;
 use lunco_mobility::{Suspension, WheelRaycast};
 use lunco_physics::kinematics::SolvedBodyAcceleration;
-use lunco_signal::{SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource};
+use lunco_signal::{
+    ScalarRecordingBinding, SignalMeta, SignalPresentation, SignalRef, SignalRegistry, SignalSource,
+};
 use lunco_telemetry::TelemetrySettings;
 use lunco_time::MissionClock;
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{HashMap, HashSet};
 
 use lunco_usd_bevy_scene::UsdPrimPath;
 
@@ -51,8 +52,7 @@ pub struct PhysicsTelemetryState {
     next_sample_time: Option<f64>,
     last_sample_time: Option<f64>,
     sample_rate_hz: Option<f64>,
-    metadata: HashMap<(Entity, PhysicsSignalName), CachedPhysicsSignal>,
-    metadata_group_paths: HashMap<Entity, String>,
+    sources: HashMap<Entity, SourceRecorders>,
 }
 
 impl SceneResource for PhysicsTelemetryState {}
@@ -86,11 +86,6 @@ fn retain_physics_telemetry(
             Option<&GlobalEntityId>,
             Option<&SignalSource>,
             Option<&SolvedBodyAcceleration>,
-        ),
-        With<RigidBody>,
-    >,
-    body_state: Query<
-        (
             Option<&Position>,
             Option<&Rotation>,
             Option<&ComputedMass>,
@@ -115,8 +110,7 @@ fn retain_physics_telemetry(
         state.next_sample_time = None;
         state.last_sample_time = None;
         state.sample_rate_hz = None;
-        state.metadata.clear();
-        state.metadata_group_paths.clear();
+        state.sources.clear();
         return;
     };
     if !settings.enabled || !settings.default_rate_hz.is_finite() || settings.default_rate_hz <= 0.0
@@ -124,16 +118,14 @@ fn retain_physics_telemetry(
         state.next_sample_time = None;
         state.last_sample_time = None;
         state.sample_rate_hz = None;
-        state.metadata.clear();
-        state.metadata_group_paths.clear();
+        state.sources.clear();
         return;
     }
     let Some(signals) = signals.as_deref_mut() else {
         state.next_sample_time = None;
         state.last_sample_time = None;
         state.sample_rate_hz = None;
-        state.metadata.clear();
-        state.metadata_group_paths.clear();
+        state.sources.clear();
         return;
     };
 
@@ -157,8 +149,7 @@ fn retain_physics_telemetry(
         if sources.contains(entity) {
             return;
         }
-        state.metadata_group_paths.remove(&entity);
-        state.metadata.retain(|(source, _), _| *source != entity);
+        state.sources.remove(&entity);
     };
     for entity in removed_bodies.read() {
         retire(entity);
@@ -191,11 +182,29 @@ fn retain_physics_telemetry(
     // pass without walking every retained history.
     let mut channel_count = signals.scalar_count();
 
-    for (entity, prim, linear, angular, global_owner, signal_source, acceleration) in &bodies {
+    for (
+        entity,
+        prim,
+        linear,
+        angular,
+        global_owner,
+        signal_source,
+        acceleration,
+        position,
+        rotation,
+        mass,
+        center_of_mass,
+        inertia,
+        colliders,
+    ) in &bodies
+    {
         let metadata_dirty = state
-            .metadata_group_paths
+            .sources
             .get(&entity)
-            .is_none_or(|path| path != &prim.path);
+            .is_none_or(|source| source.group_path != prim.path);
+        if !sample_due && !metadata_dirty {
+            continue;
+        }
         let linear_velocity = linear.map(|value| value.0.as_dvec3());
         let angular_velocity = angular.map(|value| value.0.as_dvec3());
         if linear_velocity.is_some_and(|value| !value.is_finite())
@@ -204,96 +213,50 @@ fn retain_physics_telemetry(
             continue;
         }
 
-        if !sample_due && !metadata_dirty {
-            continue;
-        }
-
-        if metadata_dirty {
-            state.metadata_group_paths.insert(entity, prim.path.clone());
-        }
-
-        let Ok((position, rotation, mass, center_of_mass, inertia, colliders)) =
-            body_state.get(entity)
-        else {
-            continue;
-        };
-
         let samples = &mut *sample_buffer;
         samples.clear();
         if let Some(linear_velocity) = linear_velocity {
-            samples.extend(vector_channels(
-                "linear_velocity",
-                linear_velocity,
-                "m/s",
-                "World-frame linear-velocity component.",
-            ));
-            samples.push(PhysicsSample::summary(
-                "linear_speed",
-                "linear_velocity",
-                "speed",
-                "magnitude",
+            samples.extend(vector_channels(LINEAR_VELOCITY, linear_velocity));
+            samples.push(PhysicsSample::new(
+                PhysicsChannel::LinearSpeed,
                 linear_velocity.length(),
-                "m/s",
-                "Magnitude of world-frame linear velocity.",
             ));
         }
         if let Some(angular_velocity) = angular_velocity {
-            samples.extend(vector_channels(
-                "angular_velocity",
-                angular_velocity,
-                "rad/s",
-                "World-frame angular-rate component.",
-            ));
-            samples.push(PhysicsSample::summary(
-                "angular_speed",
-                "angular_velocity",
-                "speed",
-                "magnitude",
+            samples.extend(vector_channels(ANGULAR_VELOCITY, angular_velocity));
+            samples.push(PhysicsSample::new(
+                PhysicsChannel::AngularSpeed,
                 angular_velocity.length(),
-                "rad/s",
-                "Magnitude of world-frame angular velocity.",
             ));
         }
 
         // Physics owns the interval, including constraints and contacts.
         // Telemetry retains the completed result at its own configured rate.
         if let Some(acceleration) = acceleration.filter(|s| s.valid && s.tick == Some(tick.0)) {
-            for (name, vector, unit, description) in [
+            for (channels, magnitude, vector) in [
                 (
-                    "linear_acceleration",
+                    LINEAR_ACCELERATION,
+                    PhysicsChannel::LinearAcceleration,
                     acceleration.linear_world,
-                    "m/s^2",
-                    "Net acceleration of the body's centre of mass in the physics frame.",
                 ),
                 (
-                    "angular_acceleration",
+                    ANGULAR_ACCELERATION,
+                    PhysicsChannel::AngularAcceleration,
                     acceleration.angular_world,
-                    "rad/s^2",
-                    "Angular acceleration in the physics frame.",
                 ),
             ] {
-                samples.extend(vector_channels(name, vector, unit, description));
-                samples.push(PhysicsSample::summary(
-                    name,
-                    name,
-                    "magnitude",
-                    "magnitude",
-                    vector.length(),
-                    unit,
-                    description,
-                ));
+                samples.extend(vector_channels(channels, vector));
+                samples.push(PhysicsSample::new(magnitude, vector.length()));
             }
             if let Some(force) = acceleration.specific_force_world {
-                samples.extend(vector_channels(
-                    "specific_force",
-                    force,
-                    "m/s^2",
-                    "Centre-of-mass acceleration minus gravitational acceleration, physics frame.",
+                samples.extend(vector_channels(SPECIFIC_FORCE, force));
+                samples.push(PhysicsSample::new(
+                    PhysicsChannel::SpecificForce,
+                    force.length(),
                 ));
-                samples.push(PhysicsSample::summary("specific_force", "specific_force", "magnitude", "magnitude", force.length(), "m/s^2", "Accelerometer magnitude |a - g| at the centre of mass. Zero in ideal free fall; support load while parked."));
             }
             if let Some(force) = acceleration.specific_force_body {
-                samples.extend(vector_channels("specific_force_body", force, "m/s^2", "Centre-of-mass acceleration minus gravity, expressed in the completed body frame."));
+                samples.extend(vector_channels(SPECIFIC_FORCE_BODY, force));
             }
         }
 
@@ -301,148 +264,45 @@ fn retain_physics_telemetry(
             .map(|value| value.0)
             .filter(|value| value.is_finite())
         {
-            samples.extend(explicit_vector_channels(
-                position,
-                "m",
-                "Physics-frame position component.",
-                "position",
-            ));
+            samples.extend(vector_channels(POSITION, position));
         }
         if let Some(rotation) = rotation
             .map(|value| value.0.as_dquat())
             .filter(|value| value.is_finite())
         {
             samples.extend([
-                PhysicsSample::named_component(
-                    "orientation.quat.x",
-                    "orientation",
-                    "quaternion x",
-                    rotation.x,
-                    "1",
-                    "Physics-body orientation quaternion x component.",
-                ),
-                PhysicsSample::named_component(
-                    "orientation.quat.y",
-                    "orientation",
-                    "quaternion y",
-                    rotation.y,
-                    "1",
-                    "Physics-body orientation quaternion y component.",
-                ),
-                PhysicsSample::named_component(
-                    "orientation.quat.z",
-                    "orientation",
-                    "quaternion z",
-                    rotation.z,
-                    "1",
-                    "Physics-body orientation quaternion z component.",
-                ),
-                PhysicsSample::named_component(
-                    "orientation.quat.w",
-                    "orientation",
-                    "quaternion w",
-                    rotation.w,
-                    "1",
-                    "Physics-body orientation quaternion w component.",
-                ),
+                PhysicsSample::new(PhysicsChannel::OrientationQuatX, rotation.x),
+                PhysicsSample::new(PhysicsChannel::OrientationQuatY, rotation.y),
+                PhysicsSample::new(PhysicsChannel::OrientationQuatZ, rotation.z),
+                PhysicsSample::new(PhysicsChannel::OrientationQuatW, rotation.w),
             ]);
             let (yaw, pitch, roll) = rotation.to_euler(bevy::math::EulerRot::YXZ);
             samples.extend([
-                PhysicsSample::named_component(
-                    "yaw",
-                    "orientation",
-                    "yaw",
-                    yaw,
-                    "rad",
-                    "Physics-body yaw about the world-up axis.",
-                ),
-                PhysicsSample::named_component(
-                    "pitch",
-                    "orientation",
-                    "pitch",
-                    pitch,
-                    "rad",
-                    "Physics-body pitch in the YXZ attitude convention.",
-                ),
-                PhysicsSample::named_component(
-                    "roll",
-                    "orientation",
-                    "roll",
-                    roll,
-                    "rad",
-                    "Physics-body roll in the YXZ attitude convention.",
-                ),
+                PhysicsSample::new(PhysicsChannel::Yaw, yaw),
+                PhysicsSample::new(PhysicsChannel::Pitch, pitch),
+                PhysicsSample::new(PhysicsChannel::Roll, roll),
             ]);
         }
         if let Some(mass) = mass.filter(|value| value.is_finite()) {
-            samples.push(PhysicsSample::scalar(
-                "mass",
+            samples.push(PhysicsSample::new(
+                PhysicsChannel::Mass,
                 f64::from(mass.value()),
-                "kg",
-                "Computed rigid-body mass including admitted colliders.",
             ));
         }
         if let Some(center_of_mass) = center_of_mass
             .map(|value| value.0.as_dvec3())
             .filter(|value| value.is_finite())
         {
-            samples.extend(explicit_vector_channels(
-                center_of_mass,
-                "m",
-                "Computed body-local center-of-mass component.",
-                "center_of_mass",
-            ));
+            samples.extend(vector_channels(CENTER_OF_MASS, center_of_mass));
         }
         if let Some(inertia) = inertia.map(|value| value.value()) {
             samples.extend([
-                PhysicsSample::named_component(
-                    "inertia.xx",
-                    "inertia",
-                    "xx",
-                    f64::from(inertia.m00),
-                    "kg.m^2",
-                    "Computed body-local angular-inertia tensor diagonal.",
-                ),
-                PhysicsSample::named_component(
-                    "inertia.xy",
-                    "inertia",
-                    "xy",
-                    f64::from(inertia.m01),
-                    "kg.m^2",
-                    "Computed body-local angular-inertia tensor component.",
-                ),
-                PhysicsSample::named_component(
-                    "inertia.xz",
-                    "inertia",
-                    "xz",
-                    f64::from(inertia.m02),
-                    "kg.m^2",
-                    "Computed body-local angular-inertia tensor component.",
-                ),
-                PhysicsSample::named_component(
-                    "inertia.yy",
-                    "inertia",
-                    "yy",
-                    f64::from(inertia.m11),
-                    "kg.m^2",
-                    "Computed body-local angular-inertia tensor diagonal.",
-                ),
-                PhysicsSample::named_component(
-                    "inertia.yz",
-                    "inertia",
-                    "yz",
-                    f64::from(inertia.m12),
-                    "kg.m^2",
-                    "Computed body-local angular-inertia tensor component.",
-                ),
-                PhysicsSample::named_component(
-                    "inertia.zz",
-                    "inertia",
-                    "zz",
-                    f64::from(inertia.m22),
-                    "kg.m^2",
-                    "Computed body-local angular-inertia tensor diagonal.",
-                ),
+                PhysicsSample::new(PhysicsChannel::InertiaXx, f64::from(inertia.m00)),
+                PhysicsSample::new(PhysicsChannel::InertiaXy, f64::from(inertia.m01)),
+                PhysicsSample::new(PhysicsChannel::InertiaXz, f64::from(inertia.m02)),
+                PhysicsSample::new(PhysicsChannel::InertiaYy, f64::from(inertia.m11)),
+                PhysicsSample::new(PhysicsChannel::InertiaYz, f64::from(inertia.m12)),
+                PhysicsSample::new(PhysicsChannel::InertiaZz, f64::from(inertia.m22)),
             ]);
         }
         if let Some(graph) = contact_graph
@@ -454,18 +314,8 @@ fn retain_physics_telemetry(
                 colliders.into_iter().flat_map(|colliders| colliders.iter()),
             );
             samples.extend([
-                PhysicsSample::scalar(
-                    "contact",
-                    contact as u8 as f64,
-                    "1",
-                    "Whether this collider is touching a physical contact pair.",
-                ),
-                PhysicsSample::scalar(
-                    "contact_force",
-                    contact_force,
-                    "N",
-                    "Normal contact force derived from the live Avian contact impulse.",
-                ),
+                PhysicsSample::new(PhysicsChannel::Contact, contact as u8 as f64),
+                PhysicsSample::new(PhysicsChannel::ContactForce, contact_force),
             ]);
         }
 
@@ -478,8 +328,7 @@ fn retain_physics_telemetry(
             time,
             samples.drain(..),
             &mut channel_count,
-            &mut state.metadata,
-            metadata_dirty,
+            &mut state.sources,
         ) && signal_source.is_none()
             && queued_signal_sources.insert(entity)
         {
@@ -489,56 +338,35 @@ fn retain_physics_telemetry(
 
     for (entity, prim, wheel, suspension, hits, global_owner, signal_source) in &wheels {
         let metadata_dirty = state
-            .metadata_group_paths
+            .sources
             .get(&entity)
-            .is_none_or(|path| path != &prim.path);
+            .is_none_or(|source| source.group_path != prim.path);
         if !sample_due && !metadata_dirty {
             continue;
-        }
-        if metadata_dirty {
-            state.metadata_group_paths.insert(entity, prim.path.clone());
         }
         let contact = hits
             .iter_sorted()
             .find(|hit| hit.normal.is_finite() && hit.normal.length_squared() > 1.0e-12);
         let distance = contact.map_or(suspension.rest_length, |hit| f64::from(hit.distance));
         let samples = [
-            PhysicsSample::scalar(
-                "suspension.compression",
+            PhysicsSample::new(
+                PhysicsChannel::SuspensionCompression,
                 (suspension.rest_length - distance).max(0.0),
-                "m",
-                "Raycast suspension compression from the live support hit.",
             ),
-            PhysicsSample::scalar(
-                "suspension.ground_distance",
-                distance,
-                "m",
-                "Distance from the authored suspension ray origin to the live support hit.",
-            ),
-            PhysicsSample::scalar(
-                "suspension.normal_force",
+            PhysicsSample::new(PhysicsChannel::SuspensionGroundDistance, distance),
+            PhysicsSample::new(
+                PhysicsChannel::SuspensionNormalForce,
                 wheel.last_normal_force,
-                "N",
-                "Suspension normal force applied during the last physics tick.",
             ),
-            PhysicsSample::scalar(
-                "suspension.contact",
+            PhysicsSample::new(
+                PhysicsChannel::SuspensionContact,
                 contact.is_some() as u8 as f64,
-                "1",
-                "Whether the suspension ray has a valid non-degenerate support hit.",
             ),
-            PhysicsSample::scalar(
-                "wheel.axle_angular_velocity",
+            PhysicsSample::new(
+                PhysicsChannel::WheelAxleAngularVelocity,
                 wheel.axle_angular_velocity(),
-                "rad/s",
-                "Signed wheel axle angular velocity from the mobility model.",
             ),
-            PhysicsSample::scalar(
-                "wheel.surface_speed",
-                wheel.surface_speed(),
-                "m/s",
-                "Wheel contact-patch speed implied by axle angular velocity.",
-            ),
+            PhysicsSample::new(PhysicsChannel::WheelSurfaceSpeed, wheel.surface_speed()),
         ];
         if retain_samples(
             signals,
@@ -549,8 +377,7 @@ fn retain_physics_telemetry(
             time,
             samples,
             &mut channel_count,
-            &mut state.metadata,
-            metadata_dirty,
+            &mut state.sources,
         ) && signal_source.is_none()
             && queued_signal_sources.insert(entity)
         {
@@ -559,63 +386,148 @@ fn retain_physics_telemetry(
     }
 }
 
-fn explicit_vector_channels(
-    value: DVec3,
-    unit: &'static str,
-    description: &'static str,
-    group: &'static str,
-) -> [PhysicsSample; 3] {
-    [
-        PhysicsSample::component(group, "x", value.x, unit, description),
-        PhysicsSample::component(group, "y", value.y, unit, description),
-        PhysicsSample::component(group, "z", value.z, unit, description),
-    ]
+/// Authored signal names and presentation are fixed by the physics recorder.
+/// Numeric samples carry only a dense channel identity and an f64 value.
+macro_rules! physics_channels {
+    (vectors { $( $group:ident: [$x:ident, $y:ident, $z:ident] => ($path:literal, $unit:literal, $description:literal) ),* $(,)? }
+     scalars { $( $channel:ident => ($name:literal, $scalar_unit:literal, $scalar_description:literal, $presentation:expr) ),* $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(usize)]
+        enum PhysicsChannel { $($x, $y, $z,)* $($channel,)* }
+        $(const $group: [PhysicsChannel; 3] = [PhysicsChannel::$x, PhysicsChannel::$y, PhysicsChannel::$z];)*
+        impl PhysicsChannel {
+            const COUNT: usize = [$(Self::$x, Self::$y, Self::$z,)* $(Self::$channel,)*].len();
+            fn descriptor(self) -> PhysicsChannelDescriptor {
+                match self {
+                    $(Self::$x => PhysicsChannelDescriptor::component(concat!($path, ".x"), $path, "x", $unit, $description),
+                      Self::$y => PhysicsChannelDescriptor::component(concat!($path, ".y"), $path, "y", $unit, $description),
+                      Self::$z => PhysicsChannelDescriptor::component(concat!($path, ".z"), $path, "z", $unit, $description),)*
+                    $(Self::$channel => PhysicsChannelDescriptor { path: $name, unit: $scalar_unit, description: $scalar_description, presentation: $presentation },)*
+                }
+            }
+        }
+    };
 }
 
-fn vector_channels(
-    prefix: &'static str,
-    value: DVec3,
-    unit: &'static str,
-    description: &'static str,
-) -> [PhysicsSample; 3] {
-    explicit_vector_channels(value, unit, description, prefix)
+physics_channels! {
+    vectors {
+        LINEAR_VELOCITY: [LinearVelocityX, LinearVelocityY, LinearVelocityZ] => ("linear_velocity", "m/s", "World-frame linear-velocity component."),
+        ANGULAR_VELOCITY: [AngularVelocityX, AngularVelocityY, AngularVelocityZ] => ("angular_velocity", "rad/s", "World-frame angular-rate component."),
+        LINEAR_ACCELERATION: [LinearAccelerationX, LinearAccelerationY, LinearAccelerationZ] => ("linear_acceleration", "m/s^2", "Net acceleration of the body's centre of mass in the physics frame."),
+        ANGULAR_ACCELERATION: [AngularAccelerationX, AngularAccelerationY, AngularAccelerationZ] => ("angular_acceleration", "rad/s^2", "Net angular acceleration of the body in the physics frame."),
+        SPECIFIC_FORCE: [SpecificForceX, SpecificForceY, SpecificForceZ] => ("specific_force", "m/s^2", "Centre-of-mass acceleration minus gravitational acceleration, physics frame."),
+        SPECIFIC_FORCE_BODY: [SpecificForceBodyX, SpecificForceBodyY, SpecificForceBodyZ] => ("specific_force_body", "m/s^2", "Centre-of-mass acceleration minus gravity, expressed in the completed body frame."),
+        POSITION: [PositionX, PositionY, PositionZ] => ("position", "m", "Physics-frame position component."),
+        CENTER_OF_MASS: [CenterOfMassX, CenterOfMassY, CenterOfMassZ] => ("center_of_mass", "m", "Computed body-local center-of-mass component."),
+    }
+    scalars {
+        LinearSpeed => ("linear_speed", "m/s", "Magnitude of world-frame linear velocity.", PhysicsSamplePresentation::Summary { group: "linear_velocity", label: "speed", formula: "magnitude" }),
+        AngularSpeed => ("angular_speed", "rad/s", "Magnitude of world-frame angular velocity.", PhysicsSamplePresentation::Summary { group: "angular_velocity", label: "speed", formula: "magnitude" }),
+        SpecificForce => ("specific_force", "m/s^2", "Accelerometer magnitude |a - g| at the centre of mass. Zero in ideal free fall; support load while parked.", PhysicsSamplePresentation::Summary { group: "specific_force", label: "magnitude", formula: "magnitude" }),
+        OrientationQuatX => ("orientation.quat.x", "1", "Physics-body orientation quaternion x component.", PhysicsSamplePresentation::Component { group: "orientation", component: "quaternion x" }),
+        OrientationQuatY => ("orientation.quat.y", "1", "Physics-body orientation quaternion y component.", PhysicsSamplePresentation::Component { group: "orientation", component: "quaternion y" }),
+        OrientationQuatZ => ("orientation.quat.z", "1", "Physics-body orientation quaternion z component.", PhysicsSamplePresentation::Component { group: "orientation", component: "quaternion z" }),
+        OrientationQuatW => ("orientation.quat.w", "1", "Physics-body orientation quaternion w component.", PhysicsSamplePresentation::Component { group: "orientation", component: "quaternion w" }),
+        Yaw => ("yaw", "rad", "Physics-body yaw about the world-up axis.", PhysicsSamplePresentation::Component { group: "orientation", component: "yaw" }),
+        Pitch => ("pitch", "rad", "Physics-body pitch in the YXZ attitude convention.", PhysicsSamplePresentation::Component { group: "orientation", component: "pitch" }),
+        Roll => ("roll", "rad", "Physics-body roll in the YXZ attitude convention.", PhysicsSamplePresentation::Component { group: "orientation", component: "roll" }),
+        Mass => ("mass", "kg", "Computed rigid-body mass including admitted colliders.", PhysicsSamplePresentation::Scalar),
+        InertiaXx => ("inertia.xx", "kg.m^2", "Computed body-local angular-inertia tensor diagonal.", PhysicsSamplePresentation::Component { group: "inertia", component: "xx" }),
+        InertiaXy => ("inertia.xy", "kg.m^2", "Computed body-local angular-inertia tensor component.", PhysicsSamplePresentation::Component { group: "inertia", component: "xy" }),
+        InertiaXz => ("inertia.xz", "kg.m^2", "Computed body-local angular-inertia tensor component.", PhysicsSamplePresentation::Component { group: "inertia", component: "xz" }),
+        InertiaYy => ("inertia.yy", "kg.m^2", "Computed body-local angular-inertia tensor diagonal.", PhysicsSamplePresentation::Component { group: "inertia", component: "yy" }),
+        InertiaYz => ("inertia.yz", "kg.m^2", "Computed body-local angular-inertia tensor component.", PhysicsSamplePresentation::Component { group: "inertia", component: "yz" }),
+        InertiaZz => ("inertia.zz", "kg.m^2", "Computed body-local angular-inertia tensor diagonal.", PhysicsSamplePresentation::Component { group: "inertia", component: "zz" }),
+        Contact => ("contact", "1", "Whether this collider is touching a physical contact pair.", PhysicsSamplePresentation::Scalar),
+        ContactForce => ("contact_force", "N", "Normal contact force derived from the live Avian contact impulse.", PhysicsSamplePresentation::Scalar),
+        SuspensionCompression => ("suspension.compression", "m", "Raycast suspension compression from the live support hit.", PhysicsSamplePresentation::Scalar),
+        SuspensionGroundDistance => ("suspension.ground_distance", "m", "Distance from the authored suspension ray origin to the live support hit.", PhysicsSamplePresentation::Scalar),
+        SuspensionNormalForce => ("suspension.normal_force", "N", "Suspension normal force applied during the last physics tick.", PhysicsSamplePresentation::Scalar),
+        SuspensionContact => ("suspension.contact", "1", "Whether the suspension ray has a valid non-degenerate support hit.", PhysicsSamplePresentation::Scalar),
+        WheelAxleAngularVelocity => ("wheel.axle_angular_velocity", "rad/s", "Signed wheel axle angular velocity from the mobility model.", PhysicsSamplePresentation::Scalar),
+        WheelSurfaceSpeed => ("wheel.surface_speed", "m/s", "Wheel contact-patch speed implied by axle angular velocity.", PhysicsSamplePresentation::Scalar),
+        LinearAcceleration => ("linear_acceleration", "m/s^2", "Net acceleration of the body's centre of mass in the physics frame.", PhysicsSamplePresentation::Summary { group: "linear_acceleration", label: "magnitude", formula: "magnitude" }),
+        AngularAcceleration => ("angular_acceleration", "m/s^2", "Net angular acceleration of the body in the physics frame.", PhysicsSamplePresentation::Summary { group: "angular_acceleration", label: "magnitude", formula: "magnitude" }),
+    }
 }
 
-struct PhysicsSample {
-    name: PhysicsSignalName,
-    value: f64,
+#[derive(Clone, Copy)]
+struct PhysicsChannelDescriptor {
+    path: &'static str,
     unit: &'static str,
     description: &'static str,
     presentation: PhysicsSamplePresentation,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum PhysicsSignalName {
-    Path(&'static str),
-    Component {
+impl PhysicsChannelDescriptor {
+    fn component(
+        path: &'static str,
         group: &'static str,
         component: &'static str,
-    },
-}
-
-impl PhysicsSignalName {
-    fn as_path(self) -> Cow<'static, str> {
-        match self {
-            Self::Path(path) => Cow::Borrowed(path),
-            Self::Component { group, component } => Cow::Owned(format!("{group}.{component}")),
+        unit: &'static str,
+        description: &'static str,
+    ) -> Self {
+        Self {
+            path,
+            unit,
+            description,
+            presentation: PhysicsSamplePresentation::Component { group, component },
         }
     }
 }
 
-struct CachedPhysicsSignal {
-    signal: SignalRef,
-    /// Whether this source published its static metadata to the signal registry.
-    metadata_published: bool,
+fn vector_channels(channels: [PhysicsChannel; 3], value: DVec3) -> [PhysicsSample; 3] {
+    [
+        PhysicsSample::new(channels[0], value.x),
+        PhysicsSample::new(channels[1], value.y),
+        PhysicsSample::new(channels[2], value.z),
+    ]
+}
+
+#[derive(Clone, Copy)]
+struct PhysicsSample {
+    channel: PhysicsChannel,
+    value: f64,
+}
+
+impl PhysicsSample {
+    fn new(channel: PhysicsChannel, value: f64) -> Self {
+        Self { channel, value }
+    }
+}
+
+#[derive(Default)]
+struct ChannelRecorder {
+    binding: Option<ScalarRecordingBinding>,
+    refused: Option<(u64, usize)>,
+    published_group: Option<u64>,
     global_owner: Option<GlobalEntityId>,
 }
 
-/// Borrowed static presentation facts for a sample; owned labels are built only
-/// when the shared signal catalog needs metadata.
+struct SourceRecorders {
+    group_path: String,
+    group_revision: u64,
+    channels: Box<[ChannelRecorder; PhysicsChannel::COUNT]>,
+}
+
+impl SourceRecorders {
+    fn new(group_path: &str) -> Self {
+        Self {
+            group_path: group_path.to_owned(),
+            group_revision: 0,
+            channels: Box::new(std::array::from_fn(|_| ChannelRecorder::default())),
+        }
+    }
+    fn observe_path(&mut self, group_path: &str) {
+        if self.group_path != group_path {
+            self.group_path = group_path.to_owned();
+            self.group_revision = self.group_revision.wrapping_add(1);
+        }
+    }
+}
+
+/// Static presentation metadata; owned labels are built only when the shared
+/// signal catalog needs them.
 #[derive(Clone, Copy)]
 enum PhysicsSamplePresentation {
     Scalar,
@@ -651,78 +563,6 @@ impl PhysicsSamplePresentation {
     }
 }
 
-impl PhysicsSample {
-    fn scalar(
-        name: &'static str,
-        value: f64,
-        unit: &'static str,
-        description: &'static str,
-    ) -> Self {
-        Self {
-            name: PhysicsSignalName::Path(name),
-            value,
-            unit,
-            description,
-            presentation: PhysicsSamplePresentation::Scalar,
-        }
-    }
-
-    fn component(
-        group: &'static str,
-        component: &'static str,
-        value: f64,
-        unit: &'static str,
-        description: &'static str,
-    ) -> Self {
-        Self {
-            name: PhysicsSignalName::Component { group, component },
-            value,
-            unit,
-            description,
-            presentation: PhysicsSamplePresentation::Component { group, component },
-        }
-    }
-
-    fn named_component(
-        name: &'static str,
-        group: &'static str,
-        component: &'static str,
-        value: f64,
-        unit: &'static str,
-        description: &'static str,
-    ) -> Self {
-        Self {
-            name: PhysicsSignalName::Path(name),
-            value,
-            unit,
-            description,
-            presentation: PhysicsSamplePresentation::Component { group, component },
-        }
-    }
-
-    fn summary(
-        name: &'static str,
-        group: &'static str,
-        label: &'static str,
-        formula: &'static str,
-        value: f64,
-        unit: &'static str,
-        description: &'static str,
-    ) -> Self {
-        Self {
-            name: PhysicsSignalName::Path(name),
-            value,
-            unit,
-            description,
-            presentation: PhysicsSamplePresentation::Summary {
-                group,
-                label,
-                formula,
-            },
-        }
-    }
-}
-
 fn retain_samples(
     signals: &mut SignalRegistry,
     settings: &TelemetrySettings,
@@ -732,77 +572,112 @@ fn retain_samples(
     time: f64,
     samples: impl IntoIterator<Item = PhysicsSample>,
     channel_count: &mut usize,
-    metadata: &mut HashMap<(Entity, PhysicsSignalName), CachedPhysicsSignal>,
-    metadata_dirty: bool,
+    sources: &mut HashMap<Entity, SourceRecorders>,
 ) -> bool {
-    let _span = bevy::log::debug_span!(
-        "physics_telemetry_source_retention",
-        metadata_dirty,
-        entity = entity.to_bits(),
-        channels = *channel_count
-    )
-    .entered();
+    let _span = bevy::log::debug_span!("physics_telemetry_source_retention").entered();
+    let source = sources
+        .entry(entity)
+        .or_insert_with(|| SourceRecorders::new(group_path));
+    source.observe_path(group_path);
     let mut retained = false;
     for sample in samples {
         if !sample.value.is_finite() {
             continue;
         }
-        let key = (entity, sample.name);
-        let cached = match metadata.entry(key) {
-            Entry::Occupied(entry) => {
-                let cached = entry.into_mut();
-                if !physics_channel_allowed(signals, &cached.signal, *channel_count, settings) {
-                    continue;
+        let slot = &mut source.channels[sample.channel as usize];
+        if let Some(binding) = slot.binding.as_ref() {
+            if slot.published_group == Some(source.group_revision)
+                && global_owner.is_none_or(|owner| slot.global_owner == Some(owner))
+            {
+                match signals.record_bound_scalar(
+                    binding,
+                    time,
+                    sample.value,
+                    settings.default_rate_hz,
+                    settings.default_retention,
+                ) {
+                    Ok(written) => {
+                        retained |= written;
+                        continue;
+                    }
+                    Err(_) => {
+                        *slot = ChannelRecorder::default();
+                    }
                 }
-                cached
-            }
-            Entry::Vacant(entry) => {
-                let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
-                if !physics_channel_allowed(signals, &signal, *channel_count, settings) {
-                    continue;
-                }
-                entry.insert(CachedPhysicsSignal {
-                    signal,
-                    metadata_published: false,
-                    global_owner: None,
-                })
-            }
-        };
-        let signal = &cached.signal;
-        {
-            let _span = (metadata_dirty || !cached.metadata_published).then(|| {
-                let known = signals.scalar_history(signal).is_some();
-                bevy::log::debug_span!("physics_telemetry_channel_metadata", known).entered()
-            });
-            if let Some(owner) = global_owner {
-                if cached.global_owner != Some(owner) {
-                    signals.associate_global_owner(signal, owner);
-                    cached.global_owner = Some(owner);
-                }
-            }
-            if metadata_dirty || !cached.metadata_published {
-                let signal_meta = SignalMeta {
-                    description: Some(sample.description.to_string()),
-                    unit: Some(sample.unit.to_string()),
-                    provenance: Some("avian".to_string()),
-                    group_path: Some(group_path.to_string()),
-                    presentation: sample.presentation.to_signal_presentation(),
-                    exposure: Default::default(),
-                    ..Default::default()
-                };
-                signals.update_meta(signal.clone(), signal_meta);
-                cached.metadata_published = true;
+            } else if !signals.recording_is_current(binding) {
+                *slot = ChannelRecorder::default();
             }
         }
-        if signals.record_scalar_at_rate(
-            signal,
-            time,
-            sample.value,
-            settings.default_rate_hz,
-            settings.default_retention,
-        ) {
-            retained = true;
-            *channel_count = signals.scalar_count();
+        // Cold path only: resolve stable names and publish metadata on admission,
+        // owner change or changed USD group. A capacity refusal stays deferred
+        // until the shared recorder membership or configured cap changes.
+        let stamp = (signals.recording_revision(), settings.max_channels);
+        if slot.binding.is_none() && slot.refused == Some(stamp) {
+            continue;
+        }
+        let descriptor = sample.channel.descriptor();
+        let signal = SignalRef::new(entity, descriptor.path);
+        if slot.binding.is_none()
+            && !physics_channel_allowed(signals, &signal, *channel_count, settings)
+        {
+            slot.refused = Some(stamp);
+            continue;
+        }
+        slot.refused = None;
+        if let Some(owner) = global_owner
+            && slot.global_owner != Some(owner)
+        {
+            signals.associate_global_owner(&signal, owner);
+            slot.global_owner = Some(owner);
+        }
+        if slot.published_group != Some(source.group_revision) {
+            let _span = bevy::log::debug_span!("physics_telemetry_channel_metadata").entered();
+            signals.update_meta(
+                signal.clone(),
+                SignalMeta {
+                    description: Some(descriptor.description.to_owned()),
+                    unit: Some(descriptor.unit.to_owned()),
+                    provenance: Some("avian".to_owned()),
+                    group_path: Some(source.group_path.clone()),
+                    presentation: descriptor.presentation.to_signal_presentation(),
+                    exposure: Default::default(),
+                    ..Default::default()
+                },
+            );
+            slot.published_group = Some(source.group_revision);
+        }
+        if let Some(binding) = slot.binding.as_ref() {
+            match signals.record_bound_scalar(
+                binding,
+                time,
+                sample.value,
+                settings.default_rate_hz,
+                settings.default_retention,
+            ) {
+                Ok(written) => retained |= written,
+                Err(error) => error!("physics telemetry: {error}"),
+            }
+        } else {
+            // Preserve exact named admission/rate semantics for a new or retired
+            // history. Only take the binding after the history is live.
+            let written = signals.record_scalar_at_rate(
+                &signal,
+                time,
+                sample.value,
+                settings.default_rate_hz,
+                settings.default_retention,
+            );
+            retained |= written;
+            if written {
+                *channel_count = signals.scalar_count();
+            }
+            if signals.scalar_history(&signal).is_some() && signals.is_active(&signal) {
+                slot.binding = signals.admit_scalar(
+                    &signal,
+                    settings.default_retention,
+                    settings.max_channels,
+                );
+            }
         }
     }
     retained
@@ -845,12 +720,7 @@ mod tests {
         let mut signals = SignalRegistry::default();
         let mut metadata = HashMap::new();
         let mut count = 0;
-        let samples = vector_channels(
-            "linear_velocity",
-            DVec3::new(1.0, 2.0, 3.0),
-            "m/s",
-            "Velocity.",
-        );
+        let samples = vector_channels(LINEAR_VELOCITY, DVec3::new(1.0, 2.0, 3.0));
         for &entity in &entities {
             retain_samples(
                 &mut signals,
@@ -859,15 +729,9 @@ mod tests {
                 None,
                 "/Body",
                 0.0,
-                vector_channels(
-                    "linear_velocity",
-                    DVec3::new(1.0, 2.0, 3.0),
-                    "m/s",
-                    "Velocity.",
-                ),
+                vector_channels(LINEAR_VELOCITY, DVec3::new(1.0, 2.0, 3.0)),
                 &mut count,
                 &mut metadata,
-                true,
             );
         }
         let began = std::time::Instant::now();
@@ -880,15 +744,9 @@ mod tests {
                     None,
                     "/Body",
                     f64::from(time),
-                    vector_channels(
-                        "linear_velocity",
-                        DVec3::new(1.0, 2.0, 3.0),
-                        "m/s",
-                        "Velocity."
-                    ),
+                    vector_channels(LINEAR_VELOCITY, DVec3::new(1.0, 2.0, 3.0)),
                     &mut count,
                     &mut metadata,
-                    false
                 ));
             }
         }
@@ -897,7 +755,7 @@ mod tests {
         let mut digest = 0xcbf29ce484222325u64;
         for entity in entities {
             for sample in &samples {
-                let signal = SignalRef::new(entity, sample.name.as_path().into_owned());
+                let signal = SignalRef::new(entity, sample.channel.descriptor().path);
                 let history = signals.scalar_history(&signal).unwrap();
                 assert_eq!(history.len(), 16);
                 for point in history.iter() {
@@ -935,10 +793,9 @@ mod tests {
                 None,
                 "/Body",
                 time,
-                vector_channels("linear_velocity", DVec3::X, "m/s", "Velocity."),
+                vector_channels(LINEAR_VELOCITY, DVec3::X),
                 &mut count,
                 &mut metadata,
-                false,
             )
         };
         assert!(record(&mut signals, &settings, 0.0));
@@ -958,6 +815,10 @@ mod tests {
         settings.max_channels = 1;
         assert!(record(&mut signals, &settings, 3.0));
         assert_eq!(signals.scalar_count(), 1);
+        assert_eq!(
+            signals.meta(&signal).unwrap().group_path.as_deref(),
+            Some("/Body")
+        );
         let point = signals.scalar_history(&signal).unwrap().back().unwrap();
         assert_eq!(point.time.to_bits(), 3.0f64.to_bits());
         assert_eq!(point.value.to_bits(), 1.0f64.to_bits());
@@ -965,40 +826,37 @@ mod tests {
 
     #[test]
     fn acceleration_channels_report_acceleration_units() {
-        let linear = vector_channels(
-            "linear_acceleration",
-            DVec3::X,
-            "m/s^2",
-            "World-frame acceleration component.",
+        let linear = vector_channels(LINEAR_ACCELERATION, DVec3::X);
+        let angular = vector_channels(ANGULAR_ACCELERATION, DVec3::X);
+        assert!(
+            linear
+                .iter()
+                .all(|sample| sample.channel.descriptor().unit == "m/s^2")
         );
-        let angular = vector_channels(
-            "angular_acceleration",
-            DVec3::X,
-            "rad/s^2",
-            "World-frame angular-acceleration component.",
+        assert!(
+            angular
+                .iter()
+                .all(|sample| sample.channel.descriptor().unit == "rad/s^2")
         );
-        assert!(linear.iter().all(|sample| sample.unit == "m/s^2"));
-        assert!(angular.iter().all(|sample| sample.unit == "rad/s^2"));
     }
 
     #[test]
     fn vector_channels_publish_typed_component_presentation() {
-        let samples = vector_channels(
-            "linear_velocity",
-            DVec3::new(1.0, 2.0, 3.0),
-            "m/s",
-            "World-frame linear-velocity component.",
-        );
+        let samples = vector_channels(LINEAR_VELOCITY, DVec3::new(1.0, 2.0, 3.0));
 
-        assert_eq!(samples[0].name.as_path().as_ref(), "linear_velocity.x");
+        assert_eq!(samples[0].channel.descriptor().path, "linear_velocity.x");
         assert_eq!(
-            samples[0].presentation.to_signal_presentation(),
+            samples[0]
+                .channel
+                .descriptor()
+                .presentation
+                .to_signal_presentation(),
             SignalPresentation::Component {
                 group: "linear_velocity".into(),
                 component: "x".into(),
             }
         );
-        assert_eq!(samples[2].name.as_path().as_ref(), "linear_velocity.z");
+        assert_eq!(samples[2].channel.descriptor().path, "linear_velocity.z");
     }
 
     #[test]
@@ -1123,8 +981,7 @@ mod tests {
         app.update();
 
         let state = app.world().resource::<PhysicsTelemetryState>();
-        assert!(!state.metadata_group_paths.contains_key(&body));
-        assert!(state.metadata.keys().all(|(entity, _)| *entity != body));
+        assert!(!state.sources.contains_key(&body));
         assert!(
             app.world()
                 .resource::<SignalRegistry>()
