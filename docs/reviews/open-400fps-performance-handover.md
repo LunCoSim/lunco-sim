@@ -541,11 +541,10 @@ do not supply the product FPS number.
 
 ## Griffin follow-up — 2026-11-25
 
-The pinned official-fork changes prepare Rumoca exact assignment certificates
+The official-fork revisions used for the following measurements prepare Rumoca exact assignment certificates
 and indexed projection diagnostics (`9763caab5014875da353663df14c75fe0cd8e990`),
 and return Bevy's render world before its bounded native presentation batch
-(`33c9a2d62c5381b2e4ae72f8ebe189928b3127f2`). Both commits are published and
-locked. Application changes balance persistent solver lanes by admitted scalar
+(`33c9a2d62c5381b2e4ae72f8ebe189928b3127f2`). Both commits were pinned for these captures. Application changes balance persistent solver lanes by admitted scalar
 weight, reuse ordered observation names and parameter lookups, retain optical
 geometry and receiver-domain proofs, avoid equal-value sun light invalidation
 and skip under-budget terrain eviction sorting. The complete runtime observation
@@ -648,3 +647,20 @@ window imported no additional full-size buffer. Keep the bounded render
 handoff. Across the paired running frames, moving existing pre-acquire work
 alongside the outstanding present could overlap at most 0.046 ms per frame
 on average on the hybrid path and 0.013 ms on the same-GPU path.
+
+## Griffin main propulsion on upstream Rumoca e0a856fea
+
+Replaying the first 1,440 production input transactions at 60 Hz through
+LunCoSim’s release solver adapter produced identical binary64 values across
+all 3,295 observations with the prior fork and the upstream merge. Both took
+2,711 internal steps in the first 1,352 communication steps and another 176
+in the final 88. In the latter window each made 5,686,320 singleton visits.
+
+Upstream orders algebraic blocks by execution reads only when every projection
+stage is explicit. The Griffin plan contains 2,662 explicit stages and 14
+compact declaration runs, so this pass returns before it examines the reads.
+The first rejected plume dependency has its consumer at scalar block 119
+and its producer at 620. An extension should represent reads and writes of
+declaration runs in the ordering pass, preserve order within a run, and split
+it at a dependency boundary when necessary. Retain coupled-block and cycle
+semantics and compare accepted steps and the full observation stream again.
