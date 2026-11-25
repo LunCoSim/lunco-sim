@@ -52,7 +52,7 @@ def main():
         raise ValueError("sample-seconds must be between three and 60")
     if not 0 <= args.warmup_seconds <= 10:
         raise ValueError("warmup-seconds must be between zero and ten")
-    check_count = 2 + 2 * len(args.rates)
+    check_count = 3 + 3 * len(args.rates)
     if args.check_modelica_hud and args.participants <= 0:
         raise ValueError("the Modelica HUD gate requires participants")
     if not args.keep_focus and not shutil.which("xmessage"):

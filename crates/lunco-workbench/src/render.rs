@@ -1098,6 +1098,20 @@ pub(crate) fn render_time_menu(
         .get_resource::<lunco_time::TimeTransport>()
         .map(|t| (matches!(t.mode, lunco_time::TransportMode::Paused), t.rate))
         .unwrap_or((false, 1.0));
+    if let Some(transport) = world.get_resource::<lunco_time::TimeTransport>() {
+        let achieved = world
+            .get_resource::<lunco_time::TransportThroughput>()
+            .and_then(|throughput| throughput.achieved_rate(transport));
+        let target = lunco_time::realtime_rate_label(rate);
+        let status = if paused {
+            format!("Target {target} · Paused")
+        } else if let Some(achieved) = achieved {
+            format!("Target {target} · Actual {achieved:.2}x")
+        } else {
+            format!("Target {target} · Actual —")
+        };
+        ui.label(status).on_hover_text("Measured completed simulation time per real second. The target does not change the physics timestep; limited compute can reduce the achieved rate.");
+    }
 
     // Every listed rate uses the same causal fixed-step path. Higher rates
     // drain more fixed iterations per render frame while the fixed timestep
@@ -1112,7 +1126,7 @@ pub(crate) fn render_time_menu(
             let on = !paused && (rate - m).abs() < f64::EPSILON;
             if ui
                 .selectable_label(on, lunco_time::realtime_rate_label(m))
-                .on_hover_text("Run the simulation (physics included) at this rate")
+                .on_hover_text("Request this simulation rate (physics included)")
                 .clicked()
             {
                 trigger_or_defer(

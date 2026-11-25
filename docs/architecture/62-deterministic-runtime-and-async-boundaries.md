@@ -352,7 +352,7 @@ or capacity retry is admitted; unchanged actors do not copy their source per
 frame. Worker ordering and the lifecycle commit boundary remain unchanged.
 
 Fixed-step time is not a wall-clock service guarantee. In the production GUI,
-the time owner drains `FixedMain` synchronously before `Update`, up to 64
+the time owner drains `FixedMain` synchronously before `Update`, up to 128
 complete fixed cycles per app update at every transport rate. The virtual
 clock admits the complete running delta even while a solver result is pending.
 The coupling barrier gates fixed execution without discarding that demand;
@@ -370,7 +370,8 @@ drop authoritative ticks. `SimulationTimingProfile` is the shared,
 bounded observation path until ownership is split: it reports the most recent
 240 completed `FixedMain` tick service times and rate-derived service budgets,
 plus per-app-update fixed-loop duration, completed-step count, remaining
-pending simulation duration (whole ticks and fractional overstep), and
+pending simulation duration (whole ticks and fractional overstep), the scene's
+one-second achieved transport rate, and
 simulation-time demand omitted if a consumer alters `Time<Virtual>::max_delta`.
 The profile is read through telemetry's query registry, does not emit per-tick
 events, and never feeds simulation decisions. Tick service is measured between
@@ -1765,24 +1766,28 @@ The whole-simulation guarantee remains open because:
     together at the diagnostics boundary, so optimization cannot target an
     owner using comparable cycle evidence.
 12. Bevy's fixed loop executes synchronously on the GUI app thread before
-    `Update`. Ordinary fixed work and native render-overlap service share one
-    allowance of 64 complete cycles and one fixed quantum of wall-clock service
+    `Update`. Ordinary fixed work uses the time owner's wall deadline (1/30 s),
+    independent of physics cadence. Native render-overlap work continues until
+    the render receipt is ready; both phases share a 128-cycle count allowance
     per host update. Admission checks the allowance between complete cycles
     and retains remaining simulation time. A fixed delta preserves numerical step size but does not
     promise 60 wall-clock physics ticks per second or responsive UI during a
     long tick/burst. `SimulationTimingProfile` now reports bounded tick and
     fixed-loop service/budget samples and recoverable pending simulation duration.
     The separate max-delta diagnostic detects unexpected virtual-clock clipping.
-    It cannot report wall-paced deadline misses and does not move fixed work off
-    the GUI thread. When the shared clock has a full cycle queued, the native
-    pipelined host can spend the remaining allowance on ready completions
-    before physical presentation sampling. Render readiness ends admission
-    between complete cycles. When queued work or its allowance runs out,
+    Achieved transport rate reports completed ticks per real second; it does not
+    move fixed work off the GUI thread. When the shared clock has a full cycle
+    queued, the native pipelined host can spend otherwise blocked render time on ready completions
+    before physical presentation sampling. Render readiness ends the overlap
+    opportunity between complete cycles; remaining ordinary service accepts
+    only ready work without waiting. When queued work or its allowance runs out,
     main-world presentation can overlap the preceding render and extraction
     receives the render world after the render schedule, not after native
     surface present. Presentation retains its exact window/surface leases and
     finishes on the same rendering thread before it accepts the next render
     world; the main thread can overlap its next update with this bounded batch.
+    The headless realtime host services ready receipts and queued cycles within
+    the ordinary deadline instead of restarting an app update for each receipt.
     While waiting, extraction can admit clock-free
     receipts. Fixed cycles stay before presentation sampling. The timing profile
     records both fixed service phases and the final accumulator, with render

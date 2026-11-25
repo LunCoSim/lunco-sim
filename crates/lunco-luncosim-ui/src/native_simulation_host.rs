@@ -78,6 +78,17 @@ fn service_simulation_during_render(world: &mut World) {
     // Otherwise let all presentation systems overlap the outgoing render.
     if lunco_time::can_service_pending_simulation(world) {
         let handoff = wait_for_render_frame(world, true);
+        // A returned render world closes the overlap opportunity, not the
+        // remaining ordinary application service slice. Consume any ready
+        // causal work before sampling presentation, but never wait on a
+        // participant once the renderer has returned.
+        if matches!(handoff, RenderFrameHandoff::Ready(_)) {
+            if let Some(deadline) = lunco_time::fixed_service_deadline(world) {
+                lunco_time::service_pending_simulation(world, || {
+                    std::time::Instant::now() < deadline
+                });
+            }
+        }
         *world.non_send_mut::<RenderFrameHandoff>() = handoff;
     }
 }
@@ -86,9 +97,49 @@ fn wait_for_render_frame(world: &mut World, service_fixed_ticks: bool) -> Render
     let executor = world
         .resource::<bevy::ecs::schedule::MainThreadExecutor>()
         .clone();
+    let Some(ticker) = executor.0.ticker() else {
+        host_fault(
+            world,
+            "native-render-executor-missing",
+            "render handoff is not on the main-thread executor".into(),
+        );
+        return RenderFrameHandoff::Failed;
+    };
     let ready = world.resource_scope(|world, mut channels: Mut<RenderAppChannels>| {
         let mut receipt = std::pin::pin!(channels.recv());
         loop {
+            if service_fixed_ticks {
+                let mut received = None;
+                // Spend otherwise blocked render time on already admitted
+                // simulation, even if the ordinary host slice is exhausted.
+                // This also works with no asynchronous participants. Check
+                // frame readiness before every indivisible fixed cycle.
+                lunco_time::service_pending_simulation(world, || {
+                    let mut context = Context::from_waker(Waker::noop());
+                    let mut ready = receipt.as_mut().poll(&mut context);
+                    if ready.is_pending() {
+                        // A render task may need the main-thread executor to
+                        // produce the receipt. Give it service at each cycle
+                        // boundary instead of starving it behind a fixed burst.
+                        ticker.try_tick();
+                        ready = receipt.as_mut().poll(&mut context);
+                    }
+                    match ready {
+                        Poll::Ready(frame) => {
+                            received = Some(frame);
+                            false
+                        }
+                        Poll::Pending => true,
+                    }
+                });
+                if let Some(frame) = received {
+                    break Ok(frame.map_or(RenderFrameHandoff::Failed, RenderFrameHandoff::Ready));
+                }
+                if !lunco_time::can_service_pending_simulation(world) {
+                    // Presentation may now overlap the remaining render time.
+                    break Ok(RenderFrameHandoff::Awaiting);
+                }
+            }
             let ready = bevy::tasks::ComputeTaskPool::get()
                 // Keep this latency-sensitive wait on its scope and render
                 // callbacks; unrelated compute jobs stay on the pool workers.
@@ -120,30 +171,6 @@ fn wait_for_render_frame(world: &mut World, service_fixed_ticks: bool) -> Render
                     // Extraction admits receipts even while the fixed clock is held.
                     if !service_fixed_ticks {
                         lunco_core_runtime::admit_simulation_completions(world);
-                        continue;
-                    }
-                    let mut received = None;
-                    lunco_time::service_pending_simulation(world, || {
-                        // Recheck at complete-cycle boundaries. The blocking
-                        // scope installs its own waker if the frame is pending.
-                        let mut context = Context::from_waker(Waker::noop());
-                        match receipt.as_mut().poll(&mut context) {
-                            Poll::Ready(frame) => {
-                                received = Some(frame);
-                                false
-                            }
-                            Poll::Pending => true,
-                        }
-                    });
-                    if let Some(frame) = received {
-                        break Ok(
-                            frame.map_or(RenderFrameHandoff::Failed, RenderFrameHandoff::Ready)
-                        );
-                    }
-                    if !lunco_time::can_service_pending_simulation(world) {
-                        // Presentation can use the current sample before extraction
-                        // receives the world. Keep any fixed debt for the next update.
-                        break Ok(RenderFrameHandoff::Awaiting);
                     }
                 }
                 Some(HostReady::Fault(error)) => break Err(error),

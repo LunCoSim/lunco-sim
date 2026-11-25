@@ -180,3 +180,49 @@ step. The execution owner sums validated worker service during its wall-clock
 window and divides by completed physics ticks; the tooltip includes the largest
 per-instance mean service cost. Completion throughput remains available through
 the diagnostic exposure, independently of the visible cost readout.
+
+## General transport qualification — 2026-11-25
+
+The time owner uses the service contract in architecture 19: a bounded ordinary
+host wall deadline, render-readiness-bounded continuation, one shared cycle
+count, and a single completion-admission schedule. Headless realtime hosts
+continue already admitted work within the same ordinary deadline. The completed
+rate measurement is scene scoped and displayed in the Time menu and the timing
+query. No solver settings, fixed timestep, or authored scene were changed.
+
+The normal optimized release (`472de10875dd6a27cda16a6d18b9d301b637e38bed6d17592ef0a631c5693367`)
+passed both 30-second strict transport gates on a private native Wayland output
+at 1280×720. Each gate passed all nine authored assertions, including native
+physics-time conservation and the running/paused rate diagnostic. Independent
+process-clock measurements were:
+
+| Scene | 2x | 4x |
+|---|---:|---:|
+| `modelica_runtime_contracts` | 2.000x | 4.000x |
+| `simulation_core_third_physics` (one live Modelica participant) | 2.000x | 3.999x |
+
+The time owner passed all 63 unit tests. The native physical-presentation gate
+passed all 13 assertions; the mixed-rate Modelica initialization network
+passed all 45 authored assertions and the inconsistent initialization scene
+passed its expected `modelica-initialization-failed` terminal-fault gate. Separate
+headless coupled samples reached 2.000x, 4.000x and 8.000x with native physics
+time error below 8e-15 s. An earlier lightweight desktop sweep reached 16.001x;
+32x and 64x requests saturated at 26.582x and 21.621x, respectively. Those
+higher requested-rate assertions failed; no skipped fixed time or registered
+runtime fault was observed.
+
+Crater Cup is not qualified for sustained 2x/4x on this host. Its final desktop
+ten-second samples were 1.253x, 1.316x and 1.848x at requested 2x, 4x and 8x.
+At 4x, fixed service p50/p95 was 4.741/13.431 ms against a 4.167 ms total
+coupled-interval budget. All three native physics-time conservation measurements
+and runtime diagnostics were clear. The UI correctly showed a varying achieved
+rate below the selected target. The earlier retained release and final release
+repeated at 4x in successive diagnostic sessions gave 0.506x and 1.660x;
+their differing build cohorts, fixed-service costs and host workloads prohibit
+an isolated speedup claim. Other host workloads were not stopped. A sustained
+heavy-Twin 4x/8x verdict and the dedicated simulation-owner migration described
+in architecture 62 remain open.
+
+Evidence is retained under `.cache/speedup-fix/`: `strict-2-4/`,
+`qualification/presentation/`, `initialization-gates/`, `final-native-gates/light/`,
+`final-diagnostics/`, and `crater-cohort-comparison/`.

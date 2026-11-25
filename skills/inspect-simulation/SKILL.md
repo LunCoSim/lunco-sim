@@ -281,7 +281,8 @@ exceeds a timestep.
 For a Time-menu acceleration report, compare completed `sim_tick` intervals
 against `clock_snapshot().wall_elapsed_s` at 1x and the requested rate. A selected
 `transport_rate` alone is not throughput evidence. Inspect `SimulationTimingProfile`
-for fixed-cycle cost and retained pending duration. Test ordinary window pacing
+for fixed-cycle cost, retained pending duration, and `transport.achieved_rate`,
+the same one-second completion measurement shown in the Time menu. Test ordinary window pacing
 and loss of focus: `--no-throttle` masks missing cadence demand or solver wake-ups.
 The native regression uses an authored Rhai verdict and an owned X11 focus window:
 

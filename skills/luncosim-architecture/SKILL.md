@@ -1198,8 +1198,9 @@ and coupled initialization certification. `First` services it after message
 rotation and before `ClockProjectionSet` gates the next virtual delta. Native
 host waits also service ready receipts while the clock is held. Compile intent remains in the
 `Update` lifecycle after scene wiring. The
-fixed runner checks admission before each full tick and shares one host-update
-allowance with render-overlap service. A projected reference must resolve by
+fixed runner checks admission before each full tick. Ordinary service uses a
+wall deadline; native render-overlap service yields at render readiness. The
+two phases share the same host-update cycle count. A projected reference must resolve by
 path on the first resumed tick using the same published index.
 
 Keep acausal conservation connectors (`Pin`, `HeatPort`, `FluidPort`, `Flange`,

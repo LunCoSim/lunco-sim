@@ -87,15 +87,19 @@ Bevy's public `RenderAppChannels` API. Rendering overlaps the next update's
 clock admission and simulation. The native host removes Bevy's optional render timestamp
 receiver: automatic time samples the main-thread monotonic clock once in `First`;
 manual recording/test strategies retain their selected source.
-When fixed demand and service budget remain after ordinary fixed work, the
-main thread can admit ready simulation completions and fixed cycles before
-physical easing samples the state. The host checks render readiness before
-admitting a completion and between cycles. Ordinary and opportunistic service
-share one count and wall-clock allowance for the host update. The host starts
-presentation when the renderer returns, fixed demand clears, or the allowance
-runs out. Extraction receives any outstanding render world and submits the next
-frame after presentation producers. The fixed-loop diagnostic reads the final
-debt and includes opportunistic service, with render waiting outside its timer.
+When complete fixed demand remains after ordinary fixed work, the main thread
+services already admitted cycles and ready completions while the prior render
+world is outstanding. It pumps the main-thread executor and checks render
+readiness before every new cycle. Service uses otherwise blocked render time,
+not a new fixed-time sample or a second clock. The renderer's return ends this
+opportunity immediately at the next complete-cycle boundary. Any remaining
+ordinary slice admits ready work without waiting on a participant. When demand or
+the shared count allowance runs out, presentation overlaps the remaining render
+work. The headless realtime host uses the same continuation before presentation
+sampling; it waits for worker receipts only until the ordinary service deadline.
+Extraction receives any outstanding render world and submits the next frame
+after presentation producers. The fixed-loop diagnostic reads the final debt
+and includes both service phases, with pure waiting outside its timer.
 Fixed debt remains queued through pauses and is drained on resume;
 catch-up must not be mistaken for a change to the requested transport rate.
 The render frame is application-owned, never shared with a concurrent World
@@ -105,7 +109,12 @@ decision requiring a Rhai policy hook. The native window gate is
 `scripts/api/test_simulation_transport_rate.py`: it verifies actual 2x, 4x and 8x
 completed time while unfocused, without `--no-throttle` or HTTP polling during
 measurement. `--twin` and `--participants` run the same authored gate on a Twin.
-Requested rates remain bounded by the cost of complete physical and solver cycles.
+Requested rates are targets, not a promise of measured completion throughput.
+The scene-owned `TransportThroughput` observes completed master ticks per
+monotonic real second in one-second windows. The Time menu and
+`SimulationTimingProfile.transport` read the same result; pause, changed rates,
+manual time sources and scene retirement invalidate the measurement. It is
+diagnostic only and cannot select physics cadence or admission.
 `scripts/api/test_physical_presentation_time.py --windowed` exercises pause,
 single stepping, transport changes and bounded monotonic physical presentation
 in the native host; its default mode exercises the scene-test host.
@@ -129,13 +138,15 @@ plus pending overstep
 equals the duration admitted to the fixed clock: each completed cycle moves one
 fixed timestep from overstep into elapsed time. A hold retains the pending
 balance without changing either clock value.
-The runner drains at most `MAX_FIXED_STEPS_PER_SERVICE` (64) complete cycles per
-host update at every transport rate. It also yields after one fixed timestep of
-measured wall-clock service, checked between complete causal cycles. This is a
-host service boundary derived from the existing fixed clock, not an authored
-mission decision. It keeps an overloaded catch-up batch from monopolizing
-presentation; a single slow cycle remains indivisible, and throughput still
-depends on cycle cost. Bevy's virtual delta is admitted without
+The runner drains at most `MAX_FIXED_STEPS_PER_SERVICE` (128) complete cycles
+per host update at every transport rate; telemetry derives its delivery capacity
+from this same count. `FixedServiceLimits` bounds ordinary host wall service to
+1/30 s, independently of the physical timestep, checked between complete cycles.
+This provides two maximum-rate demand quanta per 30 Hz host update. The native
+render-wait continuation shares the count limit, but is bounded by renderer
+readiness rather than the ordinary wall deadline. A single slow cycle remains
+indivisible. These are generic host scheduling mechanisms, not authored mission
+decisions. Bevy's virtual delta is admitted without
 wall-time clipping (`max_delta = Duration::MAX`); budget exhaustion retains
 the whole remaining duration in the same fixed accumulator. There is no second
 debt clock, timestep change, or skipped tick. Pause and causal holds stop new

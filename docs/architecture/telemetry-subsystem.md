@@ -35,11 +35,15 @@ synchronous `FixedMain` tick and fixed-loop service at monotonic clock boundarie
 into preallocated 240-sample rings. Fixed-loop service includes ordinary and
 opportunistic completion service, with render-only waiting outside its timer.
 The query exposes tick service and rate-derived
-service-budget percentiles, fixed steps per app update, and retained pending
+service-budget percentiles, fixed steps per app update, requested and achieved
+transport rate, and retained pending
 simulation duration (`fixed_loop.latest_pending_simulation_secs`, including
 whole ticks and fractional overstep). The separate max-delta fields detect
 simulation-time demand clipped if a consumer changes virtual-clock admission;
-the time owner admits the complete running delta. The query computes
+the time owner admits the complete running delta. The achieved rate uses the
+same scene-owned one-second completed-tick measurement as the Time menu and
+is unavailable while paused, under a manual clock, or before a new window
+settles. The query computes
 percentiles only when a client asks, emits no per-tick events, and does not feed
 these wall-clock observations back into causal state. Use it with the
 `engine.frame_time` channel: the profile explains fixed-loop service, while frame

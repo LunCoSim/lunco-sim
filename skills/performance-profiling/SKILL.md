@@ -1994,14 +1994,19 @@ settled owned run. It summarizes the latest 240 fixed ticks and 240 app-update
 fixed-loop bursts: p50/p95/p99/max service time, per-tick realtime service-budget
 exceedances, fixed steps per app update, and retained pending simulation duration
 (`fixed_loop.latest_pending_simulation_secs`, whole ticks plus fractional
-overstep). Ordinary fixed work and opportunistic render overlap share a budget
-of 64 complete cycles and one fixed quantum of monotonic wall-clock service per
-host update. Each admitted tick runs to completion and the full running delta
+overstep). Ordinary service has a wall deadline independent of the physics
+quantum. The native host continues ready fixed work while the render world is
+outstanding and yields that overlap opportunity when it returns. Any remaining
+ordinary slice accepts ready work without waiting on a solver. All phases share one 128-cycle count
+allowance. The headless realtime host can service receipts within the ordinary
+deadline. Each admitted tick runs to completion and the full running delta
 stays accounted for. The fixed-loop timing sample includes both service phases
 and reads debt after the last admission. Render-only waiting is outside the
 service timer. Its separate `Time<Virtual>::max_delta` diagnostic
 detects unexpected clipping and should remain zero. Pair this with
 `QueryTelemetryHistory` for `engine.frame_time`, which covers the full app frame.
+The `transport` section reports the requested and actually achieved rate; the
+Time menu reads the same scene-scoped one-second completion measurement.
 Use `CosimStatus` step diagnostics to separate solver service from end-to-end
 response latency. Fixed-tick service brackets `FixedFirst` through `FixedLast`;
 it excludes asynchronous solver work and completion admission outside that

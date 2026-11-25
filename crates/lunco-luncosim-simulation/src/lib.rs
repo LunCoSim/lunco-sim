@@ -947,6 +947,14 @@ pub struct LunCoSimHeadlessPlugin {
 /// duration that the mode promises. Realtime restores automatic wall-clock
 /// sampling when a live command switches back.
 fn install_dynamic_headless_runner(app: &mut App) {
+    // The same pre-presentation continuation boundary that the window host
+    // uses for render overlap. A headless host can wait for receipts within
+    // the ordinary service deadline without repeating lifecycle and UI-free
+    // application schedules for each coupled interval.
+    app.add_systems(
+        RunFixedMainLoop,
+        service_headless_simulation.in_set(lunco_core::RuntimeCycleSet::Presentation),
+    );
     app.set_runner(|mut app| {
         use bevy::app::PluginsState;
         use std::time::{Duration, Instant};
@@ -1016,6 +1024,35 @@ fn install_dynamic_headless_runner(app: &mut App) {
             }
         }
     });
+}
+
+fn service_headless_simulation(world: &mut World) {
+    if *world.resource::<lunco_core_runtime::SimulationExecutionMode>()
+        != lunco_core_runtime::SimulationExecutionMode::Realtime
+        || !matches!(
+            world.resource::<bevy::time::TimeUpdateStrategy>(),
+            bevy::time::TimeUpdateStrategy::Automatic
+        )
+    {
+        return;
+    }
+    let Some(deadline) = lunco_time::fixed_service_deadline(world) else {
+        return;
+    };
+    while lunco_time::can_service_pending_simulation(world) && std::time::Instant::now() < deadline
+    {
+        lunco_time::service_pending_simulation(world, || std::time::Instant::now() < deadline);
+        if !lunco_time::can_service_pending_simulation(world)
+            || std::time::Instant::now() >= deadline
+        {
+            break;
+        }
+        // A queued causal interval is held on a participant receipt; the
+        // headless host owns bounded waiting, never the shared fixed runner.
+        world
+            .resource_mut::<lunco_core_runtime::SimulationCompletionSources>()
+            .wait_until_ready_or(deadline);
+    }
 }
 
 impl Default for LunCoSimHeadlessPlugin {

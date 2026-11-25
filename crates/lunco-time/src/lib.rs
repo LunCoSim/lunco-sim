@@ -24,6 +24,7 @@ use bevy::app::RunFixedMainLoopSystems;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::time::TimeSystems;
+use lunco_core::{AppSceneExt, SceneResource};
 use lunco_hooks::HookValue as H;
 use std::time::Duration;
 
@@ -53,11 +54,9 @@ pub use scales::{tdb_jd_to_utc_string, utc_now_tdb_jd, utc_string_to_tdb_jd};
 /// Seconds in one day — the JD/epoch unit conversion.
 pub const SECS_PER_DAY: f64 = 86_400.0;
 
-/// The highest live transport rate that runs the fixed-step integrators.
-///
-/// This is a measured safety boundary for the fixed-step budget. Requests above
-/// it are rejected by [`SetTimeTransport`](crate::SetTimeTransport), so every
-/// accepted live rate advances the causal simulation.
+/// Highest supported target for the live fixed-step transport. Requests above
+/// it are rejected by [`SetTimeTransport`](crate::SetTimeTransport). Completed
+/// throughput is bounded by admission and the available host service.
 pub const MAX_REALTIME_RATE: f64 = 64.0;
 
 /// Highest user-selectable rate for the celestial child of `WorldTime`.
@@ -444,18 +443,75 @@ pub fn realtime_rate_label(rate: f64) -> String {
 
 /// Maximum number of complete causal fixed cycles one host update may drain.
 /// Remaining admitted duration stays queued in `Time<Fixed>::overstep`.
-pub const MAX_FIXED_STEPS_PER_SERVICE: u32 = 64;
+/// Reserve two maximum-rate demand quanta so a 30 Hz host can service 64x
+/// without a count-imposed ceiling. Telemetry uses the same admission bound.
+pub const MAX_FIXED_STEPS_PER_SERVICE: u32 = 2 * MAX_REALTIME_RATE as u32;
+
+/// Host responsiveness bound, independent of the physical timestep. Ordinary
+/// simulation service yields at this wall interval. If a render receipt is
+/// still outstanding, the native host can use otherwise blocked time without
+/// extending that wait. Neither changes numerical cadence.
+#[derive(Resource, Debug, Clone, Copy)]
+struct FixedServiceLimits {
+    update_wall_service: Duration,
+}
+
+impl Default for FixedServiceLimits {
+    fn default() -> Self {
+        Self {
+            update_wall_service: Duration::from_secs_f64(1.0 / 30.0),
+        }
+    }
+}
 
 #[derive(Resource, Clone, Copy, Default)]
 struct FixedServiceBudget {
-    limit: Duration,
+    deadline: Option<Instant>,
     spent: Duration,
     cycles: u32,
 }
 
 impl FixedServiceBudget {
-    fn has_remaining(self, elapsed: Duration) -> bool {
-        self.cycles < MAX_FIXED_STEPS_PER_SERVICE && self.spent.saturating_add(elapsed) < self.limit
+    fn has_remaining_cycles(self) -> bool {
+        self.cycles < MAX_FIXED_STEPS_PER_SERVICE
+    }
+}
+
+/// Current scene's observed completion rate. No pacing decision consumes this
+/// measurement; it is shared by the UI and timing diagnostics.
+#[derive(Resource, Debug, Default)]
+pub struct TransportThroughput {
+    window: Option<(Instant, u64, f64)>,
+    achieved: Option<f64>,
+}
+
+impl SceneResource for TransportThroughput {}
+
+impl TransportThroughput {
+    pub fn achieved_rate(&self, transport: &TimeTransport) -> Option<f64> {
+        self.window
+            .filter(|(_, _, rate)| transport.is_running() && *rate == transport.rate)
+            .and(self.achieved)
+    }
+
+    fn observe(&mut self, now: Instant, tick: u64, target: Option<f64>) {
+        let Some(target) = target else {
+            *self = Self::default();
+            return;
+        };
+        if let Some((start, previous_tick, previous_target)) = self.window {
+            if previous_target == target && tick >= previous_tick {
+                let elapsed = now.saturating_duration_since(start);
+                if elapsed >= Duration::from_secs(1) {
+                    self.achieved =
+                        Some((tick - previous_tick) as f64 * SECS_PER_TICK / elapsed.as_secs_f64());
+                    self.window = Some((now, tick, target));
+                }
+                return;
+            }
+        }
+        self.window = Some((now, tick, target));
+        self.achieved = None;
     }
 }
 
@@ -514,10 +570,7 @@ fn fixed_simulation_demand(world: &World) -> Option<FixedSimulationDemand> {
         .then_some(FixedSimulationDemand::Automatic)
 }
 
-fn fixed_simulation_is_admitted(world: &World) -> bool {
-    let coupling_held = world
-        .get_resource::<lunco_core_runtime::SimulationBarrier>()
-        .is_some_and(|state| state.held);
+fn fixed_scene_admission_open(world: &World) -> bool {
     let progress_held = world
         .get_resource::<lunco_core_runtime::SimulationProgress>()
         .is_some_and(lunco_core_runtime::SimulationProgress::is_held);
@@ -528,11 +581,14 @@ fn fixed_simulation_is_admitted(world: &World) -> bool {
     let faulted = world
         .get_resource::<lunco_core::RuntimeFaults>()
         .is_some_and(lunco_core::RuntimeFaults::active);
-    fixed_simulation_demand(world).is_some()
-        && !coupling_held
-        && !progress_held
-        && scene_time_ready
-        && !faulted
+    !progress_held && scene_time_ready && !faulted
+}
+
+fn fixed_simulation_is_admitted(world: &World) -> bool {
+    let coupling_held = world
+        .get_resource::<lunco_core_runtime::SimulationBarrier>()
+        .is_some_and(|state| state.held);
+    fixed_simulation_demand(world).is_some() && !coupling_held && fixed_scene_admission_open(world)
 }
 
 /// Is a complete fixed cycle requested by the existing transport or manual
@@ -549,12 +605,21 @@ fn has_queued_fixed_tick(world: &World) -> bool {
 }
 
 /// May this host update service more queued fixed simulation before presentation?
-/// Ordinary fixed work and opportunistic completion service share one budget.
+/// The cycle allowance is shared; the host's own deadline bounds wall service.
+/// A participant receipt can unhold coupling, but unrelated scene preparation
+/// requires an application update rather than waiting on a solver channel.
 pub fn can_service_pending_simulation(world: &World) -> bool {
     world
         .resource::<FixedServiceBudget>()
-        .has_remaining(Duration::ZERO)
+        .has_remaining_cycles()
         && has_queued_fixed_tick(world)
+        && fixed_scene_admission_open(world)
+}
+
+/// End of the ordinary host service slice. A headless host can wait for a
+/// ready worker within this same slice without a second application update.
+pub fn fixed_service_deadline(world: &World) -> Option<Instant> {
+    world.resource::<FixedServiceBudget>().deadline
 }
 
 /// Next wall-clock deadline for servicing the fixed accumulator, bounded by a
@@ -589,12 +654,14 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 /// admitted time stays in the shared accumulator until its owner releases the
 /// hold. The host service budget also retains time rather than clipping the
 /// input delta or discarding pending fixed cycles. Each host update starts
-/// with one fixed quantum of wall-clock service across ordinary and
-/// opportunistic work. A complete causal cycle remains indivisible.
+/// with a bounded wall-clock service slice, independent of the fixed quantum.
+/// Native render waits may service more work while the renderer is unavailable.
+/// A complete causal cycle remains indivisible.
 fn run_admitted_fixed_main_schedule(world: &mut World) {
     let service_started = Instant::now();
+    let deadline = service_started + world.resource::<FixedServiceLimits>().update_wall_service;
     let budget = FixedServiceBudget {
-        limit: world.resource::<Time<Fixed>>().timestep(),
+        deadline: Some(deadline),
         ..Default::default()
     };
     let virtual_delta = world.resource::<Time<Virtual>>().delta();
@@ -602,7 +669,12 @@ fn run_admitted_fixed_main_schedule(world: &mut World) {
         .resource_mut::<Time<Fixed>>()
         .accumulate_overstep(virtual_delta);
 
-    run_pending_fixed_main_schedule(world, service_started, budget, || true);
+    let mut first_cycle = true;
+    run_pending_fixed_main_schedule(world, service_started, budget, false, || {
+        let allowed = first_cycle || Instant::now() < deadline;
+        first_cycle = false;
+        allowed
+    });
 }
 
 /// Service already admitted cycles while a native host waits for presentation.
@@ -615,35 +687,35 @@ pub fn service_pending_simulation(world: &mut World, mut continue_service: impl 
     }
     let service_started = Instant::now();
     let budget = *world.resource::<FixedServiceBudget>();
-    lunco_core_runtime::admit_simulation_completions(world);
-    run_pending_fixed_main_schedule(world, service_started, budget, continue_service);
+    run_pending_fixed_main_schedule(world, service_started, budget, true, continue_service);
 }
 
 fn run_pending_fixed_main_schedule(
     world: &mut World,
     service_started: Instant,
     mut budget: FixedServiceBudget,
+    mut admit_on_entry: bool,
     mut continue_service: impl FnMut() -> bool,
 ) {
-    while budget.cycles == 0 || budget.has_remaining(service_started.elapsed()) {
+    let mut host_service = Duration::ZERO;
+    while budget.has_remaining_cycles() {
+        let held = world
+            .get_resource::<lunco_core_runtime::SimulationBarrier>()
+            .is_some_and(|barrier| barrier.held)
+            || world
+                .get_resource::<lunco_core_runtime::SimulationProgress>()
+                .is_some_and(lunco_core_runtime::SimulationProgress::is_held);
+        let fixed = world.resource::<Time<Fixed>>();
+        let pending = world.resource::<SimulationStepControl>().remaining() > 0
+            || fixed.overstep() >= fixed.timestep();
         if !world.resource::<lunco_core::RuntimeFaults>().active()
-            && (world
-                .get_resource::<lunco_core_runtime::SimulationBarrier>()
-                .is_some_and(|barrier| barrier.held)
-                || world
-                    .get_resource::<lunco_core_runtime::SimulationProgress>()
-                    .is_some_and(lunco_core_runtime::SimulationProgress::is_held))
+            && (admit_on_entry || (held && pending))
         {
-            let fixed = world.resource::<Time<Fixed>>();
-            if world.resource::<SimulationStepControl>().remaining() > 0
-                || fixed.overstep() >= fixed.timestep()
-            {
-                // A participant may finish while the preceding native cycle
-                // runs. Admit its ready receipt at this complete-cycle boundary
-                // instead of requiring another application/render update.
-                lunco_core_runtime::admit_simulation_completions(world);
-            }
+            // One receipt admission at a cycle boundary, including the host's
+            // initial wake. Partial receipts keep the coupling barrier held.
+            lunco_core_runtime::admit_simulation_completions(world);
         }
+        admit_on_entry = false;
         if !fixed_simulation_is_admitted(world) {
             break;
         }
@@ -657,7 +729,12 @@ fn run_pending_fixed_main_schedule(
         if !manual_step && world.resource::<Time<Fixed>>().overstep() < timestep {
             break;
         }
-        if !continue_service() {
+        // The host may pump rendering readiness here. Attribute that work to
+        // the host, not to fixed simulation service.
+        let checking = Instant::now();
+        let allowed = continue_service();
+        host_service = host_service.saturating_add(checking.elapsed());
+        if !allowed {
             break;
         }
         // Systems inside FixedMain use the prospective endpoint to order controls
@@ -720,7 +797,9 @@ fn run_pending_fixed_main_schedule(
         world.resource_mut::<SimulationStepControl>().cancel();
     }
     *world.resource_mut::<Time>() = world.resource::<Time<Virtual>>().as_generic();
-    budget.spent = budget.spent.saturating_add(service_started.elapsed());
+    budget.spent = budget
+        .spent
+        .saturating_add(service_started.elapsed().saturating_sub(host_service));
     *world.resource_mut::<FixedServiceBudget>() = budget;
 }
 
@@ -735,7 +814,18 @@ fn finish_fixed_loop_timing(
     start: Res<SimulationTimingStart>,
     budget: Res<FixedServiceBudget>,
     mut profile: ResMut<SimulationTimingProfile>,
+    transport: Res<TimeTransport>,
+    strategy: Res<bevy::time::TimeUpdateStrategy>,
+    execution: Res<lunco_core_runtime::SimulationExecutionMode>,
+    mut throughput: ResMut<TransportThroughput>,
 ) {
+    let automatic = matches!(*strategy, bevy::time::TimeUpdateStrategy::Automatic)
+        && *execution == lunco_core_runtime::SimulationExecutionMode::Realtime;
+    throughput.observe(
+        Instant::now(),
+        tick.0,
+        (automatic && input.running && transport.is_running()).then_some(transport.rate),
+    );
     let max_delta_limited_simulation_secs = if input.running {
         input.raw_real_delta_secs.map(|raw_delta_secs| {
             (raw_delta_secs - input.virtual_max_delta_secs).max(0.0) * input.effective_rate
@@ -1185,6 +1275,8 @@ impl Plugin for TimePlugin {
             .init_resource::<TimeUpdateTimingInput>()
             .init_resource::<SimulationTimingStart>()
             .init_resource::<FixedServiceBudget>()
+            .init_resource::<FixedServiceLimits>()
+            .init_scene_resource::<TransportThroughput>()
             .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<MissionClock>()
             .init_resource::<TimeTransport>()
@@ -1785,9 +1877,12 @@ mod tests {
             ))
             .init_resource::<FixedRunCount>()
             .add_systems(FixedUpdate, (count_fixed_runs, count_fixed_ticks));
-        // Native ECS dispatch exceeds this quantum without a sleep or a fake
+        // Native ECS dispatch exceeds this wall allowance without a sleep or a fake
         // clock. Every app update must still admit one complete causal cycle.
-        let quantum = Duration::from_nanos(1);
+        let quantum = Duration::from_millis(10);
+        app.insert_resource(FixedServiceLimits {
+            update_wall_service: Duration::from_nanos(1),
+        });
         app.world_mut()
             .resource_mut::<Time<Fixed>>()
             .set_timestep(quantum);
@@ -1864,7 +1959,7 @@ mod tests {
     }
 
     #[test]
-    fn host_service_shares_one_budget_across_completion_wakes() {
+    fn host_service_shares_cycle_allowance_across_completion_wakes() {
         let mut app = App::new();
         app.add_plugins((
             bevy::time::TimePlugin,
@@ -1877,6 +1972,9 @@ mod tests {
         .init_resource::<FixedRunCount>()
         .add_systems(FixedUpdate, (count_fixed_runs, count_fixed_ticks));
         let quantum = Duration::from_secs(60);
+        app.insert_resource(FixedServiceLimits {
+            update_wall_service: Duration::from_secs(60),
+        });
         let max_cycles = MAX_FIXED_STEPS_PER_SERVICE;
         app.world_mut()
             .resource_mut::<Time<Fixed>>()
@@ -1908,18 +2006,81 @@ mod tests {
         assert_eq!(world.resource::<FixedRunCount>().0, max_cycles + 2);
         assert_eq!(world.resource::<Time<Fixed>>().overstep(), Duration::ZERO);
 
-        // Inject an elapsed budget at the same boundary to avoid sleeping in
-        // the test. A completion wake cannot refresh the time allowance.
+        // The ordinary service deadline has expired. A native host can use
+        // otherwise blocked render time without refreshing the cycle allowance.
         world
             .resource_mut::<Time<Fixed>>()
             .accumulate_overstep(quantum);
-        world.resource_mut::<FixedServiceBudget>().spent = quantum;
-        assert!(!can_service_pending_simulation(world));
-        service_pending_simulation(world, || panic!("the update exhausted its time allowance"));
+        world.resource_mut::<FixedServiceBudget>().deadline = Some(Instant::now());
+        assert!(can_service_pending_simulation(world));
+        service_pending_simulation(world, || false);
         assert_eq!(world.resource::<FixedRunCount>().0, max_cycles + 2);
-        assert_eq!(world.resource::<Time<Fixed>>().overstep(), quantum);
+        service_pending_simulation(world, || true);
+        assert_eq!(world.resource::<FixedRunCount>().0, max_cycles + 3);
+        assert_eq!(world.resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+    }
+
+    #[test]
+    fn transport_throughput_reports_completed_ticks_and_retires_old_windows() {
+        let mut throughput = TransportThroughput::default();
+        let mut transport = TimeTransport {
+            mode: TransportMode::Playing,
+            rate: 8.0,
+        };
+        let start = Instant::now();
+        throughput.observe(start, 0, Some(transport.rate));
+        assert_eq!(throughput.achieved_rate(&transport), None);
+        throughput.observe(start + Duration::from_secs(1), 180, Some(transport.rate));
+        assert_eq!(throughput.achieved_rate(&transport), Some(3.0));
+        transport.rate = 2.0;
+        assert_eq!(throughput.achieved_rate(&transport), None);
+        throughput.observe(start + Duration::from_secs(2), 240, Some(transport.rate));
+        throughput.observe(start + Duration::from_secs(3), 360, Some(transport.rate));
+        assert_eq!(throughput.achieved_rate(&transport), Some(2.0));
+        transport.mode = TransportMode::Paused;
+        assert_eq!(throughput.achieved_rate(&transport), None);
+        throughput.observe(start + Duration::from_secs(4), 360, None);
+        transport.mode = TransportMode::Playing;
+        assert_eq!(throughput.achieved_rate(&transport), None);
+        throughput.clear_scene();
+        assert_eq!(throughput.achieved_rate(&transport), None);
+    }
+
+    #[test]
+    fn blocked_native_continuation_admits_receipts_once_without_advancing() {
+        #[derive(Resource, Default)]
+        struct Admissions(u32);
+        fn count_admission(mut count: ResMut<Admissions>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins((
+            bevy::time::TimePlugin,
+            TimePlugin,
+            lunco_core_runtime::SimulationCompletionPlugin,
+        ))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::ZERO,
+        ))
+        .init_resource::<Admissions>()
+        .init_resource::<lunco_core_runtime::SimulationBarrier>()
+        .add_systems(lunco_core_runtime::SimulationCompletions, count_admission);
         app.update();
-        assert_eq!(app.world().resource::<FixedRunCount>().0, max_cycles + 3);
+        let world = app.world_mut();
+        world.resource_mut::<Admissions>().0 = 0;
+        world
+            .resource_mut::<lunco_core_runtime::SimulationBarrier>()
+            .held = true;
+        let timestep = world.resource::<Time<Fixed>>().timestep();
+        world
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(timestep);
+        let tick = world.resource::<SimTick>().0;
+        service_pending_simulation(world, || true);
+        assert_eq!(world.resource::<Admissions>().0, 1);
+        assert_eq!(world.resource::<SimTick>().0, tick);
+        assert_eq!(world.resource::<Time<Fixed>>().overstep(), timestep);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 // Windowed acceptance: measure completed time under ordinary host pacing.
 fn simulation_dependencies(me, ctx) {
     #{modelica_entities: [], entity_reads: [], entity_writes: [],
-      query_reads: [], required_inputs: []}
+      query_reads: ["SimulationTimingProfile"], required_inputs: []}
 }
 
 fn rate_matches(actual, requested) {
@@ -40,6 +40,7 @@ fn on_start(me, params) {
     }
     this.index = 0;
     this.done = false;
+    this.finishing = false;
     this.checks = [
         t_true(clock_snapshot().barrier_active_participants == params.participants,
             "the admitted participant set does not match the requested scene"),
@@ -52,6 +53,14 @@ fn on_start(me, params) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     let clock = clock_snapshot();
+    if this.finishing {
+        let timing = query("SimulationTimingProfile").transport;
+        this.checks.push(t_true(!clock.transport_playing && timing.achieved_rate == (),
+            "a paused transport must not display the previous running rate"));
+        this.done = true;
+        report_verdict(this.checks, "SIMULATION TRANSPORT RATE", "SIMULATION_TRANSPORT_RATE");
+        return;
+    }
     if this.warming {
         if clock.wall_elapsed_s - this.warmup_started >= this.warmup_seconds {
             this.begin_sample(this.rates[this.index]);
@@ -68,15 +77,24 @@ fn on_tick(me, ctx) {
         + " actual=" + actual.to_string() + " wall_s=" + wall.to_string());
     this.checks.push(t_true(rate_matches(actual, requested),
         "requested " + requested.to_string() + "x, completed " + actual.to_string() + "x"));
-    this.checks.push(t_max(native_elapsed - completed_ticks * this.native_dt,
+    this.checks.push(t_max(abs(native_elapsed - completed_ticks * this.native_dt),
         this.native_dt * 0.001,
         "native physics time error at " + requested.to_string() + "x"));
+    let timing = query("SimulationTimingProfile").transport;
+    let tolerance = max(actual * 0.15, 2.0 * clock.simulation_dt_s);
+    // The meter describes the latest one-second window, not the entire
+    // independent sample. Only a sustained target-rate run compares those
+    // two intervals numerically; saturated runs still require a real sample.
+    // The strict requested-rate assertion above is unchanged.
+    this.checks.push(t_true(timing.requested_rate == requested && timing.achieved_rate != ()
+        && timing.achieved_rate.is_finite() && timing.achieved_rate >= 0.0
+        && (!rate_matches(actual, requested) || abs(timing.achieved_rate - actual) <= tolerance),
+        "the one-second completed-rate diagnostic is valid and agrees with a sustained target-rate sample"));
     this.index += 1;
     if this.index < this.rates.len() {
         this.begin_rate(this.rates[this.index]);
     } else {
-        this.done = true;
+        this.finishing = true;
         cmd("SetTimeTransport", #{playing: false, rate: 1.0});
-        report_verdict(this.checks, "SIMULATION TRANSPORT RATE", "SIMULATION_TRANSPORT_RATE");
     }
 }

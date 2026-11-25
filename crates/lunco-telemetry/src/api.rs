@@ -497,8 +497,18 @@ impl ApiQueryProvider for SimulationTimingProfileProvider {
             percentile_milliseconds(profile.recent_loops().map(|sample| sample.service_secs))?;
         let latest_tick = profile.latest_tick();
         let latest_loop = profile.latest_loop();
+        let transport = world.get_resource::<lunco_time::TimeTransport>();
+        let achieved_rate = transport.and_then(|transport| {
+            world
+                .get_resource::<lunco_time::TransportThroughput>()
+                .and_then(|throughput| throughput.achieved_rate(transport))
+        });
 
         Ok(Some(api_value!({
+            "transport": {
+                "requested_rate": optional_float(transport.map(|transport| transport.rate)),
+                "achieved_rate": optional_float(achieved_rate),
+            },
             "fixed_tick": {
                 "window_samples": tick_samples as u64,
                 "service_ms_p50": optional_float(tick_service[0]),
