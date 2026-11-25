@@ -1021,7 +1021,9 @@ fn connection_endpoints<'a>(
     };
     let source_type = property_type(source)?;
     let sink_type = property_type(sink)?;
-    if source_type != sink_type {
+    if !openusd::sdf::ValueTypeName::from(source_type.as_str())
+        .agrees_with(&openusd::sdf::ValueTypeName::from(sink_type.as_str()))
+    {
         return Err(format!("cannot connect USD {source_type} to {sink_type}"));
     }
     Ok((source, sink))

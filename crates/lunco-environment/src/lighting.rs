@@ -125,15 +125,10 @@ pub fn drive_earthshine_from_phase(
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     q_targets: Query<(Entity, &crate::DirectionTargetId)>,
     poses: lunco_physics::SimulationPoseQuery,
+    mounted: crate::solar::MountedDirectionalLights,
     mut q_fill: Query<&mut DirectionalLight, With<crate::Earthshine>>,
     mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
-    if q_fill.is_empty() {
-        if let Some(mut diagnostics) = diagnostics {
-            diagnostics.replace_producer("environment-earthshine", std::iter::empty());
-        }
-        return;
-    }
     let mut fail = |code: &str, message: String| {
         if let Some(diagnostics) = diagnostics.as_deref_mut() {
             diagnostics.replace_producer(
@@ -146,6 +141,24 @@ pub fn drive_earthshine_from_phase(
                     message,
                 }],
             );
+        }
+    };
+    let mut fill = match mounted.membership(true) {
+        crate::solar::SourceMembership::One(entity) => q_fill
+            .get_mut(entity)
+            .expect("mounted earthshine matches the fill query"),
+        crate::solar::SourceMembership::Missing => {
+            if let Some(diagnostics) = diagnostics.as_deref_mut() {
+                diagnostics.replace_producer("environment-earthshine", std::iter::empty());
+            }
+            return;
+        }
+        crate::solar::SourceMembership::Multiple => {
+            fail(
+                "earthshine-cardinality",
+                "Active scene has multiple unscoped earthshine lights".to_owned(),
+            );
+            return;
         }
     };
     let Some(frame) = active_frame.as_deref().map(|frame| frame.0) else {
@@ -195,12 +208,7 @@ pub fn drive_earthshine_from_phase(
     let lit_fraction = ((1.0 + cos_alpha) * 0.5).clamp(0.0, 1.0);
     let lux = (f64::from(FULL_EARTH_EARTHSHINE_LUX) * lit_fraction) as f32;
 
-    for mut fill in &mut q_fill {
-        // Change-driven: `DirectionalLight` is in the render extract, and the
-        // phase moves by ~0.5°/day, so an unconditional write would dirty the
-        // component every frame to restate the same number.
-        if (fill.illuminance - lux).abs() > f32::EPSILON {
-            fill.illuminance = lux;
-        }
+    if (fill.illuminance - lux).abs() > f32::EPSILON {
+        fill.illuminance = lux;
     }
 }

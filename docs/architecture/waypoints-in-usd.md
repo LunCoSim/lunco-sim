@@ -96,8 +96,8 @@ when pointer paths are present, they remain authoritative.
 The route program binds its document and paths on the matching
 `usd.document.projected` event. Its first binding processes the route snapshot
 even when that projection reports no changed prim paths; this is the event that
-makes the composed route identity authoritative. The same event refreshes the
-disposable ribbon without waiting for Modelica admission. Later projection
+makes the composed route identity authoritative. A host with curve presentation
+refreshes the disposable ribbon at that boundary. Later projection
 events refresh the route only when relevant prim paths change. `on_start`
 performs occupancy and control setup, then emits `program.ready`; the route task
 stays idle until its document binding is available.
@@ -110,16 +110,21 @@ document-backed live edit still uses the composed canonical path and the
 existing USD journal boundary.
 
 The route tool derives a ribbon from the same point children. Route-point
-topology and transforms are durable `@runtime@` edits; visited-marker colors
-and the ribbon's USD identity are disposable `@view@` presentation. A standard
-`BasisCurves` seed references
-[`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
-once so the existing USD renderer supplies a stable path, material, and
-pointer-interaction contract. The seed authors only the reference root and its
-anchor. The reference owner admits and projects the asset before the route
-policy submits curve points; child geometry and interaction defaults belong to
-the reusable asset. Rejected view edits are terminal presentation results and
-clear pending admission until a new route revision. `UpdateUsdCurveView` captures ordered f64
+topology and transforms are durable `@runtime@` edits. The tool first checks
+`command_available("UpdateUsdCurveView")`. A headless simulation runs route
+selection, sensors and navigation with the original document generation. It
+creates no ribbon or pending presentation job.
+
+The desktop and offscreen renderers use the route's composed
+`RouteRibbon/Geometry` prim for its material binding, stable picking identity
+and terrain annotation. A route author can reference the standard
+[ribbon asset](../../assets/markers/route_ribbon.usda) as a child named
+`RouteRibbon` to supply that identity with the initial scene. When the route
+has at least two points and lacks the reference, the graphics host adds the
+reference and its anchor once to the disposable `@view@` layer. That initial
+edit advances the document generation and projects the ribbon subtree.
+Subsequent movement, progress and live colour updates reuse the projected prim.
+Rejected seed edits are terminal presentation results until a new route revision. `UpdateUsdCurveView` captures ordered f64
 parent-local route points and resolves them into the owning terrain's local
 plane. The terrain annotation owner builds a bounded spatial index off-thread;
 its production and diagnostic fragments paint the route on their own surface,
@@ -133,7 +138,7 @@ texture until the replacement commits. Missing coverage, unsupported shaders
 and exceeded work/precision bounds are terminal presentation errors, independent
 of navigation. Removing
 the curve entity removes its annotation; source revisions fence background
-results. This presentation changes neither USD generation nor waypoint topology.
+results. Updating points on an admitted curve preserves the document generation and waypoint topology.
 See [USD-driven visuals](50-usd-driven-visuals.md) for the rendering ABI and gate.
 
 The route-following program owns live ribbon refreshes. The waypoint editor
@@ -201,7 +206,7 @@ change visit state or advance the route; the point must be entered again after
 its predecessors. At startup, only the first unvisited point can be marked from
 `SensorOccupants`, because a simultaneous occupancy snapshot does not establish
 arrival order. An accepted visit changes that point's reusable marker to its
-visited colour through the generic transient USD view tool, emits the authored
+visited colour through `SetSceneView`, emits the authored
 route-level `route_point_reached` event for mission policy, and advances the
 local cursor. Physics reports sensor events; Rhai maps those facts to route
 progression.
@@ -292,7 +297,7 @@ named prim in another open document. Durable edits remain one atomic
 mesh owner directly; projected route changes cover external edits and
 undo/redo. No route ribbon attributes are authored on an edit.
 
-The generic `MoveEntity` persistence observer resolves its USD document from
+For `MoveEntity` with `intent: "Persistent"`, the scene command resolves the USD document from
 the moved entity's `UsdPrimPath.stage_handle`. The active editor tab may belong
 to another open document that composes the same prim path; using that tab as the
 write destination would move the wrong route opinion while the live command
@@ -335,7 +340,7 @@ authorship, converts the active-frame position through the target's real parent
 hierarchy, and updates only its live render transform. It does not edit the USD
 document or trigger projection. Preview creation and cleanup each use one
 transient view-layer edit; only the placement click authors the waypoint's
-canonical `@runtime@` position through the existing `MoveEntity` command, which
+canonical `@runtime@` position through `MoveEntity` with `intent: "Persistent"`, which
 owns active-frame conversion and persistence. Selecting a point alone does not
 arm movement.
 Placement resolves the preview's `Target_<point>` from the explicit `@view@`
@@ -451,10 +456,14 @@ semantic intents and apply to any authored subject profile.
 The marker's dome is translucent, unlit, and shadowless. Without a color override,
 unvisited points are green and completed points are gray. Author one constant
 `color3f[] primvars:displayColor` on the route scope to color its line and points.
-A direct point root can override the route color. Completed colored points dim
-to 35 percent brightness while retaining their hue. The point root owns the
-persistent choice; the Dome's display color and ribbon's material remain derived
-`@view@` state, so progress cannot overwrite an authored choice.
+A direct point root can override the route color. This changes the marker without scheduling a new ribbon geometry revision. Completed colored points dim
+to 35 percent brightness while retaining their hue. The route and point roots own their
+persistent palette choices. The route program applies the resulting dome colour
+to `material.base_color` and the ribbon colour to `material.emissive` through
+`SetSceneView`. The terrain annotation snapshots the same effective appearance
+as the ordinary ribbon mesh. Clearing a live channel restores its authored
+value. A visit changes the marker's private render material and preserves the
+USD generation.
 
 Right-click a route line or marker and choose **Route color…**; marker menus also
 provide **Point color…**. Palette edits use the normal `@runtime@` journal,

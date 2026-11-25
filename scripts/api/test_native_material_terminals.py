@@ -41,6 +41,8 @@ def main():
                 ("material_rebind", "material_rebound", 3),
                 ("material_annotate", "material_annotated", 1),
                 ("material_restore", "material_valid", 3),
+                ("material_assign_wesl", "material_assigned_wesl", 2),
+                ("material_undo_edit", "material_valid", 3),
                 ("material_switch_terminal", "material_terminal_switched", 1),
                 ("material_switch_custom", "material_custom", 1),
                 ("material_restore_terminal", "material_valid", 3),
@@ -78,6 +80,12 @@ def main():
                         session, "lunco://scenarios/tests/usd_visual_completion.rhai",
                         title="USD VISUAL COMPLETION", check_count=2, owner_twin_id=twin,
                         params={"doc_id": doc, "mesh": "/World/NativeMaterialTerminal/Shape"},
+                        timeout_s=args.timeout,
+                    )
+                    run_authored_scenario(
+                        session, "lunco://scenarios/tests/usd_texture_completion.rhai",
+                        title="USD TEXTURE COMPLETION", check_count=8, owner_twin_id=twin,
+                        params={"doc_id": doc, "root": "/World/NativeMaterialTerminal"},
                         timeout_s=args.timeout,
                     )
     except Exception as error:

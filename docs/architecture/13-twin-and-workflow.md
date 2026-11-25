@@ -1090,9 +1090,9 @@ No data loss from crashes. Matches VS Code's `Backups` behavior.
 ### Autosave
 
 - **In a Twin:** scene edits do not autosave by default. Authored document
-  changes still use explicit Save; generated USD runtime spawns and moves use
-  the Twin setting `[settings] usd.runtime_persistence = true` when the user
-  explicitly opts into reading and writing the `.lunco/runtime` cache.
+  changes use explicit Save. Interactive spawns and moves leave the USD
+  document untouched. The Twin setting `[settings] usd.runtime_persistence = true`
+  opts the authored runtime layer into the `.lunco/runtime` cache.
   Session-only state remains disposable. The optional Rhai
   `editor_workflow::after_edit` checkpoint may save an authored edit only when
   `[settings] usd.editor_autosave = true`; an omitted or false value leaves the

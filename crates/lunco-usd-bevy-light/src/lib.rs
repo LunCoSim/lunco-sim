@@ -5,6 +5,7 @@
 //! substrate and is installed by `lunco-usd-bevy`; mesh, material, and stage
 //! projection code does not live here.
 
+mod distant;
 pub mod dome;
 pub mod light;
 
@@ -15,6 +16,16 @@ pub struct UsdLightPlugin;
 
 impl Plugin for UsdLightPlugin {
     fn build(&self, app: &mut App) {
+        use lunco_usd_bevy_core::live_edit::{UsdLiveEditOwner, UsdLiveEditRegistry};
+        app.init_resource::<UsdLiveEditRegistry>()
+            .world_mut()
+            .resource_mut::<UsdLiveEditRegistry>()
+            .register(UsdLiveEditOwner::new(
+                "usd-light.distant",
+                distant::claims,
+                None,
+                distant::refresh,
+            ));
         app.register_type::<RectLight>()
             .add_observer(light::on_usd_light_added)
             .add_plugins(dome::DomePlugin);

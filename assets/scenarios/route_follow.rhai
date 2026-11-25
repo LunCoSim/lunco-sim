@@ -455,6 +455,15 @@ fn next_route_visit_point(me, state) {
 fn mark_route_point_visited(state, point) {
     if state.visited_points[point] == true { return state; }
     state.visited_points[point] = true;
+    if !state.marker_sync_pending && state.route_marker_colors.contains(point) {
+        let marker = waypoint_editor::sync_marker_snapshot(state.route_document,
+            #{ok:true, paths:[point], marker_colors:[state.route_marker_colors[point]]}, state.visited_points);
+        if marker.ok == true { return state; }
+        if marker.retryable != true {
+            emit("route_presentation_unavailable", marker.error);
+            return state;
+        }
+    }
     state.marker_sync_pending = true;
     state
 }
@@ -628,7 +637,11 @@ fn refresh_route_view(me, state, snapshot) {
     }
     let style_key = waypoint_editor::route_style_key(read);
     let style_changed = state.route_style_key != style_key;
-    if style_changed { state.marker_sync_pending = true; }
+    if style_changed || state.route_points != read.paths {
+        state.marker_sync_pending = true;
+        state.route_marker_colors = #{};
+        for i in 0..read.paths.len() { state.route_marker_colors[read.paths[i]] = read.marker_colors[i]; }
+    }
     if state.route_view_key == view_key && !style_changed && !state.marker_sync_pending
         && !state.ribbon_sync_pending {
         return #{ result: #{ ok: true, revision: revision, view_key: view_key }, state: state };
@@ -639,10 +652,9 @@ fn refresh_route_view(me, state, snapshot) {
     state.subject_path = ();
     state.route_points = read.paths;
     state.safe_stopped = false;
-    // The ribbon's appearance and geometry share one presentation request.
-    // Progress-only marker updates leave the ribbon alone; authored style
-    // changes rebuild presentation without changing the navigation key.
-    if state.route_view_key != view_key || style_changed || state.ribbon_sync_pending {
+    // Only route geometry and the route's own color affect the ribbon.
+    let ribbon_color_changed = state.route_style_key == () || state.route_style_key.color != read.color;
+    if state.route_view_key != view_key || ribbon_color_changed || state.ribbon_sync_pending {
         let result = waypoint_editor::update_ribbon_view(
             doc, state.route_path, read.points, state.ribbon_edit_command,
         );
@@ -661,13 +673,14 @@ fn refresh_route_view(me, state, snapshot) {
             && (result.pending == true || result.retryable == true);
     }
     if state.marker_sync_pending {
-        let marker = waypoint_editor::sync_marker_states(
-            doc, state.route_path, state.visited_points,
+        let marker = waypoint_editor::sync_marker_snapshot(
+            doc, read, state.visited_points,
         );
         if marker == () || marker.ok != true {
-            state.marker_sync_pending = true;
-            if marker == () || marker.retryable != true {
-                emit("route_presentation_unavailable", "route-point state is not ready");
+            state.marker_sync_pending = marker != () && marker.retryable == true;
+            if !state.marker_sync_pending {
+                emit("route_presentation_unavailable",
+                    if marker == () { "route-point update returned no result" } else { marker.error });
             }
         } else {
             state.marker_sync_pending = false;
@@ -858,6 +871,7 @@ fn on_start(me, ctx) {
     this.route_revision = ();
     this.route_view_key = ();
     this.route_style_key = ();
+    this.route_marker_colors = #{};
     this.ribbon_sync_pending = false;
     this.ribbon_edit_command = ();
     this.route_error = "";
@@ -925,7 +939,7 @@ fn bind_projected_route(me, state, expected_doc) {
     #{ ok: true, state: state }
 }
 
-fn projected_paths_touch_route(paths, route) {
+fn projected_paths_touch_route(paths, route, structural) {
     if paths == () || route == () { return false; }
     let prefix = route + "/";
     for path in paths {
@@ -933,7 +947,8 @@ fn projected_paths_touch_route(paths, route) {
         if !path.starts_with(prefix) { continue; }
         let parts = path.sub_string(prefix.len()).split("/");
         if parts.len() == 1 && parts[0] == "RouteRibbon" { continue; }
-        if parts.len() == 1 || (parts.len() == 2 && parts[1] == "Trigger") {
+        if parts.len() == 1 || (parts.len() == 2 && (parts[1] == "Trigger"
+            || (structural && parts[1] == "Dome"))) {
             return true;
         }
     }
@@ -957,11 +972,17 @@ fn on_event(me, evt, ctx) {
             });
         }
         if !same_document_id(projected_doc, this.route_document) { return; }
-        if !first_projected_binding && !projected_paths_touch_route(
-            evt.value["changed_prim_paths"], this.route_path,
+        let full_stage = evt.value.projection_mode == "full_stage";
+        let structural = evt.value.projection_mode == "subtree";
+        if !first_projected_binding && !full_stage && !projected_paths_touch_route(
+            evt.value["changed_prim_paths"], this.route_path, structural,
         ) {
             this.route_revision = evt.value["generation"];
             return;
+        }
+        if full_stage || structural {
+            this.marker_sync_pending = true;
+            this.ribbon_sync_pending = true;
         }
         // Projection is the authoritative invalidation boundary for route
         // topology. Only route-owned transform/order changes or Trigger

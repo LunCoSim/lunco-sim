@@ -13,7 +13,7 @@ actually call, with the fields the deserializer actually accepts. See the
 [Scripting Guide](scripting-guide.md) §3 for the rhai `cmd()`/`query()` bridge and the
 [API doc](architecture/12-api.md) for the HTTP contract.
 
-**337 commands** across **62** crates. All documented.
+**339 commands** across **62** crates. All documented.
 
 > **Regenerate:** dump schemas from the running app(s), then
 > `cargo run -p gen-command-docs -- --schema <gui.json> [--schema <headless.json> ...]` (see the tool's `--help`).
@@ -25,7 +25,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 - [`lunco-luncosim-edit-core`](#lunco-luncosim-edit-core) (1 command)
 - [`lunco-luncosim-edit-ui`](#lunco-luncosim-edit-ui) (30 commands)
-- [`lunco-scene-commands`](#lunco-scene-commands) (4 commands)
+- [`lunco-scene-commands`](#lunco-scene-commands) (3 commands)
 
 **USD / scenes**
 
@@ -55,7 +55,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 **Scripting & scenarios**
 
-- [`lunco-scripting`](#lunco-scripting) (2 commands)
+- [`lunco-scripting`](#lunco-scripting) (3 commands)
 
 **Documents & twins**
 
@@ -114,7 +114,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-scene-authoring`](#lunco-scene-authoring) (6 commands)
 - [`lunco-scene-camera`](#lunco-scene-camera) (2 commands)
 - [`lunco-scene-catalog`](#lunco-scene-catalog) (2 commands)
-- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (5 commands)
+- [`lunco-scene-command-contracts`](#lunco-scene-command-contracts) (6 commands)
 - [`lunco-scene-validation`](#lunco-scene-validation) (1 command)
 - [`lunco-scripting-rhai-runtime`](#lunco-scripting-rhai-runtime) (12 commands)
 - [`lunco-scripting-rhai-world`](#lunco-scripting-rhai-world) (2 commands)
@@ -130,7 +130,7 @@ actually call, with the fields the deserializer actually accepts. See the
 - [`lunco-workbench-file-ops`](#lunco-workbench-file-ops) (6 commands)
 - [`lunco-workbench-guided-ui`](#lunco-workbench-guided-ui) (14 commands)
 - [`lunco-workbench-perf-ui`](#lunco-workbench-perf-ui) (1 command)
-- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (5 commands)
+- [`lunco-workbench-runtime-ui`](#lunco-workbench-runtime-ui) (6 commands)
 - [`lunco-workbench-window`](#lunco-workbench-window) (3 commands)
 - [`lunco-workspace`](#lunco-workspace) (11 commands)
 
@@ -553,14 +553,14 @@ actually call, with the fields the deserializer actually accepts. See the
 
 #### `DetachJoint`
 
- Request an entity detachment (joint-aware when joint state is present).
+ Release an admitted physics joint through its solver-safe retirement owner.
 
 - *defined in:* `crates/lunco-scene-commands/src/commands.rs`
 
 | Field | Type | Description |
 |---|---|---|
-| `target` | `Entity` |  Entity to detach. Joint state, when present, is retired through the  physics lifecycle; ordinary entities use normal removal. |
-| `intent` | `lunco_core :: EditIntent` |  Interactive (default) detaches only the live joint; Persistent explicitly  authors the removal into the owning USD document's runtime layer. |
+| `target` | `Entity` |  The joint's stable entity identity. |
+| `intent` | `lunco_core :: EditIntent` |  Interactive (default) releases the live joint. Persistent edits its owning USD document. |
 
 #### `RotateEntity`
 
@@ -612,19 +612,6 @@ actually call, with the fields the deserializer actually accepts. See the
 | `extend` | `bool` |  Retain the current selection and add this entity. |
 | `toggle` | `bool` |  Toggle this entity in the current selection. |
 | `remove_only` | `bool` |  Remove this entity without adding it. |
-
-#### `SetUsdConnection`
-
- Author a native USD attribute connection (`connectionPaths`) onto a prim.
-
-- *defined in:* `crates/lunco-scene-commands/src/commands.rs`
-
-| Field | Type | Description |
-|---|---|---|
-| `target` | `Entity` |  Target entity or prim root. |
-| `name` | `String` |  Attribute name (e.g. `inputs:angle` or `inputs:earth_azimuth`). |
-| `type_name` | `String` |  Attribute type name (e.g. `float`). Defaults to `float`. |
-| `sources` | `Vec < String >` |  Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/AntennaTrackerController.outputs:az"]`). |
 
 ## USD / scenes
 
@@ -1366,6 +1353,16 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ### `lunco-scripting` <a id="lunco-scripting"></a>
 
+#### `RunPython`
+
+ Evaluate code with the installed Python scripting backend and return its output.
+
+- *defined in:* `crates/lunco-scripting/src/commands.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `code` | `String` |  Python source to evaluate. |
+
 #### `SetScenarioPaused`
 
  Pause or resume the scenario attached to `target`.
@@ -1734,8 +1731,8 @@ actually call, with the fields the deserializer actually accepts. See the
  Sets scene environment lighting at runtime: the sun's direction and the
  global ambient level.
 
- All three fields are optional — only the ones provided change, the rest
- keep their current value. So a curl that just lowers the sun looks like:
+ Supply the fields to change. The owner validates the complete request before
+ applying a live update or committing an explicit persistent edit.
 
  ```jsonc
  {"type":"ExecuteCommand","command":"SetEnvironmentLight","params":{"sun_pitch":-0.15}}
@@ -1765,7 +1762,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | `ambient_brightness` | `Option < f32 >` |  Global ambient brightness (cd/m²-scaled). `None` keeps current. |
 | `exposure_ev100` | `Option < f32 >` |  Camera physical exposure, EV100 (≈15 = sunlight, 9.7 = Blender default).  Moves with `illuminance`: brighter sun ⇒ higher EV. `None` keeps current. |
 | `earthshine_color` | `Option < [f32 ; 3] >` |  [`Earthshine`] fill color, linear RGB (cool blue ≈ 0.6,0.75,1.0).  `None` keeps current. |
-| `bloom_intensity` | `Option < f32 >` |  Bloom intensity on the scene cameras. `None` keeps current; zero disables  bloom and a non-zero value enables the HDR target required by the effect.   **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is  `bevy_post_process`, and this crate must not name it. That observer  writes the render intent, whose binder owns the concrete post-process  component. |
+| `bloom_intensity` | `Option < f32 >` |  Bloom intensity on the scene cameras. `None` keeps current; zero disables  bloom and a non-zero value enables the HDR target required by the effect. |
 | `intent` | `lunco_core :: EditIntent` |  Live by default; Persistent explicitly authors supported USD light settings. |
 
 ## Terrain
@@ -3311,6 +3308,20 @@ actually call, with the fields the deserializer actually accepts. See the
 | `target` | `Entity` |  Exact collider entity, not a source prim that has no native collider. |
 | `enabled` | `bool` |  Whether the collider participates in live contact detection. |
 
+#### `SetSceneParticipation`
+
+ Apply one live scene transition. All destinations and their owners are
+ validated before publishing any physics, radio or presentation changes.
+
+- *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `bodies` | `Vec < BodyParticipation >` |  Independent bodies and all their attached contact shapes. |
+| `colliders` | `Vec < ParticipationSwitch >` |  Individual admitted shapes outside the requested bodies. |
+| `occluders` | `Vec < ParticipationSwitch >` |  Admitted sight-line blockers, independent of contact shapes. |
+| `views` | `Vec < SceneViewBatch >` |  Presentation writes to publish with this transition. |
+
 #### `SetSceneView`
 
  Apply a batch of runtime presentation values to the mounted scene.
@@ -4744,11 +4755,22 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `form_id` | `String` |   |
 
+#### `SetRuntimeHudVisibility`
+
+ Set whether a dismissible HUD in the current scene may be displayed.
+
+- *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `String` |  Surface id from InspectRuntimeHuds. |
+| `visible` | `bool` |   |
+
 #### `SetRuntimeUiDataSource`
 
- Publish rows from the active Twin's presentation policy to a declared runtime
- UI collection or data source. The destination must be declared by the active
- runtime UI manifest; the command cannot publish arbitrary exposures.
+ Publish keyed rows from the active Twin's presentation policy. A declared
+ data source can feed a native dropdown without creating a hidden HUI list;
+ collection sources use the same rows for their authored HUI host.
 
 - *defined in:* `crates/lunco-workbench-runtime-ui/src/lib.rs`
 
@@ -4955,7 +4977,7 @@ actually call, with the fields the deserializer actually accepts. See the
 
 ---
 
-<!-- 336 commands from the runtime schema; scanned 1112 .rs files for docs (0 parse failure(s) skipped).
+<!-- 339 commands from the runtime schema; scanned 1120 .rs files for docs (0 parse failure(s) skipped).
      `#[Command]` in source but NOT in the runtime schema — test fixtures, hidden
-     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, RunPython, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
+     (`ApiVisibility::hide`), or never registered; deliberately not documented: Collision, HiddenCommand, InternalEvent, PluginCommand, ReflectedEvent, ScriptOpenCommand, ScriptOwnedCommand, TestDeferred, TestEcho, TestImmediateDeferred, TestNestedCommand, TestNumericCommand
 -->

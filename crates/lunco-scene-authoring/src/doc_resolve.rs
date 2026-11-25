@@ -138,7 +138,7 @@ pub fn geom_api_schemas(world: &World, prim: &UsdPrimPath) -> Result<Vec<String>
     Ok(composed_reader(world, prim)?.api_schemas(&path))
 }
 
-pub(crate) fn composed_reader<'w>(
+pub fn composed_reader<'w>(
     world: &'w World,
     prim: &UsdPrimPath,
 ) -> Result<lunco_usd_bevy_stage::UsdReadSource<'w>, String> {
@@ -211,18 +211,7 @@ fn authorable_prim_path(
     stages: Option<&lunco_usd_bevy_stage::canonical::CanonicalStages>,
     assets: Option<&Assets<UsdStageAsset>>,
 ) -> Option<(lunco_doc::DocumentId, String)> {
-    let doc = resolve_doc_for_stage(prim.stage_handle.id(), backed, usd_registry)?;
-    let host = usd_registry.host(doc)?;
-    let prim_sdf = SdfPath::new(&prim.path).ok()?;
-    let stage_id = prim.stage_handle.id();
-    let (reader, _) = stages?.reader_for_composed_query(stage_id, assets?.get(stage_id)?);
-    if !reader.has_prim(&prim_sdf) || !reader.is_active(&prim_sdf).ok()? {
-        return None;
-    }
-    let owned = host.document().data().spec(&prim_sdf).is_some()
-        || host.document().runtime_data().spec(&prim_sdf).is_some();
-    let composed = reader.has_composition_arc(&prim_sdf).ok()?;
-    (owned || composed).then(|| (doc, prim.path.clone()))
+    delete_target(prim, usd_registry, backed, stages, assets).map(|(doc, path, _)| (doc, path))
 }
 
 /// The generic persistent-delete target for a document-backed prim.
@@ -241,29 +230,28 @@ pub enum DeleteTarget {
 /// Resolve the document/path and the USD operation shape for a persistent
 /// generic delete.
 pub fn delete_target(
-    entity: Entity,
-    q_prim: &Query<&UsdPrimPath>,
+    prim: &UsdPrimPath,
     usd_registry: &DocumentRegistry<UsdDocument>,
-    doc: lunco_doc::DocumentId,
+    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
     stages: Option<&lunco_usd_bevy_stage::canonical::CanonicalStages>,
     assets: Option<&Assets<UsdStageAsset>>,
 ) -> Option<(lunco_doc::DocumentId, String, DeleteTarget)> {
-    let host = usd_registry.host(doc)?;
-    let prim = q_prim.get(entity).ok()?;
-    let prim_sdf = SdfPath::new(&prim.path).ok()?;
-    let root_authored = host.document().data().spec(&prim_sdf).is_some();
-    let runtime_authored = host.document().runtime_data().spec(&prim_sdf).is_some();
     let stage_id = prim.stage_handle.id();
-    let (reader, _) = stages?.reader_for_composed_query(stage_id, assets?.get(stage_id)?);
-    if !reader.has_prim(&prim_sdf) {
+    let backed = backed?;
+    let doc = resolve_doc_for_stage(stage_id, Some(backed), usd_registry)?;
+    let host = usd_registry.host(doc)?;
+    if backed.applied_stage_generation(doc, stage_id) != Some(host.generation()) {
         return None;
     }
-    let under_composed_arc = reader.has_composition_arc(&prim_sdf).ok()?;
-
-    let target = if runtime_authored && !root_authored && !under_composed_arc {
-        DeleteTarget::RemoveRuntime
-    } else if root_authored || runtime_authored || under_composed_arc {
+    let path = SdfPath::new(&prim.path).ok()?;
+    let (reader, _) = stages?.reader_for_composed_query(stage_id, assets?.get(stage_id)?);
+    if !reader.has_prim(&path) || !reader.is_active(&path).ok()? {
+        return None;
+    }
+    let target = if reader.has_source_spec(&path).ok()? {
         DeleteTarget::DeactivateRuntime
+    } else if host.document().runtime_data().spec(&path).is_some() {
+        DeleteTarget::RemoveRuntime
     } else {
         return None;
     };

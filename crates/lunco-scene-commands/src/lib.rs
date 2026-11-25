@@ -1,14 +1,7 @@
 //! # LunCoSim Scene Commands
 //!
-//! The **scene/document command layer**: every runtime mutation of the scene —
-//! spawn, move, delete, set-property, shader edits — authored as journaled USD ops
-//! on the open document's runtime layer.
-//!
-//! One path, four callers. An edit made by a rhai script, by the HTTP API, by a peer
-//! arriving over the wire, or by a human dragging a gizmo in the editor all funnel
-//! through the same commands here, so they are all persisted, journaled, undoable and
-//! replicated identically. An edit that does not go through this layer escapes
-//! save/journal/undo/network.
+//! Scene commands route interactive actions to runtime owners. Explicit persistent
+//! edits commit through the owning USD document and its journal.
 //!
 //! - [`commands`] — scene-command observers and
 //!   [`commands::SpawnCommandPlugin`], the mutation plugin used by headless
@@ -40,4 +33,7 @@
 //! source path.
 
 pub mod commands;
+mod environment_light;
 pub mod scene_view;
+
+mod scene_participation;

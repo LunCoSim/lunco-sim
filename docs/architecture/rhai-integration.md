@@ -274,6 +274,7 @@ generation and makes the cache refresh deterministic.
 
 | verb | channel | purpose |
 |------|---------|---------|
+| `usd_types_agree(source, sink)` → `bool` | pure | native Sdf attribute type agreement for a USD connection |
 | `usd_document_generation(doc_id: u64)` → `u64 | ()` | read | read the authoritative USD generation as a cheap structural invalidation clock; detailed topology queries happen only after it changes |
 | `cmd(name, #{params})` → `#{ id: u64, ... }` | write | fire ANY registered `#[Command]` by name (reflect dispatch via `ApiCommandEvent`); behind networking RBAC; host-authoritative |
 | `command_result(id)` → `#{ id: u64, ... }` | read | read the result for an admitted or deferred command; the shared typed value adapter validates the identifier as `u64`, accepting native unsigned IDs and non-negative integer literals |
@@ -423,7 +424,7 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 |---|---|
 | Universal command bus | ~90 `#[Command]`, `lunco-command-macro` |
 | Dispatch-by-name (reflect) | `executor.rs:90-162` (`ReflectEvent::trigger`) |
-| RBAC/authz on commands | `#[authz_target]`, `SessionRegistry::may_possess`, sender-identity binding |
+| RBAC/authz on commands | `#[authz_target]` gathers each entity identity once across nested operations. The command owner validates repeated fields or conflicting operations. `SessionRegistry::may_possess` and sender identity govern access. |
 | Stable entity ids | `GlobalEntityId(u64)` (`lunco-core/src/lib.rs:121`), `ApiEntityRegistry::resolve` |
 | Scene/Twin/Modelica/cosim verbs | LoadScene/Spawn/SetObjectProperty/Compile/... |
 | Sandboxed Rhai scenario runtime | `ScenarioDriver` owns the persistent per-entity engine and lifecycle caps |
@@ -534,7 +535,7 @@ fn possess(r)           { cmd("AcquireControl", #{ target: r }); }
 // `path` is a root-qualified scene address (`lunco://…` or `twin://…`).
 // Use `OpenFile` for a filesystem path so the owning Twin is discovered first.
 fn load(path)           { cmd("LoadScene", #{ path: path, root_prim: "" }); }
-fn set_prop(id, k, v)   { cmd("SetObjectProperty", #{ target: id, key: k, value: v }); }
+fn set_prop(id, k, v)   { cmd("SetObjectProperty", #{ entity_id: id, property: k, value: v }); }
 ```
 
 ### 3.4 Security (must-have)
@@ -782,7 +783,7 @@ So tighter integration IS needed, as a **second, complementary channel**:
 |---|---|---|
 | Direction | writes | reads (+ scoped local writes) |
 | Mechanism | `cmd()` → `ReflectEvent::trigger` | `AppTypeRegistry` + `ReflectComponent`/`ReflectResource` plus `PortRegistry` |
-| Use for | SetPorts, LoadScene, Spawn, SetObjectProperty — anything authoritative/replicated/undoable | position, heading, sensors, cosim/Modelica vars, reflected fields/resources, entity iteration |
+| Use for | Domain commands including SetPorts, LoadScene and SetObjectProperty. Explicit persistent property edits enter the USD journal | position, heading, sensors, cosim/Modelica vars, reflected fields/resources, entity iteration |
 | Latency | request/response or deferred result | **synchronous** during eval |
 | Replicated? | yes (CommandBus SyncChannel) | no (local read) |
 | Cost | JSON+reflect+observer per call | direct reflected field access (no JSON) |

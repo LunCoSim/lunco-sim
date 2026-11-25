@@ -37,6 +37,7 @@
 //! See `docs/architecture/render-decoupling.md`.
 
 use bevy::prelude::*;
+use lunco_core::ReflectReadOnly;
 
 /// How a surface handles transparency. Mirrors `bevy::pbr::AlphaMode` without
 /// naming it (that type is in `bevy_pbr`, which is the whole thing we are avoiding).
@@ -213,7 +214,55 @@ impl Default for PbrLook {
     }
 }
 
+/// Linear RGB supplied by a live presentation owner. Authored PBR channels
+/// remain available for animation and for restoring the appearance on clear.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Reflect)]
+#[reflect(Component, ReadOnly)]
+pub struct PbrViewColor {
+    pub base_color: Option<ViewColorChannel>,
+    pub emissive: Option<ViewColorChannel>,
+}
+
+/// Linear RGB override and the script instance that may release it.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect)]
+pub struct ViewColorChannel {
+    pub rgb: [f32; 3],
+    #[reflect(ignore)]
+    pub script: Option<lunco_core::GlobalEntityId>,
+}
+
+/// An authored image dependency for the current look is loading.
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component, ReadOnly)]
+pub struct PendingPbrLook;
+
+/// Terminal failure of the currently requested material binding.
+#[derive(Component, Debug, Reflect)]
+#[reflect(Component, ReadOnly)]
+pub struct FailedPbrLook(pub String);
+
 impl PbrLook {
+    /// Resolve per-entity colour channels while retaining the authored opacity and textures.
+    pub fn with_view_color<'a>(
+        &'a self,
+        color: Option<&PbrViewColor>,
+    ) -> std::borrow::Cow<'a, Self> {
+        let Some(color) = color else {
+            return std::borrow::Cow::Borrowed(self);
+        };
+        let mut look = self.clone();
+        if let Some(channel) = color.base_color {
+            let [r, g, b] = channel.rgb;
+            look.base_color = LinearRgba::new(r, g, b, self.base_color.alpha);
+        }
+        if let Some(channel) = color.emissive {
+            let [r, g, b] = channel.rgb;
+            look.emissive = LinearRgba::new(r, g, b, self.emissive.alpha);
+        }
+        look.unshared = true;
+        std::borrow::Cow::Owned(look)
+    }
+
     /// An opaque, matte surface of `color` — the common case.
     pub fn matte(color: LinearRgba) -> Self {
         Self {

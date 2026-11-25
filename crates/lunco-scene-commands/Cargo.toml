@@ -21,6 +21,7 @@ avian3d = { workspace = true }
 big_space.workspace = true
 lunco-core = { path = "../lunco-core" }
 lunco-control-core = { path = "../lunco-control-core" }
+lunco-celestial-spatial-core = { path = "../lunco-celestial-spatial-core" }
 lunco-spatial = { path = "../lunco-spatial" }
 lunco-core-session = { path = "../lunco-core-session" }
 lunco-hooks = { path = "../lunco-hooks" }
@@ -34,11 +35,13 @@ lunco-doc = { path = "../lunco-doc" }
 # `lunco-scene-authoring` plugin; this crate only owns the remaining mutation
 # handlers and their runtime-layer observers.
 lunco-doc-bevy = { path = "../lunco-doc-bevy", default-features = false }
+lunco-api-core = { path = "../lunco-api-core" }
 lunco-api = { path = "../lunco-api" }
 lunco-scene-catalog = { path = "../lunco-scene-catalog" }
 lunco-scene-authoring = { path = "../lunco-scene-authoring" }
 lunco-scene-queries = { path = "../lunco-scene-queries" }
 lunco-usd-bevy-light = { path = "../lunco-usd-bevy-light" }
+lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-core = { path = "../lunco-usd-core" }

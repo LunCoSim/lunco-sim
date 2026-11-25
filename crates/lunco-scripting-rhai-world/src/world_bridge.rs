@@ -44,6 +44,12 @@ use lunco_core::DTransform;
 use lunco_hash::Fnv1a;
 use lunco_telemetry_core::{TelemetryEvent, TelemetryValue};
 
+fn unsigned_id(value: &Dynamic, operation: &str) -> Result<u64, Box<rhai::EvalAltResult>> {
+    let value = dynamic_to_hook_value(value).map_err(value_boundary_error)?;
+    <u64 as serde::Deserialize>::deserialize(lunco_api_core::ApiValueDeserializer::new(value))
+        .map_err(|error| value_boundary_error(format!("{operation}: {error}")))
+}
+
 /// True the FIRST time this (entity, path) `set` failure is seen; false after.
 ///
 /// Scenario `on_tick` bodies retry the same write every frame, so an
@@ -1388,6 +1394,13 @@ fn build_world_engine_base(
 
     lunco_hooks_rhai::rhai_limits::apply(&mut engine);
 
+    engine.register_fn(
+        "command_available",
+        |name: ImmutableString| -> Result<bool, Box<rhai::EvalAltResult>> {
+            bridge_core::command_available(name.as_str()).map_err(script_runtime_error)
+        },
+    );
+
     // cmd(name, #{params}) -> #{ id, ok, status, data, error }. Routes through
     // ApiCommandEvent so it inherits macro-reflected dispatch, GlobalEntityId
     // resolution, and result recording. Terminal results carry status
@@ -1423,11 +1436,7 @@ fn build_world_engine_base(
     engine.register_fn(
         "command_result",
         |id: Dynamic| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
-            let value = dynamic_to_hook_value(&id).map_err(value_boundary_error)?;
-            let id = <u64 as serde::Deserialize>::deserialize(
-                lunco_api_core::ApiValueDeserializer::new(value),
-            )
-            .map_err(|error| value_boundary_error(format!("command_result: {error}")))?;
+            let id = unsigned_id(&id, "command_result")?;
             Ok(bridge_core::command_result(&RhaiBuilder, id))
         },
     );
@@ -2393,14 +2402,27 @@ fn build_world_engine_base(
         bridge_core::query(&RhaiBuilder, name.as_str(), HookValue::Map(Vec::new()))
     });
 
+    engine.register_fn(
+        "usd_types_agree",
+        |source: ImmutableString, sink: ImmutableString| {
+            usd_bridge::usd_types_agree(source.as_str(), sink.as_str())
+        },
+    );
+
     // Read the authoritative USD document generation directly. Structural
     // scenario policy uses it as an invalidation clock; it must not pay for
     // the full InspectUsdDocument JSON snapshot on every fixed tick.
-    engine.register_fn("usd_document_generation", |doc_id: u64| -> Dynamic {
-        usd_bridge::usd_document_generation(doc_id)
+    engine.register_fn(
+        "usd_document_generation",
+        |doc_id: Dynamic| -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+            Ok(usd_bridge::usd_document_generation(unsigned_id(
+                &doc_id,
+                "usd_document_generation",
+            )?)
             .map(Dynamic::from)
-            .unwrap_or(Dynamic::UNIT)
-    });
+            .unwrap_or(Dynamic::UNIT))
+        },
+    );
 
     // SysML has both a language-neutral query surface and a typed in-process
     // snapshot. Rust owns source parsing/resolution; Rhai owns fact selection,
@@ -2495,8 +2517,11 @@ fn build_world_engine_base(
     // are not globally unique across concurrently mounted documents.
     engine.register_fn(
         "find_path_in_document",
-        |doc_id: u64, path: ImmutableString| -> i64 {
-            usd_bridge::find_path_in_document(doc_id, path.as_str())
+        |doc_id: Dynamic, path: ImmutableString| -> Result<i64, Box<rhai::EvalAltResult>> {
+            Ok(usd_bridge::find_path_in_document(
+                unsigned_id(&doc_id, "find_path_in_document")?,
+                path.as_str(),
+            ))
         },
     );
     // usd_path(id) -> exact composed USD path, or (). This is the generic

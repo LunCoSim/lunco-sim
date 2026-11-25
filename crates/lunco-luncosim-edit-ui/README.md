@@ -22,7 +22,8 @@ Inspector and authored USD panels live in
 - **Authoring inspection** — the Rhai `authoring_inspection` library composes path-based candidate diffs, structured diagnostic groups, exact selection/reveal/frame navigation, and visual/collision/joint/frame/material/provenance evidence
 - **Transform Gizmo** — provided by [`lunco-luncosim-edit-gizmo-ui`](../lunco-luncosim-edit-gizmo-ui), using `transform-gizmo-bevy`; live entities use BigSpace and the scene command, while USD previews use parent-local projection and `ApplyUsdOps`
 - **Inspector Panel** — provided by `lunco-luncosim-edit-inspector-ui`; schema-hinted USD fields with units and authored/inherited provenance are prepared as explicit, reviewable USD proposals
-- **Undo** — Ctrl+Z to revert spawns and transform changes
+- **Appearance and removal** — live material and shader controls update the scene. In a USD preview, **Apply to USD** commits a material draft to the selected layer. Delete removes the live selection. **Delete from mounted USD** explicitly edits its document.
+- **Undo** — Ctrl+Z reverts authored document edits
 
 The Assembly Editor is document-scoped. Its native USD tree, connection graph,
 parameter/variant/mount views, joint editor, and animation editor keep one
@@ -93,10 +94,8 @@ scene.
 
 ### Coordinate and ownership contract
 
-The gizmo library modifies only the proxy's render `Transform`. The editor must
-not calculate deltas, subtract a parent rotation, read `GlobalTransform` as a
-physics pose, or write Avian `Position`/`Rotation` directly. The canonical flow
-is:
+The gizmo library modifies only the proxy's render `Transform`. The live scene resolves the render proposal through the active physics frame.
+The isolated USD preview measures the gesture in parent-local space.
 
 1. **`drive_gizmo_drag` / `capture_gizmo_start`** — the current hover-map hit
    latches the proxy before the preview pan pass. The following `Update` system
@@ -111,17 +110,14 @@ is:
 3. **`capture_final_gizmo_pose`** — snapshot the proxy after its `Last`-schedule
    write on every transaction frame, including release, because the normal
    interaction transfer runs earlier in `PostUpdate`.
-4. **`restore_gizmo_dynamic`** — the live owner restores body/interpolation
-   state and commits `TransformEntity`; the USD owner restores on Escape or
-   stale preview revision, or commits changed local channels as one
-   generation-checked `ApplyUsdOps` change set.
-5. **Owner boundary** — the scene command owns live parent-local/cell storage;
-  `UsdOp::SetTranslate`/`SetRotate`/`SetScale` own preview authoring and
-  projection.
+4. On release, the live-scene gizmo restores body and interpolation state and
+   dispatches `TransformEntity` with interactive intent. The isolated USD preview
+   applies the render gesture delta to the composed, double-precision pose at
+   its displayed sample time. The shared pose planner commits the changed
+   translation, rotation or scale in one generation-checked document transaction.
+   Escape restores the original pose for the same preview revision. A closed
+   or superseded preview discards the gesture.
 
-USD preview targets expose the standard USD `xformOp:scale` handles and the
-Inspector's unitless scale fields. They commit through `UsdOp::SetScale` in the
-same generation-checked `ApplyUsdOps` change set as translation and rotation.
 Live simulation targets keep scale unavailable because changing a physics
 body's scale requires an authored `UsdPhysics` topology/solver contract; the
 existing BigSpace physics bridge remains the only normal Avian pose adapter.
@@ -175,7 +171,7 @@ This follows the OpenUSD specification: `PhysicsRigidBodyAPI` on a parent aggreg
 | Ctrl+Left-click on entity | Remove only the clicked entity |
 | Left-click on empty | Keep selection unchanged |
 | Escape | Deselect / cancel spawn |
-| Delete | Delete selected entity |
+| Delete | Remove the selected entity from the live scene |
 | Drag gizmo handles | Move/rotate entity |
 | Click palette entry → click scene | Spawn entity |
 

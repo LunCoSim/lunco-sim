@@ -173,6 +173,8 @@ impl Plugin for CelestialPlugin {
         app.register_type::<link::LinkConfig>();
         app.register_type::<lunco_celestial_spatial_core::LinkNode>();
         app.register_type::<lunco_celestial_spatial_core::LinkOccluder>();
+        app.register_type::<lunco_celestial_spatial_core::LinkOcclusion>()
+            .register_type_data::<lunco_celestial_spatial_core::LinkOcclusion, lunco_core::ReflectReadOnly>();
         app.register_type::<lunco_celestial_spatial_core::LinkState>();
         app.register_type::<lunco_celestial_spatial_core::LinkGeometryState>();
         app.register_type::<lunco_celestial_spatial_core::WifiNode>();

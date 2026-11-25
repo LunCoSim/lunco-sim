@@ -15,6 +15,8 @@ fn on_start(me, ctx) {
     this.retired_next_tick = false;
     this.done = false;
     let rejected = cmd("DetachJoint", #{target: -1, intent: "Interactive"});
+    let body_detach = cmd("DetachJoint", #{target: this.body, intent: "Interactive"});
+    this.body_rejected = body_detach != () && body_detach.ok == false;
     this.invalid_rejected = rejected != () && rejected.ok == false;
 }
 fn on_tick(me, ctx) {
@@ -32,6 +34,7 @@ fn on_tick(me, ctx) {
     this.done = true;
     report_verdict([
         t_true(this.invalid_rejected, "invalid detach rejects without changing the live joint"),
+        t_true(this.body_rejected && find_path("/SandboxScene/CubeB") == this.body, "detaching a body rejects and preserves its identity"),
         t_true(this.accepted, "an admitted joint accepts the shared detach command"),
         t_true(this.retired_next_tick, "the next physics tick observes solver-safe retirement"),
         t_true(world_pos3(this.free).y < this.free_start.y

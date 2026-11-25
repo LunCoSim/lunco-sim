@@ -174,6 +174,13 @@ fn on_tick(me, ctx) {
             fail("materialized runtime spawn did not retain its reserved GlobalEntityId");
             return;
         }
+        track_entity_write(this.balloon);
+        let removal = cmd("DeleteEntity", #{target:this.balloon,intent:"Persistent"});
+        if removal.status != "rejected" || find_catalog("modelica_balloon") != this.balloon {
+            this.done = true;
+            fail("persistent deletion must reject the live spawn and preserve its identity");
+            return;
+        }
         this.spawn_record_checked = true;
     }
 

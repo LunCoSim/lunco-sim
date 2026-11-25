@@ -15,6 +15,8 @@ pub enum SceneViewValue {
     Text { value: String },
     /// Boolean presentation value.
     Bool { value: bool },
+    /// Non-negative linear RGB at the render boundary.
+    LinearRgb { value: [f32; 3] },
     /// Withdraw the runtime value and use the authored presentation again.
     Clear,
 }
@@ -95,6 +97,46 @@ pub struct SetColliderEnabled {
     pub target: Entity,
     /// Whether the collider participates in live contact detection.
     pub enabled: bool,
+}
+
+/// Requested solver and contact participation of one independent body.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct BodyParticipation {
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub target: Entity,
+    pub active: bool,
+}
+
+/// Runtime participation of one admitted collider or radio sight-line occluder.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct ParticipationSwitch {
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub target: Entity,
+    pub enabled: bool,
+}
+
+/// Apply one live scene transition. All destinations and their owners are
+/// validated before publishing any physics, radio or presentation changes.
+#[Command(default)]
+pub struct SetSceneParticipation {
+    /// Independent bodies and all their attached contact shapes.
+    #[serde(default)]
+    #[reflect(default)]
+    pub bodies: Vec<BodyParticipation>,
+    /// Individual admitted shapes outside the requested bodies.
+    #[serde(default)]
+    #[reflect(default)]
+    pub colliders: Vec<ParticipationSwitch>,
+    /// Admitted sight-line blockers, independent of contact shapes.
+    #[serde(default)]
+    #[reflect(default)]
+    pub occluders: Vec<ParticipationSwitch>,
+    /// Presentation writes to publish with this transition.
+    #[serde(default)]
+    #[reflect(default)]
+    pub views: Vec<SceneViewBatch>,
 }
 
 /// Remove a scene entity, optionally persisting the edit to its USD document.

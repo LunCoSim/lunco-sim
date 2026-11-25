@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from runtime import BINARY, ROOT, POLL_INTERVAL_S, ProductionSession
+from runtime import BINARY, ROOT, POLL_INTERVAL_S, ProductionSession, run_authored_scenario
 from run_editor_scene_test import wait_for_scene, wait_for_scene_time_selection
 from test_native_trim_precision import execute, run, apply_fixture
 
@@ -53,10 +53,18 @@ def main():
                 print(output, flush=True)
                 if f"TESTS_OK {count}" not in output or "TESTS_FAIL" in output:
                     raise RuntimeError("authored activity verdict failed")
+            execute(session, "SetTimeTransport", playing=True)
+            owner = execute(session, "GetToolLibrary", name="runtime_ui")["active_twin"]
+            run_authored_scenario(
+                session, "lunco://scenarios/tests/native_ambient_authoring.rhai",
+                title="NATIVE AMBIENT AUTHORING", check_count=9, owner_twin_id=owner,
+                timeout_s=args.timeout,
+            )
+            execute(session, "CloseDocument", doc_id=doc)
     except Exception as error:
         print(f"FAIL — {error}", file=sys.stderr)
         return 1
-    print("PASS — nine authored checks; API Exit and port release verified")
+    print("PASS — native activation and ambient authoring checks; API Exit and port release verified")
     return 0
 
 

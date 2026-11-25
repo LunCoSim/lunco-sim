@@ -331,6 +331,16 @@ keeps physical W/m2 separate from render lux. Fixed lighting uses the authored
 Sun direction and the one-AU physical calibration; celestial lighting applies
 the provider's inverse-square distance at its admitted celestial epoch.
 
+Fixed lighting selects the primary mount’s single unscoped authored
+`DistantLight`. Direction comes from the composed transform in the active
+physics frame and illuminance comes from the resolved UsdLux photometry.
+Changing or undoing either authored channel updates its runtime consumer.
+Live controls last until their channel changes in the authored source or the
+scene is replaced. The DistantLight projector updates photometry, color, angular
+diameter, shadow enablement, and cascade bounds from the exact changed
+properties in each native notice. Mounted children keep their identities.
+Preview lights and additive mounts have separate identities.
+
 Before co-simulation initialization, `InitializationSampling` reuses the physical
 gravity, direction and solar sample producers without advancing the fixed clock.
 This lets required Modelica inputs be admitted while scene readiness holds that

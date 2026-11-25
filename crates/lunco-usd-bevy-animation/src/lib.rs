@@ -43,7 +43,7 @@ impl Plugin for UsdAnimationPlugin {
                 "usd-animation",
                 |_, _, attribute| attribute == "xformOpOrder",
                 None,
-                refresh_animation_topology,
+                |world, stage, changes| refresh_animation_topology(world, stage, changes.keys()),
             ));
         app.add_observer(|removed: On<Remove<UsdAnimated>>, mut commands: Commands| {
             commands
@@ -76,6 +76,7 @@ impl Plugin for UsdAnimationPlugin {
             PostUpdate,
             (sample_usd_animation, sample_usd_material_animation)
                 .chain()
+                .in_set(lunco_usd_bevy_scene::UsdAnimationSampleSet)
                 .run_if(lunco_time::scene_time_ready)
                 .before(UsdVisibilityReconcileSet)
                 .before(bevy::transform::TransformSystems::Propagate),
@@ -141,16 +142,16 @@ fn refresh_sampled_channels(
                     }
                 }
             }
-            refresh_animation_topology(world, stage_id, &affected.into_iter().collect::<Vec<_>>());
+            refresh_animation_topology(world, stage_id, affected.iter());
         });
     }
 }
 
 /// Reconcile native animation topology once after a committed order-edit batch.
-fn refresh_animation_topology(
+fn refresh_animation_topology<'a>(
     world: &mut World,
     stage_id: AssetId<UsdStageAsset>,
-    paths: &[SdfPath],
+    paths: impl Iterator<Item = &'a SdfPath>,
 ) {
     let facts = {
         let Some(stage) = world
@@ -161,7 +162,6 @@ fn refresh_animation_topology(
         };
         let reader = stage.view();
         paths
-            .iter()
             .map(|path| {
                 (
                     path.to_string(),

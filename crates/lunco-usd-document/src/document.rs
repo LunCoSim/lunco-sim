@@ -1483,14 +1483,23 @@ impl UsdDocument {
     /// Keep base, runtime, and view as separate USD layers so variant and
     /// reference composition sees the same opinion strength as the document.
     pub fn open_composed_stage(&self) -> Result<Stage, DocumentError> {
+        self.open_stage_with_opinions(self.authoring_recipe(), true)
+    }
+
+    fn open_stage_with_opinions(
+        &self,
+        recipe: Option<&StageRecipe>,
+        include_view: bool,
+    ) -> Result<Stage, DocumentError> {
         self.ensure_parsed()?;
-        author::open_doc_stage_with_layers(
-            &self.base,
-            &self.runtime,
-            &self.view,
-            self.authoring_recipe.as_deref(),
-        )
-        .map_err(author_err)
+        let empty = sdf::Data::new();
+        let view = if include_view {
+            self.view_data()
+        } else {
+            &empty
+        };
+        author::open_doc_stage_with_layers(&self.base, &self.runtime, view, recipe)
+            .map_err(author_err)
     }
 
     /// Open this document's current layers over the scene's resolved dependency
@@ -1500,9 +1509,7 @@ impl UsdDocument {
         &self,
         recipe: &StageRecipe,
     ) -> Result<Stage, DocumentError> {
-        self.ensure_parsed()?;
-        author::open_doc_stage_with_layers(&self.base, &self.runtime, &self.view, Some(recipe))
-            .map_err(author_err)
+        self.open_stage_with_opinions(Some(recipe), true)
     }
 
     /// Whether `path` has a prim opinion in the requested document layer.
@@ -1788,53 +1795,6 @@ impl UsdDocument {
         }
     }
 
-    /// Keep a typed edit's declaration identical to every local opinion it
-    /// can override. USD value decoding erases roles such as `color3f` versus
-    /// `float3`, so comparing only the parsed [`sdf::Value`] would allow an
-    /// array/scalar or role change to enter the document and fail later in the
-    /// live stage. Referenced-only attributes have no local declaration here;
-    /// the mounted canonical stage validates those against its composed schema
-    /// before the command is admitted.
-    fn validate_attribute_type(
-        &self,
-        prim: &SdfPath,
-        name: &str,
-        requested: &str,
-    ) -> Result<(), DocumentError> {
-        let attr = prim.append_property(name).map_err(|error| {
-            DocumentError::ValidationFailed(format!(
-                "attribute `{prim}.{name}` has an invalid path: {error}"
-            ))
-        })?;
-        for (layer_name, layer) in [
-            ("root", &self.base),
-            ("runtime", &self.runtime),
-            ("view", &self.view),
-        ] {
-            let Some(spec) = layer.spec(&attr) else {
-                continue;
-            };
-            if spec.ty != SpecType::Attribute {
-                return Err(DocumentError::ValidationFailed(format!(
-                    "`{prim}.{name}` is authored as {:?} in the {layer_name} layer, not an attribute",
-                    spec.ty
-                )));
-            }
-            let Some(sdf::Value::Token(type_name)) = spec.get("typeName") else {
-                return Err(DocumentError::ValidationFailed(format!(
-                    "`{prim}.{name}` has no USD type declaration in the {layer_name} layer"
-                )));
-            };
-            if type_name.as_str() != requested {
-                return Err(DocumentError::ValidationFailed(format!(
-                    "`{prim}.{name}` is declared as `{}` in the {layer_name} layer; typed edits must use `{requested}`",
-                    type_name.as_str()
-                )));
-            }
-        }
-        Ok(())
-    }
-
     /// The current serialized source of layer `t` (base honors the
     /// original invalid text; runtime and view contain parsed data).
     fn layer_source(&self, target: TargetLayer) -> Result<String, DocumentError> {
@@ -1880,30 +1840,6 @@ impl UsdDocument {
             edit_target: id.clone(),
             text: self.layer_source(t)?,
         })
-    }
-
-    /// Validate an attribute owner, including an authored variant root.
-    ///
-    /// A variant root is an Sdf `Variant` spec rather than a `Prim` spec, but
-    /// it can own properties such as `inputs:*`. Attribute operations address
-    /// that spec directly and does not need to create an over prim first.
-    fn require_property_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
-        let sdf = parse_prim_path(path)?;
-        let authored_variant = sdf.is_variant_selection()
-            && [&self.base, &self.runtime, &self.view]
-                .into_iter()
-                .any(|data| matches!(data.spec(&sdf), Some(spec) if spec.ty == SpecType::Variant));
-        if authored_variant
-            || prim_in(&self.base, &sdf)
-            || prim_in(&self.runtime, &sdf)
-            || prim_in(&self.view, &sdf)
-        {
-            Ok(sdf)
-        } else {
-            Err(DocumentError::ValidationFailed(format!(
-                "path `{path}` not found"
-            )))
-        }
     }
 
     /// Validate that `path` names a prim authored in **this specific layer** —
@@ -2265,6 +2201,7 @@ impl Document for UsdDocument {
 struct UsdEditSession<'a> {
     document: &'a mut UsdDocument,
     stage: std::cell::RefCell<Option<Stage>>,
+    include_view: bool,
 }
 
 impl std::ops::Deref for UsdEditSession<'_> {
@@ -2286,6 +2223,7 @@ impl<'a> UsdEditSession<'a> {
         Self {
             document,
             stage: std::cell::RefCell::new(None),
+            include_view: false,
         }
     }
 
@@ -2293,7 +2231,9 @@ impl<'a> UsdEditSession<'a> {
         if let Some(stage) = self.stage.borrow().as_ref() {
             return Ok(stage.clone());
         }
-        let stage = self.document.open_composed_stage()?;
+        let stage = self
+            .document
+            .open_stage_with_opinions(self.authoring_recipe(), self.include_view)?;
         *self.stage.borrow_mut() = Some(stage.clone());
         Ok(stage)
     }
@@ -2314,6 +2254,78 @@ impl<'a> UsdEditSession<'a> {
         self.document.commit(target, data, change);
     }
 
+    fn opinion_layers(&self) -> impl Iterator<Item = (&'static str, &sdf::Data)> {
+        [("root", self.data()), ("runtime", self.runtime_data())]
+            .into_iter()
+            .chain(self.include_view.then(|| ("view", self.view_data())))
+    }
+
+    /// Keep a typed edit's declaration identical to every local opinion it
+    /// can override. USD value decoding erases roles such as `color3f` versus
+    /// `float3`, so comparing only the parsed [`sdf::Value`] would allow an
+    /// array/scalar or role change to enter the document and fail later in the
+    /// live stage. Referenced-only attributes have no local declaration here;
+    /// the mounted canonical stage validates those against its composed schema
+    /// before the command is admitted.
+    fn validate_attribute_type(
+        &self,
+        prim: &SdfPath,
+        name: &str,
+        requested: &str,
+    ) -> Result<(), DocumentError> {
+        let attr = prim.append_property(name).map_err(|error| {
+            DocumentError::ValidationFailed(format!(
+                "attribute `{prim}.{name}` has an invalid path: {error}"
+            ))
+        })?;
+        if requested.trim().is_empty() {
+            return Err(DocumentError::ValidationFailed(format!(
+                "attribute `{attr}` requires a USD type name"
+            )));
+        }
+        for (layer_name, layer) in self.opinion_layers() {
+            let Some(spec) = layer.spec(&attr) else {
+                continue;
+            };
+            if spec.ty != SpecType::Attribute {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` is authored as {:?} in the {layer_name} layer, not an attribute",
+                    spec.ty
+                )));
+            }
+            let Some(sdf::Value::Token(type_name)) = spec.get("typeName") else {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` has no USD type declaration in the {layer_name} layer"
+                )));
+            };
+            if type_name.as_str() != requested {
+                return Err(DocumentError::ValidationFailed(format!(
+                    "`{prim}.{name}` is declared as `{}` in the {layer_name} layer; typed edits must use `{requested}`",
+                    type_name.as_str()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate an attribute owner, including an authored variant root.
+    ///
+    /// A variant root is an Sdf `Variant` spec rather than a `Prim` spec, but
+    /// it can own properties such as `inputs:*`. Attribute operations address
+    /// that spec directly and do not need to create an over prim first.
+    fn require_property_owner_anywhere(&self, path: &str) -> Result<SdfPath, DocumentError> {
+        let sdf = parse_prim_path(path)?;
+        let authored_variant = sdf.is_variant_selection()
+            && self.opinion_layers().any(
+                |(_, data)| matches!(data.spec(&sdf), Some(spec) if spec.ty == SpecType::Variant),
+            );
+        if authored_variant {
+            Ok(sdf)
+        } else {
+            self.require_prim_anywhere(path)
+        }
+    }
+
     /// Validate that `path` names a prim present in one of the document layers —
     /// an overlay op may add a child or override an attribute under a weaker
     /// prim. Returns the parsed [`SdfPath`].
@@ -2321,7 +2333,7 @@ impl<'a> UsdEditSession<'a> {
         let sdf = parse_prim_path(path)?;
         if prim_in(&self.base, &sdf)
             || prim_in(&self.runtime, &sdf)
-            || prim_in(&self.view, &sdf)
+            || (self.include_view && prim_in(&self.view, &sdf))
             || self
                 .open_composed_stage()?
                 .prim(&sdf)
@@ -2436,15 +2448,6 @@ impl<'a> UsdEditSession<'a> {
         Ok(stage)
     }
 
-    /// A referenced or payloaded subtree is present in the composed stage but
-    /// deliberately absent from this document's authored `sdf::Data`. A runtime
-    /// attribute override on such a path is valid USD: the edit layer first
-    /// defines a local over opinion, then authors the attribute on it.
-    fn path_is_under_composed_arc_path(&self, path: &SdfPath) -> Result<bool, DocumentError> {
-        let stage = self.open_composed_stage()?;
-        composed_path_has_arc(&stage, path)
-    }
-
     fn apply(&mut self, op: UsdOp) -> Result<UsdOp, DocumentError> {
         // The document is the single source of truth for its own mutability —
         // every dispatch path (UI, API, MCP, scripts) gets the same `ReadOnly`
@@ -2498,6 +2501,11 @@ impl<'a> UsdEditSession<'a> {
                 "edit target {id:?} not a known layer (root | runtime | view)"
             ))
         })?;
+        let include_view = target == TargetLayer::View;
+        if self.include_view != include_view {
+            self.stage.get_mut().take();
+            self.include_view = include_view;
+        }
         // A document opened from un-parseable base source can only be repaired
         // wholesale; structural ops have no valid base to validate against.
         if self.parse_error.is_some() && !matches!(op, UsdOp::ReplaceSource { .. }) {
@@ -2545,22 +2553,9 @@ impl<'a> UsdEditSession<'a> {
                         )
                     })
                     .transpose()?;
-                // A child under a referenced/payloaded parent is a valid local
-                // USD opinion even though that parent has no spec in this
-                // document's authored layers. Materialize the parent as an
-                // `over` below so the child can be defined without flattening
-                // or opening the referenced source document.
-                let composed_parent = if parent_path != "/" && !parent_path.is_empty() {
-                    match self.require_prim_anywhere(&parent_path) {
-                        Ok(_) => false,
-                        Err(error) => {
-                            let parent = parse_prim_path(&parent_path)?;
-                            if !self.path_is_under_composed_arc_path(&parent)? {
-                                return Err(error);
-                            }
-                            true
-                        }
-                    }
+                let parent_needs_over = if parent_path != "/" && !parent_path.is_empty() {
+                    let parent = self.require_prim_anywhere(&parent_path)?;
+                    self.layer(target).spec(&parent).is_none()
                 } else {
                     false
                 };
@@ -2584,7 +2579,7 @@ impl<'a> UsdEditSession<'a> {
                 let existed = self.layer(target).spec(&prim_sdf).is_some();
 
                 let stage = self.open_target_stage(target)?;
-                if composed_parent {
+                if parent_needs_over {
                     stage
                         .override_prim(parent_path.as_str())
                         .map_err(author_err)?;
@@ -2778,17 +2773,7 @@ impl<'a> UsdEditSession<'a> {
                         "RemoveXformOp does not support `{name}`"
                     )));
                 }
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        let path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&path)? {
-                            path
-                        } else {
-                            return Err(error);
-                        }
-                    }
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let order_path = prim_sdf
                     .append_property("xformOpOrder")
                     .map_err(|error| DocumentError::ValidationFailed(error.to_string()))?;
@@ -2852,16 +2837,7 @@ impl<'a> UsdEditSession<'a> {
                 } else {
                     sdf::SpecType::Attribute
                 };
-                let prim_sdf = match self.require_property_owner_anywhere(&path) {
-                    Ok(prim) => prim,
-                    Err(error) => {
-                        let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim)? {
-                            return Err(error);
-                        }
-                        prim
-                    }
-                };
+                let prim_sdf = self.require_property_owner_anywhere(&path)?;
                 let property = prim_sdf.append_property(&name).map_err(|error| {
                     DocumentError::ValidationFailed(format!(
                         "remove {kind} `{path}.{name}` has an invalid property name: {error}"
@@ -2975,17 +2951,7 @@ impl<'a> UsdEditSession<'a> {
                         "RestoreXformOp does not support `{name}`"
                     )));
                 }
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        let path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&path)? {
-                            path
-                        } else {
-                            return Err(error);
-                        }
-                    }
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let stage = self.open_target_stage(target)?;
                 stage.override_prim(&prim_sdf).map_err(author_err)?;
                 let conv = self.composed_stage_convention()?;
@@ -3154,17 +3120,9 @@ impl<'a> UsdEditSession<'a> {
                 value,
                 ..
             } => {
-                let (prim_sdf, define_local_over) =
-                    match self.require_property_owner_anywhere(&path) {
-                        Ok(prim) => (prim, false),
-                        Err(error) => {
-                            let prim = parse_prim_path(&path)?;
-                            if !self.path_is_under_composed_arc_path(&prim)? {
-                                return Err(error);
-                            }
-                            (prim, true)
-                        }
-                    };
+                let prim_sdf = self.require_property_owner_anywhere(&path)?;
+                let define_local_over = !prim_sdf.has_variant_selection()
+                    && self.layer(target).spec(&prim_sdf).is_none();
                 self.validate_attribute_type(&prim_sdf, &name, &type_name)?;
 
                 // The single place attribute values are turned into USD values, so
@@ -3898,15 +3856,7 @@ impl<'a> UsdEditSession<'a> {
                 documentation,
                 ..
             } => {
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) if !prim.is_property() => prim,
-                    Ok(_) => {
-                        return Err(DocumentError::ValidationFailed(format!(
-                            "SetPrimDocumentation target {path} must name a prim, not a property"
-                        )));
-                    }
-                    Err(error) => return Err(error),
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let prior = self
                     .layer(target)
                     .spec(&prim_sdf)
@@ -3956,15 +3906,7 @@ impl<'a> UsdEditSession<'a> {
             }
 
             UsdOp::SetPrimKind { path, kind, .. } => {
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) if !prim.is_property() => prim,
-                    Ok(_) => {
-                        return Err(DocumentError::ValidationFailed(format!(
-                            "SetPrimKind target {path} must name a prim, not a property"
-                        )));
-                    }
-                    Err(error) => return Err(error),
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 validate_prim_kind(kind.as_deref())?;
                 let prior = self
                     .layer(target)
@@ -4227,16 +4169,7 @@ impl<'a> UsdEditSession<'a> {
             }
 
             UsdOp::SetApiSchemas { path, schemas, .. } => {
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) => prim,
-                    Err(error) => {
-                        let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim)? {
-                            return Err(error);
-                        }
-                        prim
-                    }
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 // Typed inverse: a prior *prepend-only* schema list — the form the
                 // forward op authors — restores as a typed `SetApiSchemas`.
                 // Unauthored, or an explicit/append/delete opinion a prepend op
@@ -4299,16 +4232,7 @@ impl<'a> UsdEditSession<'a> {
                 variant,
                 ..
             } => {
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) => prim,
-                    Err(error) => {
-                        let prim = parse_prim_path(&path)?;
-                        if !self.path_is_under_composed_arc_path(&prim)? {
-                            return Err(error);
-                        }
-                        prim
-                    }
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 // Typed inverse: restore the prior selection of THIS variant set
                 // (the forward op is read-modify-write, so sibling sets are
                 // untouched either way). No prior selection for the set → the
@@ -4411,15 +4335,7 @@ impl<'a> UsdEditSession<'a> {
                 list_op,
                 ..
             } => {
-                let prim_sdf = match self.require_prim_anywhere(&path) {
-                    Ok(prim) if !prim.is_property() => prim,
-                    Ok(_) => {
-                        return Err(DocumentError::ValidationFailed(format!(
-                            "SetReferenceArcs target `{path}` must name a prim, not a property"
-                        )));
-                    }
-                    Err(error) => return Err(error),
-                };
+                let prim_sdf = self.require_prim_anywhere(&path)?;
                 let arcs = references
                     .iter()
                     .map(|reference| {
@@ -4464,17 +4380,7 @@ impl<'a> UsdEditSession<'a> {
             }
 
             UsdOp::SetActive { path, active, .. } => {
-                let prim_path = match self.require_prim_anywhere(&path) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        let prim_path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&prim_path)? {
-                            prim_path
-                        } else {
-                            return Err(error);
-                        }
-                    }
-                };
+                let prim_path = self.require_prim_anywhere(&path)?;
                 // Restore the target layer's exact prior active opinion. An
                 // unauthored active field must be cleared on undo, not replaced
                 // with `active = true`, because the weaker composed state owns
@@ -4496,13 +4402,9 @@ impl<'a> UsdEditSession<'a> {
                     },
                 };
                 let stage = self.open_target_stage(target)?;
-                // A `SetActive` must be authorable onto a layer that does not yet
-                // carry a spec for the prim — most importantly a local override
-                // over a referenced route point. `Prim::set_active` requires a
-                // spec to exist on this layer (it is not an upsert), so define it
-                // first, just as `SetTranslate`/`AddPrim` do for stronger local
-                // opinions.
-                stage.define_prim(prim_path.as_str()).map_err(author_err)?;
+                if self.layer(target).spec(&prim_path).is_none() {
+                    stage.override_prim(&prim_path).map_err(author_err)?;
+                }
                 stage
                     .prim(prim_path.as_str())
                     .map_err(author_err)?
@@ -4513,17 +4415,7 @@ impl<'a> UsdEditSession<'a> {
             }
 
             UsdOp::ClearActive { path, .. } => {
-                let prim_path = match self.require_prim_anywhere(&path) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        let prim_path = parse_prim_path(&path)?;
-                        if self.path_is_under_composed_arc_path(&prim_path)? {
-                            prim_path
-                        } else {
-                            return Err(error);
-                        }
-                    }
-                };
+                let prim_path = self.require_prim_anywhere(&path)?;
                 let inverse = match self
                     .layer(target)
                     .spec(&prim_path)

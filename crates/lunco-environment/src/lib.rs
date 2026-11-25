@@ -14,17 +14,9 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
 use lunco_core::AppSceneExt;
+use lunco_core::Command;
 use lunco_physics::{PhysicsPoseSeeded, PrescribedSimulationPose, SimulationPoseQuery};
 use lunco_spatial::coords::GridPos;
-// All render-FREE: `CascadeShadowConfig` / `GlobalAmbientLight` are `bevy_light`,
-// `Exposure` is `bevy_camera`. Neither depends on `bevy_render`. The one knob in
-// `SetEnvironmentLight` that IS render-bound — `bloom_intensity` — is applied by a
-// second observer in `lunco-render-bevy` (`env_light.rs`), so this crate names no
-// post-processing type. See docs/architecture/render-decoupling.md.
-use bevy::camera::Exposure;
-use bevy::camera::visibility::RenderLayers;
-use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, GlobalAmbientLight};
-use lunco_core::{Command, on_command, register_commands};
 use std::collections::HashMap;
 
 /// USD prim type for the scene-level **environment settings** prim (a singleton
@@ -32,21 +24,10 @@ use std::collections::HashMap;
 /// knobs that have no natural light-prim home — `lunco:env:exposureEv100` and
 /// `lunco:env:bloomIntensity`.
 ///
-/// **Ambient and earthshine are not among them.** Earthshine is an authored
-/// `DistantLight` nested under the body it reflects from, so its tint is
-/// `inputs:color` on that prim — standard UsdLux, read back by the standard
-/// light loader. Its brightness is not persisted anywhere: it is derived from
-/// Earth's phase by [`drive_earthshine_from_phase`] every frame.
-/// Uniform environment illumination is standard
-/// UsdLux — an untextured `DomeLight` — and `GlobalAmbientLight` is composed as
-/// the sum over those domes. The ambient slider therefore persists onto a
-/// `DomeLight` child of this prim (`<Environment>/AmbientFill`), not onto a
-/// custom attribute here; a custom attribute would be a second spelling of a
-/// standard thing, and the two spellings fought over the same field.
-/// The sandbox persists a `SetEnvironmentLight` render tweak onto this prim and a
-/// projector reads it back on stage change — so those knobs journal + round-trip
-/// like every other USD edit, WITHOUT coupling the light loader to global/camera
-/// render state (they live on their own prim, read by their own system).
+/// Earthshine tint is the authored DistantLight color. Its intensity follows
+/// the Earth's phase. Untextured DomeLights contribute to global ambient light.
+/// A persistent ambient edit sets the Environment/AmbientFill intensity needed
+/// to reach the requested total after accounting for other composed domes.
 pub const LUNCO_ENVIRONMENT_PRIM_TYPE: &str = "LunCoEnvironment";
 
 /// Gravity configuration types (`Gravity`, `GravityBody`, `GravityProvider`,
@@ -557,8 +538,8 @@ pub fn inject_local_gravity_into_cosim(
 /// Sets scene environment lighting at runtime: the sun's direction and the
 /// global ambient level.
 ///
-/// All three fields are optional — only the ones provided change, the rest
-/// keep their current value. So a curl that just lowers the sun looks like:
+/// Supply the fields to change. The owner validates the complete request before
+/// applying a live update or committing an explicit persistent edit.
 ///
 /// ```jsonc
 /// {"type":"ExecuteCommand","command":"SetEnvironmentLight","params":{"sun_pitch":-0.15}}
@@ -610,10 +591,6 @@ pub struct SetEnvironmentLight {
     /// Bloom intensity on the scene cameras. `None` keeps current; zero disables
     /// bloom and a non-zero value enables the HDR target required by the effect.
     ///
-    /// **Applied render-side** (`lunco_render_bevy::env_light`) — bloom is
-    /// `bevy_post_process`, and this crate must not name it. That observer
-    /// writes the render intent, whose binder owns the concrete post-process
-    /// component.
     pub bloom_intensity: Option<f32>,
     /// Live by default; Persistent explicitly authors supported USD light settings.
     #[serde(default)]
@@ -666,172 +643,196 @@ fn validated_shadow_ranges(
         .then_some((first, maximum))
 }
 
-/// Applies a [`SetEnvironmentLight`] command to semantic [`SunState`] first,
-/// then to the render projection and the other environment projections. The
-/// render light is never the source of direction or irradiance: commands and
-/// ephemeris both publish the semantic state, and one projection system writes
-/// the light from it.
-///
-/// The one render-bound field, `bloom_intensity`, is applied by a SECOND
-/// observer on this same command in `lunco-render-bevy` (`env_light.rs`) — a
-/// command may have as many observers as it has effects, and that is what keeps
-/// `bevy_post_process` out of this crate.
-///
-/// This observer is the SINGLE mutation path for environment lighting —
-/// the HTTP/MCP API, the Inspector's Environment section, and any future
-/// script hooks all dispatch this same command. (The USD loader is the
-/// *creation* path: it spawns the light entity from `DistantLight` prims;
-/// every later change flows through here.)
-#[on_command(SetEnvironmentLight)]
-fn on_set_environment_light(
-    trigger: On<SetEnvironmentLight>,
+/// Admitted targets for one lighting command. Rotation is expressed in the active physics frame.
+pub struct EnvironmentLightTargets {
+    pub sun: Option<Entity>,
+    pub rotation: Option<DQuat>,
+    pub earthshine: Option<Entity>,
+}
+
+/// Validate the entire request before applying a live update or returning its document targets.
+pub fn update_environment_light(
+    In(cmd): In<SetEnvironmentLight>,
     mut sun_state: ResMut<SunState>,
     mut directions: ResMut<EnvironmentDirections>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     scene_mount: Option<Res<lunco_core::SceneMountState>>,
-    poses: lunco_physics::SimulationPoseQuery<Without<DirectionalLight>>,
+    poses: SimulationPoseQuery<Without<DirectionalLight>>,
     q_direction_targets: Query<(Entity, &DirectionTargetId)>,
-    q_source_classifications: Query<&CelestialSourceClassification>,
-    // The sun(s): every directional light EXCEPT the earthshine fill, so an
-    // illuminance/color/direction tweak never clobbers the fill light.
-    mut q_sun: Query<
+    q_classifications: Query<&CelestialSourceClassification>,
+    mounted_lights: solar::MountedDirectionalLights,
+    mut suns: Query<
         (
-            &mut Transform,
+            Entity,
             &mut DirectionalLight,
             Option<&mut CascadeShadowConfig>,
         ),
         (
-            With<DirectionalLight>,
             Without<Earthshine>,
-            Without<RenderLayers>,
+            Without<lunco_render::EditorPreviewLight>,
         ),
     >,
-    mut q_earthshine: Query<&mut DirectionalLight, With<Earthshine>>,
-    mut q_exposure: Query<&mut Exposure>,
+    mut fills: Query<
+        (Entity, &mut DirectionalLight),
+        (With<Earthshine>, Without<lunco_render::EditorPreviewLight>),
+    >,
+    mut exposures: Query<&mut Exposure, Without<lunco_render::EditorPreviewCamera>>,
     ambient: Option<ResMut<GlobalAmbientLight>>,
-) {
-    let cmd = trigger.event();
-
-    // The command has one authoritative scene-sun target. Refuse ambiguity
-    // rather than applying a user command to an arbitrary set of lights.
-    if q_sun.iter().count() == 1 {
-        let Ok((mut _tf, mut light, cascades)) = q_sun.single_mut() else {
-            unreachable!("a counted scene sun must remain queryable");
-        };
-        if cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some() {
-            if let Some(active_root) = scene_mount.as_deref().and_then(|mount| mount.active_root())
-            {
-                match q_source_classifications.get(active_root) {
-                    Ok(classification) if classification.has_source => {
-                        warn!(
-                            "SetEnvironmentLight direction request rejected: celestial bodies own the `sun` direction in this scene"
-                        );
-                        return;
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
-                        warn!(
-                            "SetEnvironmentLight direction request rejected: the active scene's Sun source has not been classified"
-                        );
-                        return;
-                    }
-                }
-            }
-            if q_direction_targets
-                .iter()
-                .any(|(_, target)| target.as_str() == SUN_DIRECTION_SOURCE)
-            {
-                warn!(
-                    "SetEnvironmentLight direction request rejected: `sun` is an authored position target in this scene"
-                );
-                return;
-            }
-            let Some(active_frame) = active_frame.as_deref() else {
-                warn!(
-                    "SetEnvironmentLight direction request rejected: no ActivePhysicsFrame is bound"
-                );
-                return;
-            };
-            let source = DirectionSourceId::parse(SUN_DIRECTION_SOURCE)
-                .expect("built-in direction source id is valid");
-            let direction = match resolve_direction_for_frame(
-                &source,
-                active_frame.0,
-                Some(&directions),
-                &q_direction_targets,
-                &poses,
-            ) {
-                Ok(direction) => direction,
-                Err(error) => {
-                    warn!(
-                        "SetEnvironmentLight direction request rejected: Sun direction cannot be resolved: {error:?}"
-                    );
-                    return;
-                }
-            };
-            let rotation = DQuat::from_rotation_arc(DVec3::Z, direction.components());
-            let (cur_yaw, cur_pitch, _) = rotation.to_euler(EulerRot::YXZ);
-            let yaw = cmd.sun_yaw.map(f64::from).unwrap_or(cur_yaw);
-            let pitch = cmd.sun_pitch.map(f64::from).unwrap_or(cur_pitch);
-            let next = DQuat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0) * DVec3::Z;
-            let Some(next) = lunco_spatial::coords::UnitDirection3::normalized(next) else {
-                warn!(
-                    "SetEnvironmentLight direction request rejected: resulting direction is invalid"
-                );
-                return;
-            };
-            directions.set_named(
-                SUN_DIRECTION_SOURCE,
-                Some(FramedDirection {
-                    frame: active_frame.0,
-                    direction: next,
-                }),
-            );
+    bloom: (
+        Option<Res<lunco_render::RenderingQualitySettings>>,
+        Option<ResMut<lunco_render::SceneBloomOverride>>,
+    ),
+    mut cameras: Query<
+        &mut lunco_render::camera::SceneCamera,
+        Without<lunco_render::EditorPreviewCamera>,
+    >,
+) -> Result<EnvironmentLightTargets, String> {
+    let direction_requested = cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some();
+    let range_requested =
+        cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some();
+    let sun_requested = direction_requested
+        || range_requested
+        || cmd.illuminance.is_some()
+        || cmd.shadow_maps_enabled.is_some()
+        || cmd.sun_color.is_some();
+    if [cmd.sun_pitch, cmd.sun_yaw, cmd.exposure_ev100]
+        .into_iter()
+        .flatten()
+        .any(|v| !v.is_finite())
+        || [cmd.sun_color, cmd.earthshine_color]
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|v| !v.is_finite() || v < 0.0)
+        || [cmd.illuminance, cmd.ambient_brightness, cmd.bloom_intensity]
+            .into_iter()
+            .flatten()
+            .any(|v| !v.is_finite() || v < 0.0)
+    {
+        return Err(
+            "Lighting requires finite settings and non-negative intensity and color".into(),
+        );
+    }
+    let sun = if sun_requested {
+        Some(
+            suns.get_mut(mounted_lights.sun()?)
+                .map_err(|_| "Mounted Sun light is unavailable")?,
+        )
+    } else {
+        None
+    };
+    let fill = if cmd.earthshine_color.is_some() {
+        Some(
+            fills
+                .get_mut(mounted_lights.earthshine()?)
+                .map_err(|_| "Mounted earthshine light is unavailable")?,
+        )
+    } else {
+        None
+    };
+    let ranges = if range_requested {
+        let cfg = sun
+            .as_ref()
+            .and_then(|(_, _, cfg)| cfg.as_deref())
+            .ok_or("Sun has no shadow cascade configuration")?;
+        let first = *cfg.bounds.first().ok_or("Sun has empty cascade bounds")?;
+        let maximum = *cfg.bounds.last().ok_or("Sun has empty cascade bounds")?;
+        Some(
+            validated_shadow_ranges(
+                cfg.minimum_distance,
+                first,
+                maximum,
+                cmd.shadow_first_cascade_bound,
+                cmd.shadow_max_distance,
+            )
+            .ok_or("Invalid shadow range: require minimum < first bound < maximum")?,
+        )
+    } else {
+        None
+    };
+    if direction_requested || cmd.illuminance.is_some() {
+        let root = scene_mount
+            .as_deref()
+            .and_then(|mount| mount.active_root())
+            .ok_or("No active scene")?;
+        if q_classifications
+            .get(root)
+            .map_err(|_| "Scene Sun source has not been classified")?
+            .has_source
+        {
+            return Err("Celestial bodies own Sun direction and illuminance in this scene".into());
         }
-
+    }
+    let direction = if direction_requested {
+        if q_direction_targets
+            .iter()
+            .any(|(_, target)| target.as_str() == SUN_DIRECTION_SOURCE)
+        {
+            return Err("Sun is an authored position target in this scene".into());
+        }
+        let frame = active_frame.as_deref().ok_or("No active physics frame")?.0;
+        let source =
+            DirectionSourceId::parse(SUN_DIRECTION_SOURCE).expect("valid built-in direction id");
+        let current = resolve_direction_for_frame(
+            &source,
+            frame,
+            Some(&directions),
+            &q_direction_targets,
+            &poses,
+        )
+        .map_err(|error| format!("Cannot resolve Sun direction: {error:?}"))?;
+        let (yaw, pitch, _) =
+            DQuat::from_rotation_arc(DVec3::Z, current.components()).to_euler(EulerRot::YXZ);
+        let rotation = DQuat::from_euler(
+            EulerRot::YXZ,
+            cmd.sun_yaw.map(f64::from).unwrap_or(yaw),
+            cmd.sun_pitch.map(f64::from).unwrap_or(pitch),
+            0.0,
+        );
+        let direction = lunco_spatial::coords::UnitDirection3::normalized(rotation * DVec3::Z)
+            .ok_or("Invalid Sun direction")?;
+        Some((rotation, FramedDirection { frame, direction }))
+    } else {
+        None
+    };
+    let targets = EnvironmentLightTargets {
+        sun: sun.as_ref().map(|(entity, ..)| *entity),
+        rotation: direction.as_ref().map(|(rotation, _)| *rotation),
+        earthshine: fill.as_ref().map(|(entity, _)| *entity),
+    };
+    if cmd.intent.is_persistent() {
+        return Ok(targets);
+    }
+    if cmd.ambient_brightness.is_some() && ambient.is_none() {
+        return Err("Ambient lighting is unavailable".into());
+    }
+    let bloom = if let Some(intensity) = cmd.bloom_intensity {
+        let settings = bloom.0.ok_or("Graphics settings are unavailable")?;
+        let profile = settings
+            .validated_profile()
+            .map_err(|error| error.to_string())?;
+        Some((
+            intensity,
+            profile.camera_bloom_low_frequency_boost,
+            bloom.1.ok_or("Scene bloom is unavailable")?,
+        ))
+    } else {
+        None
+    };
+    if let Some((_, next)) = direction {
+        directions.set_named(SUN_DIRECTION_SOURCE, Some(next));
+    }
+    if let Some((_, mut light, cfg)) = sun {
         if let Some(lux) = cmd.illuminance {
-            if !lux.is_finite() || lux < 0.0 {
-                warn!(
-                    "SetEnvironmentLight illuminance request rejected: expected a finite non-negative value"
-                );
-                return;
-            }
-            sun_state.set_irradiance(Some(lux));
+            sun_state.publish(Some(lux));
         }
         if let Some([r, g, b]) = cmd.sun_color {
             light.color = Color::linear_rgb(r, g, b);
         }
-        if let Some(s) = cmd.shadow_maps_enabled {
-            light.shadow_maps_enabled = s;
+        if let Some(enabled) = cmd.shadow_maps_enabled {
+            light.shadow_maps_enabled = enabled;
         }
-        if cmd.shadow_first_cascade_bound.is_some() || cmd.shadow_max_distance.is_some() {
-            let Some(mut cfg) = cascades else {
-                warn!(
-                    "SetEnvironmentLight shadow-range request ignored: the scene sun has no cascade configuration"
-                );
-                return;
-            };
-            let Some((&cur_first, &cur_max)) = cfg.bounds.first().zip(cfg.bounds.last()) else {
-                warn!(
-                    "SetEnvironmentLight shadow-range request ignored: the scene sun has no cascade bounds"
-                );
-                return;
-            };
-            let Some((first, maximum)) = validated_shadow_ranges(
-                cfg.minimum_distance,
-                cur_first,
-                cur_max,
-                cmd.shadow_first_cascade_bound,
-                cmd.shadow_max_distance,
-            ) else {
-                warn!(
-                    "SetEnvironmentLight shadow-range request ignored: first cascade bound must be finite and greater than the minimum distance, and maximum distance must be finite and greater than the first bound"
-                );
-                return;
-            };
-            // Rebuild from the live config, overriding only the two requested
-            // range knobs. No renderer default or clamp is allowed to replace
-            // an invalid explicit request.
+        if let (Some(mut cfg), Some((first, maximum))) = (cfg, ranges) {
             *cfg = CascadeShadowConfigBuilder {
                 num_cascades: cfg.bounds.len(),
                 minimum_distance: cfg.minimum_distance,
@@ -842,46 +843,33 @@ fn on_set_environment_light(
             .build();
         }
     }
-
-    if let (Some(b), Some(mut ambient)) = (cmd.ambient_brightness, ambient) {
-        ambient.brightness = b;
+    if let (Some((_, mut fill)), Some([r, g, b])) = (fill, cmd.earthshine_color) {
+        fill.color = Color::linear_rgb(r, g, b);
     }
-
-    // Camera exposure (all cameras that carry an Exposure component).
+    if let (Some(mut ambient), Some(value)) = (ambient, cmd.ambient_brightness) {
+        ambient.brightness = value;
+    }
     if let Some(ev) = cmd.exposure_ev100 {
-        for mut exposure in &mut q_exposure {
+        for mut exposure in &mut exposures {
             exposure.ev100 = ev;
         }
     }
-
-    // Earthshine fill light — TINT only; brightness is phase-derived.
-    //
-    // The fill exists only in a scene that DECLARES the body it reflects from
-    // (`lunco://lighting/earthshine.usda`, nested under that body's prim), so
-    // this query is legitimately empty in a scene with no sky. Report it rather
-    // than let the request evaporate: nothing here can conjure the light, since
-    // which body it belongs to — and therefore its direction and phase — is
-    // exactly what the scene did not say. Spawning a stand-in would be an
-    // unshadowed fill nobody authored, aimed nowhere in particular.
-    if cmd.earthshine_color.is_some() && q_earthshine.is_empty() {
-        warn_once!(
-            "[environment] earthshine requested, but this scene declares no body to \
-             reflect it — nothing to apply. Reference a celestial body that carries \
-             the fill (`lunco://celestial/solar_system.usda` brings Earth's), or nest \
-             `lunco://lighting/earthshine.usda` under the body prim yourself."
-        );
-    }
-    for mut fill in &mut q_earthshine {
-        if let Some([r, g, b]) = cmd.earthshine_color {
-            fill.color = Color::linear_rgb(r, g, b);
+    if let Some((intensity, boost, mut state)) = bloom {
+        state.intensity = Some(intensity);
+        for mut camera in &mut cameras {
+            let boost = camera.bloom.map_or(boost, |look| look.low_frequency_boost);
+            let next =
+                (intensity > 0.0).then(|| lunco_render::camera::BloomLook::new(intensity, boost));
+            if camera.bloom != next {
+                camera.bloom = next;
+            }
+            if camera.hdr != next.is_some() {
+                camera.hdr = next.is_some();
+            }
         }
     }
-
-    // `bloom_intensity` is handled render-side (`lunco_render_bevy::env_light`),
-    // which writes `SceneCamera::bloom`. Bloom is `bevy_post_process` → wgpu.
+    Ok(targets)
 }
-
-register_commands!(on_set_environment_light);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Plugin
@@ -990,8 +978,11 @@ impl Plugin for EnvironmentPlugin {
         // is projected before BigSpace propagation; its finalized world
         // direction is published afterwards for render consumers.
         app.add_systems(
-            Update,
-            project_environment_sun_to_light.run_if(tracked_sun_light_projection()),
+            PostUpdate,
+            project_environment_sun_to_light
+                .run_if(tracked_sun_light_projection())
+                .before(big_space::prelude::BigSpaceSystems::RecenterLargeTransforms)
+                .before(bevy::transform::TransformSystems::Propagate),
         );
         app.add_systems(
             PostUpdate,
@@ -1025,13 +1016,6 @@ impl Plugin for EnvironmentPlugin {
         // is simply absent headless. Inert until a terrain carries the
         // `HorizonShadowTerrain` marker (USD-stamped).
         app.add_plugins(HorizonShadowPlugin);
-
-        // Register environment commands (SetEnvironmentLight). The macro-built
-        // `register_all_commands` does `register_type` + `add_observer` so the
-        // HTTP/MCP API can dispatch it by reflected type name. The command is
-        // render-free now — its `bloom_intensity` field is applied by a second
-        // observer over in `lunco-render-bevy`.
-        register_all_commands(app);
     }
 }
 

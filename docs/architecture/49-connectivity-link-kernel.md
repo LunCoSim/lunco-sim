@@ -164,6 +164,12 @@ def Cube "Body" ( prepend apiSchemas = ["PhysicsCollisionAPI", "LunCoOccluderAPI
 }
 ```
 
+Every admitted box starts with `LinkOcclusion.enabled = true`. Supply it in
+the `occluders` list of `SetSceneParticipation` to switch subsequent radio
+sight-line tests. The projected extent and pose remain available while the box
+is off. A retractable prop can include its collider and visibility in the same
+command. A rejected entry leaves every participant in its previous state.
+
 Three decisions worth keeping:
 
 - **Not derived from colliders.** Opacity is a MATERIAL property, not a collision one: a

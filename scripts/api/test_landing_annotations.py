@@ -64,8 +64,8 @@ def wait_mounted(session):
 
 
 def wait_descent_route(session):
-    # The route preview is a transient USD transaction. Mission readiness and
-    # footprint publication can precede its projection into the live entities.
+    # The mission starts its route after scene readiness. Wait for the live
+    # markers to reach their terrain clearance before running the assertions.
     code = '''
         let ready=true;
         for name in ["RoverRampApproach", "RoverRampExit", "RoverTarget1", "RoverTarget2", "BaseSite"] {
@@ -73,9 +73,7 @@ def wait_descent_route(session):
             let id=find_path(path);
             if id<0 {ready=false;continue;}
             let p=world_pos3(id);let h=terrain_height(p.x,p.z);
-            let prim=query("QueryUsdPrim",#{path:path,attrs:["lunco:billboard:fadeEnd"]});
-            if h==() || p.y-h<0.049 || prim==()
-                || prim.attrs["lunco:billboard:fadeEnd"]!=griffin_spec::_sysml_attribute("surfaceRouteMarkerFadeEndM") {
+            if h==() || p.y-h<0.049 {
                 ready=false;
             }
         }
@@ -87,7 +85,7 @@ def wait_descent_route(session):
         if execute(session, "RunRhai", code=code).get("stdout", "").strip() == "true":
             return
         time.sleep(0.1)
-    raise RuntimeError("descent route markers did not project onto the terrain")
+    raise RuntimeError("descent route markers did not reach their terrain clearance")
 
 
 def headless(port, out, common):

@@ -54,10 +54,14 @@ is required.
 For moving interactive elements, use `TransformEntity` with
 live intent (the default) for discrete live poses, declared joint inputs for
 continuous physical motion, `SetColliderEnabled` for a prepared collider,
+`SetSceneParticipation` to switch admitted bodies, individual contact shapes, radio occluders and presentation writes in one validated transition,
 and `SetSceneView` with `property: "visibility"` and a `Bool` value for
 already admitted presentation geometry. Target the namespace root for a
 subtree toggle; the runtime visibility owner preserves authored descendant and
-purpose opinions. Store the current interaction state
+purpose opinions. Use `material.base_color` or `material.emissive` with
+`#{LinearRgb:#{value:[r,g,b]}}` on a projected PBR surface, and `"Clear"`
+to restore that channel's authored value. Waypoint visits update only their
+dome. Route palette changes are explicit document edits. Store the current interaction state
 in the runtime owner, not `@runtime@` or `@view@`. The live commands do not
 publish a USD notice or advance document generation. See the
 [live update routes](../../docs/architecture/50-usd-driven-visuals.md#live-values-and-saved-settings).
@@ -68,7 +72,12 @@ For absolute pose commits, plan the complete ordered stack with
 `lunco_scene_authoring::local_pose::local_pose_ops` on the admitted composed reader at the entity’s displayed pose time. Exercise the compound quaternion, mixed-stack
 hinge, repeat edit and undo in `transform_entity.usda`. Use `usd.document.projected` for composed
 reads and `usd.projection.visuals_ready` or `usd.projection.visuals_failed` for
-the outcome of a subtree or stage visual rebuild.
+the affected visual outcome. A StandardMaterial edit follows the prim's PBR
+image dependencies and its actual UsdShade producers, retaining the previous
+binding during a replacement load. Use `test_native_material_terminals.py`
+for a failed texture, an unrelated successful edit and a repaired binding.
+Custom WESL streaming owns its own shader, layout, texture and cover readiness.
+Inspect actual frames for a GPU draw or loading-colour regression.
 
 For live physical mount edits, follow the notice-driven owner in
 [USD Domain](../../docs/architecture/21-domain-usd.md). Check both native mount
@@ -186,6 +195,11 @@ The worker snapshots the native fact; live authoring uses
 `CanonicalStages::reader_for_composed_query` to consume the admitted prepared
 plan before a canonical stage opens and live state after edits. Missing lazy
 stage state does not imply that a projected referenced child is uneditable.
+
+For environment settings and DomeLights use `CanonicalStages::paths_of_type`
+with the active stage and mount path. Native admission maintains type changes
+alongside asset reference discovery. Validate each matched prim’s composed
+fields, including candidates whose rendering projection failed.
 
 Use native traversal activity facts when preparing a projection snapshot and
 fallible `UsdRead::is_active` at live read boundaries. Native errors reject worker

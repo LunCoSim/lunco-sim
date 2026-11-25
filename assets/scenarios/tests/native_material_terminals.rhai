@@ -37,6 +37,10 @@ fn material_prepare(doc) {
         material_connect(alternate, alternate_shader),
         #{SetApiSchemas: #{edit_target: "@root@", path: material_shape(), schemas: ["MaterialBindingAPI"]}},
         material_add(root, "Mat", "Material"),
+        material_add(mat, "InvalidImage", "Shader"),
+        material_attr(mat+"/InvalidImage", "info:id", "token", "\"UsdUVTexture\""),
+        material_attr(mat+"/InvalidImage", "inputs:file", "asset", "@lunco://shaders/pbr_lit.wesl@"),
+        material_attr(mat+"/InvalidImage", "outputs:rgb", "float3", "(0,0,0)"),
         material_add(mat, "Preview", "Shader"),
         material_attr(material_shader(), "info:id", "token", "\"UsdPreviewSurface\""),
         material_attr(material_shader(), "inputs:diffuseColor", "color3f", "(0.2,0.4,0.6)"),
@@ -205,8 +209,44 @@ fn material_repaired_input(doc) {
             "material repair does not reset geometry or unrelated runtime state")
     ],"NATIVE MATERIAL INPUT REPAIR","NATIVE_MATERIAL_INPUT_REPAIR");
 }
+fn material_assign_wesl(doc) {
+    let shape = material_entity(doc);
+    let before = query("QueryUsdPrim", #{doc_id: doc, path: material_shader()}).document_generation;
+    let invalid = cmd("SetObjectProperty", #{entity_id: shape, property: "shader",
+        value: "lunco://shaders/invalid.png", intent: "Persistent"});
+    let after = query("QueryUsdPrim", #{doc_id: doc, path: material_shader()}).document_generation;
+    if invalid.ok != false || invalid.status != "rejected" || after != before || get(shape,"PbrLook") == () {
+        throw("Rejected shader assignment changed the document or its bound appearance: " + invalid.to_string());
+    }
+    let result = cmd("SetObjectProperty", #{entity_id: shape, property: "shader",
+        value: "lunco://shaders/pbr_lit.wesl", intent: "Persistent"});
+    if !result.ok { throw(result.to_string()); }
+    print("FIXTURE_APPLIED");
+}
+fn material_assigned_wesl(doc) {
+    let shape = material_entity(doc);
+    let shader = query("QueryUsdPrim", #{doc_id: doc, path: material_shader(),
+        attrs: ["info:implementationSource", "info:wesl:sourceAsset"]});
+    if shader.attrs == () || get(shape, "PbrLook") != () { print("MATERIAL_PENDING"); return; }
+    report_verdict([
+        t_true(shader.attrs["info:implementationSource"] == "sourceAsset" &&
+            shader.attrs["info:wesl:sourceAsset"] == "lunco://shaders/pbr_lit.wesl",
+            "assigning a PreviewSurface selects the WESL source and stores the public asset identity"),
+        t_true(get(shape, "UsdSceneProjectionFailed") == () && get(shape, "Transform.translation.x") == 3.0,
+            "shader assignment preserves the live pose and projects the assigned surface")
+    ], "NATIVE SHADER ASSIGNMENT", "NATIVE_SHADER_ASSIGNMENT");
+}
 fn material_edit(doc) {
-    let result = cmd("SetObjectProperty", #{entity_id: material_entity(doc), property: "roughness", value: "0.7", intent:"Persistent"});
+    let shape = material_entity(doc);
+    let read = #{doc_id:doc,path:material_shader(),attrs:["inputs:roughness"]};
+    let before = query("QueryUsdPrim", read);
+    let live = cmd("SetObjectProperty", #{entity_id:shape,property:"roughness",value:"0.45"});
+    let after = query("QueryUsdPrim", read);
+    if live.ok != true || abs(get(shape,"PbrLook").perceptual_roughness - 0.45) > 0.001 ||
+        before.document_generation != after.document_generation || before.attrs != after.attrs {
+        throw("live roughness must update the surface and retain authored inputs and generation");
+    }
+    let result = cmd("SetObjectProperty", #{entity_id: shape, property: "roughness", value: "0.7", intent:"Persistent"});
     if result.ok != true || result.status != "applied" { throw(result.to_string()); }
     print("FIXTURE_APPLIED");
 }

@@ -35,8 +35,7 @@ use lunco_scene_selection::SelectedEntities;
 // Doc resolution + material-binding walk: headless-safe, shared verbatim with the
 // command layer (which is why they don't live in this panel — see `doc_resolve`).
 use lunco_scene_authoring::doc_resolve::{
-    bound_shader_prim, geom_api_schemas, resolve_doc_for_entity,
-    resolve_shader_parameter_usd_target,
+    resolve_doc_for_entity, resolve_shader_parameter_usd_target,
 };
 use lunco_usd_bevy_scene::UsdPrimPath;
 use lunco_usd_core::commands::ApplyUsdOp;
@@ -64,7 +63,7 @@ fn report_inspector_error(world: &mut World, message: impl Into<String>) {
     });
 }
 
-/// Apply authored shader values. The shader owner structural check observes
+/// Apply live shader values. The shader owner structural check observes
 /// the changed component after this mutation and advances the shared topology
 /// generation only when the declared parameter surface changes.
 fn apply_shader_parameter_edits(world: &mut World, entity: Entity, edits: &[(String, ParamValue)]) {
@@ -167,50 +166,34 @@ pub(crate) struct AttachAtSocketRequested {
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct ShaderSwapRequested {
-    part: Entity,
+    target: InspectorAppearanceTarget,
     path: String,
 }
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct ShaderCreateRequested {
-    part: Entity,
+    target: InspectorAppearanceTarget,
     name: String,
     template: String,
 }
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct ShaderImportRequested {
-    part: Entity,
+    target: InspectorAppearanceTarget,
     source: String,
 }
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct ShaderParametersRequested {
-    entity: Entity,
+    target: InspectorAppearanceTarget,
     edits: Vec<(String, ParamValue)>,
-    usd_prim_exists: bool,
-    intent: EditIntent,
 }
 
 #[derive(Event, Clone, Debug)]
 pub(crate) struct PbrMaterialRequested {
-    part: Entity,
+    target: InspectorAppearanceTarget,
     parts: Vec<Entity>,
-    base: [f32; 3],
-    alpha: f32,
-    emissive: [f32; 3],
-    metallic: f32,
-    roughness: f32,
-    ior: f32,
-    double_sided: bool,
-    base_changed: bool,
-    emissive_changed: bool,
-    metallic_changed: bool,
-    roughness_changed: bool,
-    ior_changed: bool,
-    alpha_changed: bool,
-    double_sided_changed: bool,
-    intent: EditIntent,
+    edits: Vec<(&'static str, String)>,
 }
 
 pub(crate) fn on_inspector_component_edit(
@@ -535,7 +518,9 @@ fn authoring_context(
     if lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
         preview_authoring_context(world, entity)
     } else {
-        resolve_doc_for_entity(world, entity).map(|doc| (doc, LayerId::root(), 0))
+        let doc = resolve_doc_for_entity(world, entity)?;
+        let registry = world.get_resource::<lunco_doc_bevy::DocumentRegistry<lunco_usd_document::document::UsdDocument>>()?;
+        Some((doc, LayerId::root(), registry.host(doc)?.generation()))
     }
 }
 
@@ -564,7 +549,7 @@ pub(crate) fn on_attach_at_socket_requested(
 pub(crate) fn on_shader_swap_requested(trigger: On<ShaderSwapRequested>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        swap_shader_on_entity(world, request.part, &request.path);
+        swap_shader_on_entity(world, request.target, &request.path);
     });
 }
 
@@ -574,7 +559,7 @@ pub(crate) fn on_shader_create_requested(
 ) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        create_and_apply(world, request.part, &request.name, &request.template);
+        create_and_apply(world, request.target, &request.name, &request.template);
     });
 }
 
@@ -584,7 +569,7 @@ pub(crate) fn on_shader_import_requested(
 ) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        import_and_apply(world, request.part, &request.source);
+        import_and_apply(world, request.target, &request.source);
     });
 }
 
@@ -593,211 +578,105 @@ pub(crate) fn on_shader_parameters_requested(
     mut commands: Commands,
 ) {
     let request = trigger.event().clone();
-    commands.queue(move |world: &mut World| {
-        if !request.intent.is_persistent() {
-            apply_shader_parameter_edits(world, request.entity, &request.edits);
-            return;
-        }
-        let Some((doc, edit_target, generation)) = authoring_context(world, request.entity) else {
-            if request.usd_prim_exists {
-                report_inspector_error(world, "Selected shader target is not document-backed");
+    commands.queue(move |world: &mut World| match request.target {
+        InspectorAppearanceTarget::Live(entity) => {
+            if world.get::<ShaderLook>(entity).is_none() {
+                report_inspector_error(world, "Selected shader is no longer available");
                 return;
             }
-            apply_shader_parameter_edits(world, request.entity, &request.edits);
-            return;
-        };
-
-        let mut ops = Vec::new();
-        if request.usd_prim_exists {
-            let Some(prim) = world.get::<UsdPrimPath>(request.entity).cloned() else {
-                report_inspector_error(world, "Selected shader target has no USD prim path");
+            apply_shader_parameter_edits(world, entity, &request.edits);
+        }
+        InspectorAppearanceTarget::Usd { part, lease } => {
+            let Some(prim) = validated_preview_prim(world, part, &lease) else {
                 return;
             };
+            let mut ops = Vec::new();
             for (name, value) in &request.edits {
-                let target = match resolve_shader_parameter_usd_target(world, &prim, name, value) {
-                    Ok(target) => target,
+                match resolve_shader_parameter_usd_target(world, &prim, name, value) {
+                    Ok(input) => ops.push(UsdOp::SetAttribute {
+                        edit_target: lease.edit_target.clone(),
+                        path: input.shader_path,
+                        name: input.attribute_name,
+                        type_name: input.type_name,
+                        value: input.literal,
+                    }),
                     Err(error) => {
-                        report_inspector_error(
-                            world,
-                            format!("Shader parameter `{name}` cannot be authored: {error}"),
-                        );
+                        report_inspector_error(world, error);
                         return;
                     }
-                };
-                ops.push(UsdOp::SetAttribute {
-                    edit_target: edit_target.clone(),
-                    path: target.shader_path,
-                    name: target.attribute_name,
-                    type_name: target.type_name,
-                    value: target.literal,
-                });
+                }
             }
-        }
-
-        apply_shader_parameter_edits(world, request.entity, &request.edits);
-        if !ops.is_empty() {
             world.trigger(ApplyUsdOps {
-                doc_id: doc,
-                parent_gen: (generation != 0).then_some(generation),
-                label: "Edit shader parameters".to_owned(),
+                doc_id: lease.doc,
+                parent_gen: Some(lease.generation),
+                label: "Edit USD shader parameters".into(),
                 ops,
             });
         }
     });
 }
 
-fn apply_pbr_material_preview(world: &mut World, request: &PbrMaterialRequested) {
-    for &entity in &request.parts {
-        let Some(mut look) = world.get_mut::<PbrLook>(entity) else {
-            continue;
-        };
-        let mut next = look.clone();
-        if request.base_changed {
-            next.base_color.red = request.base[0];
-            next.base_color.green = request.base[1];
-            next.base_color.blue = request.base[2];
-        }
-        if request.alpha_changed {
-            next.base_color.alpha = request.alpha;
-            next.alpha = if request.alpha >= 1.0 {
-                lunco_render::SurfaceAlpha::Opaque
-            } else {
-                lunco_render::SurfaceAlpha::Blend
-            };
-        }
-        if request.emissive_changed {
-            next.emissive = LinearRgba::new(
-                request.emissive[0],
-                request.emissive[1],
-                request.emissive[2],
-                1.0,
-            );
-        }
-        if request.metallic_changed {
-            next.metallic = request.metallic;
-        }
-        if request.roughness_changed {
-            next.perceptual_roughness = request.roughness;
-        }
-        if request.ior_changed {
-            next.ior = request.ior;
-        }
-        if request.double_sided_changed {
-            next.double_sided = request.double_sided;
-        }
-        look.set_if_neq(next);
-    }
-}
-
 pub(crate) fn on_pbr_material_requested(trigger: On<PbrMaterialRequested>, mut commands: Commands) {
     let request = trigger.event().clone();
     commands.queue(move |world: &mut World| {
-        if !request.intent.is_persistent() {
-            apply_pbr_material_preview(world, &request);
-            return;
-        }
-        let Some(prim) = world.get::<UsdPrimPath>(request.part).cloned() else {
-            return;
-        };
-        let shader_path = match bound_shader_prim(world, &prim) {
-            Ok(shader) => shader,
-            Err(error) => {
-                report_inspector_error(world, &error);
-                return;
-            }
-        };
-        let Some((doc, edit_target, generation)) = authoring_context(world, request.part) else {
-            report_inspector_error(world, "Selected material target is not document-backed");
-            return;
-        };
-        let (mut ops, shader) = match &shader_path {
-            Some(path) => (Vec::new(), path.clone()),
-            None => {
-                let schemas = match geom_api_schemas(world, &prim) {
-                    Ok(schemas) => schemas,
-                    Err(error) => {
-                        report_inspector_error(world, &error);
-                        return;
+        use lunco_scene_authoring::properties::{appearance_ops, edited_pbr_look};
+        match request.target {
+            InspectorAppearanceTarget::Live(_) => {
+                let looks = request
+                    .parts
+                    .iter()
+                    .map(|&part| {
+                        edited_pbr_look(
+                            world,
+                            part,
+                            request
+                                .edits
+                                .iter()
+                                .map(|(key, value)| (*key, value.as_str())),
+                        )
+                        .map(|look| (part, look))
+                    })
+                    .collect::<Result<Vec<_>, _>>();
+                match looks {
+                    Ok(looks) => {
+                        for (part, look) in looks {
+                            world.entity_mut(part).insert(look);
+                        }
                     }
-                };
-                let Some((ops, shader)) = lunco_usd_core::material::ensure_preview_surface_ops(
-                    edit_target.clone(),
-                    &prim.path,
-                    &schemas,
-                ) else {
+                    Err(error) => report_inspector_error(world, error),
+                }
+            }
+            InspectorAppearanceTarget::Usd { part, lease } => {
+                let Some(prim) = validated_preview_prim(world, part, &lease) else {
                     return;
                 };
-                (ops, shader)
+                let keys = request
+                    .edits
+                    .iter()
+                    .map(|(key, _)| *key)
+                    .collect::<Vec<_>>();
+                let ops = edited_pbr_look(
+                    world,
+                    part,
+                    request
+                        .edits
+                        .iter()
+                        .map(|(key, value)| (*key, value.as_str())),
+                )
+                .and_then(|look| {
+                    appearance_ops(world, &prim, lease.edit_target.clone(), &keys, &look)
+                });
+                match ops {
+                    Ok(ops) => world.trigger(ApplyUsdOps {
+                        doc_id: lease.doc,
+                        parent_gen: Some(lease.generation),
+                        label: "Edit USD material".into(),
+                        ops,
+                    }),
+                    Err(error) => report_inspector_error(world, error),
+                }
             }
-        };
-        apply_pbr_material_preview(world, &request);
-
-        let fresh = shader_path.is_none();
-        let root = edit_target;
-        let mut set = |name: &str, type_name: &str, value: String| {
-            ops.push(UsdOp::SetAttribute {
-                edit_target: root.clone(),
-                path: shader.clone(),
-                name: name.to_string(),
-                type_name: type_name.to_string(),
-                value,
-            });
-        };
-        if request.base_changed || fresh {
-            set(
-                "inputs:diffuseColor",
-                "color3f",
-                format!(
-                    "({}, {}, {})",
-                    request.base[0], request.base[1], request.base[2]
-                ),
-            );
         }
-        if request.emissive_changed || fresh {
-            set(
-                "inputs:emissiveColor",
-                "color3f",
-                format!(
-                    "({}, {}, {})",
-                    request.emissive[0], request.emissive[1], request.emissive[2]
-                ),
-            );
-        }
-        if request.metallic_changed || fresh {
-            set(
-                "inputs:metallic",
-                "float",
-                format!("{:.3}", request.metallic),
-            );
-        }
-        if request.roughness_changed || fresh {
-            set(
-                "inputs:roughness",
-                "float",
-                format!("{:.3}", request.roughness),
-            );
-        }
-        if request.ior_changed || fresh {
-            set("inputs:ior", "float", format!("{:.3}", request.ior));
-        }
-        if request.alpha_changed || fresh {
-            set("inputs:opacity", "float", request.alpha.to_string());
-        }
-        if request.double_sided_changed {
-            ops.push(UsdOp::SetAttribute {
-                edit_target: root,
-                path: prim.path,
-                name: "doubleSided".into(),
-                type_name: "bool".into(),
-                value: request.double_sided.to_string(),
-            });
-        }
-        world.trigger(lunco_usd_core::commands::ApplyUsdOps {
-            doc_id: doc,
-            parent_gen: (generation != 0).then_some(generation),
-            label: "Edit material".to_string(),
-            ops,
-        });
     });
 }
 
@@ -940,19 +819,6 @@ fn environment_panel_content(_panel: &mut EnvironmentPanel, ui: &mut egui::Ui, c
         .show(ui, |ui| obstacle_field_section(ui, ctx));
 }
 
-/// Delete `entity` from the scene — the single delete path for both the Del
-/// hotkey and the Delete button.
-///
-/// Authors the deletion into the active document's runtime layer FIRST (using a
-/// removal for runtime-only prims and an active=false override for base or
-/// composed prims), so it is a journaled, undoable, networked document op — the
-/// editor keeps no private history — then performs the live despawn for immediate
-/// feedback and drops it from the selection. A non-document entity (a palette
-/// spawn the doc doesn't own) simply isn't authored — it just despawns.
-/// NOTE: there is no local `delete_entity` helper any more. It did the same three things
-/// the typed `DeleteEntity` verb does (author the USD delete edit, despawn, drop
-/// the selection), so it was a second delete path that the command bus — and hence the
-/// API, the journal and networked peers — never saw. The Inspector triggers the command.
 /// Delete the selected entity through the same typed command as the Inspector
 /// button. The shortcut comes from `UserIntent::DeleteSelection`, so it remains
 /// rebindable and never fires while an egui field or cursor tool owns input.
@@ -960,15 +826,19 @@ pub fn delete_selected_on_intent(
     delete: DeleteSelectionIntent,
     cursor_mode: lunco_interaction_core::CursorModeActive,
     selected: Res<SelectedEntities>,
+    parents: Query<&ChildOf>,
+    previews: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     mut commands: Commands,
 ) {
     if !delete.just_pressed() || cursor_mode.any() {
         return;
     }
-    if let Some(target) = selected.primary() {
+    if let Some(target) = selected.primary()
+        && !lunco_usd_bevy_scene::is_preview_only(target, &parents, &previews)
+    {
         commands.trigger(DeleteEntity {
             target,
-            intent: lunco_core::EditIntent::Persistent,
+            intent: EditIntent::Interactive,
         });
     }
 }
@@ -1085,18 +955,26 @@ fn usd_editor_session_context(ui: &mut egui::Ui, ctx: &mut PanelCtx) {
 /// `lunco-usd-bevy`, so the Inspector can author it with the document's existing
 /// transform operations without inventing a preview ECS setter or asking the
 /// live physics command to resolve an identity it does not own.
-#[derive(Clone)]
-struct PreviewTransformContext {
+#[derive(Clone, Debug)]
+struct PreviewPrimContext {
+    preview: lunco_usd_viewport_core::UsdPreviewId,
     doc: lunco_doc::DocumentId,
     edit_target: LayerId,
     generation: u64,
     path: String,
 }
 
-fn focused_preview_transform_context(
-    ctx: &PanelCtx,
-    entity: Entity,
-) -> Option<PreviewTransformContext> {
+fn inspector_preview_root(ctx: &PanelCtx, entity: Entity) -> Option<Entity> {
+    std::iter::successors(Some(entity), |entity| {
+        ctx.get::<ChildOf>(*entity).map(ChildOf::parent)
+    })
+    .find(|ancestor| {
+        ctx.get::<lunco_usd_bevy_scene::UsdPreviewOnly>(*ancestor)
+            .is_some()
+    })
+}
+
+fn focused_preview_prim_context(ctx: &PanelCtx, entity: Entity) -> Option<PreviewPrimContext> {
     let prim = ctx.get::<UsdPrimPath>(entity)?;
     let viewport = ctx.resource::<lunco_usd_viewport_core::UsdViewportState>()?;
     let session = viewport.focused_session()?;
@@ -1111,31 +989,23 @@ fn focused_preview_transform_context(
     // into the live scene and several isolated preview leases. Confirm the
     // entity belongs to this exact preview root through the authoritative
     // hierarchy before exposing its document target to the Inspector.
-    if entity != session.scene_root() {
-        let mut current = entity;
-        let mut belongs = false;
-        for _ in 0..64 {
-            let Some(parent) = ctx.get::<ChildOf>(current) else {
-                break;
-            };
-            current = parent.parent();
-            if current == session.scene_root() {
-                belongs = true;
-                break;
-            }
-        }
-        if !belongs {
-            return None;
-        }
+    if inspector_preview_root(ctx, entity) != Some(session.scene_root()) {
+        return None;
     }
 
-    Some(PreviewTransformContext {
+    Some(PreviewPrimContext {
+        preview: session.id(),
         doc: session.doc(),
         edit_target: session.edit_target().clone(),
         generation: session.projected_generation(),
         path: prim.path.clone(),
     })
 }
+
+/// Values from the current pointer gesture, keyed to the exact preview sample.
+#[derive(Resource, Default)]
+pub(crate) struct PreviewPoseDraft(Option<(egui::Id, [[f64; 3]; 3])>);
+impl lunco_core::SceneResource for PreviewPoseDraft {}
 
 fn usd_edit_released(response: &egui::Response) -> bool {
     response.drag_stopped() || (response.changed() && !response.dragged())
@@ -1151,7 +1021,7 @@ fn usd_preview_transform_section(
     ui: &mut egui::Ui,
     ctx: &mut PanelCtx,
     entity: Entity,
-    preview: PreviewTransformContext,
+    preview: PreviewPrimContext,
 ) {
     let Some(prim) = ctx.get::<UsdPrimPath>(entity) else {
         return;
@@ -1178,91 +1048,67 @@ fn usd_preview_transform_section(
         }
     };
     let (s, r, t) = matrix.to_scale_rotation_translation();
-    let mut translation = t.to_array();
-    let mut rotation = lunco_usd_document::document::usd_rotate_xyz_degrees(r);
-    let mut scale = s.to_array();
-    let mut translation_commit = false;
-    let mut rotation_commit = false;
-    let mut scale_commit = false;
-    egui::CollapsingHeader::new("Transform")
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.label("Local · canonical metres · Euler XYZ degrees · scale unitless");
-            let (translate_x, translate_y, translate_z) = ui
-                .horizontal(|ui| {
-                    (
-                        ui.add(
-                            egui::DragValue::new(&mut translation[0])
-                                .speed(0.1)
-                                .prefix("X: "),
-                        ),
-                        ui.add(
-                            egui::DragValue::new(&mut translation[1])
-                                .speed(0.1)
-                                .prefix("Y: "),
-                        ),
-                        ui.add(
-                            egui::DragValue::new(&mut translation[2])
-                                .speed(0.1)
-                                .prefix("Z: "),
-                        ),
-                    )
-                })
-                .inner;
-            let (rotate_x, rotate_y, rotate_z) = ui
-                .horizontal(|ui| {
-                    (
-                        ui.add(
-                            egui::DragValue::new(&mut rotation[0])
-                                .speed(0.5)
-                                .prefix("Rx: "),
-                        ),
-                        ui.add(
-                            egui::DragValue::new(&mut rotation[1])
-                                .speed(0.5)
-                                .prefix("Ry: "),
-                        ),
-                        ui.add(
-                            egui::DragValue::new(&mut rotation[2])
-                                .speed(0.5)
-                                .prefix("Rz: "),
-                        ),
-                    )
-                })
-                .inner;
-            let (scale_x, scale_y, scale_z) = ui
-                .horizontal(|ui| {
-                    (
-                        ui.add(
-                            egui::DragValue::new(&mut scale[0])
-                                .speed(0.01)
-                                .prefix("Sx: "),
-                        ),
-                        ui.add(
-                            egui::DragValue::new(&mut scale[1])
-                                .speed(0.01)
-                                .prefix("Sy: "),
-                        ),
-                        ui.add(
-                            egui::DragValue::new(&mut scale[2])
-                                .speed(0.01)
-                                .prefix("Sz: "),
-                        ),
-                    )
-                })
-                .inner;
-            translation_commit = [translate_x, translate_y, translate_z]
-                .iter()
-                .any(usd_edit_released);
-            rotation_commit = [rotate_x, rotate_y, rotate_z].iter().any(usd_edit_released);
-            scale_commit = [scale_x, scale_y, scale_z].iter().any(usd_edit_released);
-        });
-
-    let committed = translation_commit || rotation_commit || scale_commit;
-    if !committed {
+    let key = ui.make_persistent_id((
+        entity,
+        preview.preview,
+        preview.generation,
+        &preview.edit_target,
+        time_code.to_bits(),
+    ));
+    let draft = ctx.resource::<PreviewPoseDraft>().and_then(|draft| draft.0);
+    let authored = [
+        t.to_array(),
+        lunco_usd_document::document::usd_rotate_xyz_degrees(r),
+        s.to_array(),
+    ];
+    let mut channels = draft
+        .filter(|(id, _)| *id == key)
+        .map_or(authored, |(_, values)| values);
+    let mut committed = [false; 3];
+    let mut dragging = false;
+    ui.push_id(key, |ui| {
+        egui::CollapsingHeader::new("USD transform")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label("Local · canonical metres · Euler XYZ degrees · scale unitless");
+                for (index, (labels, speed)) in [
+                    (["X: ", "Y: ", "Z: "], 0.1),
+                    (["Rx: ", "Ry: ", "Rz: "], 0.5),
+                    (["Sx: ", "Sy: ", "Sz: "], 0.01),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    ui.horizontal(|ui| {
+                        for (value, label) in channels[index].iter_mut().zip(labels) {
+                            let response = ui.add(
+                                egui::DragValue::new(value)
+                                    .speed(speed)
+                                    .prefix(label)
+                                    .update_while_editing(false),
+                            );
+                            dragging |= response.dragged();
+                            committed[index] |= usd_edit_released(&response);
+                        }
+                    });
+                }
+            });
+    });
+    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if draft.is_some() {
+            ctx.set_resource(PreviewPoseDraft::default());
+        }
         return;
     }
-
+    let [translation_commit, rotation_commit, scale_commit] = committed;
+    if !committed.into_iter().any(|changed| changed) || channels == authored {
+        let next = dragging.then_some((key, channels));
+        if draft != next {
+            ctx.set_resource(PreviewPoseDraft(next));
+        }
+        return;
+    }
+    let [translation, rotation, scale] = channels;
     let result = lunco_scene_authoring::local_pose::local_pose_ops(
         &reader,
         &preview.edit_target,
@@ -1272,6 +1118,9 @@ fn usd_preview_transform_section(
         rotation_commit.then(|| lunco_usd_document::document::usd_rotate_xyz_quaternion(rotation)),
         scale_commit.then(|| bevy::math::DVec3::from_array(scale)),
     );
+    if draft.is_some() {
+        ctx.set_resource(PreviewPoseDraft::default());
+    }
     let ops = match result {
         Ok(ops) => ops,
         Err(error) => {
@@ -1361,16 +1210,12 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
     // A USD preview has no live entity identity or physics body. Its
     // document-backed transform is handled by the explicit preview lease;
     // only live simulation entities use MoveEntity below.
-    if let Some(preview) = focused_preview_transform_context(ctx, entity) {
+    if let Some(preview) = focused_preview_prim_context(ctx, entity) {
         usd_preview_transform_section(ui, ctx, entity, preview);
-    } else if ctx.get::<Transform>(entity).is_some() {
-        // The sliders author a **document op**, they do not poke ECS: a committed
-        // translation edit fires `MoveEntity`, whose observers seat the body and author
-        // `UsdOp::SetTranslate` into the runtime layer. So an Inspector move
-        // survives reload, journals, syncs, and is undone by the same Ctrl+Z as a
-        // gizmo drag. Committed = drag released or value typed — per-frame firing
-        // during a drag would push one op per frame.
-        egui::CollapsingHeader::new("Transform")
+    } else if inspector_preview_root(ctx, entity).is_none()
+        && ctx.get::<Transform>(entity).is_some()
+    {
+        egui::CollapsingHeader::new("Live position (m)")
             .default_open(true)
             .show(ui, |ui| {
                 // GRID-ABSOLUTE, not `Transform.translation`: on a
@@ -1391,15 +1236,7 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
                         let rx = ui.add(egui::DragValue::new(&mut x).speed(0.1).prefix("X: "));
                         let ry = ui.add(egui::DragValue::new(&mut y).speed(0.1).prefix("Y: "));
                         let rz = ui.add(egui::DragValue::new(&mut z).speed(0.1).prefix("Z: "));
-                        // Author ONCE, on release — not on every `changed()` frame, which
-                        // would flood the journal with an op per mouse-move for a single
-                        // drag. Same rule as the gizmo's drag-end authoring.
-                        let committed = [&rx, &ry, &rz]
-                            .iter()
-                            .any(|r| r.drag_stopped() || (r.changed() && !r.dragged()));
-                        if committed {
-                            // Route through the typed `MoveEntity` verb; it owns
-                            // physics pose seating and USD persistence.
+                        if rx.changed() || ry.changed() || rz.changed() {
                             let Some(gid) = ctx.get::<lunco_core::GlobalEntityId>(entity).copied()
                             else {
                                 warn!("INSPECTOR: {entity:?} has no GlobalEntityId — not movable");
@@ -1418,7 +1255,7 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
                                 return;
                             };
                             ctx.trigger(MoveEntity {
-                                intent: lunco_core::EditIntent::Persistent,
+                                intent: lunco_core::EditIntent::Interactive,
                                 entity_id: gid.get(),
                                 translation: [x, y, z],
                             });
@@ -1524,24 +1361,28 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
         }
 
         if let Some(part) = target {
-            shader_picker_for_part(ui, ctx, part);
-            shader_tools_ui(ui, ctx, part);
+            if let Some(target) = InspectorAppearanceTarget::for_part(ctx, part) {
+                shader_picker_for_part(ui, ctx, part, &target);
+                shader_tools_ui(ui, ctx, part, &target);
+            }
 
             // Reuse the selected root's material-bearing entities to find the
             // chosen part's surfaces without another child-tree traversal.
             let (pbr_parts, shader_holder) = part_materials(ctx, part, &parts);
-            if let Some(holder) = shader_holder {
-                egui::CollapsingHeader::new("Shader Parameters")
+            if let Some(holder) = shader_holder
+                && let Some(target) = InspectorAppearanceTarget::for_part(ctx, holder)
+            {
+                egui::CollapsingHeader::new(format!("{} shader parameters", target.destination()))
                     .default_open(true)
-                    .show(ui, |ui| {
-                        shader_parameters_section(ui, ctx, holder);
-                    });
+                    .show(ui, |ui| shader_parameters_section(ui, ctx, holder, &target));
             }
-            if !pbr_parts.is_empty() {
-                egui::CollapsingHeader::new("Material (PBR)")
+            if !pbr_parts.is_empty()
+                && let Some(target) = InspectorAppearanceTarget::for_part(ctx, part)
+            {
+                egui::CollapsingHeader::new(format!("{} material (PBR)", target.destination()))
                     .default_open(true)
                     .show(ui, |ui| {
-                        material_pbr_section(ui, ctx, part, &pbr_parts);
+                        material_pbr_section(ui, ctx, part, &pbr_parts, &target)
                     });
             }
         }
@@ -1569,13 +1410,37 @@ fn inspector_content(panel: &mut Inspector, ui: &mut egui::Ui, ctx: &mut PanelCt
             });
     }
 
-    // Delete button
     ui.separator();
-    if ui.button("Delete Entity (Del)").clicked() {
-        ctx.trigger(DeleteEntity {
-            target: entity,
-            intent: lunco_core::EditIntent::Persistent,
-        });
+    if inspector_preview_root(ctx, entity).is_some() {
+        if let Some(lease) = focused_preview_prim_context(ctx, entity)
+            && ui.button("Deactivate prim in USD").clicked()
+        {
+            ctx.trigger(ApplyUsdOps {
+                doc_id: lease.doc,
+                parent_gen: Some(lease.generation),
+                label: "Deactivate prim in USD".into(),
+                ops: vec![UsdOp::SetActive {
+                    edit_target: lease.edit_target,
+                    path: lease.path,
+                    active: false,
+                }],
+            });
+        }
+    } else {
+        if ui.button("Remove from live scene (Del)").clicked() {
+            ctx.trigger(DeleteEntity {
+                target: entity,
+                intent: EditIntent::Interactive,
+            });
+        }
+        if ctx.get::<UsdPrimPath>(entity).is_some()
+            && ui.button("Delete from mounted USD").clicked()
+        {
+            ctx.trigger(DeleteEntity {
+                target: entity,
+                intent: EditIntent::Persistent,
+            });
+        }
     }
 }
 
@@ -3060,7 +2925,12 @@ fn parts_selector(
 
 /// Shader picker for a single part. Lists the [`ShaderCatalog`] entries and,
 /// on pick, emits a typed `.wesl` swap request for `part`.
-fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
+fn shader_picker_for_part(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    part: Entity,
+    target: &InspectorAppearanceTarget,
+) {
     let entries = ctx
         .resource::<lunco_materials::ShaderCatalog>()
         .map(|c| c.entries.clone())
@@ -3076,7 +2946,7 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
         .unwrap_or_else(|| "— (none)".to_string());
 
     let mut chosen: Option<String> = None;
-    egui::ComboBox::from_label("Shader")
+    egui::ComboBox::from_label(target.label())
         .selected_text(cur_label)
         .show_ui(ui, |ui| {
             for e in &entries {
@@ -3087,82 +2957,134 @@ fn shader_picker_for_part(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
         });
     if let Some(path) = chosen {
         if path != cur {
-            ctx.trigger(ShaderSwapRequested { part, path });
+            ctx.trigger(ShaderSwapRequested {
+                target: target.clone(),
+                path,
+            });
         }
     }
 }
 
-/// Point `part`'s [`ShaderLook`] at shader `path`, carrying over the params it
-/// already had (the render binder swaps the material). Runs in the typed
-/// request observer after the egui pass.
-fn swap_shader_on_entity(world: &mut World, part: Entity, path: &str) {
-    let Some(prim) = world.get::<UsdPrimPath>(part).cloned() else {
-        report_inspector_error(world, "Selected shader target has no USD prim path");
-        return;
-    };
-    let shader_prim = match bound_shader_prim(world, &prim) {
-        Ok(Some(shader)) => shader,
-        Ok(None) => {
-            report_inspector_error(
-                world,
-                "This prim has no bound surface Shader; the shader was not changed",
-            );
-            return;
-        }
-        Err(error) => {
-            report_inspector_error(world, &error);
-            return;
-        }
-    };
-    let Some((doc, edit_target, generation)) = authoring_context(world, part) else {
-        report_inspector_error(world, "Selected shader target is not document-backed");
-        return;
-    };
-    let authored_source = match lunco_assets_core::asset_path::source_uri_for_address(
-        path,
-        world.get_resource::<lunco_assets_core::TwinRoots>(),
-    ) {
-        Ok(source) => source,
-        Err(error) => {
-            report_inspector_error(
-                world,
-                format!("Cannot resolve shader source identity: {error}"),
-            );
-            return;
-        }
-    };
-    let mut look = world.get::<ShaderLook>(part).cloned().unwrap_or_default();
-    look.shader = path.to_string();
-    world
-        .commands()
-        .entity(part)
-        // The `PbrLook` intent must go. Leaving it would have the PBR binder keep
-        // re-inserting its own material alongside the shader one — two materials on
-        // one mesh, drawn twice.
-        .remove::<PbrLook>()
-        .try_insert(look);
-    // …and the material that binder ALREADY bound, or the same double-draw happens
-    // once, statically. (Removed reflectively — this crate may not name `bevy_pbr`.)
-    lunco_scene_authoring::properties::drop_bound_pbr_material(world, part);
+#[derive(Clone, Debug)]
+enum InspectorAppearanceTarget {
+    Live(Entity),
+    Usd {
+        part: Entity,
+        lease: PreviewPrimContext,
+    },
+}
 
-    // Propagate to USD — onto the `Shader` prim of the `Material` this geometry is
-    // bound to. A shader is not a property of a mesh: it belongs to the material, and
-    // the material is what the mesh binds. So the edit goes where the shader lives.
-    //
-    // The TYPE is the schema's, and writer and reader must agree on it, not just on the
-    // name: an `asset` reads back as `Value::AssetPath`, and a loader asking for a
-    // `String` gets `None`.
-    world.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: (generation != 0).then_some(generation),
-        op: UsdOp::SetAttribute {
-            edit_target,
-            path: shader_prim,
-            name: "info:wesl:sourceAsset".to_string(),
-            type_name: "asset".to_string(),
-            value: format!("@{}@", authored_source),
-        },
+impl InspectorAppearanceTarget {
+    fn for_part(ctx: &PanelCtx, part: Entity) -> Option<Self> {
+        if inspector_preview_root(ctx, part).is_some() {
+            return Some(Self::Usd {
+                part,
+                lease: focused_preview_prim_context(ctx, part)?,
+            });
+        }
+        Some(Self::Live(part))
+    }
+
+    fn destination(&self) -> &'static str {
+        match self {
+            Self::Live(_) => "Live",
+            Self::Usd { .. } => "USD",
+        }
+    }
+
+    fn draft_key(&self) -> Option<egui::Id> {
+        match self {
+            Self::Live(_) => None,
+            Self::Usd { part, lease } => Some(egui::Id::new((
+                *part,
+                lease.preview,
+                lease.generation,
+                &lease.edit_target,
+            ))),
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Live(_) => "Live shader",
+            Self::Usd { .. } => "USD shader",
+        }
+    }
+}
+
+fn validated_preview_prim(
+    world: &mut World,
+    part: Entity,
+    lease: &PreviewPrimContext,
+) -> Option<UsdPrimPath> {
+    let prim = world.get::<UsdPrimPath>(part);
+    let valid = prim.is_some_and(|prim| {
+        world
+            .resource::<lunco_usd_viewport_core::UsdViewportState>()
+            .focused_session()
+            .is_some_and(|session| {
+                session.id() == lease.preview
+                    && session.projection_ready()
+                    && session.doc() == lease.doc
+                    && session.edit_target() == &lease.edit_target
+                    && session.projected_generation() == lease.generation
+                    && session
+                        .stage_handle()
+                        .is_some_and(|stage| stage.id() == prim.stage_handle.id())
+                    && prim.path == lease.path
+                    && std::iter::successors(Some(part), |entity| {
+                        world.get::<ChildOf>(*entity).map(ChildOf::parent)
+                    })
+                    .any(|entity| entity == session.scene_root())
+            })
     });
+    if valid {
+        return prim.cloned();
+    }
+    report_inspector_error(
+        world,
+        "The USD preview changed. Reopen the selected prim to edit its material.",
+    );
+    None
+}
+
+fn swap_shader_on_entity(world: &mut World, target: InspectorAppearanceTarget, path: &str) {
+    match target {
+        InspectorAppearanceTarget::Live(part) => {
+            let Some(gid) = world
+                .resource::<lunco_api::registry::ApiEntityRegistry>()
+                .api_id_for(part)
+            else {
+                report_inspector_error(world, "The selected surface has no live API identity");
+                return;
+            };
+            world.trigger(lunco_scene_authoring::properties::SetObjectProperty {
+                entity_id: gid.get(),
+                property: "shader".into(),
+                value: path.into(),
+                intent: EditIntent::Interactive,
+            });
+        }
+        InspectorAppearanceTarget::Usd { part, lease } => {
+            let Some(prim) = validated_preview_prim(world, part, &lease) else {
+                return;
+            };
+            match lunco_scene_authoring::properties::shader_assignment_ops(
+                world,
+                &prim,
+                lease.edit_target,
+                path,
+            ) {
+                Ok(ops) => world.trigger(ApplyUsdOps {
+                    doc_id: lease.doc,
+                    parent_gen: Some(lease.generation),
+                    label: "Assign USD shader".into(),
+                    ops,
+                }),
+                Err(error) => report_inspector_error(world, error),
+            }
+        }
+    }
 }
 
 /// The asset path of `part`'s current shader (read via [`PanelCtx`]), or `None` if
@@ -3176,8 +3098,13 @@ fn current_shader_path(ctx: &PanelCtx, part: Entity) -> Option<String> {
 /// "Shader Tools" — GUI front-end for the live shader-authoring commands.
 /// Create / Import apply the result to `part` by `Entity`. Commands are emitted
 /// as typed events (their observers run via `world.trigger`).
-fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
-    egui::CollapsingHeader::new("Shader Tools")
+fn shader_tools_ui(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    part: Entity,
+    target: &InspectorAppearanceTarget,
+) {
+    egui::CollapsingHeader::new(format!("{} tools", target.label()))
         .default_open(false)
         .show(ui, |ui| {
             let id = ui.make_persistent_id("shader_tools_state");
@@ -3228,7 +3155,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                 let name = st.name.clone();
                 let template = st.template.clone();
                 ctx.trigger(ShaderCreateRequested {
-                    part,
+                    target: target.clone(),
                     name,
                     template,
                 });
@@ -3252,7 +3179,10 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
                 .clicked()
             {
                 let src = st.import.trim().to_string();
-                ctx.trigger(ShaderImportRequested { part, source: src });
+                ctx.trigger(ShaderImportRequested {
+                    target: target.clone(),
+                    source: src,
+                });
             }
 
             ui.separator();
@@ -3293,7 +3223,7 @@ fn shader_tools_ui(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity) {
 }
 
 /// Install through the typed command owner and bind only its successful source.
-fn install_and_apply<E>(world: &mut World, part: Entity, command: E)
+fn install_and_apply<E>(world: &mut World, target: InspectorAppearanceTarget, command: E)
 where
     E: bevy::ecs::event::Event,
     for<'a> E::Trigger<'a>: Default,
@@ -3321,24 +3251,21 @@ where
         Some(lunco_core::CommandOutcome::Rejected(reason)) => Err(reason.to_string()),
         _ => Err("Shader installation did not report completion".into()),
     };
-    let path = source.and_then(|source| {
-        lunco_assets_core::asset_path::load_source_uri(
-            &source,
-            world.get_resource::<lunco_assets_core::TwinRoots>(),
-        )
-        .map(|path| path.to_string())
-        .map_err(|error| error.to_string())
-    });
-    match path {
-        Ok(path) => swap_shader_on_entity(world, part, &path),
+    match source {
+        Ok(path) => swap_shader_on_entity(world, target, &path),
         Err(error) => report_inspector_error(world, error),
     }
 }
 
-fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str) {
+fn create_and_apply(
+    world: &mut World,
+    target: InspectorAppearanceTarget,
+    name: &str,
+    template: &str,
+) {
     install_and_apply(
         world,
-        part,
+        target,
         lunco_scene_authoring::properties::CreateShader {
             name: name.to_owned(),
             template: template.to_owned(),
@@ -3348,10 +3275,10 @@ fn create_and_apply(world: &mut World, part: Entity, name: &str, template: &str)
     );
 }
 
-fn import_and_apply(world: &mut World, part: Entity, source: &str) {
+fn import_and_apply(world: &mut World, target: InspectorAppearanceTarget, source: &str) {
     install_and_apply(
         world,
-        part,
+        target,
         lunco_scene_authoring::properties::ImportShader {
             source_path: source.to_owned(),
             name: String::new(),
@@ -3360,118 +3287,161 @@ fn import_and_apply(world: &mut World, part: Entity, source: &str) {
     );
 }
 
-fn material_edit_intent(response: &egui::Response) -> Option<EditIntent> {
-    if usd_edit_released(response) {
-        Some(EditIntent::Persistent)
-    } else if response.changed() {
-        Some(EditIntent::Interactive)
-    } else {
-        None
+/// A preview holds local widget values until the user applies or discards them.
+/// Keying the draft by preview, layer, generation and part fences selection and reload.
+#[derive(Resource)]
+pub(crate) struct PreviewAppearanceDraft<T: Send + Sync + 'static>(Option<(egui::Id, T)>);
+
+impl<T: Send + Sync + 'static> Default for PreviewAppearanceDraft<T> {
+    fn default() -> Self {
+        Self(None)
     }
 }
+impl<T: Send + Sync + 'static> lunco_core::SceneResource for PreviewAppearanceDraft<T> {}
 
-/// Editable PBR controls for the selected object's surfaces.
-///
-/// Edits the [`PbrLook`] **intent** component, not the material asset: the render
-/// binder re-materialises on `Changed<PbrLook>`. This is not merely tidier — it is
-/// required for correctness, because the binder shares one material across every
-/// entity with the same look, so the old `Assets::get_mut(handle)` write would now
-/// bleed onto unrelated entities that happen to look alike. (It is also what keeps
-/// this crate off `bevy_pbr`.) A surface with no `PbrLook` is not listed as a part,
-/// so there is nothing here to fall back to.
-///
-/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are handled by
-/// a typed observer.
-fn material_pbr_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, part: Entity, parts: &[Entity]) {
-    let Some(&first) = parts.first() else {
-        return;
-    };
+fn appearance_draft<T: Send + Sync + Clone + 'static>(
+    ctx: &PanelCtx,
+    target: &InspectorAppearanceTarget,
+) -> Option<T> {
+    let key = target.draft_key()?;
+    let (stored, value) = ctx.resource::<PreviewAppearanceDraft<T>>()?.0.as_ref()?;
+    (*stored == key).then(|| value.clone())
+}
 
-    // Snapshot current values — no world borrow held while drawing widgets.
-    let Some(look) = ctx.get::<PbrLook>(first) else {
-        ui.label("Material still loading…");
-        return;
+fn submit_appearance<T: Send + Sync + Clone + PartialEq + 'static>(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    target: &InspectorAppearanceTarget,
+    original: &T,
+    draft: &T,
+) -> bool {
+    let Some(key) = target.draft_key() else {
+        return original != draft;
     };
-    let snap = {
-        let b = look.base_color;
-        let e = look.emissive;
-        (
-            [b.red, b.green, b.blue],
-            b.alpha,
-            [e.red, e.green, e.blue],
-            look.metallic,
-            look.perceptual_roughness,
-            look.ior,
-            look.double_sided,
-        )
-    };
-    let (mut base, mut alpha, mut emissive, mut metallic, mut roughness, mut ior, mut double_sided) =
-        snap;
-
-    let base_edit = ui
+    let old = ctx
+        .resource::<PreviewAppearanceDraft<T>>()
+        .and_then(|s| s.0.as_ref());
+    let pending = draft != original;
+    let (apply, discard) = ui
         .horizontal(|ui| {
-            let response = ui.color_edit_button_rgb(&mut base);
-            ui.label("Base color");
-            material_edit_intent(&response)
+            (
+                ui.add_enabled(pending, egui::Button::new("Apply to USD"))
+                    .clicked(),
+                ui.add_enabled(pending, egui::Button::new("Discard"))
+                    .clicked(),
+            )
         })
         .inner;
-    let alpha_edit =
-        material_edit_intent(&ui.add(egui::Slider::new(&mut alpha, 0.0..=1.0).text("Alpha")));
-    let emissive_edit = ui
-        .horizontal(|ui| {
-            let response = ui.color_edit_button_rgb(&mut emissive);
-            ui.label("Emissive");
-            material_edit_intent(&response)
-        })
-        .inner;
-    let metallic_edit =
-        material_edit_intent(&ui.add(egui::Slider::new(&mut metallic, 0.0..=1.0).text("Metallic")));
-    let roughness_edit = material_edit_intent(
-        &ui.add(egui::Slider::new(&mut roughness, 0.0..=1.0).text("Roughness")),
-    );
-    let ior_edit =
-        material_edit_intent(&ui.add(egui::Slider::new(&mut ior, 1.0..=2.33).text("IOR")));
-    let sided_edit = material_edit_intent(&ui.checkbox(&mut double_sided, "Double-sided"));
-    if parts.len() > 1 {
-        ui.label(egui::RichText::new(format!("applies to {} parts", parts.len())).weak());
+    let next = (pending && !apply && !discard).then(|| (key, draft.clone()));
+    if old != next.as_ref() {
+        ctx.set_resource(PreviewAppearanceDraft(next));
     }
+    apply
+}
 
-    for intent in [EditIntent::Interactive, EditIntent::Persistent] {
-        let edited = |field| field == Some(intent);
-        if ![
-            base_edit,
-            alpha_edit,
-            emissive_edit,
-            metallic_edit,
-            roughness_edit,
-            ior_edit,
-            sided_edit,
-        ]
-        .into_iter()
-        .any(edited)
-        {
-            continue;
-        }
-        ctx.trigger(PbrMaterialRequested {
-            part,
-            parts: parts.to_vec(),
-            base,
-            alpha,
-            emissive,
-            metallic,
-            roughness,
-            ior,
-            double_sided,
-            base_changed: edited(base_edit),
-            emissive_changed: edited(emissive_edit),
-            metallic_changed: edited(metallic_edit),
-            roughness_changed: edited(roughness_edit),
-            ior_changed: edited(ior_edit),
-            alpha_changed: edited(alpha_edit),
-            double_sided_changed: edited(sided_edit),
-            intent,
+#[derive(Clone, PartialEq)]
+pub(crate) struct PbrFields {
+    base: [f32; 3],
+    alpha: f32,
+    emissive: [f32; 3],
+    metallic: f32,
+    roughness: f32,
+    ior: f32,
+    double_sided: bool,
+}
+
+fn material_pbr_section(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    part: Entity,
+    parts: &[Entity],
+    target: &InspectorAppearanceTarget,
+) {
+    // USD edits address the selected prim's binding. Live group edits affect its surfaces.
+    let source = match target {
+        InspectorAppearanceTarget::Live(_) => parts[0],
+        InspectorAppearanceTarget::Usd { .. } => part,
+    };
+    let Some(look) = ctx.get::<PbrLook>(source) else {
+        ui.weak("Select a surface to edit its material.");
+        return;
+    };
+    let rgb = |c: LinearRgba| [c.red, c.green, c.blue];
+    let original = PbrFields {
+        base: rgb(look.base_color),
+        alpha: look.base_color.alpha,
+        emissive: rgb(look.emissive),
+        metallic: look.metallic,
+        roughness: look.perceptual_roughness,
+        ior: look.ior,
+        double_sided: look.double_sided,
+    };
+    let mut draft = appearance_draft(ctx, target).unwrap_or_else(|| original.clone());
+    let color = |ui: &mut egui::Ui, value: &mut [f32; 3], label| {
+        ui.horizontal(|ui| {
+            let mut picked = *value;
+            if ui.color_edit_button_rgb(&mut picked).changed() {
+                *value = picked;
+            }
+            ui.label(label);
         });
+    };
+    color(ui, &mut draft.base, "Base color");
+    ui.add(
+        egui::Slider::new(&mut draft.alpha, 0.0..=1.0)
+            .clamping(egui::SliderClamping::Edits)
+            .text("Alpha"),
+    );
+    color(ui, &mut draft.emissive, "Emissive");
+    ui.add(
+        egui::Slider::new(&mut draft.metallic, 0.0..=1.0)
+            .clamping(egui::SliderClamping::Edits)
+            .text("Metallic"),
+    );
+    ui.add(
+        egui::Slider::new(&mut draft.roughness, 0.0..=1.0)
+            .clamping(egui::SliderClamping::Edits)
+            .text("Roughness"),
+    );
+    ui.add(
+        egui::Slider::new(&mut draft.ior, 1.0..=2.33)
+            .clamping(egui::SliderClamping::Edits)
+            .text("IOR"),
+    );
+    ui.checkbox(&mut draft.double_sided, "Double-sided");
+    if parts.len() > 1 && matches!(target, InspectorAppearanceTarget::Live(_)) {
+        ui.weak(format!("Applies to {} surfaces", parts.len()));
     }
+    if !submit_appearance(ui, ctx, target, &original, &draft) {
+        return;
+    }
+    let mut edits = Vec::new();
+    for (key, before, after) in [
+        ("base_color", original.base, draft.base),
+        ("emissive", original.emissive, draft.emissive),
+    ] {
+        if before != after {
+            edits.push((key, format!("{},{},{}", after[0], after[1], after[2])));
+        }
+    }
+    for (key, before, after) in [
+        ("alpha", original.alpha, draft.alpha),
+        ("metallic", original.metallic, draft.metallic),
+        ("roughness", original.roughness, draft.roughness),
+        ("ior", original.ior, draft.ior),
+    ] {
+        if before != after {
+            edits.push((key, after.to_string()));
+        }
+    }
+    if original.double_sided != draft.double_sided {
+        edits.push(("double_sided", draft.double_sided.to_string()));
+    }
+    ctx.trigger(PbrMaterialRequested {
+        target: target.clone(),
+        parts: parts.to_vec(),
+        edits,
+    });
 }
 
 /// Reflected schemas keyed by shader asset, so each loaded WESL source is
@@ -3599,161 +3569,123 @@ fn shader_schema_of(
     cached.unwrap_or_default()
 }
 
-/// Render named, range-bounded controls for the selected entity's [`ShaderLook`]
-/// parameters.
-///
-/// The rows are DERIVED — from the shader's own `ParamSchema` (reflected out of its
-/// WESL `Material` struct), never from a hand-written list; the current values come
-/// from `ShaderLook::values` (falling back to each field's declared default). An
-/// edit mutates the component and the binder re-materialises on `Changed<ShaderLook>`,
-/// so nothing here touches a material asset.
-///
-/// Reads a snapshot via [`PanelCtx`]; the component + USD writes are handled by
-/// a typed observer.
-fn shader_parameters_section(ui: &mut egui::Ui, ctx: &mut PanelCtx, entity: Entity) {
+/// Read the shader's WESL schema and live inputs. Editable rows submit to the
+/// selected appearance owner. Engine-driven values stay read-only.
+fn shader_parameters_section(
+    ui: &mut egui::Ui,
+    ctx: &mut PanelCtx,
+    entity: Entity,
+    target: &InspectorAppearanceTarget,
+) {
     use lunco_materials::{ParamType, ParamValue, UiKind};
 
     let Some(look) = ctx.get::<ShaderLook>(entity).cloned() else {
         return;
     };
 
-    struct Row {
-        name: String,
-        label: String,
-        ui: UiKind,
-        ty: ParamType,
-        scalar: f32,
-        int: i32,
-        color: [f32; 3],
-        /// The engine owns this value — show it, never let the user fight it.
-        locked: bool,
-    }
-    let rows: Vec<Row> = {
-        // The schema is a property of the ASSET: read it from the loaded WESL
-        // source. `None` = the shader hasn't loaded yet.
-        let Some(schema) = shader_schema_of(ctx, &look.shader) else {
-            ui.label("Shader still loading…");
-            return;
-        };
-        schema
-            .fields
-            .iter()
-            .map(|f| {
-                // A parameter is ENGINE-OWNED when it is filled from simulation state
-                // rather than authored — either annotated `//!@engine` in the WESL
-                // (Rust fills it, e.g. `sun_vis`) or currently driven by a USD
-                // connection (a wire writes it every tick).
-                //
-                // `ShaderLook::live` IS that fact — it is the engine-owned half of the
-                // look, the map that sits outside the material sharing key precisely
-                // because the engine mutates it. So membership in `live` is the test;
-                // there is no second registry of "which fields are driven" to keep in
-                // step, and this covers every writer (a `.connect` wire and
-                // `horizon_shade`'s engine fields alike) without naming any of them.
-                let locked = matches!(f.ui, UiKind::Engine) || look.has_live_value(&f.name);
-                // Show the value the engine is actually pushing, not the authored one
-                // it is overriding — a locked row displaying a stale `values` entry
-                // would misreport the frame on screen.
-                let floats = look
-                    .live_value(&f.name)
-                    .or_else(|| look.values().get(&f.name).copied())
-                    .or(f.default)
-                    .map(|v| v.as_floats())
-                    .unwrap_or_default();
-                Row {
-                    name: f.name.clone(),
-                    label: f.label.clone(),
-                    ui: f.ui.clone(),
-                    ty: f.ty,
-                    locked,
-                    scalar: floats.first().copied().unwrap_or(0.0),
-                    int: floats.first().copied().unwrap_or(0.0).round() as i32,
-                    color: [
-                        floats.first().copied().unwrap_or(0.5),
-                        floats.get(1).copied().unwrap_or(0.5),
-                        floats.get(2).copied().unwrap_or(0.5),
-                    ],
-                }
-            })
-            .collect()
+    let empty = std::collections::BTreeMap::<String, ParamValue>::new();
+    let mut draft: std::collections::BTreeMap<String, ParamValue> =
+        appearance_draft(ctx, target).unwrap_or_default();
+    let Some(schema) = shader_schema_of(ctx, &look.shader) else {
+        ui.weak("Preparing shader parameters");
+        return;
     };
-
-    if rows.is_empty() {
-        ui.label("No editable parameters.");
+    if schema.fields.is_empty() {
+        ui.weak("No editable parameters.");
         return;
     }
+    draft.retain(|name, _| {
+        schema
+            .field(name)
+            .is_some_and(|f| !matches!(f.ui, UiKind::Engine))
+            && !look.has_live_value(name)
+    });
 
-    let mut preview = Vec::new();
-    let mut commit = Vec::new();
-    let mut edit = |response: &egui::Response, name, value| match material_edit_intent(response) {
-        Some(EditIntent::Interactive) => preview.push((name, value)),
-        Some(EditIntent::Persistent) => commit.push((name, value)),
-        None => {}
-    };
-    for mut row in rows {
-        // An engine-owned parameter is SHOWN but not editable. Showing it is the
-        // point — watching `load_frac` climb as the strut compresses is what makes
-        // the wire legible. Editing it would be a lie: the next propagation tick
-        // overwrites whatever the user typed, so an enabled control would read as a
-        // broken slider rather than as a value under someone else's authority.
-        let locked = row.locked;
-        ui.add_enabled_ui(!locked, |ui| match row.ui {
-            UiKind::Slider { min, max } => {
-                let response =
-                    ui.add(egui::Slider::new(&mut row.scalar, min..=max).text(&row.label));
-                edit(&response, row.name, ParamValue::F32(row.scalar));
+    for field in &schema.fields {
+        // Unassigned fields in the material uniform block are zero-initialized.
+        let original = look
+            .live_value(&field.name)
+            .or_else(|| look.values().get(&field.name).copied())
+            .or(field.default)
+            .unwrap_or_else(|| match field.ty {
+                ParamType::F32 => ParamValue::F32(0.0),
+                ParamType::I32 => ParamValue::I32(0),
+                ParamType::U32 => ParamValue::U32(0),
+                ParamType::Vec2 => ParamValue::Vec2([0.0; 2]),
+                ParamType::Vec3 => ParamValue::Vec3([0.0; 3]),
+                ParamType::Vec4 => ParamValue::Vec4([0.0; 4]),
+            });
+        let mut value = draft.get(&field.name).copied().unwrap_or(original);
+        let locked = matches!(field.ui, UiKind::Engine) || look.has_live_value(&field.name);
+        let controls = ui.add_enabled_ui(!locked, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(&field.label);
+                match (&field.ui, &mut value) {
+                    (UiKind::Slider { min, max }, ParamValue::F32(v)) => ui
+                        .add(
+                            egui::Slider::new(v, *min..=*max).clamping(egui::SliderClamping::Edits),
+                        )
+                        .changed(),
+                    (UiKind::Int { min, max }, ParamValue::I32(v)) => ui
+                        .add(
+                            egui::Slider::new(v, *min..=*max).clamping(egui::SliderClamping::Edits),
+                        )
+                        .changed(),
+                    (UiKind::Int { min, max }, ParamValue::U32(v)) => ui
+                        .add(
+                            egui::Slider::new(v, (*min).max(0) as u32..=(*max).max(0) as u32)
+                                .clamping(egui::SliderClamping::Edits),
+                        )
+                        .changed(),
+                    (UiKind::Int { min, max }, ParamValue::F32(v)) => ui
+                        .add(
+                            egui::Slider::new(v, *min as f32..=*max as f32)
+                                .integer()
+                                .clamping(egui::SliderClamping::Edits),
+                        )
+                        .changed(),
+                    (UiKind::Color, ParamValue::Vec3(v)) => ui.color_edit_button_rgb(v).changed(),
+                    (UiKind::Color, ParamValue::Vec4(v)) => {
+                        ui.color_edit_button_rgba_unmultiplied(v).changed()
+                    }
+                    (_, ParamValue::F32(v)) => {
+                        ui.add(egui::DragValue::new(v).speed(0.01)).changed()
+                    }
+                    (_, ParamValue::I32(v)) => ui.add(egui::DragValue::new(v)).changed(),
+                    (_, ParamValue::U32(v)) => ui.add(egui::DragValue::new(v)).changed(),
+                    (_, ParamValue::Vec2(v)) => shader_vector_fields(ui, v),
+                    (_, ParamValue::Vec3(v)) => shader_vector_fields(ui, v),
+                    (_, ParamValue::Vec4(v)) => shader_vector_fields(ui, v),
+                }
+            })
+            .inner
+        });
+        if controls.inner && !locked {
+            if value == original {
+                draft.remove(&field.name);
+            } else {
+                draft.insert(field.name.clone(), value);
             }
-            UiKind::Int { min, max } => {
-                let response = ui.add(egui::Slider::new(&mut row.int, min..=max).text(&row.label));
-                let value = match row.ty {
-                    ParamType::U32 => ParamValue::U32(row.int.max(0) as u32),
-                    ParamType::F32 => ParamValue::F32(row.int as f32),
-                    _ => ParamValue::I32(row.int),
-                };
-                edit(&response, row.name, value);
-            }
-            UiKind::Color => {
-                ui.horizontal(|ui| {
-                    let response = ui.color_edit_button_rgb(&mut row.color);
-                    let value = if row.ty == ParamType::Vec3 {
-                        ParamValue::Vec3(row.color)
-                    } else {
-                        ParamValue::Vec4([row.color[0], row.color[1], row.color[2], 1.0])
-                    };
-                    edit(&response, row.name, value);
-                    ui.label(&row.label);
-                });
-            }
-            UiKind::Free | UiKind::Engine => {
-                ui.horizontal(|ui| {
-                    let response = ui.add(egui::DragValue::new(&mut row.scalar).speed(0.01));
-                    edit(&response, row.name, ParamValue::F32(row.scalar));
-                    ui.label(&row.label);
-                });
-            }
-        })
-        .response
-        .on_disabled_hover_text(
-            "Driven by the simulation — this value comes from a USD connection or \
-             from the engine, so it cannot be edited here.",
-        );
+        }
+        controls
+            .response
+            .on_disabled_hover_text("Driven by the simulation or a USD connection.");
     }
 
-    for (intent, edits) in [
-        (EditIntent::Interactive, preview),
-        (EditIntent::Persistent, commit),
-    ] {
-        if edits.is_empty() {
-            continue;
-        }
-        let usd_prim_exists = ctx.get::<UsdPrimPath>(entity).is_some();
+    if submit_appearance(ui, ctx, target, &empty, &draft) {
         ctx.trigger(ShaderParametersRequested {
-            entity,
-            edits,
-            usd_prim_exists,
-            intent,
+            target: target.clone(),
+            edits: draft.into_iter().collect(),
         });
     }
+}
+
+fn shader_vector_fields(ui: &mut egui::Ui, values: &mut [f32]) -> bool {
+    let mut changed = false;
+    for value in values {
+        changed |= ui.add(egui::DragValue::new(value).speed(0.01)).changed();
+    }
+    changed
 }
 
 /// Render editable sliders for every tunable `parameter Real` in the
@@ -3991,7 +3923,7 @@ fn apply_usd_path_attribute_change(
         };
         world.trigger(ApplyUsdOp {
             doc_id: doc,
-            parent_gen: (generation != 0).then_some(generation),
+            parent_gen: Some(generation),
             op,
         });
     }
@@ -4029,7 +3961,7 @@ fn apply_usd_attribute_batch_change(
         .collect();
     world.trigger(lunco_usd_core::commands::ApplyUsdOps {
         doc_id: doc,
-        parent_gen: (generation != 0).then_some(generation),
+        parent_gen: Some(generation),
         label: "Edit USD parameters".to_string(),
         ops,
     });
@@ -4060,7 +3992,7 @@ fn apply_usd_variant_selection(
         };
         world.trigger(ApplyUsdOp {
             doc_id: doc,
-            parent_gen: (generation != 0).then_some(generation),
+            parent_gen: Some(generation),
             op,
         });
     }

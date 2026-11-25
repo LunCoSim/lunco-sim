@@ -30,9 +30,23 @@ impl Default for LinkNode {
     }
 }
 
+/// Live participation of an admitted box in radio sight-line tests.
+#[derive(Component, Debug, Clone, Copy, Reflect)]
+#[reflect(Component)]
+pub struct LinkOcclusion {
+    pub enabled: bool,
+}
+
+impl Default for LinkOcclusion {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// An authored sight-line blocker represented by a local-space USD extent.
 #[derive(Component, Debug, Clone, Copy, Reflect)]
 #[reflect(Component)]
+#[require(LinkOcclusion)]
 pub struct LinkOccluder {
     /// Half-size of the local-space extent before the prim's scale.
     pub half_extents: DVec3,

@@ -13,7 +13,6 @@ fn route_ribbon_width() { 0.12 }
 // Marker appearance is a generic route-tool policy. State is a transient view
 // of the authored program's visited set, written through the standard gprim
 // displayColor attribute; the marker asset supplies only the initial visual.
-fn unvisited_marker_color() { [0.10, 0.95, 0.22] }
 fn visited_marker_color() { [0.55, 0.55, 0.55] }
 
 // A route scope supplies the default constant USD color. A direct point may
@@ -53,7 +52,7 @@ fn record_color(record) {
 
 fn marker_state_color(color, visited) {
     if color == () {
-        return if visited { visited_marker_color() } else { unvisited_marker_color() };
+        return if visited { visited_marker_color() } else { () };
     }
     if !visited { return color; }
     // Dim completed points while retaining the route's hue.
@@ -61,9 +60,7 @@ fn marker_state_color(color, visited) {
 }
 
 fn route_style_key(read) {
-    let key = read.color.to_string();
-    for color in read.marker_colors { key += ";" + color.to_string(); }
-    key
+    #{color:read.color, marker_colors:read.marker_colors}
 }
 
 fn vector_equal(left, right) {
@@ -235,53 +232,46 @@ fn apply_view_ops(doc, label, ops) {
     #{ ok: true, changed: true }
 }
 
-// Synchronize all route-point marker colours from the policy-owned visited
-// set. The map is keyed by canonical USD point path, so new points inherit
-// the route color and editing cannot accidentally transfer state by index.
-// This is called only at a document/view revision boundary by the route
-// program; it is not a per-frame render update.
+fn material_color_write(property, rgb) {
+    #{property:property, value:if rgb == () { "Clear" } else { #{LinearRgb:#{value:rgb}} }}
+}
+
 fn sync_marker_states(doc, route, visited) {
-    let snapshot = route_positions(doc, route);
+    sync_marker_snapshot(doc, route_positions(doc, route), visited)
+}
+
+// Progress is keyed by point path. A clear restores the dome's authored colour.
+fn sync_marker_snapshot(doc, snapshot, visited) {
     if snapshot.ok != true { return snapshot; }
-    let points = snapshot.paths;
-    if points.len() == 0 {
-        return apply_view_ops(doc, "Update route-point states", []);
-    }
-    let marker_paths = [];
-    for point in points { marker_paths.push(point + "/Dome"); }
-    let markers = query("QueryUsdPrims", #{
-        doc_id: doc,
-        paths: marker_paths,
-        attrs: ["primvars:displayColor"],
-    });
-    if markers == () || markers.ok == false || markers.records == ()
-        || markers.records.len() != points.len() {
-        return #{ ok: false, retryable: true,
-            error: "route-point marker display state is not synchronized" };
-    }
-    let ops = [];
-    for i in 0..points.len() {
-        let point = points[i];
-        let marked = if visited == () { () } else { visited[point] };
-        let color = marker_state_color(snapshot.marker_colors[i], marked == true);
-        let marker = markers.records[i];
-        if marker.path != marker_paths[i] || marker.attrs == ()
-            || marker.attrs["primvars:displayColor"] == () {
-            return #{ ok: false, retryable: true,
-            error: "route-point marker display state is not synchronized" };
+    let batches = [];
+    for i in 0..snapshot.paths.len() {
+        let point = snapshot.paths[i];
+        let dome = find_path_in_document(doc, point + "/Dome");
+        if dome < 0 {
+            return #{ok:false, retryable:true, error:"route-point dome is awaiting projection: " + point};
         }
-        let current_color = marker.attrs["primvars:displayColor"];
-        if current_color.len() != 1 || !vector_equal(current_color[0], color) {
-            ops.push(#{ SetAttribute: #{
-                edit_target: "@view@",
-                path: point + "/Dome",
-                name: "primvars:displayColor",
-                type_name: "color3f[]",
-                value: "[" + point_literal(color) + "]",
-            }});
+        if execution_context().clock == "simulation" { track_entity_read(dome); }
+        let issue = get(dome, "UsdSceneProjectionFailed");
+        if issue != () { return #{ok:false, error:point + "/Dome: " + issue.to_string()}; }
+        if get(dome, "PbrLook") == () {
+            return #{ok:false, retryable:true, error:"route-point material is awaiting projection: " + point};
+        }
+        let marked = visited != () && visited[point] == true;
+        let rgb = marker_state_color(snapshot.marker_colors[i], marked);
+        batches.push(#{target:dome, writes:[material_color_write("material.base_color", rgb)]});
+    }
+    let chunk = [];
+    for i in 0..batches.len() {
+        chunk.push(batches[i]);
+        if chunk.len() == 256 || i + 1 == batches.len() {
+            let result = cmd("SetSceneView", #{batches:chunk});
+            if result == () || result.ok != true {
+                return #{ok:false, error:if result == () { "route marker update returned no result" } else { result.error }};
+            }
+            chunk = [];
         }
     }
-    apply_view_ops(doc, "Update route-point states", ops)
+    #{ok:true}
 }
 
 fn route_edit_path(context) {
@@ -847,6 +837,9 @@ fn update_ribbon_view(doc, route, points) {
 }
 
 fn update_ribbon_view(doc, route, points, pending_command) {
+    if !command_available("UpdateUsdCurveView") {
+        return #{ok:true, pending:false};
+    }
     if pending_command != () {
         let result = command_result(pending_command);
         if result == () || result.status == "pending" {
@@ -865,46 +858,13 @@ fn update_ribbon_view(doc, route, points, pending_command) {
             attrs:["primvars:displayColor"]});
         let color = record_color(style);
         if !color.ok { return color; }
-        let rgb = if color.color == () { [0.2, 1.4, 0.55] } else { color.color };
-        let shader = ribbon + "/Looks/RouteRibbon_Mat/Surface";
-        let material = query("QueryUsdPrim", #{doc_id:doc, path:shader,
-            attrs:["inputs:emissiveColor"]});
-        if material == () || material.attrs == () {
-            return #{ok:false, retryable:true, error:"route ribbon material is not synchronized"};
+        if execution_context().clock == "simulation" { track_entity_read(curve_entity); }
+        if get(curve_entity, "PbrLook") == () { return #{ok:true, pending:true}; }
+        let painted = cmd("SetSceneView", #{batches:[#{target:curve_entity,
+            writes:[material_color_write("material.emissive", color.color)]}]});
+        if painted == () || painted.ok != true {
+            return #{ok:false, error:if painted == () { "route ribbon colour returned no result" } else { painted.error }};
         }
-        let curve_style = query("QueryUsdPrim", #{doc_id:doc, path:geometry,
-            attrs:["primvars:displayColor"]});
-        if curve_style == () || curve_style.attrs == () {
-            return #{ok:false, retryable:true, error:"route ribbon geometry style is not synchronized"};
-        }
-        let curve_colors = curve_style.attrs["primvars:displayColor"];
-        // Surface-conforming curve meshes consume the curve's display colour.
-        // Keep it consistent with the material used by the ordinary USD view.
-        let curve_matches = curve_colors != () && curve_colors.len() == 1
-            && vector_equal(curve_colors[0], rgb);
-        if !vector_equal(material.attrs["inputs:emissiveColor"], rgb) || !curve_matches {
-            let painted = apply_view_ops(doc, "Update route ribbon color", [#{SetAttribute:#{
-                edit_target:"@view@", path:shader, name:"inputs:emissiveColor",
-                type_name:"color3f", value:point_literal(rgb)}}, #{SetAttribute:#{
-                edit_target:"@view@", path:geometry, name:"primvars:displayColor",
-                type_name:"color3f[]", value:"["+point_literal(rgb)+"]"}}]);
-            if !painted.ok || painted.pending == true { return painted; }
-            return #{ok:true, pending:true};
-        }
-        // The document commit precedes its projected material. A curve-view
-        // request captures PbrLook into an immutable terrain worker request;
-        // submitting before this handoff would retain the previous colour.
-        if execution_context().clock == "simulation" {
-            track_entity_read(curve_entity);
-        }
-        let projected_look = get(curve_entity, "PbrLook");
-        if projected_look == () { return #{ok:true, pending:true}; }
-        let projected_rgb = [
-            projected_look.base_color.red + projected_look.emissive.red,
-            projected_look.base_color.green + projected_look.emissive.green,
-            projected_look.base_color.blue + projected_look.emissive.blue,
-        ];
-        if !vector_equal(projected_rgb, rgb) { return #{ok:true, pending:true}; }
         let result = cmd("UpdateUsdCurveView", #{
             doc_id: doc,
             root_entity_id: root_entity,

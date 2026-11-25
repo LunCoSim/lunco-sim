@@ -839,8 +839,8 @@ Every transfer/blend parameter is a **reflected uniform** on the dynamic
 `terrain_debug.wesl` uses). Exposing a param as a reflected uniform gives, for free:
 
 - **Inspector** — a slider (critical angle, opacity, domain, colormap picker);
-- **Scripting / API** — `cmd("SetObjectProperty", { critical_angle: 0.35 })` over rhai / HTTP / MCP;
-- **USD** — the layer prim carries defaults (`lunco:layer:slope:criticalAngle`); live tweaks ride the runtime/session layer, journaled + replicated like any edit.
+- **Scripting / API** — query the shader's reflected parameters before setting a supported uniform on an entity with `SetObjectProperty`. Supply `entity_id`, `property` and the textual `value`.
+- **USD** — edit the authored shader input through its document to save a new default. Runtime uniform changes use the live material.
 
 Changing the value writes a uniform → instant, no re-bake. Changing the data channel
 swaps the sampled texture; changing the colormap swaps the LUT.

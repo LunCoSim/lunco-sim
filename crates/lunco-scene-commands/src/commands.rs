@@ -14,7 +14,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::{CellCoord, Grid};
+use lunco_api::executor::{CommandReply, DeferredCommandAppExt};
 use lunco_command_contracts::{Ack, OpId, Reject};
+use lunco_core::CommandOutcome;
 use lunco_core::{Command, SpawnEntity, on_command, register_commands};
 use lunco_doc_bevy::DocumentRegistry;
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
@@ -25,10 +27,9 @@ use lunco_scene_command_contracts::{
 };
 use lunco_scene_selection::SelectedEntities;
 use lunco_usd_bevy_scene::{UsdPrimPath, UsdSceneRoot};
-use lunco_usd_core::commands::{ApplyUsdOp, ApplyUsdOps};
+use lunco_usd_core::commands::ApplyUsdOps;
 use lunco_usd_document::document::UsdDocument;
 use lunco_usd_document::document::{LayerId, UsdOp};
-use openusd_schemas::lux::tokens as ltok;
 
 /// Select one live scene entity through the render-free shared selection
 /// resource. Editor packages may add highlights or gizmos, but authored tools
@@ -137,14 +138,12 @@ fn reconcile_stable_scene_selection(
     selected.entities = resolved;
 }
 
-/// Request an entity detachment (joint-aware when joint state is present).
+/// Release an admitted physics joint through its solver-safe retirement owner.
 #[Command(reflect_default)]
 pub struct DetachJoint {
-    /// Entity to detach. Joint state, when present, is retired through the
-    /// physics lifecycle; ordinary entities use normal removal.
+    /// The joint's stable entity identity.
     pub target: Entity,
-    /// Interactive (default) detaches only the live joint; Persistent explicitly
-    /// authors the removal into the owning USD document's runtime layer.
+    /// Interactive (default) releases the live joint. Persistent edits its owning USD document.
     #[serde(default)]
     pub intent: lunco_core::EditIntent,
 }
@@ -158,157 +157,54 @@ impl Default for DetachJoint {
     }
 }
 
-/// Observer that handles `DetachJoint` commands.
-///
-/// This is a generic entity-detach verb, not a `PhysicsJointLink` allow-list:
-/// an ordinary entity is removed directly, while an entity carrying any joint
-/// state is routed through the physics lifecycle marker.  The USD/Avian bridge
-/// owns that joint teardown path.  Keeping native-joint despawn out of this
-/// command layer is important: Bevy's recursive despawn removes joint
-/// components in an unspecified order, while Avian requires graph/island
-/// retirement first.
 #[on_command(DetachJoint)]
 pub fn on_detach_joint(
     trigger: On<DetachJoint>,
     mut commands: Commands,
-    q_joint: Query<(
-        Option<&lunco_physics::PhysicsJointLink>,
-        Option<&UsdPrimPath>,
-        Option<&lunco_physics::PhysicsJointDetachRequested>,
-        Option<&lunco_physics::PhysicsJointPending>,
-        Option<&avian3d::dynamics::joints::joint_graph::JointComponentId>,
+    joints: Query<(
+        &lunco_physics::PhysicsJointLink,
+        Has<lunco_physics::PhysicsJointDetachRequested>,
     )>,
-    q_detached: Query<Option<&lunco_physics::PhysicsJointDetachSet>>,
-) -> Result<Ack, String> {
+    removal: PrimRemoval,
+    reply: CommandReply,
+) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
-    let (link, path, already_requested, pending, native) = q_joint
-        .get(cmd.target)
-        .ok()
-        .map(|(link, path, requested, pending, native)| {
-            (
-                link.copied(),
-                path.map(|path| path.path.clone()),
-                requested.is_some(),
-                pending.is_some(),
-                native.is_some(),
-            )
-        })
-        .unwrap_or((None, None, false, false, false));
-    let Some(mut entity) = commands.get_entity(cmd.target).ok() else {
-        warn!(
-            "DETACH_JOINT rejected: target {:?} does not exist",
+    let (link, requested) = joints.get(cmd.target).map_err(|_| {
+        Reject::InvalidOp(format!(
+            "target {:?} is not an admitted physics joint",
             cmd.target
-        );
-        return Err(format!("target {:?} does not exist", cmd.target));
-    };
-    if already_requested {
-        warn!(
-            "DETACH_JOINT ignored: target {:?} already has a pending detach",
+        ))
+    })?;
+    if requested {
+        return Err(Reject::InvalidOp(format!(
+            "joint {:?} already has a pending detach",
             cmd.target
-        );
-        return Ok(Ack::new(OpId::new()));
+        )));
     }
-    let path = path.unwrap_or_default();
-    let Some(link) = link else {
-        if pending || native {
-            warn!(
-                "DETACH_JOINT rejected: target {:?} has joint state but no PhysicsJointLink; repair attachment topology before detaching",
-                cmd.target
-            );
-            return Err(format!(
-                "target {:?} has joint state but no PhysicsJointLink; repair attachment topology before detaching",
-                cmd.target
-            ));
-        }
-        entity.try_despawn();
-        info!(
-            "DETACH_JOINT: removed ordinary non-joint entity {:?} ({:?})",
-            cmd.target, cmd.intent
-        );
-        return Ok(Ack::new(OpId::new()));
-    };
-    {
-        entity.try_insert(lunco_physics::PhysicsJointDetachRequested);
-        info!(
-            "DETACH_JOINT: queued solver-safe retirement for {:?} ({:?})",
-            cmd.target, cmd.intent
-        );
+    removal.guard_mount(cmd.target)?;
+    if cmd.intent.is_persistent() {
+        let edit = removal.plan(cmd.target, "Detach joint")?;
+        return Ok(reply.forward(&mut commands, edit));
     }
-    if !path.is_empty() {
-        // The marker is written to both endpoints before the lifecycle owner
-        // retires the joint. Admission can then release exactly this authored
-        // topology edge without promoting a body that still has another
-        // unresolved joint. Keep the existing endpoint list when several
-        // joints release.
-        for body in [link.body0, link.body1] {
-            let mut detached = q_detached
-                .get(body)
-                .ok()
-                .flatten()
-                .cloned()
-                .unwrap_or_default();
-            detached.record(path.clone());
-            if let Ok(mut entity) = commands.get_entity(body) {
-                entity.try_insert(detached);
+    commands
+        .entity(cmd.target)
+        .try_insert(lunco_physics::PhysicsJointDetachRequested);
+    if let Ok(prim) = removal.prims.get(cmd.target) {
+        let path = prim.path.clone();
+        let endpoints = [link.body0, link.body1];
+        commands.queue(move |world: &mut World| {
+            for body in endpoints {
+                if let Ok(mut entity) = world.get_entity_mut(body) {
+                    entity
+                        .entry::<lunco_physics::PhysicsJointDetachSet>()
+                        .or_default()
+                        .into_mut()
+                        .record(path.clone());
+                }
             }
-        }
+        });
     }
-    Ok(Ack::new(OpId::new()))
-}
-
-/// Persist a **`Persistent`** `DetachJoint` into the active USD document's
-/// runtime overlay. Runtime-only joints are removed; a joint supplied by the
-/// base scene or a composition arc receives the same standard active=false
-/// override used by generic entity deletion. `Interactive` detaches are
-/// throwaway (no journal), so this early-returns for them.
-pub fn persist_detach_to_runtime_layer(
-    trigger: On<DetachJoint>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    if !cmd.intent.is_persistent() {
-        return;
-    }
-    let Ok(prim) = q_prim.get(cmd.target) else {
-        return;
-    };
-    let Some(doc) = document_for_prim(&prim, &usd_registry, backed.as_deref()) else {
-        warn!(target = ?cmd.target, path = %prim.path, "persistent joint detach has no owning USD document");
-        return;
-    };
-    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
-        cmd.target,
-        &q_prim,
-        &usd_registry,
-        doc,
-        canonical.as_deref(),
-        usd_assets.as_deref(),
-    ) else {
-        warn!(target = ?cmd.target, path = %prim.path, "persistent joint detach target is not authorable in its owning USD document");
-        return;
-    };
-
-    let op = match target {
-        lunco_scene_authoring::doc_resolve::DeleteTarget::RemoveRuntime => UsdOp::RemovePrim {
-            edit_target: LayerId::runtime(),
-            path,
-        },
-        lunco_scene_authoring::doc_resolve::DeleteTarget::DeactivateRuntime => UsdOp::SetActive {
-            edit_target: LayerId::runtime(),
-            path,
-            active: false,
-        },
-    };
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op,
-    });
+    Ok(reply.complete(&mut commands, Ack::default()))
 }
 
 /// Lower one document-backed spawn into the single USD mutation that owns its
@@ -392,6 +288,7 @@ struct SpawnCommandAdmission<'w, 's> {
     entity_registry: Res<'w, lunco_api::registry::ApiEntityRegistry>,
     role: Res<'w, lunco_core_session::NetworkRole>,
     backed: Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>,
+    documents: Option<Res<'w, DocumentRegistry<UsdDocument>>>,
     active_command: Res<'w, lunco_core::ActiveCommandId>,
     scene: Option<Res<'w, lunco_core::SceneTransitionCoordinator>>,
     tick: Option<Res<'w, lunco_core_runtime::SimTick>>,
@@ -404,7 +301,8 @@ pub fn on_spawn_entity_command(
     trigger: On<SpawnEntity>,
     mut commands: Commands,
     mut admission: SpawnCommandAdmission,
-) -> Result<Ack, Reject> {
+    reply: CommandReply,
+) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
     let _span =
         bevy::log::info_span!("scene_spawn_entity_command", entry_id = %cmd.entry_id).entered();
@@ -414,7 +312,7 @@ pub fn on_spawn_entity_command(
     // back (arriving via `apply_replicated_spawns`). Don't spawn locally, or the
     // client would get a duplicate with no server identity.
     if matches!(*admission.role, lunco_core_session::NetworkRole::Client) {
-        return Ok(Ack::new(OpId::new()));
+        return Ok(reply.complete(&mut commands, Ack::new(OpId::new())));
     }
 
     let entry = match admission.catalog.get(&cmd.entry_id) {
@@ -501,6 +399,21 @@ pub fn on_spawn_entity_command(
         .ok_or_else(|| {
             Reject::InvalidOp("Persistent spawn requires a document-backed scene".into())
         })?;
+        let generation = admission
+            .documents
+            .as_deref()
+            .and_then(|docs| docs.host(doc))
+            .ok_or_else(|| Reject::InvalidOp("Spawn document is closed".into()))?
+            .generation();
+        if admission
+            .backed
+            .applied_stage_generation(doc, scene_root_prim.stage_handle.id())
+            != Some(generation)
+        {
+            return Err(Reject::InvalidOp(
+                "Spawn requires the current mounted document revision".into(),
+            ));
+        }
         let SpawnSource::UsdFile {
             source_uri: asset_path,
             ..
@@ -513,13 +426,15 @@ pub fn on_spawn_entity_command(
             rotation,
         );
         info!("SPAWN_ENTITY: authoring {} at {:?}", prim_path, position);
-        commands.trigger(ApplyUsdOps {
-            doc_id: doc,
-            parent_gen: None,
-            label: format!("Spawn {}", entry.display_name),
-            ops,
-        });
-        return Ok(Ack::new(OpId::new()));
+        return Ok(reply.forward(
+            &mut commands,
+            ApplyUsdOps {
+                doc_id: doc,
+                parent_gen: Some(generation),
+                label: format!("Spawn {}", entry.display_name),
+                ops,
+            },
+        ));
     }
 
     let producer = lunco_core_session::SessionInputProducer::from_command_origin(
@@ -583,36 +498,39 @@ pub fn on_spawn_entity_command(
         )
         .map_err(Reject::InvalidOp)?;
 
-    Ok(Ack::with_data(
-        OpId::new(),
-        HookValue::map([
-            ("entry_id", HookValue::str(cmd.entry_id.clone())),
-            ("correlation_id", HookValue::UInt(correlation_id)),
-            ("producer_kind", HookValue::str(producer.kind())),
-            (
-                "producer_id",
-                producer
-                    .stable_id()
-                    .map_or(HookValue::Unit, HookValue::UInt),
-            ),
-            (
-                "admission",
-                HookValue::map([
-                    (
-                        "scene_generation",
-                        HookValue::UInt(input_admission.scene_generation),
-                    ),
-                    (
-                        "effective_tick",
-                        HookValue::UInt(input_admission.effective_tick),
-                    ),
-                    ("sequence", HookValue::UInt(input_admission.sequence)),
-                    ("scene_root_gid", HookValue::UInt(scene_root_gid.get())),
-                    ("active_frame_gid", HookValue::UInt(active_frame_gid.get())),
-                    ("spawned_root_gid", HookValue::UInt(spawned_root.get())),
-                ]),
-            ),
-        ]),
+    Ok(reply.complete(
+        &mut commands,
+        Ack::with_data(
+            OpId::new(),
+            HookValue::map([
+                ("entry_id", HookValue::str(cmd.entry_id.clone())),
+                ("correlation_id", HookValue::UInt(correlation_id)),
+                ("producer_kind", HookValue::str(producer.kind())),
+                (
+                    "producer_id",
+                    producer
+                        .stable_id()
+                        .map_or(HookValue::Unit, HookValue::UInt),
+                ),
+                (
+                    "admission",
+                    HookValue::map([
+                        (
+                            "scene_generation",
+                            HookValue::UInt(input_admission.scene_generation),
+                        ),
+                        (
+                            "effective_tick",
+                            HookValue::UInt(input_admission.effective_tick),
+                        ),
+                        ("sequence", HookValue::UInt(input_admission.sequence)),
+                        ("scene_root_gid", HookValue::UInt(scene_root_gid.get())),
+                        ("active_frame_gid", HookValue::UInt(active_frame_gid.get())),
+                        ("spawned_root_gid", HookValue::UInt(spawned_root.get())),
+                    ]),
+                ),
+            ]),
+        ),
     ))
 }
 
@@ -967,7 +885,8 @@ pub fn on_move_entity_command(
     q_marker: Query<&JustMovedKinematic>,
     bounds: Option<Res<lunco_physics::WorldBounds>>,
     persistence: TransformPersistence,
-) -> Result<Ack, Reject> {
+    reply: CommandReply,
+) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
     if cmd.translation.iter().any(|value| !value.is_finite()) {
         warn!(
@@ -1095,13 +1014,15 @@ pub fn on_move_entity_command(
             ));
         }
     }
-    let authored = persistence.plan(
+    if let Some(edit) = persistence.plan(
         target,
         cmd.intent,
         Some(local_position),
         None,
         "Move entity",
-    )?;
+    )? {
+        return Ok(reply.forward(&mut commands, edit));
+    }
     let mut writable = spatial.p1();
     let Ok((mut tf, lin_vel_opt)) = writable.get_mut(target) else {
         warn!(
@@ -1158,14 +1079,11 @@ pub fn on_move_entity_command(
         angular_pulse: false,
     });
 
-    if let Some(edit) = authored {
-        commands.trigger(edit);
-    }
     debug!(
         "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
         cmd.entity_id, cmd.translation[0], cmd.translation[1], cmd.translation[2]
     );
-    Ok(Ack::default())
+    Ok(reply.complete(&mut commands, Ack::default()))
 }
 
 /// Set an entity's world ORIENTATION — the rotational twin of [`MoveEntity`].
@@ -1227,7 +1145,8 @@ pub fn on_rotate_entity_command(
     q_rb: Query<&RigidBody>,
     q_marker: Query<&JustMovedKinematic>,
     persistence: TransformPersistence,
-) -> Result<Ack, Reject> {
+    reply: CommandReply,
+) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
     let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
     let Some(target) = registry.resolve(&global_id) else {
@@ -1286,13 +1205,15 @@ pub fn on_rotate_entity_command(
         };
         (previous_rotation, local_rotation)
     };
-    let authored = persistence.plan(
+    if let Some(edit) = persistence.plan(
         target,
         cmd.intent,
         None,
         Some(local_rotation),
         "Rotate entity",
-    )?;
+    )? {
+        return Ok(reply.forward(&mut commands, edit));
+    }
     let mut writable = spatial.p1();
     let Ok((mut tf, angular_velocity)) = writable.get_mut(target) else {
         warn!(
@@ -1331,14 +1252,11 @@ pub fn on_rotate_entity_command(
         });
     }
 
-    if let Some(edit) = authored {
-        commands.trigger(edit);
-    }
     debug!(
         "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
         cmd.entity_id, cmd.rotation[0], cmd.rotation[1], cmd.rotation[2], cmd.rotation[3]
     );
-    Ok(Ack::default())
+    Ok(reply.complete(&mut commands, Ack::default()))
 }
 
 /// Authored destination for the complete pose command. The live handler owns
@@ -1379,16 +1297,6 @@ impl TransformPersistence<'_, '_> {
             .map_err(|e| Reject::InvalidOp(e.to_string()))?
             .stage_handle
             .id();
-        let current = self
-            .backed
-            .as_deref()
-            .and_then(|backed| backed.applied_stage_generation(doc, stage_id))
-            == Some(host.generation());
-        if !current {
-            return Err(Reject::InvalidOp(
-                "Pose edit requires the current composed document revision".into(),
-            ));
-        }
         let stages = self
             .canonical
             .as_deref()
@@ -1490,7 +1398,8 @@ pub fn on_transform_entity_command(
     q_marker: Query<&JustMovedKinematic>,
     bounds: Option<Res<lunco_physics::WorldBounds>>,
     persistence: TransformPersistence,
-) -> Result<Ack, Reject> {
+    reply: CommandReply,
+) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
     if cmd.translation.iter().any(|value| !value.is_finite()) {
         warn!(
@@ -1636,13 +1545,15 @@ pub fn on_transform_entity_command(
         }
     }
 
-    let authored = persistence.plan(
+    if let Some(edit) = persistence.plan(
         target,
         cmd.intent,
         Some(local_position),
         Some(new_rotation),
         "Transform entity",
-    )?;
+    )? {
+        return Ok(reply.forward(&mut commands, edit));
+    }
     {
         let mut writable = spatial.p1();
         let Ok((mut tf, lin_vel_opt, angular_vel_opt)) = writable.get_mut(target) else {
@@ -1693,62 +1604,30 @@ pub fn on_transform_entity_command(
         });
     }
 
-    // The transform write above is the storage authority. The BigSpace bridge
-    // derives Avian Position/Rotation from it; never create a second Position
-    // writer here.
-    if cmd.intent.is_persistent() {
-        if let Some(edit) = authored {
-            commands.trigger(edit);
-        }
-        info!(
-            "TRANSFORM_ENTITY: {:?} → position={:?}, rotation={:?}",
-            cmd.entity_id, target_position, rotation
-        );
-    } else {
-        debug!(
-            "TRANSFORM_ENTITY: {:?} → position={:?}, rotation={:?}",
-            cmd.entity_id, target_position, rotation
-        );
-    }
-    Ok(Ack::default())
+    debug!(
+        "TRANSFORM_ENTITY: {:?} → position={:?}, rotation={:?}",
+        cmd.entity_id, target_position, rotation
+    );
+    Ok(reply.complete(&mut commands, Ack::default()))
 }
 
 /// Publish a contact enablement command through the native physics owner.
 #[on_command(SetColliderEnabled)]
 pub fn on_set_collider_enabled(
     trigger: On<SetColliderEnabled>,
-    active: Res<lunco_core::ActiveCommandId>,
+    reply: CommandReply,
     mut commands: Commands,
-) {
-    let target = trigger.event().target;
-    let enabled = trigger.event().enabled;
-    let id = active.get();
-    commands.queue(move |world: &mut World| {
-        let result = (|| {
-            let root = lunco_usd_bevy_scene::scene_root_in_world(world, target)
-                .map_err(|error| format!("cannot resolve collider scene: {error:?}"))?;
-            if !root.is_some_and(|root| {
-                world
-                    .get_resource::<lunco_core::SceneMountState>()
-                    .is_some_and(|mounts| mounts.contains_root(root))
-            }) || lunco_usd_bevy_scene::is_preview_only_entity(world, target)
-            {
-                return Err(format!("{target:?} is outside the mounted scene"));
-            }
-            lunco_physics::readiness::set_runtime_collider_enabled(world, target, enabled)
-        })();
-        if let Err(error) = &result {
-            warn!("SetColliderEnabled rejected: {error}");
-        }
-        if let Some(id) = id {
-            world
-                .resource_mut::<lunco_core::CommandResults>()
-                .record_handler_result(
-                    id,
-                    result.map(|()| Ack::default()).map_err(Reject::InvalidOp),
-                );
-        }
-    });
+) -> CommandOutcome {
+    reply.forward(
+        &mut commands,
+        lunco_scene_command_contracts::SetSceneParticipation {
+            colliders: vec![lunco_scene_command_contracts::ParticipationSwitch {
+                target: trigger.event().target,
+                enabled: trigger.event().enabled,
+            }],
+            ..default()
+        },
+    )
 }
 
 // Document history — THE history
@@ -1802,58 +1681,103 @@ pub fn handle_undo_input(
     }
 }
 
-/// A generic delete may not remove a mounted component. The mount command owns
-/// the coordinated removal of its component, exact joint, and socket
-/// occupancy; this guard keeps the generic entity verb from bypassing that
-/// invariant. It deliberately checks the applied schema, not a path spelling.
-fn is_mount_component(
-    registry: &DocumentRegistry<UsdDocument>,
-    doc: lunco_doc::DocumentId,
-    path: &str,
-) -> Result<bool, String> {
-    let path = openusd::sdf::Path::new(path).map_err(|error| error.to_string())?;
-    let document = registry
-        .host(doc)
-        .ok_or_else(|| format!("unknown USD document {doc}"))?
-        .document();
-    document
-        .open_composed_stage()
-        .map_err(|error| error.to_string())?
-        .prim(path)
-        .map_err(|error| error.to_string())?
-        .has_api_schema("LunCoMountAttachmentAPI")
-        .map_err(|error| error.to_string())
+#[derive(SystemParam)]
+pub struct PrimRemoval<'w, 's> {
+    prims: Query<'w, 's, &'static UsdPrimPath>,
+    documents: Option<Res<'w, DocumentRegistry<UsdDocument>>>,
+    backed: Option<Res<'w, lunco_usd_bevy_twin::DocBackedTwinScenes>>,
+    stages: Option<NonSend<'w, lunco_usd_bevy_stage::canonical::CanonicalStages>>,
+    assets: Option<Res<'w, Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
 }
 
-/// Resolve an entity's scene-owned USD document from the stage it was
-/// projected from. The editor's active document is an editing focus and may
-/// belong to a different scene.
-fn document_for_prim(
-    prim: &UsdPrimPath,
-    registry: &DocumentRegistry<UsdDocument>,
-    backed: Option<&lunco_usd_bevy_twin::DocBackedTwinScenes>,
-) -> Option<lunco_doc::DocumentId> {
-    lunco_scene_authoring::doc_resolve::resolve_doc_for_stage(
-        prim.stage_handle.id(),
-        backed,
-        registry,
-    )
+impl PrimRemoval<'_, '_> {
+    fn guard_mount(&self, entity: Entity) -> Result<(), Reject> {
+        use lunco_usd_bevy_stage::UsdRead;
+        let Ok(prim) = self.prims.get(entity) else {
+            return Ok(());
+        };
+        let stage_id = prim.stage_handle.id();
+        let stages = self
+            .stages
+            .as_deref()
+            .ok_or_else(|| Reject::InvalidOp("USD stage registry is unavailable".into()))?;
+        let asset = self
+            .assets
+            .as_deref()
+            .and_then(|assets| assets.get(stage_id))
+            .ok_or_else(|| Reject::InvalidOp("USD stage is unavailable".into()))?;
+        let (reader, _) = stages.reader_for_composed_query(stage_id, asset);
+        let path =
+            openusd::sdf::Path::new(&prim.path).map_err(|e| Reject::InvalidOp(e.to_string()))?;
+        if !reader.has_prim(&path) {
+            return Err(Reject::InvalidOp(format!(
+                "{} is no longer on its mounted stage",
+                prim.path
+            )));
+        }
+        if reader
+            .api_schemas(&path)
+            .iter()
+            .any(|name| name == "LunCoMountAttachmentAPI")
+        {
+            return Err(Reject::InvalidOp(format!(
+                "{} is an attached component; use DetachComponent",
+                prim.path
+            )));
+        }
+        Ok(())
+    }
+
+    fn plan(&self, entity: Entity, label: &str) -> Result<ApplyUsdOps, Reject> {
+        let prim = self
+            .prims
+            .get(entity)
+            .map_err(|_| Reject::InvalidOp(format!("{label} requires an authorable USD prim")))?;
+        let registry = self
+            .documents
+            .as_deref()
+            .ok_or_else(|| Reject::InvalidOp("USD document registry is unavailable".into()))?;
+        let (doc, path, target) = lunco_scene_authoring::doc_resolve::delete_target(
+            prim,
+            registry,
+            self.backed.as_deref(),
+            self.stages.as_deref(),
+            self.assets.as_deref(),
+        )
+        .ok_or_else(|| {
+            Reject::InvalidOp(format!(
+                "{label} requires the current authored USD prim: {}",
+                prim.path
+            ))
+        })?;
+        let op = match target {
+            lunco_scene_authoring::doc_resolve::DeleteTarget::RemoveRuntime => UsdOp::RemovePrim {
+                edit_target: LayerId::runtime(),
+                path,
+            },
+            lunco_scene_authoring::doc_resolve::DeleteTarget::DeactivateRuntime => {
+                UsdOp::SetActive {
+                    edit_target: LayerId::runtime(),
+                    path,
+                    active: false,
+                }
+            }
+        };
+        Ok(ApplyUsdOps {
+            doc_id: doc,
+            parent_gen: registry.host(doc).map(|host| host.generation()),
+            label: label.to_owned(),
+            ops: vec![op],
+        })
+    }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// DeleteEntity — removal, authored
-// ─────────────────────────────────────────────────────────────────────
-
-/// Live leg: despawn the entity and drop it from the selection.
+/// Delete a live entity or submit the revision-fenced edit to its document owner.
 #[on_command(DeleteEntity)]
 pub fn on_delete_entity(
     trigger: On<DeleteEntity>,
     selected: Option<ResMut<SelectedEntities>>,
-    usd_registry: Option<Res<DocumentRegistry<UsdDocument>>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
+    removal: PrimRemoval,
     q_joint_state: Query<
         (),
         Or<(
@@ -1862,556 +1786,32 @@ pub fn on_delete_entity(
             With<avian3d::dynamics::joints::joint_graph::JointComponentId>,
         )>,
     >,
+    reply: CommandReply,
     mut commands: Commands,
-) -> Result<Ack, String> {
+) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
-    let _span =
-        bevy::log::info_span!("scene_delete_entity_command", target = ?cmd.target).entered();
     if q_joint_state.contains(cmd.target) {
-        warn!(
-            "DELETE_ENTITY rejected for joint {:?}; use DetachJoint so the physics bridge retires the solver edge",
+        return Err(Reject::InvalidOp(format!(
+            "target {:?} is a joint; use DetachJoint",
             cmd.target
-        );
-        return Err(format!(
-            "target {:?} is a joint; use DetachJoint so the physics bridge retires the solver edge",
-            cmd.target
-        ));
+        )));
     }
-    let Some(mut entity) = commands.get_entity(cmd.target).ok() else {
-        warn!(
-            "DELETE_ENTITY rejected: target {:?} does not exist",
-            cmd.target
-        );
-        return Err(format!("target {:?} does not exist", cmd.target));
-    };
-    if let Ok(prim) = q_prim.get(cmd.target) {
-        let owner = usd_registry
-            .as_deref()
-            .and_then(|registry| document_for_prim(prim, registry, backed.as_deref()));
-        if cmd.intent.is_persistent() {
-            let Some((registry, (doc, _, _))) =
-                usd_registry
-                    .as_deref()
-                    .zip(owner)
-                    .and_then(|(registry, doc)| {
-                        lunco_scene_authoring::doc_resolve::delete_target(
-                            cmd.target,
-                            &q_prim,
-                            registry,
-                            doc,
-                            canonical.as_deref(),
-                            usd_assets.as_deref(),
-                        )
-                        .map(|target| (registry, target))
-                    })
-            else {
-                let message = format!(
-                    "persistent delete cannot resolve an authorable USD document for {}",
-                    prim.path
-                );
-                warn!(target = ?cmd.target, path = %prim.path, "{message}");
-                return Err(message);
-            };
-            if is_mount_component(registry, doc, &prim.path)? {
-                let message = format!(
-                    "target {} is an attached component; use DetachComponent",
-                    prim.path
-                );
-                warn!(target = ?cmd.target, path = %prim.path, "{message}");
-                return Err(message);
-            }
-        } else if let (Some(registry), Some(doc)) = (usd_registry.as_deref(), owner)
-            && is_mount_component(registry, doc, &prim.path)?
-        {
-            let message = format!(
-                "target {} is an attached component; use DetachComponent",
-                prim.path
-            );
-            warn!(target = ?cmd.target, path = %prim.path, "{message}");
-            return Err(message);
-        }
+    removal.guard_mount(cmd.target)?;
+    if cmd.intent.is_persistent() {
+        let edit = removal.plan(cmd.target, "Delete entity")?;
+        return Ok(reply.forward(&mut commands, edit));
     }
-    let deleted_path = q_prim.get(cmd.target).ok().map(|prim| prim.path.clone());
+    let mut entity = commands
+        .get_entity(cmd.target)
+        .map_err(|_| Reject::InvalidOp(format!("target {:?} does not exist", cmd.target)))?;
     entity.try_despawn();
     if let Some(mut selected) = selected {
         selected.entities.retain(|e| *e != cmd.target);
-        if let Some(path) = deleted_path {
-            selected.stable_paths.retain(|selected| selected != &path);
+        if let Ok(prim) = removal.prims.get(cmd.target) {
+            selected.stable_paths.retain(|path| path != &prim.path);
         }
     }
-    Ok(Ack::new(OpId::new()))
-}
-
-/// Authoring leg: apply the generic USD delete edit, so the deletion persists,
-/// journals, replicates, and undoes. Same shape as every other `persist_*`
-/// observer.
-pub fn persist_delete_to_runtime_layer(
-    trigger: On<DeleteEntity>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
-    q_joint_state: Query<
-        (),
-        Or<(
-            With<lunco_physics::PhysicsJointLink>,
-            With<lunco_physics::PhysicsJointPending>,
-            With<avian3d::dynamics::joints::joint_graph::JointComponentId>,
-        )>,
-    >,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    let _span =
-        bevy::log::info_span!("scene_delete_entity_persist", target = ?cmd.target).entered();
-    if q_joint_state.contains(cmd.target) {
-        warn!(
-            "DELETE_ENTITY persistence rejected for joint {:?}; use DetachJoint",
-            cmd.target
-        );
-        return;
-    }
-    if !cmd.intent.is_persistent() {
-        return;
-    }
-    let Ok(prim) = q_prim.get(cmd.target) else {
-        return;
-    };
-    let Some(doc) = document_for_prim(&prim, &usd_registry, backed.as_deref()) else {
-        warn!(target = ?cmd.target, path = %prim.path, "persistent delete has no owning USD document");
-        return;
-    };
-    let Some((doc, path, target)) = lunco_scene_authoring::doc_resolve::delete_target(
-        cmd.target,
-        &q_prim,
-        &usd_registry,
-        doc,
-        canonical.as_deref(),
-        usd_assets.as_deref(),
-    ) else {
-        warn!(target = ?cmd.target, path = %prim.path, "persistent delete target is not authorable in its owning USD document");
-        return;
-    };
-    let mounted = match is_mount_component(&usd_registry, doc, &path) {
-        Ok(mounted) => mounted,
-        Err(error) => {
-            warn!("DELETE_ENTITY persistence cannot inspect document {doc}: {error}");
-            return;
-        }
-    };
-    if mounted {
-        warn!(
-            "DELETE_ENTITY persistence rejected for attached component {}; use DetachComponent",
-            path
-        );
-        return;
-    }
-    let op = match target {
-        lunco_scene_authoring::doc_resolve::DeleteTarget::RemoveRuntime => UsdOp::RemovePrim {
-            edit_target: LayerId::runtime(),
-            path,
-        },
-        lunco_scene_authoring::doc_resolve::DeleteTarget::DeactivateRuntime => UsdOp::SetActive {
-            edit_target: LayerId::runtime(),
-            path,
-            active: false,
-        },
-    };
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op,
-    });
-}
-
-fn default_float_type() -> String {
-    "float".to_string()
-}
-
-/// Author a native USD attribute connection (`connectionPaths`) onto a prim.
-#[Command]
-pub struct SetUsdConnection {
-    /// Target entity or prim root.
-    pub target: Entity,
-    /// Attribute name (e.g. `inputs:angle` or `inputs:earth_azimuth`).
-    pub name: String,
-    /// Attribute type name (e.g. `float`). Defaults to `float`.
-    #[serde(default = "default_float_type")]
-    #[reflect(default)]
-    pub type_name: String,
-    /// Absolute property paths this attribute connects to (e.g. `["/SandboxScene/Skid_Raycast_1/Comms/AntennaTrackerController.outputs:az"]`).
-    pub sources: Vec<String>,
-}
-
-#[on_command(SetUsdConnection)]
-pub fn on_set_usd_connection(
-    trigger: On<SetUsdConnection>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    backed: Option<Res<lunco_usd_bevy_twin::DocBackedTwinScenes>>,
-    canonical: Option<NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>>,
-    usd_assets: Option<Res<Assets<lunco_usd_bevy_stage::UsdStageAsset>>>,
-    q_prim: Query<&UsdPrimPath>,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    let Some((doc, path)) = lunco_scene_authoring::doc_resolve::authorable_prim(
-        cmd.target,
-        &q_prim,
-        &usd_registry,
-        backed.as_deref(),
-        canonical.as_deref(),
-        usd_assets.as_deref(),
-    ) else {
-        return;
-    };
-    commands.trigger(ApplyUsdOp {
-        doc_id: doc,
-        parent_gen: None,
-        op: UsdOp::SetConnection {
-            edit_target: LayerId::runtime(),
-            path,
-            name: cmd.name.clone(),
-            type_name: if cmd.type_name.is_empty() {
-                "float".to_string()
-            } else {
-                cmd.type_name.clone()
-            },
-            sources: cmd.sources.clone(),
-        },
-    });
-}
-
-/// Persist a `SetEnvironmentLight` sun tweak into the active USD document's
-/// runtime overlay — the environment twin of the shader-parameter authoring path.
-///
-/// `lunco-environment` mutates the live `DirectionalLight` for immediate
-/// feedback but writes nothing back to USD, so a sun tweak is lost on reload.
-/// This decoupled observer authors the changed
-/// fields as `SetAttribute`s onto the sun's `DistantLight` prim in
-/// `LayerId::runtime()`, using the SAME attribute names the loader
-/// (`lunco_usd_bevy_light::light`) already reads back — so illuminance / colour /
-/// shadow-range knobs round-trip on reload and ride the Twin journal like every
-/// other USD edit. (Live peer-sync then follows the USD projection, exactly as
-/// the move / property persisters do — no bespoke light broadcast.)
-///
-/// Scope: the fields with an existing loader reader. The render-only knobs have
-/// no `DistantLight` attribute that reads them back, so they persist elsewhere —
-/// exposure / bloom / earthshine onto the `LunCoEnvironment` settings prim, and
-/// **ambient** onto a dedicated untextured `DomeLight` (`Environment/AmbientFill`),
-/// which is the standard USD spelling of uniform environment illumination and the
-/// only thing `GlobalAmbientLight` is composed from. Because that composition is a
-/// SUM over domes, the authored intensity is solved (`requested − other domes`)
-/// rather than assigned; see the ambient block at the end of this function.
-///
-/// Targets every non-earthshine `DistantLight` the active document owns
-/// (`SetEnvironmentLight` itself is global). Ownership-guarded like the other
-/// persisters; no-op when no USD doc is active (headless).
-pub fn persist_environment_light_to_runtime_layer(
-    trigger: On<lunco_environment::SetEnvironmentLight>,
-    usd_registry: Res<DocumentRegistry<UsdDocument>>,
-    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
-    q_sun: Query<
-        (&UsdPrimPath, &Transform),
-        (
-            With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
-            With<DirectionalLight>,
-            Without<lunco_environment::Earthshine>,
-        ),
-    >,
-    // The body fill, which now has a prim of its own to be written to — the
-    // exact complement of `q_sun`, so no light is addressed twice.
-    q_earthshine: Query<
-        &UsdPrimPath,
-        (
-            With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
-            With<DirectionalLight>,
-            With<lunco_environment::Earthshine>,
-        ),
-    >,
-    mut commands: Commands,
-) {
-    let cmd = trigger.event();
-    if !cmd.intent.is_persistent() {
-        return;
-    }
-    let Some(workspace) = workspace else { return };
-    let Some(doc) = workspace.0.active_document else {
-        return;
-    };
-    let Some(host) = usd_registry.host(doc) else {
-        return;
-    };
-
-    // Collect only the fields that HAVE a matching loader reader, so every attr
-    // authored here round-trips on reload (name, USD type, USD-literal value).
-    let mut attrs: Vec<(&str, &str, String)> = Vec::new();
-    if let Some(lux) = cmd.illuminance {
-        attrs.push((ltok::INPUTS_INTENSITY, "float", lux.to_string()));
-    }
-    if let Some([r, g, b]) = cmd.sun_color {
-        attrs.push((ltok::INPUTS_COLOR, "color3f", format!("({r}, {g}, {b})")));
-    }
-    if let Some(v) = cmd.shadow_max_distance {
-        // Standard `UsdLuxShadowAPI`, not an invented `lunco:` name.
-        attrs.push((ltok::INPUTS_SHADOW_DISTANCE, "float", v.to_string()));
-    }
-    if let Some(v) = cmd.shadow_first_cascade_bound {
-        // The one renderer-specific knob: cascaded shadow maps are a rasterizer
-        // technique UsdLux has no attribute for.
-        attrs.push(("lunco:shadow:firstCascadeFarBound", "float", v.to_string()));
-    }
-    // Direction changes when yaw or pitch is specified.
-    let direction_changed = cmd.sun_yaw.is_some() || cmd.sun_pitch.is_some();
-    let parent_path = lunco_usd_bevy_stage::layer_default_prim(host.document().data())
-        .map(|p| format!("/{p}"))
-        .unwrap_or_else(|| "/".to_string());
-    let env_path = if parent_path == "/" {
-        "/Environment".to_string()
-    } else {
-        format!("{parent_path}/Environment")
-    };
-    // Resolve the ambient solve before queuing any other edits. A malformed
-    // authored DomeLight must reject the whole command rather than allowing the
-    // unrelated sun/environment edits through while silently fabricating a
-    // different ambient value.
-    let ambient_plan = if let Some(requested) = cmd.ambient_brightness {
-        let fill_path = format!("{env_path}/AmbientFill");
-        let composed = match host.document().open_composed_stage() {
-            Ok(stage) => stage,
-            Err(error) => {
-                error!("[scene-commands] cannot compose lighting document {doc}: {error}");
-                return;
-            }
-        };
-        let fill_sdf = openusd::sdf::Path::new(&fill_path).ok();
-        match lunco_usd_bevy_light::light::untextured_dome_intensity_sum(
-            &composed,
-            fill_sdf.as_ref(),
-        ) {
-            Ok(others) => Some((f64::from(requested), others, fill_path)),
-            Err(_) => {
-                error!(
-                    "[scene-commands] refusing environment update: authored DomeLight \
-                     intensity, exposure, or texture data is malformed or unresolved"
-                );
-                return;
-            }
-        }
-    } else {
-        None
-    };
-
-    for (prim, tf) in &q_sun {
-        // Ownership guard: only author for suns the active document actually
-        // holds (base or runtime), so an unowned runtime entity never gets opinions.
-        let Ok(prim_sdf) = openusd::sdf::Path::new(&prim.path) else {
-            continue;
-        };
-        let owned = host.document().data().spec(&prim_sdf).is_some()
-            || host.document().runtime_data().spec(&prim_sdf).is_some();
-        if !owned {
-            continue;
-        }
-        for (name, type_name, value) in &attrs {
-            commands.trigger(ApplyUsdOp {
-                doc_id: doc,
-                parent_gen: None,
-                op: UsdOp::SetAttribute {
-                    edit_target: LayerId::runtime(),
-                    path: prim.path.clone(),
-                    name: (*name).to_string(),
-                    type_name: (*type_name).to_string(),
-                    value: value.clone(),
-                },
-            });
-        }
-        // Sun direction → `xformOp:rotateXYZ` via the new `SetRotate` op. Compute
-        // the SAME final orientation the live handler does — YXZ yaw/pitch, the
-        // unspecified axis kept from the current transform — then express it as
-        // Euler XYZ **degrees** for USD. (Reading `cur` from the transform is
-        // order-independent w.r.t. the live handler: a specified axis overrides
-        // `cur`; an unspecified one the live handler leaves unchanged, so `cur`
-        // is the same value either way.) Uses the runtime-overlay layer, exactly
-        // as the pose command journals its accepted translation.
-        if direction_changed {
-            let (cur_yaw, cur_pitch, _) = tf.rotation.to_euler(EulerRot::YXZ);
-            let yaw = cmd.sun_yaw.unwrap_or(cur_yaw);
-            let pitch = cmd.sun_pitch.unwrap_or(cur_pitch);
-            let quat = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
-            commands.trigger(ApplyUsdOp {
-                doc_id: doc,
-                parent_gen: None,
-                op: UsdOp::SetRotate {
-                    edit_target: LayerId::runtime(),
-                    path: prim.path.clone(),
-                    value: lunco_usd_document::document::usd_rotate_xyz_degrees(quat.as_dquat()),
-                },
-            });
-        }
-    }
-
-    // ── Earthshine TINT → its own `DistantLight` prim, standard UsdLux ───────
-    //
-    // Same treatment as the sun above, because it is the same kind of thing: a
-    // light with an authored prim, whose tint is `inputs:color`. The loader
-    // reads it back, so the round trip needs no second spelling.
-    //
-    // Its `inputs:intensity` is NOT persisted. That value is derived from
-    // Earth's phase every frame by `drive_earthshine_from_phase`, so authoring
-    // it would journal a number the next frame overwrites — a persisted
-    // opinion that never survives contact with its own driver.
-    //
-    // Empty when the scene declares no body to reflect from — a scene gets the
-    // fill by declaring the body, so there is nothing to write and nothing to
-    // invent. `on_set_environment_light` is where that is reported.
-    let mut fill_attrs: Vec<(&str, &str, String)> = Vec::new();
-    if let Some([r, g, b]) = cmd.earthshine_color {
-        fill_attrs.push((ltok::INPUTS_COLOR, "color3f", format!("({r}, {g}, {b})")));
-    }
-    if !fill_attrs.is_empty() {
-        for prim in &q_earthshine {
-            // Ownership guard, exactly as for the sun: only author onto fills the
-            // active document actually holds.
-            let Ok(prim_sdf) = openusd::sdf::Path::new(&prim.path) else {
-                continue;
-            };
-            let owned = host.document().data().spec(&prim_sdf).is_some()
-                || host.document().runtime_data().spec(&prim_sdf).is_some();
-            if !owned {
-                continue;
-            }
-            for (name, type_name, value) in &fill_attrs {
-                commands.trigger(ApplyUsdOp {
-                    doc_id: doc,
-                    parent_gen: None,
-                    op: UsdOp::SetAttribute {
-                        edit_target: LayerId::runtime(),
-                        path: prim.path.clone(),
-                        name: (*name).to_string(),
-                        type_name: (*type_name).to_string(),
-                        value: value.clone(),
-                    },
-                });
-            }
-        }
-    }
-
-    // Render knobs (exposure / bloom / ambient) have no natural
-    // light-prim home — they apply to global/camera state — so per the schema
-    // decision they persist onto a dedicated `LunCoEnvironment` settings prim
-    // (a singleton under the default prim). A projector in `lunco-luncosim` reads
-    // them back on stage change and applies them, so the light loader stays pure.
-    let mut env_attrs: Vec<(&str, &str, String)> = Vec::new();
-    if let Some(v) = cmd.exposure_ev100 {
-        env_attrs.push(("lunco:env:exposureEv100", "float", v.to_string()));
-    }
-    if let Some(v) = cmd.bloom_intensity {
-        env_attrs.push(("lunco:env:bloomIntensity", "float", v.to_string()));
-    }
-    // Ambient is authored through the standard untextured `DomeLight` path
-    // below; it is not an environment scalar.
-    // Earthshine is not among them: it has a light prim, so it persists onto it
-    // like the sun does. See the earthshine block above.
-    // Ambient shares the `Environment` scope but NOT the custom-attribute
-    // mechanism, so the prim has to be ensured for either reason.
-    if env_attrs.is_empty() && cmd.ambient_brightness.is_none() {
-        return;
-    }
-
-    // Ensure the settings prim exists, but only author `AddPrim` when it's
-    // actually absent (else every render tweak would journal a redundant
-    // AddPrim). Idempotent thereafter — SetAttribute overwrites in place.
-    let prim_missing = |path: &str| {
-        !openusd::sdf::Path::new(path)
-            .ok()
-            .map(|sdf| {
-                host.document().data().spec(&sdf).is_some()
-                    || host.document().runtime_data().spec(&sdf).is_some()
-            })
-            .unwrap_or(false)
-    };
-    if prim_missing(&env_path) {
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: UsdOp::AddPrim {
-                edit_target: LayerId::runtime(),
-                parent_path,
-                name: "Environment".to_string(),
-                type_name: Some(lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE.to_string()),
-                reference: None,
-                reference_prim_path: None,
-            },
-        });
-    }
-    for (name, type_name, value) in &env_attrs {
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: UsdOp::SetAttribute {
-                edit_target: LayerId::runtime(),
-                path: env_path.clone(),
-                name: (*name).to_string(),
-                type_name: (*type_name).to_string(),
-                value: value.clone(),
-            },
-        });
-    }
-
-    // ── Ambient → a dedicated untextured `DomeLight`, not a custom attribute ──
-    //
-    // UsdLux has no "ambient light"; an untextured `DomeLight` is the standard
-    // spelling, and `lunco_usd_bevy_light::light::on_usd_light_added` composes
-    // `GlobalAmbientLight::brightness` as the SUM over every such dome. That sum
-    // is what the inspector's slider reads back.
-    //
-    // Hence the subtraction. The slider reads a TOTAL but writes ONE dome, so
-    // authoring the requested value verbatim onto `AmbientFill` would ADD to
-    // whatever the scene already authors (e.g. a `RegolithBounce` dome at 2600):
-    // ask for 50, compose 2650, and the slider jumps to 2650 on the next frame.
-    // Authoring `requested - others` makes the composed total land exactly on the
-    // request, so the knob is stable under its own feedback.
-    if let Some((requested, others, fill_path)) = ambient_plan {
-        // The native sum excludes the current runtime fill, including opinions
-        // from earlier drags, so repeated writes preserve the requested total.
-        let intensity = lunco_usd_bevy_light::light::ambient_fill_intensity(requested, others);
-
-        if lunco_usd_bevy_light::light::ambient_fill_saturates(requested, others) {
-            warn!(
-                "[scene-commands] ambient {requested} is below the {others} already \
-                 contributed by other authored DomeLights; `{fill_path}` clamped to 0 \
-                 and the scene will stay brighter than requested. Lower those domes' \
-                 `inputs:intensity` instead."
-            );
-        }
-
-        if prim_missing(&fill_path) {
-            commands.trigger(ApplyUsdOp {
-                doc_id: doc,
-                parent_gen: None,
-                op: UsdOp::AddPrim {
-                    edit_target: LayerId::runtime(),
-                    parent_path: env_path,
-                    name: "AmbientFill".to_string(),
-                    type_name: Some(ltok::DOME_LIGHT.to_string()),
-                    reference: None,
-                    reference_prim_path: None,
-                },
-            });
-        }
-        commands.trigger(ApplyUsdOp {
-            doc_id: doc,
-            parent_gen: None,
-            op: UsdOp::SetAttribute {
-                edit_target: LayerId::runtime(),
-                path: fill_path,
-                name: ltok::INPUTS_INTENSITY.to_string(),
-                type_name: "float".to_string(),
-                value: intensity.to_string(),
-            },
-        });
-    }
+    Ok(reply.complete(&mut commands, Ack::default()))
 }
 
 /// Marker inserted on a kinematic body that just received a
@@ -2487,17 +1887,12 @@ pub fn clear_kinematic_pulse_velocity(
 /// commands are installed by the sibling `lunco-scene-camera` package.
 pub struct SpawnCommandPlugin;
 
-// Generates `register_all_commands(app)` — every `#[Command]` this module owns,
-// each wired type + observer together. `persist_*_to_runtime_layer` are NOT here:
-// they are additional observers on the same verbs (the journaling/runtime-layer
-// leg), not the command handlers, so they stay plain `add_observer`s.
 register_commands!(
     crate::scene_view::on_set_scene_view,
     on_delete_entity,
     on_detach_joint,
     on_move_entity_command,
     on_rotate_entity_command,
-    on_set_usd_connection,
     on_spawn_entity_command,
     on_select_scene_entity,
     on_set_collider_enabled,
@@ -2523,20 +1918,22 @@ impl Plugin for SpawnCommandPlugin {
         // verb is available consistently through the HTTP API, Rhai, and
         // `discover_schema`.
         register_all_commands(app);
+        app.register_deferred_command::<SpawnEntity>()
+            .register_deferred_command::<DeleteEntity>()
+            .register_deferred_command::<DetachJoint>()
+            .register_deferred_command::<MoveEntity>()
+            .register_deferred_command::<RotateEntity>()
+            .register_deferred_command::<TransformEntity>()
+            .register_deferred_command::<SetColliderEnabled>()
+            .register_deferred_command::<lunco_scene_command_contracts::SetSceneView>();
         crate::scene_view::install(app);
         app.add_observer(commit_runtime_spawn);
         app.add_systems(Update, reconcile_stable_scene_selection);
         // The read-only scene surface is a separate production package, so query
         // changes do not rebuild this much larger mutation layer.
         app.add_plugins(lunco_scene_queries::SceneQueryPlugin);
-        // Persist a Persistent DetachJoint into the active doc's runtime layer.
-        app.add_observer(persist_detach_to_runtime_layer);
-        app.add_observer(persist_delete_to_runtime_layer);
-        // C4b: persist authored-scene moves into the active doc's runtime layer.
-        // #14: persist a `SetEnvironmentLight` sun tweak (illuminance / colour /
-        // shadow range) as `SetAttribute`s on the sun's DistantLight prim, using
-        // the names the loader already reads back — so it round-trips + journals.
-        app.add_observer(persist_environment_light_to_runtime_layer);
+        crate::environment_light::install(app);
+        crate::scene_participation::install(app);
         // NOTE: `SelectEntity`/`on_select_entity` are editor-only (they drive the
         // Inspector highlight + gizmo) and live in the `ui`-gated `selection`
         // module; `SceneEditPlugin` registers them. The headless server has no
@@ -2580,36 +1977,14 @@ mod tests {
     }
 
     #[test]
-    fn detach_joint_remains_generic_for_ordinary_entities() {
-        use super::*;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<lunco_core::CommandResults>()
-            .init_resource::<lunco_core::ActiveCommandId>();
-        app.add_observer(on_detach_joint);
-
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut().trigger(DetachJoint {
-            target: entity,
-            intent: lunco_core::EditIntent::Interactive,
-        });
-        app.update();
-
-        assert!(
-            app.world().get_entity(entity).is_err(),
-            "generic DetachJoint must not require PhysicsJointLink for an ordinary entity"
-        );
-    }
-
-    #[test]
     fn malformed_joint_detach_is_rejected_without_despawn_or_panic() {
         use super::*;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<lunco_core::CommandResults>()
-            .init_resource::<lunco_core::ActiveCommandId>();
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.add_observer(on_detach_joint);
 
         // A pending/native joint without the link is malformed topology. The
@@ -2633,8 +2008,8 @@ mod tests {
             app.world()
                 .resource::<lunco_core::CommandResults>()
                 .get(41),
-            Some(lunco_core::CommandOutcome::Failed(message))
-                if message.contains("PhysicsJointLink")
+            Some(lunco_core::CommandOutcome::Rejected(Reject::InvalidOp(message)))
+                if message.contains("not an admitted physics joint")
         ));
     }
 
@@ -2710,7 +2085,10 @@ mod tests {
 
         const EDGE: f32 = 2000.0;
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_move_entity_command);
 
@@ -2773,7 +2151,10 @@ mod tests {
         use big_space::prelude::{CellCoord, Grid};
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_move_entity_command);
 
@@ -2817,7 +2198,10 @@ mod tests {
         use super::*;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_move_entity_command);
 
@@ -2862,7 +2246,10 @@ mod tests {
         use super::*;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.insert_resource(lunco_physics::WorldBounds::Some {
             min: DVec3::splat(-100.0),
@@ -2913,7 +2300,10 @@ mod tests {
         use super::*;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_rotate_entity_command);
 
@@ -2967,7 +2357,10 @@ mod tests {
         use super::*;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<lunco_core::CommandResults>()
+            .init_resource::<lunco_core::ActiveCommandId>()
+            .init_resource::<lunco_api::executor::PendingApiRequest>();
         app.init_resource::<lunco_api::registry::ApiEntityRegistry>();
         app.add_observer(on_rotate_entity_command);
 

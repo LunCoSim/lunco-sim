@@ -17,7 +17,7 @@
 //! and captures change notices. Initial asset projection uses the immutable
 //! prepared plan; this stage owns authoring and incremental re-projection.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -50,6 +50,16 @@ pub struct RawStageChange {
     pub sample_paths: Vec<SdfPath>,
     /// Identifier of the layer whose edit produced this change.
     pub layer: String,
+}
+
+impl RawStageChange {
+    fn may_change_prim_types(&self) -> bool {
+        self.resynced.iter().any(|p| !p.is_property())
+            || self
+                .info_only
+                .iter()
+                .any(|p| p.is_prim() && !p.is_abs_root())
+    }
 }
 
 /// The canonical live-composed stage for the active scene. `NonSend` (holds an
@@ -89,9 +99,40 @@ pub struct CanonicalStage {
     /// generation. Any later live edit makes the snapshot stale by advancing
     /// `generation`.
     prepared_plan: Option<(Arc<crate::UsdStageProjectionPlan>, u64)>,
+    type_changes: ComposedTypeChanges,
     native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
     native_paths_generation: u64,
     native_paths_pending: bool,
+}
+
+/// Sparse namespace changes relative to the worker-prepared schema index.
+/// A structural notice replaces membership beneath its root. Property notices
+/// cannot change schema membership and perform no hierarchy work.
+#[derive(Default)]
+struct ComposedTypeChanges {
+    replaced: BTreeSet<String>,
+    changed_prims: BTreeSet<String>,
+    by_type: HashMap<String, BTreeSet<String>>,
+    pending: bool,
+}
+
+impl ComposedTypeChanges {
+    fn remove_subtree(paths: &mut BTreeSet<String>, root: &SdfPath) {
+        if root.is_abs_root() {
+            paths.clear();
+            return;
+        }
+        paths.remove(root.as_str());
+        let prefix = format!("{root}/");
+        let descendants: Vec<_> = paths
+            .range(prefix.clone()..)
+            .take_while(|path| path.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for path in descendants {
+            paths.remove(&path);
+        }
+    }
 }
 
 /// Send-safe authored-layer snapshot of one canonical generation.
@@ -163,6 +204,7 @@ impl CanonicalStage {
             generation: 0,
             replacement_notice_pending: false,
             prepared_plan: None,
+            type_changes: Default::default(),
             native_paths: None,
             native_paths_generation: 0,
             native_paths_pending: false,
@@ -973,6 +1015,46 @@ impl CanonicalStage {
         Ok(())
     }
 
+    /// Discover native assets and update composed type membership in the same
+    /// walk of the changed namespaces. Unrelated namespaces keep their facts.
+    pub fn discover_changed_assets(
+        &mut self,
+        changes: &[RawStageChange],
+    ) -> anyhow::Result<BTreeSet<lunco_assets_core::asset_path::AssetReference>> {
+        let facts = crate::native_paths::changed_native_facts(&self.view(), changes)?;
+        let delta = &mut self.type_changes;
+        for root in facts.roots {
+            if !root
+                .ancestors()
+                .any(|p| delta.replaced.contains(p.as_str()))
+            {
+                ComposedTypeChanges::remove_subtree(&mut delta.replaced, &root);
+                delta.replaced.insert(root.to_string());
+            }
+            ComposedTypeChanges::remove_subtree(&mut delta.changed_prims, &root);
+            for paths in delta.by_type.values_mut() {
+                ComposedTypeChanges::remove_subtree(paths, &root);
+            }
+        }
+        for path in facts.changed_prims {
+            if !path
+                .ancestors()
+                .any(|p| delta.replaced.contains(p.as_str()))
+            {
+                delta.changed_prims.insert(path.to_string());
+            }
+            for paths in delta.by_type.values_mut() {
+                paths.remove(path.as_str());
+            }
+        }
+        for (kind, paths) in facts.types {
+            delta.by_type.entry(kind).or_default().extend(paths);
+        }
+        delta.by_type.retain(|_, paths| !paths.is_empty());
+        delta.pending = false;
+        Ok(facts.references)
+    }
+
     /// Drain and clear the change inbox, bumping `generation` if anything landed.
     pub fn drain_changes(&mut self) -> Vec<RawStageChange> {
         let drained = self
@@ -981,6 +1063,7 @@ impl CanonicalStage {
             .map(|mut q| std::mem::take(&mut *q))
             .unwrap_or_default();
         if !drained.is_empty() {
+            self.type_changes.pending |= drained.iter().any(RawStageChange::may_change_prim_types);
             if !self.replacement_notice_pending {
                 self.generation += 1;
             }
@@ -1225,6 +1308,7 @@ impl CanonicalStages {
         if let Some(paths) = plan.native_asset_paths_snapshot() {
             stage.set_native_asset_paths(paths);
         }
+        stage.type_changes = Default::default();
         stage.prepared_plan = Some((plan, stage.generation));
         true
     }
@@ -1244,6 +1328,62 @@ impl CanonicalStages {
                     *generation == stage.generation && Arc::ptr_eq(prepared, plan)
                 })
         })
+    }
+
+    /// Whether the prepared type index and its native namespace deltas cover
+    /// the current composition, including changes awaiting the next sink drain.
+    pub fn type_paths_ready(&self, id: bevy::asset::AssetId<UsdStageAsset>) -> bool {
+        self.get(id).is_none_or(|stage| {
+            !stage.type_changes.pending
+                && stage
+                    .inbox
+                    .lock()
+                    .expect("canonical change inbox lock poisoned")
+                    .iter()
+                    .all(|change| !change.may_change_prim_types())
+        })
+    }
+
+    /// Active composed prims of one exact type under the given mount, in stable path order. The
+    /// immutable asset supplies untouched namespaces; native resyncs supply
+    /// replacements, including prims with invalid authored field values.
+    pub fn paths_of_type(
+        &self,
+        id: bevy::asset::AssetId<UsdStageAsset>,
+        asset: &UsdStageAsset,
+        namespace: &str,
+        kind: &str,
+    ) -> Result<Vec<SdfPath>, String> {
+        let namespace = SdfPath::new(namespace).map_err(|error| error.to_string())?;
+        let live = self.get(id);
+        if !self.type_paths_ready(id) {
+            return Err("USD namespace changes are awaiting projection".into());
+        }
+        let delta = live.map(|stage| &stage.type_changes);
+        let plan = live
+            .and_then(|s| s.prepared_plan.as_ref().map(|(plan, _)| plan))
+            .unwrap_or(&asset.projection_plan);
+        let mut paths = BTreeSet::new();
+        for prim in plan.prims_of_type(kind) {
+            let path = SdfPath::new(&prim.path).map_err(|e| e.to_string())?;
+            if path.has_prefix(&namespace)
+                && delta.is_none_or(|d| {
+                    !d.changed_prims.contains(path.as_str())
+                        && !path.ancestors().any(|p| d.replaced.contains(p.as_str()))
+                })
+            {
+                paths.insert(path);
+            }
+        }
+        if let Some(additions) = delta.and_then(|d| d.by_type.get(kind)) {
+            for path in additions {
+                let path = SdfPath::new(path).map_err(|e| e.to_string())?;
+                if path.has_prefix(&namespace) {
+                    paths.insert(path);
+                }
+            }
+        }
+        Ok(paths.into_iter().collect())
     }
 
     /// Native admission data from the same generation selected by `reader_for`.

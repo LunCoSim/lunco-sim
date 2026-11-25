@@ -231,53 +231,33 @@ const PBR_LOOK_KEYS: &[&str] = &[
     "double_sided",
 ];
 
-/// Apply one PBR property addressed by `SetObjectProperty` to a [`PbrLook`] —
-/// appearance **intent**, no material asset touched.
-///
-/// Value formats: colors are comma-separated **linear** `r,g,b[,a]` in 0..1 (so they
-/// round-trip the Inspector's `color_edit_button_rgb`); scalars a single float;
-/// booleans `true`/`1`/`yes`/`on`. Only the keys in [`PBR_LOOK_KEYS`] are understood;
-/// anything else returns `false`.
-/// Author a `PbrLook` edit into the USD document, so a material change persists,
-/// journals, undoes and replicates like every other edit.
-///
-/// The look's USD home is a `UsdPreviewSurface` Shader reached through the geom's
-/// `material:binding`. If the prim has no material yet, one is created
-/// (`ensure_preview_surface_ops` — Looks scope + Material + Shader + binding) and
-/// EVERY input is seeded from the current look, not just the edited one: a
-/// freshly-created material must reproduce what is on screen, rather than snapping
-/// the untouched channels to `UsdPreviewSurface`'s defaults.
-///
-/// `double_sided` is deliberately NOT a shader input — it is `uniform bool
-/// doubleSided` on `UsdGeomGprim`, a property of the geometry — so it is authored
-/// on the geom prim instead. `unlit` is likewise a gprim property, registered by
-/// `LunCoSurfaceAPI`, because `UsdPreviewSurface` has no standard input for the
-/// render intent.
-fn appearance_edit(
-    world: &mut World,
-    target: Entity,
-    key: &str,
+/// Produce one USD material transaction for a selected layer. Creating a
+/// surface seeds all inputs from the projected look. Existing materials only
+/// receive the changed inputs. Geometry flags stay on the addressed prim.
+pub fn appearance_ops(
+    world: &World,
+    prim: &UsdPrimPath,
+    edit_target: LayerId,
+    keys: &[&str],
     look: &PbrLook,
-) -> Result<ApplyUsdOps, String> {
-    let Some(doc) = crate::doc_resolve::resolve_doc_for_entity(world, target) else {
-        return Err("appearance has no authored destination".into());
-    };
-    let Some(prim) = world.get::<UsdPrimPath>(target).cloned() else {
-        return Err("appearance has no authored destination".into());
-    };
-
+) -> Result<Vec<UsdOp>, String> {
+    let mut ops = Vec::new();
+    let mut surface_schemas = None;
     // Geometry-level appearance intents live on the gprim, not the surface.
-    if key == "double_sided" || key == "unlit" {
-        let mut ops = Vec::new();
+    for &key in keys
+        .iter()
+        .filter(|key| matches!(**key, "double_sided" | "unlit"))
+    {
         if key == "unlit" {
-            let mut schemas = crate::doc_resolve::geom_api_schemas(world, &prim)?;
+            let mut schemas = crate::doc_resolve::geom_api_schemas(world, prim)?;
             if !schemas.iter().any(|schema| schema == "LunCoSurfaceAPI") {
                 schemas.push("LunCoSurfaceAPI".into());
                 ops.push(UsdOp::SetApiSchemas {
-                    edit_target: LayerId::root(),
+                    edit_target: edit_target.clone(),
                     path: prim.path.clone(),
-                    schemas,
+                    schemas: schemas.clone(),
                 });
+                surface_schemas = Some(schemas);
             }
         }
         let (name, value) = if key == "double_sided" {
@@ -286,31 +266,34 @@ fn appearance_edit(
             ("lunco:surface:unlit", look.unlit)
         };
         ops.push(UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
+            edit_target: edit_target.clone(),
             path: prim.path.clone(),
             name: name.into(),
             type_name: "bool".into(),
             value: value.to_string(),
         });
-        return Ok(ApplyUsdOps {
-            doc_id: doc,
-            parent_gen: None,
-            label: "Update geometry appearance intent".into(),
-            ops,
-        });
     }
-    if lunco_usd_core::material::preview_surface_input(key).is_none() {
-        return Err("appearance has no authored destination".into());
+    if keys
+        .iter()
+        .all(|key| matches!(*key, "double_sided" | "unlit"))
+    {
+        return Ok(ops);
+    }
+    if keys.iter().any(|key| !PBR_LOOK_KEYS.contains(key)) {
+        return Err("Unsupported PBR property".into());
     }
 
     // An existing bound shader, else create the material.
-    let existing = crate::doc_resolve::bound_shader_prim(world, &prim)?;
-    let (mut ops, shader, fresh) = match existing {
+    let existing = crate::doc_resolve::bound_shader_prim(world, prim)?;
+    let (setup, shader, fresh) = match existing {
         Some(sp) => (Vec::new(), sp, false),
         None => {
-            let schemas = crate::doc_resolve::geom_api_schemas(world, &prim)?;
+            let schemas = match surface_schemas {
+                Some(schemas) => schemas,
+                None => crate::doc_resolve::geom_api_schemas(world, prim)?,
+            };
             match lunco_usd_core::material::ensure_preview_surface_ops(
-                LayerId::root(),
+                edit_target.clone(),
                 &prim.path,
                 &schemas,
             ) {
@@ -320,9 +303,10 @@ fn appearance_edit(
         }
     };
 
+    ops.extend(setup);
     let mut set = |attr: &str, ty: &str, value: String| {
         ops.push(UsdOp::SetAttribute {
-            edit_target: LayerId::root(),
+            edit_target: edit_target.clone(),
             path: shader.clone(),
             name: attr.into(),
             type_name: ty.into(),
@@ -340,19 +324,14 @@ fn appearance_edit(
     ] {
         // A fresh material seeds every input; an existing one writes only what
         // changed (so an unrelated authored input is not clobbered).
-        if !fresh && !key_matches(key, k) {
+        if !fresh && !keys.iter().any(|key| key_matches(key, k)) {
             continue;
         }
         if let Some((attr, _)) = lunco_usd_core::material::preview_surface_input(k) {
             set(attr, ty, v);
         }
     }
-    Ok(ApplyUsdOps {
-        doc_id: doc,
-        parent_gen: None,
-        label: "Update material appearance".into(),
-        ops,
-    })
+    Ok(ops)
 }
 
 /// Whether the edited look key names the same `UsdPreviewSurface` input as `slot`
@@ -360,6 +339,28 @@ fn appearance_edit(
 fn key_matches(key: &str, slot: &str) -> bool {
     lunco_usd_core::material::preview_surface_input(key)
         == lunco_usd_core::material::preview_surface_input(slot)
+}
+
+/// Validate an entire PBR patch against the selected surface before publishing it.
+pub fn edited_pbr_look<'a>(
+    world: &World,
+    target: Entity,
+    edits: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<PbrLook, String> {
+    if let Some(failure) = world.get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(target) {
+        return Err(failure.0.clone());
+    }
+    let mut look = match world.get::<PbrLook>(target) {
+        Some(look) => look.clone(),
+        None if world.get::<Mesh3d>(target).is_some() => PbrLook::default(),
+        None => return Err("entity has no PBR surface".into()),
+    };
+    for (key, value) in edits {
+        if !apply_pbr_look(&mut look, key, value) {
+            return Err(format!("invalid {key} value '{value}'"));
+        }
+    }
+    Ok(look)
 }
 
 fn apply_pbr_look(look: &mut PbrLook, key: &str, value: &str) -> bool {
@@ -484,35 +485,42 @@ pub(crate) fn author_shader_look(
     let mut look = existing.cloned().unwrap_or_default();
     look.shader = shader_path.to_string();
     commands.entity(target).remove::<PbrLook>().try_insert(look);
-    commands.queue(move |world: &mut World| drop_bound_pbr_material(world, target));
 }
 
-/// Drop the concrete PBR material a render build already bound to `e`.
-///
-/// Removing the [`PbrLook`] *intent* stops the binder re-materialising the entity,
-/// but the `MeshMaterial3d<StandardMaterial>` it inserted earlier stays put — and a
-/// mesh carrying that AND the shader material draws twice. That component is
-/// `bevy_pbr`'s and this crate may not name it (render-decoupling rule), so it is
-/// resolved out of the type registry instead (`MaterialPlugin` registers it, and it
-/// is `#[reflect(Component)]`).
-///
-/// No-op headless and in tests, where nothing ever bound a material — and a no-op the
-/// day `lunco-render-bevy` grows an `On<Remove<PbrLook>>` observer that unbinds its
-/// own material, which is where this really belongs.
-pub fn drop_bound_pbr_material(world: &mut World, e: Entity) {
-    let Some(registry) = world.get_resource::<AppTypeRegistry>().cloned() else {
-        return;
-    };
-    let reflect_component = {
-        let reg = registry.read();
-        reg.get_with_short_type_path("MeshMaterial3d<StandardMaterial>")
-            .and_then(|r| r.data::<bevy::ecs::reflect::ReflectComponent>())
-            .cloned()
-    };
-    let Some(rc) = reflect_component else { return };
-    if let Ok(mut entity) = world.get_entity_mut(e) {
-        rc.remove(&mut entity);
+/// Plan a WESL assignment on the bound UsdShade shader. The document stores
+/// the public source identity, including for shaders in a mounted Twin.
+pub fn shader_assignment_ops(
+    world: &World,
+    prim: &UsdPrimPath,
+    edit_target: LayerId,
+    source: &str,
+) -> Result<Vec<UsdOp>, String> {
+    let source = crate::shader_doc::canonical_shader_path(source);
+    if !is_wesl_shader_path(&source) {
+        return Err("Shader assignment requires a standalone .wesl asset".into());
     }
+    let source =
+        lunco_assets_core::asset_path::source_uri_for_address(&source, world.get_resource())
+            .map_err(|error| error.to_string())?;
+    let shader = crate::doc_resolve::bound_shader_prim(world, prim)?
+        .ok_or("Shader assignment requires a bound USD shader")?;
+    Ok([
+        (
+            "info:implementationSource",
+            "token",
+            r#""sourceAsset""#.to_owned(),
+        ),
+        ("info:wesl:sourceAsset", "asset", format!("@{source}@")),
+    ]
+    .into_iter()
+    .map(|(name, kind, value)| UsdOp::SetAttribute {
+        edit_target: edit_target.clone(),
+        path: shader.clone(),
+        name: name.into(),
+        type_name: kind.into(),
+        value,
+    })
+    .collect())
 }
 
 /// Observer for [`SetObjectProperty`].
@@ -600,56 +608,33 @@ fn apply_object_property(
             }
         }
         "shader" => {
-            let path =
-                lunco_assets_core::asset_path::load_source_uri(&cmd.value, world.get_resource())
-                    .map_err(|error| error.to_string())?
-                    .to_string();
             if persistent {
-                let prim = world
-                    .get::<UsdPrimPath>(target)
-                    .cloned()
-                    .ok_or("missing USD prim")?;
-                let shader = crate::doc_resolve::bound_shader_prim(world, &prim)?
-                    .ok_or("shader assignment requires a bound USD shader")?;
-                for (name, kind, value) in [
-                    (
-                        "info:implementationSource",
-                        "token",
-                        "\"sourceAsset\"".to_owned(),
-                    ),
-                    ("info:wesl:sourceAsset", "asset", format!("@{path}@")),
-                ] {
-                    ops.push(UsdOp::SetAttribute {
-                        edit_target: LayerId::runtime(),
-                        path: shader.clone(),
-                        name: name.into(),
-                        type_name: kind.into(),
-                        value,
-                    });
-                }
+                let prim = world.get::<UsdPrimPath>(target).ok_or("missing USD prim")?;
+                ops.extend(shader_assignment_ops(
+                    world,
+                    prim,
+                    LayerId::runtime(),
+                    &cmd.value,
+                )?);
             } else {
+                let source = crate::shader_doc::canonical_shader_path(&cmd.value);
+                if !is_wesl_shader_path(&source) {
+                    return Err("Shader assignment requires a standalone .wesl asset".into());
+                }
+                let path =
+                    lunco_assets_core::asset_path::load_source_uri(&source, world.get_resource())
+                        .map_err(|error| error.to_string())?
+                        .to_string();
                 let existing = world.get::<ShaderLook>(target).cloned();
                 author_shader_look(&mut world.commands(), target, existing.as_ref(), &path);
             }
         }
         key if PBR_LOOK_KEYS.contains(&key) => {
-            if let Some(failure) =
-                world.get::<lunco_usd_bevy_scene::UsdSceneProjectionFailed>(target)
-            {
-                return Err(failure.0.clone());
-            }
-            let mut look = match world.get::<PbrLook>(target) {
-                Some(look) => look.clone(),
-                None if world.get::<Mesh3d>(target).is_some() => PbrLook::default(),
-                None => return Err("entity has no PbrLook / mesh".into()),
-            };
-            if !apply_pbr_look(&mut look, key, &cmd.value) {
-                return Err(format!("invalid {key} value '{}'", cmd.value));
-            }
+            let look = edited_pbr_look(world, target, [(key, cmd.value.as_str())])?;
             if persistent {
-                return appearance_edit(world, target, key, &look).map(Some);
-            }
-            if world.get::<PbrLook>(target) != Some(&look) {
+                let prim = world.get::<UsdPrimPath>(target).ok_or("missing USD prim")?;
+                ops.extend(appearance_ops(world, prim, LayerId::root(), &[key], &look)?);
+            } else if world.get::<PbrLook>(target) != Some(&look) {
                 world.entity_mut(target).insert(look);
             }
         }

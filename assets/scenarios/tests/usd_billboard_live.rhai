@@ -9,6 +9,17 @@ fn simulation_dependencies(me, ctx) {
        query_reads: ["QueryUsdPrim"], required_inputs: [] }
 }
 
+fn on_visualization(me, ctx) {
+    let node = find_path(CHILD);
+    let rejected = false;
+    try { cmd("TransformEntity", #{entity_id:node, translation:[1.0,0.0,0.0], rotation:[0.0,0.0,0.0,1.0]}); }
+    catch (error) { rejected = true; }
+    if !rejected { throw "visualization admitted a simulation write"; }
+    let write = #{property:"visibility", value:#{Bool:#{value:false}}};
+    let result = cmd("SetSceneView", #{batches:[#{target:node, writes:[write]}]});
+    if !result.ok { throw result.error; }
+}
+
 fn on_start(me, ctx) {
     this = #{ phase: 0, ticks: 0, done: false, doc: (), child: () };
 }
@@ -27,6 +38,11 @@ fn on_tick(me, ctx) {
     let child = find_path(CHILD);
     if node < 0 || child < 0 { return; }
     if this.phase == 0 {
+        if !get(child, "Visibility").to_string().contains("Hidden") {
+            this.done = true;
+            finish([t_true(false, "presentation startup must hide the child after rejecting the simulation write")]);
+            return;
+        }
         let root = query("QueryUsdPrim", #{path: ROOT});
         this.doc = root.doc_id;
         this.child = child;

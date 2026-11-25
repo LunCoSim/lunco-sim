@@ -588,6 +588,7 @@ fn capture_gizmo_start(
     viewport: Option<Res<UsdViewportState>>,
     q_paths: Query<&UsdPrimPath>,
     q_parents: Query<&ChildOf>,
+    preview_roots: Query<(), With<lunco_usd_bevy_scene::UsdPreviewOnly>>,
     q_transforms: Query<&Transform, Without<GizmoProxy>>,
     active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
     simulation_pose: lunco_physics::SimulationPoseQuery,
@@ -616,7 +617,15 @@ fn capture_gizmo_start(
             continue;
         }
 
-        if let Some(owner) = preview_drag_owner(entity, viewport.as_deref(), &q_paths, &q_parents) {
+        let is_preview = lunco_usd_bevy_scene::is_preview_only(entity, &q_parents, &preview_roots);
+        if is_preview != pointer_capture.preview {
+            continue;
+        }
+        if is_preview {
+            let Some(owner) = preview_drag_owner(entity, viewport.as_deref(), &q_paths, &q_parents)
+            else {
+                continue;
+            };
             let Ok(local) = q_transforms.get(entity) else {
                 continue;
             };
@@ -1019,7 +1028,7 @@ fn restore_gizmo_dynamic(
                     entity_id: gid.get(),
                     translation: drag.current_position.to_array(),
                     rotation: drag.current_rotation.to_array(),
-                    intent: lunco_core::EditIntent::Persistent,
+                    intent: lunco_core::EditIntent::Interactive,
                 });
             }
         }
@@ -1035,7 +1044,7 @@ fn restore_gizmo_dynamic(
     session.targets.retain(|entity| q_drag.get(*entity).is_ok());
     let session_empty = session.targets.is_empty();
 
-    // Resume only after every released drag has authored its root teleport and
+    // Resume only after every released drag has seated its live pose and
     // its velocity was zeroed. This keeps a jointed lander from taking one fixed
     // step against a half-restored articulation.
     if session_empty {

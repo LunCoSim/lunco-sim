@@ -529,7 +529,7 @@ fn claims_standalone_primitive_dimension(
 fn refresh_standalone_primitive_dimensions(
     world: &mut World,
     stage_id: AssetId<UsdStageAsset>,
-    paths: &[SdfPath],
+    paths: &lunco_usd_bevy_core::live_edit::UsdPropertyChanges,
 ) {
     let facts = {
         let Some(stage) = world
@@ -541,7 +541,7 @@ fn refresh_standalone_primitive_dimensions(
         let view = stage.view();
         let index = world.resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>();
         let mut facts = Vec::new();
-        for path in paths {
+        for path in paths.keys() {
             let entities: Vec<_> = index
                 .in_stage(stage_id, path.as_str())
                 .iter()

@@ -107,6 +107,13 @@ fn on_tick(me, ctx) {
         let wrong = assembly_edit::describe(this.modelica);
         this.checks.push(t_true(wrong.ok == false,
             "Modelica handle is rejected by the USD owner"));
+        let host = find_path_in_document(this.original, "/DocumentIdentity/Part");
+        let generation = usd_document_generation(this.fork);
+        let foreign = false;
+        try { mission_checkpoint(host, this.fork, "@root@", "identity", "foreign"); }
+        catch (error) { foreign = error.to_string().contains("does not own"); }
+        this.checks.push(t_true(host >= 0 && foreign && usd_document_generation(this.fork) == generation,
+            "checkpoint rejects a different document containing the same prim path"));
         this.save_path = "target/document-identity-" + this.fork + ".usda";
         assembly_edit::save_as_document(this.fork, this.save_path);
         this.phase = 6;

@@ -39,7 +39,12 @@ pub struct SceneEditInspectorUiPlugin;
 
 impl Plugin for SceneEditInspectorUiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_scene_resource::<SelectionTarget>();
+        app.init_scene_resource::<SelectionTarget>()
+            .init_scene_resource::<inspector::PreviewPoseDraft>()
+            .init_scene_resource::<inspector::PreviewAppearanceDraft<inspector::PbrFields>>()
+            .init_scene_resource::<inspector::PreviewAppearanceDraft<
+                std::collections::BTreeMap<String, lunco_materials::ParamValue>,
+            >>();
 
         app.register_panel(inspector::Inspector::default())
             .register_panel(inspector::EnvironmentPanel);

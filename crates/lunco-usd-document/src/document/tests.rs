@@ -2960,6 +2960,86 @@ fn runtime_set_attribute_overrides_nested_base_attr_in_composed() {
 }
 
 #[test]
+fn persistent_edits_resolve_sublayers_and_exclude_view_reference_namespaces() {
+    let base = "#usda 1.0\n(subLayers = [@parts.usda@])\n";
+    let parts = "#usda 1.0\ndef Xform \"Catalog\" { def Cube \"Item\" { double mass = 1 } }\n";
+    let mut document = UsdDocument::with_origin(
+        DocumentId::new(43),
+        base,
+        DocumentOrigin::writable_file("/tmp/layered.usda"),
+    );
+    document.set_authoring_recipe(
+        None,
+        Some(StageRecipe::new(
+            "layered.usda",
+            std::collections::HashMap::from([
+                ("layered.usda".into(), base.as_bytes().to_vec()),
+                ("parts.usda".into(), parts.as_bytes().to_vec()),
+            ]),
+        )),
+    );
+    let mass = |path: &str| UsdOp::SetAttribute {
+        edit_target: LayerId::runtime(),
+        path: path.into(),
+        name: "mass".into(),
+        type_name: "double".into(),
+        value: "2".into(),
+    };
+    let path = "/Catalog/Item";
+    let undo_mass = document.apply(mass(path)).unwrap();
+    let active = |doc: &UsdDocument, path: &str| {
+        doc.open_composed_stage()
+            .unwrap()
+            .prim(path)
+            .unwrap()
+            .is_active()
+            .unwrap()
+    };
+    let undo_hide = document
+        .apply(UsdOp::SetActive {
+            edit_target: LayerId::runtime(),
+            path: path.into(),
+            active: false,
+        })
+        .unwrap();
+    assert!(!active(&document, path));
+    document.apply(undo_hide).unwrap();
+    assert!(active(&document, path));
+    document.apply(undo_mass).unwrap();
+    let sdf_path = SdfPath::new(path).unwrap();
+    assert_eq!(
+        native_snapshot(&document).prim_attribute_value::<f64>(&sdf_path, "mass"),
+        Some(1.0)
+    );
+
+    document
+        .apply(UsdOp::AddPrim {
+            edit_target: LayerId::view(),
+            parent_path: "/".into(),
+            name: "Preview".into(),
+            type_name: Some("Xform".into()),
+            reference: Some(String::new()),
+            reference_prim_path: Some("/Catalog".into()),
+        })
+        .unwrap();
+    let preview_path = "/Preview/Item";
+    assert!(active(&document, preview_path));
+    let generation = document.generation();
+    assert!(document.apply(mass(preview_path)).is_err());
+    assert!(
+        document
+            .apply(UsdOp::SetActive {
+                edit_target: LayerId::runtime(),
+                path: preview_path.into(),
+                active: false
+            })
+            .is_err()
+    );
+    assert_eq!(document.generation(), generation);
+    assert!(active(&document, preview_path));
+}
+
+#[test]
 fn runtime_set_attribute_can_override_a_referenced_prim() {
     // A wrapper document owns only /Traverse; the terrain children arrive
     // through its reference and therefore do not occur in the authored data.

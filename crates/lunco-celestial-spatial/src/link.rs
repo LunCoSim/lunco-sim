@@ -69,7 +69,7 @@ use lunco_celestial::coords::ecliptic_to_bevy;
 use lunco_celestial::ephemeris::EphemerisResource;
 use lunco_celestial::geo::{segment_hits_obb, segment_hits_sphere};
 use lunco_celestial_spatial_core::{
-    LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState,
+    LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkOcclusion, LinkPeer, LinkState,
 };
 
 /// Speed of light in vacuum, m/s — the SI definition (exact).
@@ -375,7 +375,7 @@ pub(crate) fn update_links(
         Option<&lunco_core::GlobalEntityId>,
     )>,
     q_terrain: Query<(Entity, &DemHeightField)>,
-    q_occluders: Query<(&LinkOccluder, &SolarFramePose, &Transform)>,
+    q_occluders: Query<(&LinkOccluder, &LinkOcclusion, &SolarFramePose, &Transform)>,
     q_parents: Query<&ChildOf>,
     q_grids: Query<&Grid>,
     q_spatial: Query<(Option<&CellCoord>, &Transform)>,
@@ -489,7 +489,8 @@ pub(crate) fn update_links(
     // snapshot discipline. Usually a handful of prims, often none.
     let occluders: Vec<(DVec3, DQuat, DVec3)> = q_occluders
         .iter()
-        .map(|(occ, pose, tf)| {
+        .filter(|(_, state, _, _)| state.enabled)
+        .map(|(occ, _, pose, tf)| {
             let (center_local, half) = occ.box_for(tf.scale);
             // The pose is already in the solar frame used by link endpoints;
             // using raw grid transforms here would compare unlike coordinates.

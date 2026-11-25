@@ -433,3 +433,15 @@ fn find_or_none(path) {
     if id == () || id < 0 { return (); }
     id
 }
+
+
+// Read the PBR base colour selected for a live draw entity.
+fn t_pbr_base_color(entity) {
+    if entity < 0 { return (); }
+    if execution_context().clock == "simulation" { track_entity_read(entity); }
+    let view = get(entity, "PbrViewColor.base_color.0.rgb");
+    if view != () { return view; }
+    let authored = get(entity, "PbrLook.base_color");
+    if authored == () { return (); }
+    [authored.red, authored.green, authored.blue]
+}

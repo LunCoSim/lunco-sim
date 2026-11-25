@@ -3500,7 +3500,11 @@ fn claims_visibility_edit(reader: &dyn UsdReadObject, path: &SdfPath, attribute:
 /// Apply the current native visibility to the affected composed descendants.
 /// Traverse the composed subtree, not the entire ECS scene, and keep existing
 /// mesh, collider, and script identities intact.
-fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths: &[SdfPath]) {
+fn refresh_visibility(
+    world: &mut World,
+    stage_id: AssetId<UsdStageAsset>,
+    paths: &lunco_usd_bevy_core::live_edit::UsdPropertyChanges,
+) {
     let facts = {
         let Some(stage) = world
             .get_non_send::<CanonicalStages>()
@@ -3510,7 +3514,7 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
         };
         let view = stage.view();
         let index = world.resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>();
-        let mut pending = paths.to_vec();
+        let mut pending = paths.keys().cloned().collect::<Vec<_>>();
         let mut visited = std::collections::BTreeSet::new();
         let mut facts = Vec::new();
         while let Some(path) = pending.pop() {
@@ -3537,7 +3541,7 @@ fn refresh_visibility(world: &mut World, stage_id: AssetId<UsdStageAsset>, paths
     let roots = {
         let index = world.resource::<lunco_usd_bevy_scene::prim_index::UsdPrimIndex>();
         paths
-            .iter()
+            .keys()
             .flat_map(|path| index.in_stage(stage_id, path.as_str()).iter().copied())
             .collect::<Vec<_>>()
     };

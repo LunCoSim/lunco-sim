@@ -18,13 +18,10 @@ description: >
 
 # Build & edit USD scenes
 
-The 3D world is **OpenUSD, projected to Bevy ECS** — USD is the source of truth,
-the ECS scene is its projection. You build the world by **authoring USD** (via
-commands that apply reversible ops), not by mutating ECS directly. Drive it over
-the API (`--api`, port **4101**; launch per [`test-via-api`](../test-via-api/SKILL.md)).
-
-Design background: [`21-domain-usd.md`](../../docs/architecture/21-domain-usd.md),
-[`usd-source-of-truth.md`](../../docs/architecture/usd-source-of-truth.md).
+USD describes the authored scene. To change it, use document commands or
+request persistent intent on a scene command. For live motion, inputs and
+presentation, use the runtime owner. [USD domain](../../docs/architecture/21-domain-usd.md) ·
+[Live and authored changes](../../docs/architecture/50-usd-driven-visuals.md#live-values-and-saved-settings)
 
 This skill owns mounting and scene placement. For authoring the reusable
 assembly itself, switch to the [interactive Assembly Editor runbook](../edit-usd-assembly/SKILL.md),
@@ -148,24 +145,11 @@ runtime prim or caching an entity id.
 
 ## Recipe
 
-1. **Base:** `LoadScene {path:"lunco://scenes/…/foo.usda", root_prim:""}` for an existing
-   scene, or start from the loaded default and add to it. `ClearScene` first if
-   replacing.
-2. **What can I spawn?** `list_bundled` → pick an `entry_id`.
-3. **Place it:** `SpawnEntity {entry_id, position:[x,y,z], rotation?, producer_id?}` (Y-up metres).
-   For raw-file runtime scenes, the response `data` carries the fixed-tick
-   admission stamp and reserved root id; the root receives that same id when
-   it materializes. API and actorless Rhai calls include a stable producer id.
-4. **Adjust:** `MoveEntity` or `TransformEntity` / `SetObjectProperty` (colour, mass, material, scale) /
-   `SelectEntity` to inspect.
-5. **Confirm:** `CaptureScreenshot` → `target/x.png` → Read it (see
-   [`inspect-simulation`](../inspect-simulation/SKILL.md) for reading state back).
-6. **Persist:** to make it permanent, author it into the `.usda` scene file under
-   `assets/scenes/` (the runtime edits are USD ops; save them into the layer).
-7. **Verify the contract:** run `$LUNCOSIM_BIN --validate <scene.usda>`;
-   for a composed world, run the authored Rhai scene gate and inspect its
-   verdict. `--validate` catches parse/composition/lint failures but does not
-   prove that the light remains stable during runtime.
+1. Open the Twin and its intended scene. Inspect the mounted USD document, its ID and edit target.
+2. Choose a catalog entry with `list_bundled`. To place an object in the document’s runtime layer, submit `SpawnEntity` with `entry_id`, `position` in metres and `intent: "Persistent"`. The scene supplies the document and parent.
+3. To journal a pose or supported property, pass `intent: "Persistent"` to `MoveEntity`, `TransformEntity` or `SetObjectProperty`. Read the changed prim from the published document generation. Each command has its own intent.
+4. To change the source file, use typed document operations targeting `@root@`, then `SaveDocument` and reopen the file to verify it. The Twin’s runtime persistence settings control saving and restoring `@runtime@` separately.
+5. For a simulation-only trial, leave intent at its default. For a live spawn from the external API supply a stable nonzero `producer_id`. Observe the runtime entity through `QueryEntity` or its physics and port queries.
 
 ## Gotchas
 
@@ -202,12 +186,11 @@ runtime prim or caching an entity id.
 - **Twin root ownership uses the canonical native path** — `Twin::open` stores the resolved root, including the Windows verbatim prefix. Opening a USD file inside that root remains a document-only open; it does not replace the running Twin.
 - **Display names are separate from Twin source authorities** — `TwinRoots::register_twin` derives stable logical provenance from the manifest/folder label and assigns an opaque mount authority. Keep the displayed name unchanged and use the returned authority; spaces, Unicode, `%`, `#`, `/` and `?` in a name do not authorize reconstructed load addresses.
 - **Verify native paths on Windows** — use the nightly Windows native-path step for file URI, canonical Twin root, provider manifest, and typed native asset admission coverage. Record Windows execution separately from Unix results; the focused step does not exercise junction escapes.
-- **Spawn `entry_id` must be in the catalog** — an unknown id logs `unknown entry '…'` and no-ops. List first with `list_bundled`.
+- Choose an `entry_id` returned by `list_bundled` and inspect the command result for rejection.
 - **Empty spawn path / root_prim → the `defaultPrim` sentinel**: an empty path means "the stage's default prim". A stage without `defaultPrim` is an invalid scene mount and fails visibly.
 - **Spawns land ON the terrain surface.** Placement samples the terrain **height oracle** (analytic, so it works even before a streamed/CDLOD collider tile bakes) — a spawn over un-baked terrain rests on the ground instead of free-falling. The GUI click path terrain-fits the asset's composed `UsdPhysics` collision footprint (slope-aligned, and it considers a physics obstacle under the chassis). An asset without a `defaultPrim` or collision footprint is rejected visibly; placement never invents dimensions or a lift. The API `SpawnEntity` path uses the explicit position supplied by the caller, so pass a real Y. On admission, the physics owner validates the authored pose against the live terrain using the collider's support geometry for convex shapes; a persisted pose that now overlaps after terrain changes remains held and must be repaired through `TransformEntity` or removed through `DeleteEntity`.
-- **One spawn = one entity.** In a single-player (`Standalone`) session a `SpawnEntity` instantiates exactly one rover; it is not also re-projected from the document (that path is suppressed to avoid a double-instantiation / vanish-on-reload).
 - **Gizmo / selection frame:** on a static-USD select, the selectable root is tagged `SelectableRoot` in the **world frame** — not `GridAnchor`. If the gizmo grabs the wrong thing or the wrong frame, that tag is why.
-- **Never `SetDocumentSource` for live scene building** — it replaces the whole source and cancels in-flight work. Submit typed scene commands (`SpawnEntity`/`MoveEntity`/`TransformEntity`/`SetObjectProperty`), and let their handlers lower the intent through the existing USD operation path.
+- **Never `SetDocumentSource` for live scene building** — it replaces the whole source and cancels in-flight work. For authored changes, submit typed USD operations or pass explicit persistent intent to a supported scene command.
 - **USD → ECS is a projection**, so authored changes flow one way — edit the USD (via ops), and the ECS scene reconciles. Don't hand-mutate ECS transforms expecting them to persist.
 - **Behaviour ≠ scene.** Making a spawned rover *do* something (drive, patrol) is a scenario — see [`author-scenario`](../author-scenario/SKILL.md); its self-driving GNC is [`authoring-vessel-controllers`](../authoring-vessel-controllers/SKILL.md).
 

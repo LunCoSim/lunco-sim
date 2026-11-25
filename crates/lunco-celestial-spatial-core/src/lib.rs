@@ -18,8 +18,8 @@ pub use components::{
     celestial_declared,
 };
 pub use connectivity::{
-    LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkPeer, LinkState, WifiNode,
-    WifiPeer, WifiState,
+    LinkGeometryPeer, LinkGeometryState, LinkNode, LinkOccluder, LinkOcclusion, LinkPeer,
+    LinkState, WifiNode, WifiPeer, WifiState,
 };
 pub use frame_index::{
     ReferenceFrameIndex, transform_pose_between_reference_frames, update_reference_frame_index,

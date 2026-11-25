@@ -82,8 +82,8 @@ background or its fill. Check front, back and underside views when tuning it.
 Ambient authoring reads native composed DomeLights, including references,
 schema defaults, exposure and activity. The dedicated runtime fill is excluded
 from the sum; connected or time-varying inputs reject document authoring before
-any edits. Run `scenarios/tests/native_ambient_authoring.rhai` through
-`RunScenarioAsset` on the settled replacement fixture to verify that contract.
+any edits. Run `scripts/api/test_native_activity.py --port <free-port>` for the
+production Rhai checks on ambient edits, mount scope, prim retyping and activation.
 
 Use native WESL (`.wesl`) imports and conditional attributes. Headless
 `ValidateAsset` checks syntax with the shared WESL frontend; full pipeline and

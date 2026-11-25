@@ -694,7 +694,7 @@ pub fn ensure_script_effect_allowed() -> Result<(), String> {
             "simulation_dependencies is read-only; it may resolve dependency identities but cannot mutate the world".into(),
         ),
         lunco_core::RuntimePhase::Visualization => Err(
-            "on_visualization cannot mutate simulation state; use ApplyUsdTransientOps for disposable view edits".into(),
+            "on_visualization accepts presentation commands such as SetSceneView; simulation writes require a simulation or interaction hook".into(),
         ),
         _ => Ok(()),
     }
@@ -713,7 +713,10 @@ pub fn ensure_script_mutation_allowed() -> Result<(), String> {
 pub fn ensure_script_command_allowed(name: &str) -> Result<(), String> {
     // Visualization preparation can update only disposable owner-managed views.
     if execution_context().phase == lunco_core::RuntimePhase::Visualization
-        && matches!(name, "ApplyUsdTransientOps" | "UpdateUsdCurveView")
+        && matches!(
+            name,
+            "SetSceneView" | "ApplyUsdTransientOps" | "UpdateUsdCurveView"
+        )
     {
         Ok(())
     } else {
@@ -760,9 +763,7 @@ pub fn enforce_script_authority(
     authorize(reg, rbac, pol, &paths, session, op, target_gid).map_err(|r| r.to_string())
 }
 
-/// The `#[authz_target]` gid a command authorizes against, read from the
-/// typed script params via its reflect schema. `None` for a target-less command
-/// (or an unknown name).
+/// Distinct reflected authorization identities for this script command.
 fn command_target_gids(world: &World, name: &str, params: &ApiValue) -> Result<Vec<u64>, String> {
     let app_reg = world.resource::<AppTypeRegistry>();
     let type_reg = app_reg.read();
@@ -1105,6 +1106,25 @@ fn bind_execution_twin_identity(
         }
     }
     Ok(HookValue::Map(fields))
+}
+
+/// Whether this host exposes an unambiguous public command with this name.
+/// Execution-time authority and target validation still belong to dispatch.
+pub fn command_available(name: &str) -> Result<bool, String> {
+    with_world(|world| {
+        let registry = world
+            .get_resource::<AppTypeRegistry>()
+            .ok_or("Command discovery requires the host type registry")?
+            .read();
+        match find_api_command(&registry, name, world.get_resource::<ApiVisibility>()) {
+            Ok(_) => Ok(true),
+            Err(error @ lunco_api::discovery::ApiCommandLookupError::Ambiguous) => {
+                Err(error.message(name))
+            }
+            Err(_) => Ok(false),
+        }
+    })
+    .ok_or("Command discovery requires a script world")?
 }
 
 /// Fire a typed command through `ApiCommandEvent` (the same entry point the
@@ -2462,6 +2482,7 @@ mod tests {
         assert!(ensure_script_command_allowed("SpawnEntity").is_err());
         assert!(ensure_script_command_allowed("ApplyUsdTransientOps").is_ok());
         assert!(ensure_script_command_allowed("UpdateUsdCurveView").is_ok());
+        assert!(ensure_script_command_allowed("SetSceneView").is_ok());
     }
 
     #[test]

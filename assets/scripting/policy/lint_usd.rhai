@@ -434,7 +434,7 @@ fn lint_usd(facts) {
 }
 
 /// A USD connection is only useful when its source property survives composed
-/// resolution and has the same declared type as the consuming attribute. The
+/// resolution and its value type agrees with the consuming attribute. The
 /// fact producer does the authored/composed stage work; runtime-only providers
 /// are checked again against the live PortRegistry by RunLint. This policy
 /// keeps the finding actionable and points at the consuming property so an
@@ -465,7 +465,7 @@ fn connection_source_issue(subject, target_type, source) {
     if !source.property_exists && !source.runtime_provider {
         return connection_source_property_missing(subject, source.path);
     }
-    if target_type != "" && source.type != "" && target_type != source.type {
+    if target_type != "" && source.type != "" && !source.types_agree {
         return connection_source_type_mismatch(subject, source.path, source.type, target_type);
     }
     ()
@@ -499,7 +499,7 @@ fn connection_source_type_mismatch(subject, source_path, source_type, target_typ
     message += source_type;
     message += ") to a ";
     message += target_type;
-    message += " sink. Author matching USD attribute types on both ends.";
+    message += " sink. Author USD attribute types that agree on both ends.";
     finding("connection-source-type-mismatch", "error", subject, message)
 }
 

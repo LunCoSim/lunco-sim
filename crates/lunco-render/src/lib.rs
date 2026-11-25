@@ -25,8 +25,9 @@ mod quality_policy;
 pub mod sun;
 
 pub use appearance::{
-    PbrLook, PbrLookKey, PbrTextures, ProceduralSkybox, ScreenConstantMarker,
-    ScreenConstantMarkerVisibility, SurfaceAlpha,
+    FailedPbrLook, PbrLook, PbrLookKey, PbrTextures, PbrViewColor, PendingPbrLook,
+    ProceduralSkybox, ScreenConstantMarker, ScreenConstantMarkerVisibility, SurfaceAlpha,
+    ViewColorChannel,
 };
 pub use backend::{
     OfflineImageSampling, RendererSettings, RendererStatus, RenderingBackend, TwinRendererOverride,

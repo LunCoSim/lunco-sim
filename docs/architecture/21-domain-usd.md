@@ -12,6 +12,8 @@
 > `lunco-usd-sim-authoring`, `lunco-usd-sim-core`, `lunco-usd-sim-cosim`, `lunco-usd-sim-cosim-api`,
 > `lunco-usd-sim-domain`, `lunco-usd-sim-domain-api`.
 
+Persistent document operations resolve their targets in the composed source and runtime layers. Disposable view references, variant opinions, and preview-only prims enter composition only for a view operation or a presentation read. A persistent edit may override a prim supplied by a source sublayer or reference.
+
 Package ownership follows the same boundary: `lunco-usd-document` contains
 the headless authored document/layer surface, layer identity, typed operations,
 and edit history; `lunco-usd-data` contains reusable authored-data contracts,
@@ -1465,7 +1467,7 @@ interaction, and panels; `lunco-luncosim-edit-gizmo-ui` owns the focused
 transform-gizmo frontend and pose transaction adapter;
 `lunco-luncosim-edit-inspector-ui` owns the Inspector and authored USD panels;
 and `lunco-usd-prim-tree-ui` owns the reusable prim tree.
-- **Spawning**: explicit Persistent `SpawnEntity` lowers to `ApplyUsdOp` with `UsdOp::AddPrim { reference: Some(...) }` against its explicit document and parent path. Live spawns (default) are admitted through the fixed-tick `PendingSessionInputs` owner and preserve the reserved root identity for replication; see the [command journal](command-journal.md).
+- **Spawning**: explicit Persistent `SpawnEntity` resolves the mounted scene's owning document and parent path, then submits a compound `ApplyUsdOps` placement. Live spawns (default) are admitted through the fixed-tick `PendingSessionInputs` owner and preserve the reserved root identity for replication; see the [command journal](command-journal.md).
   A palette spawn mounts the stage's `defaultPrim` via the **empty-path sentinel**
   (`UsdPrimPath { path: "" }`) — the loader resolves and writes back the concrete
   prim path. USD stays the source of truth for the root prim; the loader resolves

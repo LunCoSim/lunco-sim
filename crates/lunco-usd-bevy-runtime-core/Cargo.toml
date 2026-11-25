@@ -32,6 +32,7 @@ lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-avian-contracts = { path = "../lunco-usd-avian-contracts" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-authored-runtime = { path = "../lunco-usd-bevy-authored-runtime" }
+lunco-render = { path = "../lunco-render" }
 lunco-usd-bevy-scene = { path = "../lunco-usd-bevy-scene" }
 lunco-usd-bevy-twin = { path = "../lunco-usd-bevy-twin" }
 lunco-usd-bevy-runtime-persistence = { path = "../lunco-usd-bevy-runtime-persistence" }

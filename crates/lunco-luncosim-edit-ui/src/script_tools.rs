@@ -533,7 +533,7 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
             ]),
             exactly_one_of: Vec::new(),
             response: Some(
-                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, surface_binding_count, displayed_surface_binding_count, surface_texture, index_updated_segments, index_touched_nodes, index_patch_bytes, index_full_uploads, uploaded_patch_bytes, uploaded_patch_batches, index_upload_sequence, uploaded_patch_sequence, error }"
+                "{ doc_id, entity_id, path, state, requested_revision, completed_revision, applied_revision, local_visibility, result_segment_count, projection, requested_surface_rgb, surface_binding_count, displayed_surface_binding_count, surface_texture, index_updated_segments, index_touched_nodes, index_patch_bytes, index_full_uploads, uploaded_patch_bytes, uploaded_patch_batches, index_upload_sequence, uploaded_patch_sequence, error }"
                     .to_owned(),
             ),
         }
@@ -700,6 +700,10 @@ impl ApiQueryProvider for InspectUsdCurveViewProvider {
                     .and_then(|views| views.sources.get(&entity))
                     .is_some_and(|source| source.projection == UsdCurveViewProjection::Spatial) { "spatial_curve" }
                 else { "authored_curve" },
+            "requested_surface_rgb": world.get_resource::<PendingUsdCurveViews>()
+                .and_then(|views| views.sources.get(&entity))
+                .filter(|source| source.projection == UsdCurveViewProjection::Surface)
+                .map(|source| [source.color.red, source.color.green, source.color.blue]),
             "surface_binding_count": surface_binding_count as u64,
             "displayed_surface_binding_count": displayed_surface_binding_count as u64,
             "surface_texture": displayed_publication.and_then(|p| p.image.as_ref()).map(|image| format!("{:?}", image.id())),
@@ -722,7 +726,7 @@ fn on_update_usd_curve_view(
     backed: Res<lunco_usd_bevy_twin::DocBackedTwinScenes>,
     entities: Res<lunco_api::registry::ApiEntityRegistry>,
     q_root: Query<&lunco_usd_bevy_scene::UsdPrimPath>,
-    q_look: Query<&lunco_render::PbrLook>,
+    q_look: Query<(&lunco_render::PbrLook, Option<&lunco_render::PbrViewColor>)>,
     q_parents: Query<&ChildOf>,
     mut q_curve: Query<
         (&lunco_usd_bevy_scene::UsdPrimPath, &Mesh3d, &mut Visibility),
@@ -792,9 +796,10 @@ fn on_update_usd_curve_view(
     let color = if command.projection == UsdCurveViewProjection::Spatial {
         LinearRgba::WHITE
     } else {
-        let look = q_look
+        let (look, view) = q_look
             .get(curve)
             .map_err(|_| "curve view material is not projected".to_string())?;
+        let look = look.with_view_color(view);
         LinearRgba::new(
             look.base_color.red + look.emissive.red,
             look.base_color.green + look.emissive.green,

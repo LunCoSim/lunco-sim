@@ -343,10 +343,9 @@ static directional lights supply a framed ray through the same resolver. An
 authored light is a static `sun` source only when no celestial source owns the
 scene, and only after the active composed root has completed celestial-source
 classification. The USD celestial projector publishes that result as
-`CelestialSourceClassification` on the scene root; until it is present, static
-Sun seeding waits and `SetEnvironmentLight` yaw/pitch requests leave the
-direction unchanged with a warning. Once classified, only a static scene may
-accept those manual direction updates.
+`CelestialSourceClassification` on the scene root. The static source and
+`SetEnvironmentLight` direction and illuminance controls wait for this
+classification. A celestial scene obtains both channels from its provider.
 The celestial USD projector marks each scene prim after its one-time admission,
 but only decodes authored celestial/connectivity fields for the root, prims
 with a `lunco:` property, `DistantLight` prims whose parent may be a body, and

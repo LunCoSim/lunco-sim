@@ -317,6 +317,9 @@ hook, policy-status, reflected reads, Twin settings, and engine exposure reads
 also hide workspace Twin IDs; direct identity paths return no value. Rhai does
 not receive the private mount authority. Values and diagnostics show stable
 source identities; unknown opaque mount tokens are redacted.
+For an optional host feature use `command_available(name)` before preparing
+entity or document state for its command. The name resolves against the host’s
+public command registry without dispatching anything.
 
 ## 1. Lifecycle hooks — the shape of every scenario
 

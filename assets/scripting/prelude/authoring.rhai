@@ -282,10 +282,17 @@ fn modelica_set_experiment(class, start_time, stop_time, tolerance, interval) {
 // authored on that host prim. The mission supplies its USD document explicitly
 // through `fn mission_document(me)`. This keeps writes correct for referenced
 // prims and works with the existing typed command surface without a Rust rebuild.
+fn mission_checkpoint_path(me, doc) {
+    let path = usd_path(me);
+    if doc == () || path == () || find_path_in_document(doc, path) != me {
+        throw "Mission checkpoint document does not own the live host";
+    }
+    path
+}
+
 // Empty string is the logical tombstone used by mission_checkpoint_clear.
 fn mission_checkpoint(me, doc, edit_target, key, value) {
-    let path = usd_path(me);
-    if path == () || doc == () { return false; }
+    let path = mission_checkpoint_path(me, doc);
     let result = cmd("ApplyUsdOp", #{
         doc_id: doc,
         op: #{ SetAttribute: #{
@@ -296,15 +303,16 @@ fn mission_checkpoint(me, doc, edit_target, key, value) {
             value: value,
         }},
     });
-    result.ok == true
+    if result.status != "applied" { throw "Mission checkpoint was not committed: " + result.to_string(); }
+    true
 }
 
-fn mission_checkpoint_read(me, key) {
-    let path = usd_path(me);
-    if path == () { return (); }
+fn mission_checkpoint_read(me, doc, key) {
+    let path = mission_checkpoint_path(me, doc);
     let attr = "lunco:mission:checkpoint:" + key;
-    let result = query("QueryUsdPrim", #{ path: path, attrs: [attr] });
-    if result == () || result.attrs == () || result.attrs[attr] == () { return (); }
+    let result = query("QueryUsdPrim", #{ doc_id: doc, path: path, attrs: [attr] });
+    if result == () || result.attrs == () { throw "Mission checkpoint host could not be read"; }
+    if result.attrs[attr] == () { return (); }
     if result.attrs[attr] == "" { return (); }
     result.attrs[attr]
 }

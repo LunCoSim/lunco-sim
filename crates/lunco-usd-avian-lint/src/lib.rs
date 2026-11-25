@@ -1263,6 +1263,14 @@ pub fn physics_facts(reader: &StageView<'_>) -> Result<H, String> {
                             ("property_exists", H::Bool(property_exists)),
                             ("runtime_provider", H::Bool(runtime_provider)),
                             ("runtime_provider_name", H::str(runtime_provider_name)),
+                            (
+                                "types_agree",
+                                H::Bool(source_type.as_deref().is_some_and(|source| {
+                                    openusd::sdf::ValueTypeName::from(source).agrees_with(
+                                        &openusd::sdf::ValueTypeName::from(target_type.as_str()),
+                                    )
+                                })),
+                            ),
                             ("type", H::str(source_type.unwrap_or_default())),
                         ])
                     })

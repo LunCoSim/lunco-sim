@@ -16,6 +16,10 @@ use openusd::sdf::Path as SdfPath;
 use lunco_usd_bevy_stage::UsdStageAsset;
 use lunco_usd_bevy_stage::read::UsdReadObject;
 
+/// Exact authored properties grouped by owning prim for a single native notice.
+pub type UsdPropertyChanges =
+    std::collections::BTreeMap<SdfPath, std::collections::BTreeSet<String>>;
+
 /// One specialized owner of a live USD edit surface.
 ///
 /// The owner decides whether an attribute is handled in place, can invalidate
@@ -31,7 +35,7 @@ pub struct UsdLiveEditOwner {
     id: &'static str,
     claims_edit: Option<fn(&dyn UsdReadObject, &SdfPath, &str) -> bool>,
     invalidates_projection: Option<fn(&mut World, Entity) -> bool>,
-    refresh_prims: Option<fn(&mut World, AssetId<UsdStageAsset>, &[SdfPath])>,
+    refresh_prims: Option<fn(&mut World, AssetId<UsdStageAsset>, &UsdPropertyChanges)>,
     requires_stage_projection_reset: fn(&World, AssetId<UsdStageAsset>, &str) -> bool,
     prepare_stage_projection_reset: fn(&mut World, AssetId<UsdStageAsset>) -> Result<(), String>,
 }
@@ -42,7 +46,7 @@ impl UsdLiveEditOwner {
         id: &'static str,
         claims_edit: fn(&dyn UsdReadObject, &SdfPath, &str) -> bool,
         invalidates_projection: Option<fn(&mut World, Entity) -> bool>,
-        refresh_prims: fn(&mut World, AssetId<UsdStageAsset>, &[SdfPath]),
+        refresh_prims: fn(&mut World, AssetId<UsdStageAsset>, &UsdPropertyChanges),
     ) -> Self {
         Self {
             id,
@@ -97,7 +101,7 @@ impl UsdLiveEditOwner {
         self,
         world: &mut World,
         stage: AssetId<UsdStageAsset>,
-        prims: &[SdfPath],
+        prims: &UsdPropertyChanges,
     ) {
         if let Some(refresh) = self.refresh_prims {
             refresh(world, stage, prims);
@@ -176,7 +180,7 @@ mod tests {
         true
     }
 
-    fn refresh(_world: &mut World, _stage: AssetId<UsdStageAsset>, _prims: &[SdfPath]) {}
+    fn refresh(_world: &mut World, _stage: AssetId<UsdStageAsset>, _prims: &UsdPropertyChanges) {}
 
     fn requires_reset(_world: &World, _stage: AssetId<UsdStageAsset>, _path: &str) -> bool {
         true

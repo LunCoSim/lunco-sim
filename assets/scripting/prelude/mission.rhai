@@ -71,7 +71,7 @@ fn __obj_ready(m, requires) {
 fn __advance_objective(me, o, now, doc) {
     if o.fail != () && o.fail.call(me) {
         o.state = "failed";
-        mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "failed");
+        if doc != () { mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "failed"); }
         emit("OBJECTIVE_FAILED", o.id);
         return o;
     }
@@ -83,7 +83,7 @@ fn __advance_objective(me, o, now, doc) {
         if (now - o.t0) < o.dwell { return o; }
     }
     o.state = "complete";
-    mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "complete");
+    if doc != () { mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "complete"); }
     emit("OBJECTIVE_COMPLETE", o.id);
     if o.on_complete != () { o.on_complete.call(me); }
     o
@@ -154,9 +154,9 @@ fn __mission_hud(m) {
 /// Restore only terminal objective transitions. Dwell timers and event latches
 /// are deliberately transient: replaying an event or pretending a partially
 /// held condition survived a restart would make a mission non-deterministic.
-fn __restore_mission(me, m) {
+fn __restore_mission(me, doc, m) {
     for i in 0..m.len() {
-        let saved = mission_checkpoint_read(me, "objective:" + m[i].id);
+        let saved = mission_checkpoint_read(me, doc, "objective:" + m[i].id);
         if saved == "complete" { m[i].state = "complete"; }
         if saved == "failed"   { m[i].state = "failed"; }
     }
@@ -174,7 +174,7 @@ fn __init_mission(me, ctx) {
     if this.mission == () && is_def_fn("mission", 2) { this.mission = mission(me, ctx); }
     if this.mission != () {
         if this.__mission_doc != () {
-            this.mission = __restore_mission(me, this.mission);
+            this.mission = __restore_mission(me, this.__mission_doc, this.mission);
         }
         let s = __mission_status(this.mission);
         if s.all_done || s.any_failed { this.__mission_done = true; }

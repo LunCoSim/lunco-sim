@@ -24,6 +24,12 @@ fn on_tick(me, ctx) {
         if y.ok == false || y.value != 2.0 { return; }
         this.checks.push(t_true(y.value == 2.0, "compatible native length ports exchange their initial physical sample"));
         require(cmd("StepSimulation", #{hold: true}));
+        let before = usd_document_generation(this.doc);
+        let invalid = cmd("ApplyUsdOps", #{doc_id: this.doc, ops: [#{SetConnection: #{
+            edit_target: "@runtime@", path: "/World/Target", name: "inputs:mass",
+            type_name: "", sources: ["/World/Source.outputs:position_y"]}}]});
+        this.checks.push(t_true(invalid.status == "rejected" && usd_document_generation(this.doc) == before,
+            "malformed connection type rejects without a document change"));
         let operation = #{SetConnection: #{edit_target: "@runtime@", path: "/World/Target",
             name: "inputs:mass", type_name: "double", sources: ["/World/Source.outputs:position_y"]}};
         require(cmd("ApplyUsdOps", #{doc_id: this.doc, ops: [operation]}));

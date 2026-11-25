@@ -36,6 +36,7 @@ mod joint_reaction;
 pub mod kinematics;
 pub mod occlusion;
 pub mod order;
+pub mod participation;
 pub mod pose;
 pub mod raycast;
 pub mod readiness;

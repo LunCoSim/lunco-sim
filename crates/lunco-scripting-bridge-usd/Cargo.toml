@@ -6,6 +6,7 @@ license.workspace = true
 description = "USD identity projections for LunCoSim scripting backends"
 
 [dependencies]
+openusd = { workspace = true }
 bevy = { workspace = true }
 lunco-api = { path = "../lunco-api" }
 lunco-doc = { path = "../lunco-doc" }

@@ -138,6 +138,12 @@ impl From<Result<CommandOutcome, String>> for CommandOutcome {
     }
 }
 
+impl From<Result<CommandOutcome, Reject>> for CommandOutcome {
+    fn from(result: Result<CommandOutcome, Reject>) -> Self {
+        result.unwrap_or_else(Self::Rejected)
+    }
+}
+
 impl From<Result<Ack, Reject>> for CommandOutcome {
     fn from(result: Result<Ack, Reject>) -> Self {
         match result {

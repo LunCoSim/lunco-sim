@@ -268,6 +268,10 @@ pub struct UsdPrimProjectionSet;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UsdVisualProjectionSet;
 
+/// Per-frame authored USD samples admitted before spatial and light consumers.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UsdAnimationSampleSet;
+
 /// Render target selected by a simulation-side visual split.
 ///
 /// A physical owner may retain the USD identity while its mesh is moved to a

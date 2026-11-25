@@ -136,7 +136,7 @@ impl UsdProjectionVisuals {
             && prior.doc == next.doc
         {
             next.scope.work = next.scope.work.max(prior.scope.work);
-            if next.scope.work == ProjectionWork::Subtree {
+            if next.scope.work != ProjectionWork::FullStage {
                 next.scope.roots.extend(prior.scope.roots);
             } else {
                 next.scope.roots.clear();
@@ -164,6 +164,18 @@ pub(crate) fn settle_projection_visuals(
         &lunco_usd_bevy_scene::UsdSceneProjectionFailed,
         Option<&lunco_usd_bevy_scene::UsdSurfaceDependencies>,
     )>,
+    materials: Query<
+        (Entity, Option<&lunco_render::FailedPbrLook>),
+        Or<(
+            With<lunco_render::PendingPbrLook>,
+            With<lunco_render::FailedPbrLook>,
+        )>,
+    >,
+    prims: Query<(
+        &UsdPrimPath,
+        Option<&lunco_usd_bevy_scene::UsdSurfaceDependencies>,
+    )>,
+    parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
     use lunco_telemetry_core::{Severity, TelemetryEvent, TelemetryValue};
@@ -186,7 +198,37 @@ pub(crate) fn settle_projection_visuals(
         let affected = |prim: &UsdPrimPath| {
             prim.stage_handle.id() == *stage && revision.scope.contains(&prim.path)
         };
-        if pending.iter().any(affected) {
+        let affected_surface =
+            |prim: &UsdPrimPath, deps: Option<&lunco_usd_bevy_scene::UsdSurfaceDependencies>| {
+                affected(prim)
+                    || (prim.stage_handle.id() == *stage
+                        && deps.is_some_and(|deps| {
+                            deps.0
+                                .iter()
+                                .any(|path| revision.scope.contains(path.as_str()))
+                        }))
+            };
+        let mut waiting = pending.iter().any(affected);
+        let mut failure = failures
+            .iter()
+            .find(|(prim, _, deps)| affected_surface(prim, *deps))
+            .map(|(prim, detail, _)| format!("{}: {}", prim.path, detail.0));
+        for (target, material_failure) in &materials {
+            // A mesh split retains the prim identity on its physical parent.
+            let owner = std::iter::once(target)
+                .chain(parents.iter_ancestors(target))
+                .find_map(|entity| prims.get(entity).ok());
+            if let Some((prim, deps)) = owner
+                && affected_surface(prim, deps)
+            {
+                if let Some(detail) = material_failure {
+                    failure = Some(format!("{}: {}", prim.path, detail.0));
+                    break;
+                }
+                waiting = true;
+            }
+        }
+        if waiting && failure.is_none() {
             return true;
         }
         let mut data = BTreeMap::from([
@@ -200,20 +242,8 @@ pub(crate) fn settle_projection_visuals(
                 TelemetryValue::String(revision.scope.work.name().into()),
             ),
         ]);
-        let (name, severity) = if let Some((prim, failure, _)) =
-            failures.iter().find(|(prim, _, deps)| {
-                affected(prim)
-                    || (prim.stage_handle.id() == *stage
-                        && deps.is_some_and(|deps| {
-                            deps.0
-                                .iter()
-                                .any(|path| revision.scope.contains(path.as_str()))
-                        }))
-            }) {
-            data.insert(
-                "detail".into(),
-                TelemetryValue::String(format!("{}: {}", prim.path, failure.0)),
-            );
+        let (name, severity) = if let Some(message) = failure {
+            data.insert("detail".into(), TelemetryValue::String(message));
             ("usd.projection.visuals_failed", Severity::Error)
         } else {
             ("usd.projection.visuals_ready", Severity::Info)
@@ -638,7 +668,7 @@ fn publish_stage_projected(
         .and_then(|mut pending| pending.work.remove(&stage_id))
         .unwrap_or_default();
     let work = scope.work;
-    if work != ProjectionWork::InPlace {
+    if work != ProjectionWork::InPlace || !scope.roots.is_empty() {
         world.resource_mut::<UsdProjectionVisuals>().submit(
             stage_id,
             VisualRevision {
@@ -1288,7 +1318,10 @@ pub(crate) fn refresh_edited_prims_live(
         .get_resource::<lunco_usd_bevy_core::live_edit::UsdLiveEditRegistry>()
         .map(|registry| registry.snapshot())
         .unwrap_or_default();
-    let mut claimed_live_edit_owners: BTreeMap<usize, BTreeSet<SdfPath>> = BTreeMap::new();
+    let mut claimed_live_edit_owners: BTreeMap<
+        usize,
+        lunco_usd_bevy_core::live_edit::UsdPropertyChanges,
+    > = BTreeMap::new();
     for p in info_only {
         let Some((prim, attr)) = p.split_once('.') else {
             continue;
@@ -1308,7 +1341,9 @@ pub(crate) fn refresh_edited_prims_live(
                 claimed_live_edit_owners
                     .entry(owner)
                     .or_default()
-                    .insert(prim);
+                    .entry(prim)
+                    .or_default()
+                    .insert(attr.to_owned());
                 continue;
             }
         }
@@ -1326,6 +1361,7 @@ pub(crate) fn refresh_edited_prims_live(
                     )
                 })
         {
+            note_projection_work(world, id, ProjectionWork::InPlace, prim);
             continue;
         }
         // A mission tree is a `LunCoProgramAPI` child. The shared resolver owns
@@ -1370,7 +1406,11 @@ pub(crate) fn refresh_edited_prims_live(
         if is_transform_attribute(attr) {
             continue;
         }
-        if matches!(attr, "material:binding" | "material:binding:physics") {
+        if attr == "material:binding:physics" {
+            continue;
+        }
+        if attr == "material:binding" {
+            note_projection_work(world, id, ProjectionWork::InPlace, prim);
             continue;
         }
         // Standard display primvars are appearance, even when authored on a
@@ -1378,6 +1418,7 @@ pub(crate) fn refresh_edited_prims_live(
         // the batch in place; rebuilding this subtree can retire live programs
         // or physical bodies for a color-only edit.
         if matches!(attr, "primvars:displayColor" | "primvars:displayOpacity") {
+            note_projection_work(world, id, ProjectionWork::InPlace, prim);
             continue;
         }
         if authored_ui_metadata_attribute(world, id, prim, attr) {
@@ -1424,7 +1465,10 @@ pub(crate) fn refresh_edited_prims_live(
     }
 
     for (owner, prims) in claimed_live_edit_owners {
-        live_edit_owners[owner].refresh_prims(world, id, &prims.into_iter().collect::<Vec<_>>());
+        for path in prims.keys() {
+            note_projection_work(world, id, ProjectionWork::InPlace, path.as_str());
+        }
+        live_edit_owners[owner].refresh_prims(world, id, &prims);
     }
 
     for (owner, resolved) in program_updates {

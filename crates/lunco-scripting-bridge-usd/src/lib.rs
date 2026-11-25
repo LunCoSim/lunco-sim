@@ -9,6 +9,11 @@ use lunco_api::registry::ApiEntityRegistry;
 use lunco_scripting_bridge_core::{resolve_entity, with_world};
 use lunco_usd_bevy_scene::prim_index::UsdPrimIndex;
 
+/// Compare two USD attribute types using native Sdf semantic-role agreement.
+pub fn usd_types_agree(source: &str, sink: &str) -> bool {
+    openusd::sdf::ValueTypeName::from(source).agrees_with(&openusd::sdf::ValueTypeName::from(sink))
+}
+
 /// Read the authoritative USD document generation without constructing the
 /// full `InspectUsdDocument` snapshot.
 ///

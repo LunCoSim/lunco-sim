@@ -17,6 +17,8 @@ ownership, lifecycle, and production acceptance.
 
 ## Standing issues
 
+- [Live USD interaction coverage](open-live-usd-interactions.md) records the Twin inventory, production checks and sources with outstanding namespace diagnostics.
+
 - [`open-model-authoring-ux-gaps.md`](open-model-authoring-ux-gaps.md) —
   current generic UX and runtime-evidence backlog derived from vehicle modeling
   and live simulation; it does not propose vehicle-specific core APIs.

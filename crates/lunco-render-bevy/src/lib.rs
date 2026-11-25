@@ -15,7 +15,6 @@
 mod backend;
 mod camera_image;
 mod data_texture;
-mod env_light;
 mod gpu_culling;
 pub mod horizon_shade;
 mod light_transform_safety;
@@ -52,7 +51,9 @@ use bevy::pbr::{
 use bevy::prelude::*;
 use bevy::render::material_bind_groups::RenderMaterialBindings;
 use bevy::render::{ExtractSchedule, Render, RenderApp, RenderSystems};
-use lunco_render::{PbrLook, PbrLookKey, SurfaceAlpha};
+use lunco_render::{
+    FailedPbrLook, PbrLook, PbrLookKey, PbrViewColor, PendingPbrLook, SurfaceAlpha,
+};
 use lunco_usd_bevy_scene::UsdPrimDisplayMode;
 
 /// Render-only state retained while a prim has a display override.
@@ -110,7 +111,6 @@ impl RenderProfile {
 /// to move here bodily rather than be expressed as a component:
 /// - `horizon_shade` — the per-frame heightfield/sun *uniform feed* into the terrain
 ///   `ShaderMaterial`;
-/// - `env_light` — the `bloom` arm of `SetEnvironmentLight` (from `lunco-environment`);
 ///   Terrain-derived map selection remains render-free on the terrain's
 ///   `ShaderLook`; this crate only binds that intent to the generic GPU material.
 ///
@@ -154,20 +154,38 @@ impl Plugin for LuncoRenderPlugin {
             // adapter — anything that wants to know what a surface looks like asks the
             // component the loader already filled, rather than re-deriving it.
             .register_type::<PbrLook>()
+            .register_type::<PendingPbrLook>()
+            .register_type::<FailedPbrLook>()
             .register_type::<bevy::camera::visibility::RenderLayers>()
             .add_observer(bind_pbr_look)
+            .add_observer(
+                |event: On<Insert<PbrViewColor>>, mut looks: Query<&mut PbrLook>| {
+                    if let Ok(mut look) = looks.get_mut(event.entity) {
+                        look.set_changed();
+                    }
+                },
+            )
+            .add_observer(
+                |event: On<Remove<PbrViewColor>>, mut looks: Query<&mut PbrLook>| {
+                    if let Ok(mut look) = looks.get_mut(event.entity) {
+                        look.set_changed();
+                    }
+                },
+            )
             .add_observer(reject_default_usd_material)
             .add_observer(retire_pending_pbr_look)
             .add_systems(
                 Update,
                 (
-                    rebind_changed_pbr_look,
+                    wake_repaired_pbr_images.run_if(
+                        bevy::ecs::schedule::common_conditions::on_message::<AssetEvent<Image>>,
+                    ),
                     look_cache::sweep_look_cache::<PbrLook>,
-                )
-                    // Names the binders; carries no ordering rule. The despawn race
-                    // that used to live here is solved a schedule up — the USD
-                    // projector runs in `PreUpdate`. See `lunco_render::LookRebind`.
-                    .in_set(lunco_render::LookRebind),
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                rebind_changed_pbr_look.in_set(lunco_render::LookRebind),
             );
         // The wireframe pass is a render concern. Keeping it here avoids
         // pulling `bevy_pbr` into the render-free USD scene and viewport crates.
@@ -226,7 +244,6 @@ impl Plugin for LuncoRenderPlugin {
         // panics on a duplicate plugin.
         app.add_plugins(shader_material::ShaderMaterialPlugin);
         horizon_shade::build(app);
-        env_light::build(app);
         world_label::build(app);
         sensor_beams::build(app);
         // Connectivity beams: runtime-spawned mesh, authored look, local Transform (no
@@ -602,10 +619,18 @@ fn material_for(
     cache.resolve(look, materials, |look| standard_material(look, profile))
 }
 
-/// A changed appearance is awaiting one or more explicitly authored images.
-/// The previously bound material (if any) remains the active presentation.
-#[derive(Component)]
-struct PendingPbrLook;
+fn pbr_images(look: &PbrLook) -> impl Iterator<Item = &Handle<Image>> {
+    let textures = &look.textures;
+    [
+        &textures.base_color,
+        &textures.emissive,
+        &textures.metallic_roughness,
+        &textures.normal_map,
+        &textures.occlusion,
+    ]
+    .into_iter()
+    .flatten()
+}
 
 /// Inspect only the texture dependencies of this actual rendering profile.
 fn pbr_images_ready(
@@ -617,18 +642,8 @@ fn pbr_images_ready(
     if profile.is_fast() {
         return Ok(true);
     }
-    let textures = &look.textures;
     let mut ready = true;
-    for handle in [
-        &textures.base_color,
-        &textures.emissive,
-        &textures.metallic_roughness,
-        &textures.normal_map,
-        &textures.occlusion,
-    ]
-    .into_iter()
-    .flatten()
-    {
+    for handle in pbr_images(look) {
         if images.get(handle).is_some() {
             continue;
         }
@@ -652,16 +667,23 @@ fn admit_pbr_look(
     entity: Entity,
     result: Result<bool, String>,
     was_pending: bool,
+    failure: Option<&FailedPbrLook>,
     commands: &mut Commands,
 ) -> bool {
     match result {
         Ok(true) => {
+            if failure.is_some() {
+                commands.entity(entity).try_remove::<FailedPbrLook>();
+            }
             if was_pending {
                 commands.entity(entity).try_remove::<PendingPbrLook>();
             }
             true
         }
         Ok(false) => {
+            if failure.is_some() {
+                commands.entity(entity).try_remove::<FailedPbrLook>();
+            }
             if !was_pending {
                 commands.entity(entity).try_insert(PendingPbrLook);
             }
@@ -671,9 +693,43 @@ fn admit_pbr_look(
             if was_pending {
                 commands.entity(entity).try_remove::<PendingPbrLook>();
             }
+            if failure.is_some_and(|previous| previous.0 == message) {
+                return false;
+            }
+            commands
+                .entity(entity)
+                .try_insert(FailedPbrLook(message.clone()));
             warn!("PBR appearance for {entity:?} rejected: {message}");
             lunco_core::trigger_runtime_error(commands, "pbr-texture-load-failed", message);
             false
+        }
+    }
+}
+
+/// A hot-reloaded texture can recover a terminal binding without changing USD.
+fn wake_repaired_pbr_images(
+    mut events: MessageReader<AssetEvent<Image>>,
+    mut failed: Query<&mut PbrLook, With<FailedPbrLook>>,
+) {
+    if failed.is_empty() {
+        events.clear();
+        return;
+    }
+    let ready: std::collections::HashSet<_> = events
+        .read()
+        .filter_map(|event| match event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if ready.is_empty() {
+        return;
+    }
+    for mut look in &mut failed {
+        if pbr_images(&look).any(|image| ready.contains(&image.id())) {
+            look.set_changed();
         }
     }
 }
@@ -682,13 +738,13 @@ fn admit_pbr_look(
 fn retire_pending_pbr_look(removed: On<Remove<PbrLook>>, mut commands: Commands) {
     commands
         .entity(removed.entity)
-        .try_remove::<PendingPbrLook>();
+        .try_remove::<(PendingPbrLook, FailedPbrLook)>();
 }
 
 /// `On<Add<PbrLook>>` — the moment intent appears, give it a material.
 fn bind_pbr_look(
     add: On<Add<PbrLook>>,
-    looks: Query<&PbrLook>,
+    looks: Query<(&PbrLook, Option<&PbrViewColor>, Option<&FailedPbrLook>)>,
     profile: Res<RenderProfile>,
     images: Res<Assets<Image>>,
     server: Res<AssetServer>,
@@ -697,11 +753,16 @@ fn bind_pbr_look(
     mut commands: Commands,
 ) {
     let e = add.entity;
-    let Ok(look) = looks.get(e) else { return };
+    let Ok((authored, color, was_failed)) = looks.get(e) else {
+        return;
+    };
+    let resolved = authored.with_view_color(color);
+    let look = resolved.as_ref();
     if !admit_pbr_look(
         e,
         pbr_images_ready(look, *profile, &images, &server),
         false,
+        was_failed,
         &mut commands,
     ) {
         return;
@@ -796,6 +857,8 @@ fn rebind_changed_pbr_look(
             Has<MeshMaterial3d<ShaderMaterial>>,
             Has<NotShadowCaster>,
             Has<PendingPbrLook>,
+            Option<&FailedPbrLook>,
+            Option<&PbrViewColor>,
         ),
         Or<(Changed<PbrLook>, Changed<Mesh3d>, With<PendingPbrLook>)>,
     >,
@@ -806,15 +869,26 @@ fn rebind_changed_pbr_look(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
-    for (e, look_ref, current, binding, has_shader_material, has_not_shadow_caster, was_pending) in
-        &changed
+    for (
+        e,
+        look_ref,
+        current,
+        binding,
+        has_shader_material,
+        has_not_shadow_caster,
+        was_pending,
+        was_failed,
+        color,
+    ) in &changed
     {
         let look_changed = look_ref.is_changed() || was_pending;
-        let look = &*look_ref;
+        let resolved = look_ref.with_view_color(color);
+        let look = resolved.as_ref();
         if !admit_pbr_look(
             e,
             pbr_images_ready(look, *profile, &images, &server),
             was_pending,
+            was_failed,
             &mut commands,
         ) {
             continue;
@@ -1259,9 +1333,13 @@ mod tests {
                 .0
         );
 
-        let mut tinted = app.world_mut().get_mut::<PbrLook>(reached).unwrap();
-        tinted.base_color = LinearRgba::rgb(0.38, 0.38, 0.38);
-        tinted.unshared = true;
+        app.world_mut().entity_mut(reached).insert(PbrViewColor {
+            base_color: Some(lunco_render::ViewColorChannel {
+                rgb: [0.38; 3],
+                script: None,
+            }),
+            emissive: None,
+        });
         app.update();
 
         let reached_handle = app
@@ -1294,6 +1372,16 @@ mod tests {
                 .unwrap()
                 .base_color,
             Color::from(LinearRgba::rgb(0.38, 0.38, 0.38))
+        );
+        app.world_mut().entity_mut(reached).remove::<PbrViewColor>();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<MeshMaterial3d<StandardMaterial>>(reached)
+                .unwrap()
+                .0,
+            shared,
+            "clearing a live channel restores the shared authored material"
         );
     }
 

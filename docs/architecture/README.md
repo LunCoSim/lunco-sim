@@ -121,7 +121,6 @@ the banner pattern). **Draft** = under live review, may be wrong.
 | [`caching-and-precompute-strategy.md`](caching-and-precompute-strategy.md) · [`scenario-program-cache.md`](scenario-program-cache.md) | Caching strategy; the rhai program cache |
 | [`efficiency-and-maintainability.md`](efficiency-and-maintainability.md) | **The North Star + substrates B–E in full**: the one principle, the tier ladder, `lunco-precompute` (B), `Mobility` (C), ports resolve→handle (D), `lunco-hash` (E) |
 | [`editor-authoring-capability-gaps.md`](editor-authoring-capability-gaps.md) | Remaining generic capabilities that shorten the live component edit/checkpoint loop without adding a second USD writer |
-| [`usd-source-of-truth.md`](usd-source-of-truth.md) | **USD is the truth; ECS is a projection of it.** The rule every edit path obeys |
 | [`rhai-integration.md`](rhai-integration.md) | Why rhai, and the as-built scripting surface. The *how-to* is [`../scripting-guide.md`](../scripting-guide.md) |
 | [`hook-policies.md`](hook-policies.md) | Function-shaped policy seams: owner-side macro declarations, link-time reflection, dynamic application/Twin policy loading, typed Rhai/API binding, and failure semantics |
 | [`62-deterministic-runtime-and-async-boundaries.md`](62-deterministic-runtime-and-async-boundaries.md) | Cross-domain tick ordering, async preparation and revision admission, causal dependencies, numerical scope, and the remaining deterministic replay contract |

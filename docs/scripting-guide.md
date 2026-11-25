@@ -262,6 +262,7 @@ fields. `get_twin_setting()` and `get_exposure()` apply the same projection;
 direct workspace Twin identity paths return no value. Script values and
 diagnostics translate known mount authorities to stable source identities and
 redact unknown opaque mount tokens.
+Use `command_available("UpdateUsdCurveView")` to check one optional host command before preparing its inputs. The lookup uses the public command registry and visibility policy. Dispatch checks the caller’s authority and target state.
 Rhai scripts that query
 `ScriptingCatalog` should pass a `sections` array such as
 `#{sections: ["commands", "queries"]}`; omitting it returns the full catalog
@@ -591,7 +592,7 @@ Superseded or retired preparations cannot replace a newer report.
 | `execution_context()` | map | read-only owner scope, cycle, phase, selected clock sample, sequence, and event producer stamp; Twin-scoped maps omit workspace Twin identity fields, while an unclassified route has unit scope, cycle, and generation |
 | `rand()` / `rand_range(lo,hi)` / `rand_int(lo,hi)` | f64 / f64 / i64 | **deterministic** RNG — seeded by entity, event producer or cycle sequence, and hook; discrete lifecycle hooks use a stable sequence-free seed |
 | `param(id, key, default)` | any | read a `lunco:param:<key>` attribute from a prim (`custom float lunco:param:wmax = 1.05`); returns `default` if it is absent |
-| `detach_joint(id)` | bool | detach an entity through the generic `DetachJoint` command; ordinary entities use normal removal, while joint entities release their rigid link through the solver lifecycle |
+| `detach_joint(id)` | bool | release an admitted physics joint through its solver-safe lifecycle |
 | `notify(msg)` / `notify_kind(msg, kind)` | () | send a HUD notification; `kind` is `"info"` / `"warn"` / `"error"` |
 
 Reflected world state stays native: `get`/`get_setting` build Rhai values
@@ -656,17 +657,11 @@ verbs — read the topic files for the full, authoritative list. Highlights:
   component/joint/socket paths; USD remains the scene/topology authority and
   Modelica remains the equation/graph authority. Obtain document ids from
   `ListOpenDocuments` before authoring.
-- **Mission durability:** `mission_checkpoint` and
-  `mission_checkpoint_read` author phase state on the host prim as USD string
-  attributes through the explicit document command path. Define
-  `fn mission_document(me) { <usd-document-id> }` and use the returned document
-  id at objective/phase boundaries so a task can resume after a hot reload or
-  restart without a second persistence mechanism. `ListOpenDocuments` supplies
-  the id in editor sessions.
+- **Mission durability.** To save objective checkpoints, return the host prim's document ID from `mission_document(me)` using `assembly_edit::document_for_entity(me)`. The checkpoint reader and writer use that document and the host's exact prim path. Omit the document for a live-only mission.
 - **Selection toolkit:** `all_of_type`, `min_by`/`max_by`, `count_where`, `nearest_where`/`farthest_where`, `has_component`, `kind`.
 - **View / cutscenes:** `set_camera(name)` — cut the scene viewport to a `def Camera` by name (leaf or full USD path); pairs with a timeline for cutscene camera changes. `possess(vessel)`, `notify(msg)`, `photo()` (capture from the active camera).
 - **Route programs** ([`route_follow.rhai`](../assets/scenarios/route_follow.rhai)): the scene owns an ordered USD route and a sibling `LunCoProgramAPI` program. The program resolves its `inputs:subject` relationship, reads route-point poses, records only the next unvisited point in USD order, and advances an enabled route on the matching named sensor enter event. Generic `SENSOR_ENTER` / `SENSOR_EXIT` events carry sensor and moving-body identity; `TriggerZone` labels additionally provide named geofence events. Out-of-order arrivals do not mark later points. Route points are not stored on or discovered through a vessel-owned list.
-- **Route presentation**: the reusable [`route_point.usda`](../assets/markers/route_point.usda) asset owns the standard translucent, unlit, shadowless visual/material and trigger geometry. Its unvisited point is green in standard `primvars:displayColor`/`primvars:displayOpacity`; the generic `route_follow` policy uses the `waypoint_editor` transient USD view tool to turn a visited point gray. A secondary `route.context` gesture opens the authored menu without selecting the waypoint or showing its gizmo; Select and Move are separate menu actions, and Move arms the disposable click-to-place ghost. A scenario consumes `route_point_reached` for mission policy without recreating distance checks or adding a second marker implementation.
+- **Route presentation**: the reusable [`route_point.usda`](../assets/markers/route_point.usda) asset owns the standard translucent, unlit, shadowless visual/material and trigger geometry. Its unvisited point is green in standard `primvars:displayColor`/`primvars:displayOpacity`; the generic `route_follow` policy uses `SetSceneView` to turn a visited point gray without changing the authored document. A secondary `route.context` gesture opens the authored menu without selecting the waypoint or showing its gizmo; Select and Move are separate menu actions, and Move arms the disposable click-to-place ghost. A scenario consumes `route_point_reached` for mission policy without recreating distance checks or adding a second marker implementation.
 - **Route restart and possession**: `route_follow` keeps visited USD point paths when autopilot is disabled and re-enabled, and selects the first unvisited point. `SensorOccupants` reads Avian's current touching moving bodies by stable sensor id, so only the next unvisited point can be marked from the `on_start` occupancy snapshot; simultaneous contacts cannot establish route order. Later named sensor enters mark only the next point while disabled, and an active route advances on the matching enter event. Releasing manual possession updates session authority and presentation without writing endpoint ports; the enabled route keeps its current target and continues running.
 - **Science instruments** ([`science.rhai`](../assets/scripting/prelude/science.rhai)): `photo_from(vessel)` captures from a vessel's mounted camera through the typed `CaptureFromCamera` command. Tool actions are generic task/program data; the engine dispatches only registered executable tools.
 - **Tutorial HUD** ([`hud.rhai`](../assets/scripting/prelude/hud.rhai)): `hint(msg)`/`clear_hint()` (sticky instruction), `objectives_hud(list)` (or just declare a `mission(me, ctx)` — it auto-publishes), `guided_hud_actions(tool, hook, actions)`/`clear_guided_hud_actions()` (persistent semantic buttons dispatched through a typed Rhai tool hook), `spotlight(anchor, caption)`/`clear_spotlight()` (dim + ring a workbench widget by `HelpAnchors` key), `focus_panel(id)` (open a singleton workbench panel on interactive hosts; unattended gates omit this presentation command), and `coach_step(steps, i)` (a guided coach-mark tour step; advance the cursor in `on_event`). This is how tutorials are authored — a tutorial is just a scenario. See [`tutorials/README.md`](../assets/tutorials/README.md).

@@ -142,18 +142,8 @@ fn point_distance(left, right) {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-fn marker_color(doc, path) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: path + "/Dome",
-        attrs: ["primvars:displayColor"],
-    });
-    if result == () || result.ok == false || result.attrs == () {
-        return ();
-    }
-    let colors = result.attrs["primvars:displayColor"];
-    if colors == () || colors.len() != 1 { return (); }
-    colors[0]
+fn marker_color_for(doc, point) {
+    t_pbr_base_color(find_path_in_document(doc, point + "/Dome"))
 }
 
 fn color_matches(actual, expected) {
@@ -1405,11 +1395,11 @@ fn route_step_route_point_reached_action(me) {
     if this.done { return; }
     this.waiting_for = "the route-point reached event and marker state";
     if this.reached == 0 { return; }
-    let reached_color = marker_color(this.doc, this.reached_point_path);
+    let reached_color = marker_color_for(this.doc, this.reached_point_path);
     let points = direct_points(this.doc);
     if reached_color == () || points == () || points.len() < 2 { return; }
     let pending_path = if points[0] == this.reached_point_path { points[1] } else { points[0] };
-    let pending_color = marker_color(this.doc, pending_path);
+    let pending_color = marker_color_for(this.doc, pending_path);
     if !color_matches(reached_color, [0.55, 0.55, 0.55])
         || !color_matches(pending_color, [0.10, 0.95, 0.22]) { return; }
     this.checks.push(t_true(true,
@@ -1894,15 +1884,14 @@ fn route_color_phase(me) {
         this.color_phase = 1;
         return;
     }
-    let shader = query("QueryUsdPrim", #{doc_id:this.doc,
-        path:ROUTE + "/RouteRibbon/Looks/RouteRibbon_Mat/Surface",
-        attrs:["inputs:emissiveColor"]});
-    let line = if shader == () || shader.attrs == () { () } else {
-        shader.attrs["inputs:emissiveColor"] };
+    let curve = find_path_in_document(this.doc, RIBBON_GEOMETRY);
+    let view = if curve >= 0 { query("InspectUsdCurveView", #{doc_id:this.doc, entity_id:curve}) } else { () };
+    let line = if view == () || view.state != "ready" { () } else { view.requested_surface_rgb };
     if this.color_phase == 1 {
-        if !color_matches(marker_color(this.doc, point), blue) || !color_matches(line, blue)
+        if !color_matches(marker_color_for(this.doc, point), blue) || !color_matches(line, blue)
             || !ribbon_view_ready(this.doc, 3) { return; }
         this.checks.push(t_true(true, "route color updates projected markers and ribbon"));
+        this.ribbon_color_revision = view.requested_revision;
         let result = waypoint_editor::on_set_color(#{doc_id:this.doc, route_path:ROUTE,
             color_path:point, color:amber});
         this.checks.push(t_true(result.ok, "a waypoint can override its route color"));
@@ -1910,26 +1899,29 @@ fn route_color_phase(me) {
         return;
     }
     if this.color_phase == 2 {
-        if !color_matches(marker_color(this.doc, point), amber) { return; }
-        this.checks.push(t_true(color_matches(line, blue), "a point override leaves the route line unchanged"));
+        if !color_matches(marker_color_for(this.doc, point), amber) { return; }
+        this.checks.push(t_true(color_matches(line, blue) && view.requested_revision == this.ribbon_color_revision,
+            "a point override leaves the route line color and geometry revision unchanged"));
         let visited = #{};
         visited[point] = true;
+        this.progress_generation = usd_document_generation(this.doc);
         let result = waypoint_editor::sync_marker_states(this.doc, ROUTE, visited);
         this.checks.push(t_true(result.ok, "progress styling accepts authored colors"));
         this.color_phase = 3;
         return;
     }
     if this.color_phase == 3 {
-        if !color_matches(marker_color(this.doc, point),
+        if !color_matches(marker_color_for(this.doc, point),
             waypoint_editor::marker_state_color(amber, true)) { return; }
-        this.checks.push(t_true(true, "visited waypoint dims its own authored hue"));
+        this.checks.push(t_true(usd_document_generation(this.doc) == this.progress_generation,
+            "visiting a waypoint dims its authored hue and preserves the document generation"));
         let result = cmd("UndoDocument", #{doc_id:this.doc});
         this.checks.push(t_true(result != () && result.ok != false, "point color supports undo"));
         this.color_phase = 4;
         return;
     }
     if this.color_phase == 4 {
-        if !color_matches(marker_color(this.doc, point), blue) { return; }
+        if !color_matches(marker_color_for(this.doc, point), blue) { return; }
         this.checks.push(t_true(true, "undo restores route color inheritance"));
         let result = cmd("RedoDocument", #{doc_id:this.doc});
         this.checks.push(t_true(result != () && result.ok != false, "point color supports redo"));
@@ -1937,7 +1929,7 @@ fn route_color_phase(me) {
         return;
     }
     if this.color_phase == 5 {
-        if !color_matches(marker_color(this.doc, point), amber) { return; }
+        if !color_matches(marker_color_for(this.doc, point), amber) { return; }
         this.checks.push(t_true(true, "redo restores waypoint color"));
         let ops = waypoint_editor::color_plan("@runtime@", ROUTE, ()).ops;
         ops += waypoint_editor::color_plan("@runtime@", point, ()).ops;
@@ -1946,9 +1938,9 @@ fn route_color_phase(me) {
         this.color_phase = 6;
         return;
     }
-    if !color_matches(marker_color(this.doc, point), [0.10,0.95,0.22])
+    if !color_matches(marker_color_for(this.doc, point), [0.10,0.95,0.22])
         || !color_matches(line, [0.2,1.4,0.55]) || !ribbon_view_ready(this.doc, 3) { return; }
-    this.checks.push(t_true(true, "clearing colors restores legacy marker and ribbon appearance"));
+    this.checks.push(t_true(true, "clearing colors restores authored marker and ribbon appearance"));
     this.color_phase = 7;
 }
 fn route_color_complete(me) { this.done || this.color_phase == 7 }

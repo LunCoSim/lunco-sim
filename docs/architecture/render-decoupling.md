@@ -792,7 +792,7 @@ Not everything visual is *appearance*. Three things had no honest intent represe
 - **`horizon_shade`** — a per-frame heightfield/sun **uniform feed** into the terrain shader (from
   `lunco-environment`). Not a look; a data pump. The horizon **maths** stayed behind — it was already
   render-free, and `lunco-luncosim` imports exactly that half.
-- **`env_light`** — the `bloom` arm of `SetEnvironmentLight`.
+- Camera binding realizes the bloom intent published by the environment owner.
 - **Terrain map source reconciliation** remains a render-free `ShaderLook` update in
   `lunco-terrain-surface`; this crate only turns that intent into a GPU material.
 

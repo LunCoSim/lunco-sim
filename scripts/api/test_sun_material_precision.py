@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -99,13 +100,74 @@ def main():
                 raise RuntimeError(f"DEM visual cover did not settle: {status}")
         if not capture("initial"):
             raise RuntimeError("initial native-light/terrain/sky GPU control failed")
+        doc = execute(session, "QueryUsdPrim", path="/World/Sun")["doc_id"]
+        lighting_test = (ROOT / "assets/scenarios/tests/sun_material_precision.rhai").read_text()
+        checked = execute(session, "RunRhai", code=lighting_test + f"\ncheck_lighting_rejection({doc});")
+        assert "LIGHT_REJECTION_PASS" in checked["stdout"], checked
+
+        def rhai(expression):
+            return execute(session, "RunRhai", code=lighting_test + "\n" + expression)["stdout"].strip()
+
+        def wait_light(expected):
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if rhai(f"light_matches({json.dumps(expected)})") == "true":
+                    return
+                time.sleep(.05)
+            raise RuntimeError(f"expected Sun {expected}, observed {rhai('light_sample()')}")
+
+        def ray(yaw, pitch):
+            return [-math.sin(yaw)*math.cos(pitch), math.sin(pitch), -math.cos(yaw)*math.cos(pitch)]
+
+        execute(session, "ApplyUsdTransientOps", doc_id=doc, label="Mounted light child", ops=[{
+            "AddPrim": {"edit_target": "@view@", "parent_path": "/World/Sun", "name": "AttachedScope",
+                        "type_name": "Scope", "reference": None}
+        }])
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            child = int(rhai('find_path("/World/Sun/AttachedScope")'))
+            if child >= 0:
+                break
+            time.sleep(.05)
+        else:
+            raise RuntimeError("attached light child was not projected")
+        initial = json.loads(rhai("light_sample()"))
+        root = int(rhai('find_path("/World")'))
+        root_rotation = json.loads(rhai(f"world_rotation({root})"))
+        # A live parent orientation differs from USD stage-world axes.
+        # The authored Sun command still speaks in the active physics frame.
+        phase = .25
+        execute(session, "RotateEntity", entity_id=root, rotation=[0., math.sin(phase), 0., math.cos(phase)])
+        rotated_ray = [initial[1]*math.cos(2*phase) + initial[3]*math.sin(2*phase),
+                       initial[2], -initial[1]*math.sin(2*phase) + initial[3]*math.cos(2*phase)]
+        original = [initial[0], *rotated_ray]
+        wait_light(original)
+        generation = int(rhai(f"usd_document_generation({doc})"))
+        execute(session, "SetEnvironmentLight", sun_pitch=-.12, sun_yaw=.18, illuminance=14000.,
+                sun_color=[.25,.5,.75], shadow_maps_enabled=False)
+        live = ray(.18, -.12)
+        wait_light([14000., *live])
+        if int(rhai(f"usd_document_generation({doc})")) != generation:
+            raise RuntimeError("Live light adjustment changed the USD document")
+        execute(session, "SetEnvironmentLight", intent="Persistent", illuminance=32000.)
+        wait_light([32000., *live])
+        execute(session, "SetEnvironmentLight", intent="Persistent", sun_pitch=-.27, sun_yaw=.42)
+        wait_light([32000., *ray(.42, -.27)])
+        execute(session, "UndoDocument", doc_id=doc)
+        wait_light([32000., *original[1:]])
+        execute(session, "UndoDocument", doc_id=doc)
+        wait_light(original)
+        if rhai(f"live_channels_retained({child})") != "true":
+            raise RuntimeError("Authored Sun edits replaced a child or overwrote unrelated live channels")
+        execute(session, "RotateEntity", entity_id=root, rotation=root_rotation)
+        wait_light(initial)
+        print("PASS static Sun live, authored and undo channels", flush=True)
         execute(session, "SetEnvironmentLight", sun_pitch=.00001, sun_yaw=.5)
         if not capture("night"):
             raise RuntimeError("night GPU control failed")
         execute(session, "SetEnvironmentLight", sun_pitch=-.00001)
         wait_cache(lambda cache: abs(cache["sampled_sun_local"][1]) < .0001 and cache["uploads"])
         capture("tiny-sunrise")
-        doc = execute(session, "QueryUsdPrim", path="/World/Sun")["doc_id"]
         for name, angle, sky_red in [("positive-angle", "0.000001", True), ("zero-angle", "0", False)]:
             execute(session, "ApplyUsdTransientOps", doc_id=doc, label="GPU angular-size boundary", ops=[{
                 "SetAttribute": {"edit_target": "@view@", "path": "/World/Sun",

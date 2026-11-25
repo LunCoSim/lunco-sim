@@ -456,7 +456,7 @@ merely **wrong** — `error` severities join `errors`, everything else joins
 | `connection-source-path-invalid` | error | a connection source is not a valid USD property path |
 | `connection-source-prim-missing` | error | the source prim is absent from the composed stage |
 | `connection-source-property-missing` | error | the source property is absent and no runtime provider owns the source prim |
-| `connection-source-type-mismatch` | error | authored source and sink attribute types differ, including role/array shape |
+| `connection-source-type-mismatch` | error | source and sink fail native Sdf type agreement (underlying values and role aliases agree, distinct roles and array shapes do not) |
 | `connection-source-runtime-direction-invalid` | error, loaded `RunLint` | a runtime source omits the standard `inputs:` or `outputs:` namespace |
 | `connection-source-runtime-port-missing` | error, loaded `RunLint` | a known runtime provider exists, but the exact projected source name/direction does not |
 | `connection-source-runtime-port-pending` | warn, loaded `RunLint` | the provider has explicitly published a pending port surface; rerun after projection completes |

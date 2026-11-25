@@ -83,10 +83,7 @@ impl Plugin for UsdSceneRuntimePlugin {
         use lunco_core::AppSceneExt;
         app.init_resource::<live_consume::PendingStageProjections>();
         app.init_scene_resource::<UsdProjectionVisuals>();
-        app.add_systems(
-            bevy::prelude::PostUpdate,
-            live_consume::settle_projection_visuals,
-        );
+        app.add_systems(bevy::prelude::Last, live_consume::settle_projection_visuals);
         app.init_resource::<native_assets::PendingNativeAssetPaths>();
         if !app.is_plugin_added::<lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin>() {
             app.add_plugins(lunco_usd_bevy_scene::prim_index::UsdPrimIndexPlugin);

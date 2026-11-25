@@ -252,6 +252,18 @@ fn on_tick(me, ctx) {
             fail(this, "attach relationships did not preserve exact identities");
             return;
         }
+        let component = find_path_in_document(this.doc, COMPONENT);
+        let generation = usd_document_generation(this.doc);
+        for command in ["DetachJoint", "DeleteEntity"] {
+            for intent in ["Interactive", "Persistent"] {
+                let result = cmd(command, #{target: component, intent: intent});
+                if result.status != "rejected" || find_path_in_document(this.doc, COMPONENT) != component
+                    || usd_document_generation(this.doc) != generation {
+                    fail(this, command + " must reject mounted component removal and preserve its identity");
+                    return;
+                }
+            }
+        }
         if !save_phase(this.doc, "connection_ready") {
             fail(this, "could not persist connection-ready test phase");
             return;

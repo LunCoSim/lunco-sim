@@ -242,6 +242,14 @@ pub struct InspectRuntimeUiForm {
     pub form_id: String,
 }
 
+/// Set whether a dismissible HUD in the current scene may be displayed.
+#[lunco_core::Command(default)]
+pub struct SetRuntimeHudVisibility {
+    /// Surface id from InspectRuntimeHuds.
+    pub id: String,
+    pub visible: bool,
+}
+
 /// Inspect user permission, current eligibility and actual retained HUD visibility.
 #[lunco_core::Command(default)]
 pub struct InspectRuntimeHuds {}
@@ -2437,7 +2445,7 @@ fn dismissible_hud(surface: &RuntimeUiSurfaceDefinition) -> bool {
 }
 
 #[derive(Event)]
-struct SetRuntimeHudVisibility {
+struct RuntimeHudMenuSelection {
     id: String,
     visible: bool,
     revision: Option<u64>,
@@ -2445,25 +2453,21 @@ struct SetRuntimeHudVisibility {
 }
 
 fn set_runtime_hud_visibility(
-    event: On<SetRuntimeHudVisibility>,
+    event: On<RuntimeHudMenuSelection>,
     mut state: ResMut<RuntimeUiManifestState>,
 ) {
-    if state.applied != event.revision
-        || state.selected != event.twin
-        || !state.manifest().is_some_and(|manifest| {
-            manifest
-                .surfaces
-                .iter()
-                .any(|surface| surface.id == event.id && dismissible_hud(surface))
-        })
-    {
-        return;
+    if state.applied == event.revision && state.selected == event.twin {
+        let _ = state.set_hud_visibility(&event.id, event.visible);
     }
-    if event.visible {
-        state.user_hidden_huds.remove(&event.id);
-    } else {
-        state.user_hidden_huds.insert(event.id.clone());
-    }
+}
+
+#[lunco_core::on_command(SetRuntimeHudVisibility)]
+fn on_set_runtime_hud_visibility(
+    trigger: On<SetRuntimeHudVisibility>,
+    mut state: ResMut<RuntimeUiManifestState>,
+) -> Result<Ack, lunco_command_contracts::Reject> {
+    state.set_hud_visibility(&trigger.event().id, trigger.event().visible)?;
+    Ok(Ack::default())
 }
 
 fn set_all_runtime_hud_visibility(
@@ -2531,7 +2535,7 @@ fn register_runtime_hud_menu(world: &mut World) {
                 ctx.landmark(format!("hud.runtime.{id}"), rect);
             }
             if let Some(visible) = row.inner {
-                ctx.trigger(SetRuntimeHudVisibility {
+                ctx.trigger(RuntimeHudMenuSelection {
                     id,
                     visible,
                     revision,
@@ -2612,6 +2616,29 @@ fn on_inspect_runtime_huds(
 }
 
 impl RuntimeUiManifestState {
+    fn set_hud_visibility(
+        &mut self,
+        id: &str,
+        visible: bool,
+    ) -> Result<(), lunco_command_contracts::Reject> {
+        if !self.manifest().is_some_and(|manifest| {
+            manifest
+                .surfaces
+                .iter()
+                .any(|surface| surface.id == id && dismissible_hud(surface))
+        }) {
+            return Err(lunco_command_contracts::Reject::InvalidOp(format!(
+                "no dismissible HUD named {id:?} in the active scene"
+            )));
+        }
+        if visible {
+            self.user_hidden_huds.remove(id);
+        } else {
+            self.user_hidden_huds.insert(id.to_owned());
+        }
+        Ok(())
+    }
+
     fn user_allows_hud(&self, id: &str) -> bool {
         !self.user_hidden_huds.contains(id)
     }
@@ -5766,6 +5793,7 @@ lunco_core::register_commands!(
     on_set_runtime_ui_form_status,
     on_inspect_runtime_ui_form,
     on_inspect_runtime_huds,
+    on_set_runtime_hud_visibility,
 );
 
 fn register_runtime_ui_form_commands(app: &mut App) {
@@ -7112,7 +7140,7 @@ mod tests {
         assert!(!state.user_allows_hud("optional"));
         assert!(state.user_allows_hud("essential"));
 
-        app.world_mut().trigger(SetRuntimeHudVisibility {
+        app.world_mut().trigger(RuntimeHudMenuSelection {
             id: "optional".into(),
             visible: true,
             revision: Some(0),
@@ -7123,7 +7151,7 @@ mod tests {
                 .resource::<RuntimeUiManifestState>()
                 .user_allows_hud("optional")
         );
-        app.world_mut().trigger(SetRuntimeHudVisibility {
+        app.world_mut().trigger(RuntimeHudMenuSelection {
             id: "optional".into(),
             visible: true,
             revision: Some(1),

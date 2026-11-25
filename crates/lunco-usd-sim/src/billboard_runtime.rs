@@ -60,7 +60,11 @@ pub(crate) fn read_billboard(
     }))
 }
 
-pub(crate) fn refresh_prims(world: &mut World, stage: AssetId<UsdStageAsset>, prims: &[SdfPath]) {
+pub(crate) fn refresh_prims(
+    world: &mut World,
+    stage: AssetId<UsdStageAsset>,
+    prims: &lunco_usd_bevy_core::live_edit::UsdPropertyChanges,
+) {
     let updates = {
         let Some(stages) = world.get_non_send::<CanonicalStages>() else {
             return;
@@ -73,7 +77,7 @@ pub(crate) fn refresh_prims(world: &mut World, stage: AssetId<UsdStageAsset>, pr
         };
         let view = canonical.view();
         prims
-            .iter()
+            .keys()
             .filter_map(|path| {
                 let mut entities = index.in_stage(stage, path.as_str()).to_vec();
                 if entities.is_empty() {

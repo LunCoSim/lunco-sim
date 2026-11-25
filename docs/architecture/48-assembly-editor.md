@@ -463,7 +463,25 @@ or saved files.
 
 ### Dynamic shader parameter edits
 
-Dynamic shader parameters are authored on the composed USD `UsdShade.Shader`
+The shader picker labels its destination **Live shader** or **USD shader**. Live
+assignment changes the selected entity through interactive `SetObjectProperty`.
+USD assignment validates the focused preview lease and commits both
+`info:implementationSource` and `info:wesl:sourceAsset` on the bound shader
+in one undoable transaction. The document stores the public asset URI. The
+material projector and renderer own the resulting visual change.
+
+**Live material (PBR)** and **Live shader parameters** change the selected
+surface at runtime. In a USD preview the corresponding controls hold a draft.
+**Apply to USD** submits the changed values together to the displayed layer
+and revision. **Discard** restores the projected values. A failed edit leaves
+the projected material intact. PBR inputs and geometry flags share their
+schema-aware authoring logic with `SetObjectProperty`.
+
+The live Inspector's Delete shortcut removes the selected live entity.
+**Delete from mounted USD** is an explicit document edit. In a USD preview,
+**Deactivate prim in USD** authors `active = false` in the displayed layer.
+
+Authored shader parameters belong to the composed USD `UsdShade.Shader`
 prim that the selected geometry reaches through `material:binding`. The editor
 does not infer a destination from a field name and does not write shader values
 as geometry `primvars:`. The shared resolver converts the reflected
@@ -472,7 +490,7 @@ as geometry `primvars:`. The shared resolver converts the reflected
 `color3f[]`), validates the literal through the USD authoring parser, and
 submits the complete edit as one `ApplyUsdOps` change set. New inputs use the
 canonical scalar/vector type for their reflected value. This is the same
-resolver used by `SetObjectProperty`, so interactive and agent edits have one
+resolver used by persistent `SetObjectProperty`, so preview and API edits have one
 USD destination and one type contract.
 
 When an authored `UsdPreviewSurface` input changes, `UsdSceneChangeBatch`
@@ -761,15 +779,13 @@ with an edited preview, including an invalid preview connection.
 
 The Inspector uses that same lease boundary for numeric transform edits. A
 selected entity under the focused preview root is edited as its composed USD
-prim's local canonical transform: the controls display metres, Euler XYZ
-degrees, and unitless scale, and submit one `ApplyUsdOps` change set containing
-the changed `SetTranslate`, `SetRotate`, and/or `SetScale` operations after a
-value is committed. The command
-uses the preview's explicit document, edit target, and projected generation, so
-stale edits are rejected and the USD projector remains the only preview update
-owner. Live simulation entities continue to use `MoveEntity`, which owns
-BigSpace/physics seating; a preview entity is never sent through that live
-identity path.
+prim's local pose. The controls display metres, Euler XYZ degrees and unitless
+scale. The shared pose planner reads the ordered transform stack at the displayed
+sample time and encodes the changed channels in one `ApplyUsdOps` transaction
+using the preview document, edit target and projected generation. The live-scene
+Inspector labels its grid-absolute controls **Live position (m)** and dispatches
+interactive `MoveEntity` as the user moves them. Use **USD transform** in the
+Editor preview to change the authored pose.
 
 Live scene persistence resolves `UsdPrimPath.stage_handle` through
 `scene_document_for(&backed, stage_id)` and reads authorability from that
@@ -779,15 +795,15 @@ its lease and retirement contract.
 The standard transform gizmo uses the same unparented proxy frontend for both
 owners. At drag start, a focused preview target is identified by its exact
 preview root, stage handle, document, edit target, generation, and `UsdPrimPath`;
-its local composed Bevy `Transform` becomes the transaction snapshot. During the
-drag, the proxy's render pose is converted to parent-local space with Bevy's
-`GlobalTransform::reparented_to`. Release authors only the changed local
-translation, Euler XYZ rotation, and/or unitless scale as one generation-checked
+the proxy captures the rendered local pose. During the drag, the proxy's render
+pose is converted to parent-local space. Release applies the gesture delta to
+the authored double-precision pose at the displayed sample time. The shared
+pose planner preserves the ordered stack and commits one generation-checked
 `ApplyUsdOps` change set. Escape restores the local snapshot, while a changed
 preview generation or closed session discards the transaction without restoring
 stale state. Preview drags never create `RigidBody`, `KinematicDrive`, or a
 physics hold. Live targets keep the existing BigSpace/Avian capture, rebranch,
-restore, and `TransformEntity` path; live scale remains unavailable until a
+restore, and interactive `TransformEntity` path; live scale remains unavailable until a
 separate authored physics contract defines its topology and solver consequences.
 
 The presentation binding is shared with the standard workbench contracts. A

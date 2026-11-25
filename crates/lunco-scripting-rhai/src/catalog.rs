@@ -273,6 +273,11 @@ const VERB_DOCS: &[(&str, &str, &str)] = &[
         "WRITE. Fire a command by name through ApiCommandEvent — every #[Command] is reachable with no per-command binding. `status` is applied, rejected, failed, or pending; `data` carries command-specific result data (a spawned gid, stdout, etc.). Use command_result(id) when a deferred owner has not finished yet.",
     ),
     (
+        "command_available",
+        "bool",
+        "READ. Resolve an exact public command name on this host. Dispatch checks authority and target state.",
+    ),
+    (
         "command_result",
         "#{ id, ok, status, data, error }",
         "READ. Get the shared terminal result of a prior cmd() call. Deferred commands remain status=pending until their owner records applied, rejected, or failed; do not treat acceptance as applied.",
@@ -468,6 +473,11 @@ const VERB_DOCS: &[(&str, &str, &str)] = &[
         "nav_command",
         "#{ throttle, steer, brake, arrived } | ()",
         "Compute one authored-capability-aware navigation command through the shared host law; () means the authoritative pose or steering geometry is unavailable and the caller must hold brake.",
+    ),
+    (
+        "usd_types_agree",
+        "bool",
+        "Whether the source and sink USD attribute types agree under native Sdf role and array rules.",
     ),
     (
         "usd_document_generation",

@@ -164,7 +164,7 @@ struct WheelUpdate {
 pub(crate) fn resync_wheels_for_stage(
     world: &mut World,
     id: AssetId<UsdStageAsset>,
-    _edited_prims: &[SdfPath],
+    _edited_prims: &lunco_usd_bevy_core::live_edit::UsdPropertyChanges,
 ) {
     let mut rows: Vec<(Entity, String, bool)> = Vec::new();
     {

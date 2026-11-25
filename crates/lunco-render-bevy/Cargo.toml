@@ -42,10 +42,7 @@ lunco-materials = { path = "../lunco-materials" }
 # Terrain-derived map selection is kept on the render-free `ShaderLook` intent in
 # `lunco-terrain-surface`; this dependency lets the generic binder consume it.
 lunco-terrain-surface = { path = "../lunco-terrain-surface" }
-# The horizon heightfield/shadow-cache BAKES (render-free, they stay there) plus
-# `SetEnvironmentLight`. The two render-bound halves — the per-frame uniform feed
-# into the terrain shader (`horizon_shade.rs`) and the command's `bloom` arm
-# (`env_light.rs`) — moved HERE, which is what let `lunco-environment` drop wgpu.
+# Feed the terrain shader from the environment's horizon heightfield and shadow cache.
 lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-spatial = { path = "../lunco-spatial" }

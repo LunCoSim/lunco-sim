@@ -1185,7 +1185,7 @@ impl Plugin for UsdSimPlugin {
         // in Update sees the default identity GlobalTransform for a newly
         // admitted light and would publish a horizontal semantic sun on the
         // following frame.
-        install_authored_sun_state_seed(app);
+        install_authored_sun_projection(app);
     }
 }
 
@@ -4291,13 +4291,14 @@ fn invalidate_usd_sim_projection(world: &mut World, entity: Entity) -> bool {
     true
 }
 
-fn install_authored_sun_state_seed(app: &mut App) {
-    app.add_systems(
-        PostUpdate,
-        seed_authored_sun_state
-            .after(TransformSystems::Propagate)
-            .before(lunco_environment::finalize_sun_render_state),
-    );
+fn install_authored_sun_projection(app: &mut App) {
+    app.init_scene_resource::<AuthoredSunProjection>()
+        .add_systems(
+            PostUpdate,
+            project_authored_sun_state
+                .after(lunco_usd_bevy_scene::UsdAnimationSampleSet)
+                .before(lunco_environment::project_environment_sun_to_light),
+        );
 }
 
 /// Avoids marking `EnvironmentDirections` changed on every update when the
@@ -4313,128 +4314,221 @@ fn clear_authored_sun_direction_if_present(
     }
 }
 
-/// Select the static authored-light source only after the active scene root's
-/// celestial projection confirms that no celestial source owns it. A celestial
-/// source is authoritative even when its declaration or ephemeris is invalid;
-/// in that case the `sun` direction source stays empty and the cosim projection
-/// reports missing solar data instead of restoring a stale authored direction.
-///
-/// The static scene contract is one unscoped authored DistantLight below the
-/// active USD scene root. Its composed rotation and illuminance define the
-/// constant solar direction for manual/static scenes such as the sun tracker.
-fn seed_authored_sun_state(
+/// Last admitted source values are distinct from live lighting controls. Only a
+/// changed authored channel replaces its corresponding live value.
+#[derive(Resource, Default)]
+struct AuthoredSunProjection {
+    source: Option<Entity>,
+    parent: Option<Entity>,
+    local_sample: Option<AuthoredSunTransformSample>,
+    direction: Option<lunco_environment::FramedDirection>,
+    lux: Option<f32>,
+}
+
+impl SceneResource for AuthoredSunProjection {}
+
+struct AuthoredSunTransformSample {
+    generation: u64,
+    time: f64,
+    plan: Arc<UsdStageProjectionPlan>,
+    rotation: Option<(DQuat, bool)>,
+}
+
+#[derive(SystemParam)]
+struct AuthoredSunSource<'w, 's> {
+    stages: Option<Res<'w, Assets<UsdStageAsset>>>,
+    canonical: Option<NonSend<'w, CanonicalStages>>,
+    lights: Query<
+        'w,
+        's,
+        (
+            &'static UsdPrimPath,
+            Ref<'static, lunco_environment::solar::AuthoredDirectionalLight>,
+            Option<&'static lunco_usd_bevy_scene::UsdAnimated>,
+            Has<lunco_usd_bevy_scene::UsdAnimatedTransform>,
+            &'static ChildOf,
+        ),
+    >,
+}
+
+fn project_authored_sun_state(
     sun_state: Option<ResMut<lunco_environment::SunState>>,
     directions: Option<ResMut<lunco_environment::EnvironmentDirections>>,
-    mut authored_seed_revision: Local<Option<u64>>,
+    mut projection: ResMut<AuthoredSunProjection>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     scene_mount: Option<Res<lunco_core::SceneMountState>>,
-    q_grids: Query<&big_space::prelude::Grid>,
-    q_spatial: Query<(Option<&big_space::prelude::CellCoord>, &Transform)>,
-    q_scene_roots: Query<(), With<lunco_usd_bevy_scene::UsdSceneRoot>>,
-    q_projected_roots: Query<
-        (),
-        (
-            With<lunco_usd_bevy_scene::UsdSceneRoot>,
-            With<lunco_usd_sim_celestial::CelestialProjected>,
-        ),
-    >,
-    q_source_classifications: Query<
+    mounted_lights: lunco_environment::solar::MountedDirectionalLights,
+    source: AuthoredSunSource,
+    poses: lunco_physics::SimulationPoseQuery,
+    classifications: Query<
         &lunco_environment::CelestialSourceClassification,
-        With<lunco_usd_bevy_scene::UsdSceneRoot>,
+        With<lunco_usd_sim_celestial::CelestialProjected>,
     >,
     q_parents: Query<&ChildOf>,
-    q_entities: Query<Entity>,
-    q_suns: Query<
-        (Entity, &bevy::light::DirectionalLight),
-        (
-            With<lunco_usd_bevy_light::light::UsdAuthoredLight>,
-            Without<lunco_environment::Earthshine>,
-            Without<bevy::camera::visibility::RenderLayers>,
-        ),
+    changed_spatial: Query<
+        (),
+        Or<(
+            Changed<Transform>,
+            Changed<Grid>,
+            Changed<CellCoord>,
+            Changed<ChildOf>,
+            Changed<Position>,
+            Changed<Rotation>,
+            Changed<lunco_physics::PrescribedSimulationPose>,
+        )>,
     >,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
-    let Some(mut sun_state) = sun_state else {
+    let (Some(mut sun), Some(mut directions), Some(root)) = (
+        sun_state,
+        directions,
+        scene_mount.as_deref().and_then(|s| s.active_root()),
+    ) else {
         return;
     };
-    let Some(mut directions) = directions else {
+    let Ok(classification) = classifications.get(root) else {
         return;
     };
-    let Some(active_root) = scene_mount.as_deref().and_then(|mount| mount.active_root()) else {
-        *authored_seed_revision = None;
-        return;
-    };
-    if q_scene_roots.get(active_root).is_err() || q_projected_roots.get(active_root).is_err() {
-        return;
-    }
-    let Ok(source_classification) = q_source_classifications.get(active_root) else {
-        return;
-    };
-    if source_classification.has_source {
-        clear_authored_sun_direction_if_present(&mut directions);
-        if authored_seed_revision
-            .take()
-            .is_some_and(|revision| sun_state.revision == revision)
+    let light = (!classification.has_source)
+        .then(|| mounted_lights.sun().ok())
+        .flatten();
+    if light != projection.source {
+        if projection.lux.is_some()
+            && (!classification.has_source || projection.lux == sun.irradiance_lux)
         {
-            sun_state.clear();
+            sun.publish(None);
         }
+        if projection.direction.is_some() {
+            clear_authored_sun_direction_if_present(&mut directions);
+        }
+        *projection = AuthoredSunProjection {
+            source: light,
+            ..default()
+        };
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            diagnostics.replace_producer("usd-authored-sun", std::iter::empty());
+        }
+    }
+    if classification.has_source {
+        clear_authored_sun_direction_if_present(&mut directions);
         return;
     }
-    if directions
-        .get_named(lunco_environment::SUN_DIRECTION_SOURCE)
-        .is_some()
+    let Some(entity) = light else { return };
+    let Ok((prim, light, animation, animated_transform, parent)) = source.lights.get(entity) else {
+        return;
+    };
+
+    if light.is_changed() || projection.lux != Some(light.illuminance_lux) {
+        sun.publish(Some(light.illuminance_lux));
+        projection.lux = Some(light.illuminance_lux);
+    }
+    let (Some(frame), Some(stages), Some(canonical)) = (
+        active_frame,
+        source.stages.as_deref(),
+        source.canonical.as_deref(),
+    ) else {
+        return;
+    };
+    let stage = prim.stage_handle.id();
+    let Some(asset) = stages.get(stage) else {
+        return;
+    };
+    let generation = canonical.generation_for(stage);
+    let time = if animated_transform {
+        animation.map(|sample| sample.pose_time_code)
+    } else {
+        Some(0.0)
+    };
+    let Some(time) = time else { return };
+    let changed = projection.local_sample.as_ref().is_none_or(|sample| {
+        sample.generation != generation
+            || sample.time != time
+            || !Arc::ptr_eq(&sample.plan, &asset.projection_plan)
+    });
+    if changed {
+        let (reader, _) = canonical.reader_for(stage, asset);
+        let rotation =
+            lunco_usd_bevy_stage::local_pose_matrix(&reader, &prim.path, time).and_then(|matrix| {
+                if !matrix.is_finite()
+                    || !matrix.determinant().is_finite()
+                    || matrix.determinant() == 0.0
+                {
+                    return Err(format!(
+                        "Invalid directional-light transform at {}",
+                        prim.path
+                    ));
+                }
+                let (_, rotation, _) = matrix.to_scale_rotation_translation();
+                if !rotation.is_finite() || rotation.length_squared() == 0.0 {
+                    return Err(format!(
+                        "Invalid directional-light orientation at {}",
+                        prim.path
+                    ));
+                }
+                let path = SdfPath::new(&prim.path).map_err(|error| error.to_string())?;
+                let reset = lunco_usd_bevy_stage::UsdRead::resets_xform_stack(&reader, &path)
+                    .map_err(|error| error.to_string())?;
+                Ok((rotation.normalize(), reset))
+            });
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            diagnostics.replace_producer(
+                "usd-authored-sun",
+                rotation
+                    .as_ref()
+                    .err()
+                    .map(|message| lunco_core::RuntimeDiagnostic {
+                        producer: "usd-authored-sun".into(),
+                        code: "authored-sun-transform".into(),
+                        subject: prim.path.clone(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        message: message.clone(),
+                    }),
+            );
+        }
+        projection.local_sample = Some(AuthoredSunTransformSample {
+            generation,
+            time,
+            plan: asset.projection_plan.clone(),
+            rotation: rotation.ok(),
+        });
+    }
+    let parent = if projection
+        .local_sample
+        .as_ref()
+        .and_then(|sample| sample.rotation)
+        .is_some_and(|(_, reset)| reset)
+    {
+        q_parents.get(root).ok().map(ChildOf::parent)
+    } else {
+        Some(parent.parent())
+    };
+    let frame = frame.0;
+    if !changed
+        && projection.direction.is_some_and(|dir| dir.frame == frame)
+        && projection.parent == parent
+        && parent.is_some_and(|parent| {
+            !lunco_spatial::coords::world_pose_changed(parent, &q_parents, &changed_spatial)
+        })
+        && !lunco_spatial::coords::world_pose_changed(frame, &q_parents, &changed_spatial)
     {
         return;
     }
-
-    let mut authored_sun_entity = None;
-    let mut authored_sun_count = 0;
-    for (entity, _) in &q_suns {
-        if lunco_usd_bevy_scene::scene_root_ancestor(
-            entity,
-            &q_scene_roots,
-            &q_parents,
-            &q_entities,
-        ) == Ok(Some(active_root))
-        {
-            authored_sun_count += 1;
-            authored_sun_entity = Some(entity);
-        }
+    projection.parent = parent;
+    let direction = projection
+        .local_sample
+        .as_ref()
+        .and_then(|sample| sample.rotation)
+        .and_then(|(local, _)| {
+            let parent_rotation = poses.rotation(parent?)?.0;
+            let direction = lunco_spatial::coords::UnitDirection3::normalized(
+                parent_rotation * local * DVec3::Z,
+            )?;
+            Some(lunco_environment::FramedDirection { frame, direction })
+        });
+    if projection.direction != direction {
+        directions.set_named(lunco_environment::SUN_DIRECTION_SOURCE, direction);
+        projection.direction = direction;
     }
-    if authored_sun_count != 1 {
-        return;
-    }
-    let Some(active_frame) = active_frame else {
-        return;
-    };
-    let Some(authored_sun_entity) = authored_sun_entity else {
-        return;
-    };
-    let Ok((_, light)) = q_suns.get(authored_sun_entity) else {
-        return;
-    };
-    let Some((_, light_rotation_in_frame)) = lunco_spatial::coords::pose_in_grid(
-        authored_sun_entity,
-        active_frame.0,
-        &q_parents,
-        &q_grids,
-        &q_spatial,
-    ) else {
-        return;
-    };
-    let Some(direction_to_sun) = lunco_spatial::coords::UnitDirection3::normalized(
-        -(light_rotation_in_frame * bevy::math::DVec3::NEG_Z),
-    ) else {
-        return;
-    };
-    directions.set_named(
-        lunco_environment::SUN_DIRECTION_SOURCE,
-        Some(lunco_environment::FramedDirection {
-            frame: active_frame.0,
-            direction: direction_to_sun,
-        }),
-    );
-    sun_state.publish(Some(light.illuminance));
-    *authored_seed_revision = Some(sun_state.revision);
 }
 
 #[cfg(test)]

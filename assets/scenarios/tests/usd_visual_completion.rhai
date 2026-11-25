@@ -34,7 +34,8 @@ fn on_event(me, evt, ctx) {
     report_verdict([
         t_true(evt.name == "usd.projection.visuals_ready" && this.revision == event.generation,
             "visual completion follows publication of the same document revision"),
-        t_true(mesh > 0 && get(mesh, "Mesh3d") != () && get(mesh, "UsdSceneProjectionFailed") == (),
+        t_true(mesh > 0 && get(mesh, "Mesh3d") != () && get(mesh, "UsdSceneProjectionFailed") == ()
+            && get(mesh, "PendingPbrLook") == () && get(mesh, "FailedPbrLook") == (),
             "the affected mesh is available at visual completion")
     ], "USD VISUAL COMPLETION", "USD_VISUAL_COMPLETION");
 }

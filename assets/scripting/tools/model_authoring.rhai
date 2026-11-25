@@ -851,6 +851,13 @@ fn wiring_plan(doc, edit_target, root, connections, parent_gen) {
         if sink.direction != "input" && sink.direction != "connector" {
             return failure("wiring_plan", sink_id + ": sink must be an input or connector");
         }
+        if connection.type_name != () && sink.type_name != () && connection.type_name != sink.type_name {
+            return failure("wiring_plan", sink_id + ": explicit type does not match the sink declaration");
+        }
+        let type_name = if connection.type_name == () { sink.type_name } else { connection.type_name };
+        if type_name == () || type_name == "" {
+            return failure("wiring_plan", sink_id + ": connection type cannot be resolved");
+        }
         let source_ids = [];
         let source_endpoints = [];
         for source in connection.sources {
@@ -869,20 +876,11 @@ fn wiring_plan(doc, edit_target, root, connections, parent_gen) {
             if endpoint.direction != "output" && endpoint.direction != "connector" {
                 return failure("wiring_plan", source_id + ": source must be an output or connector");
             }
-            if connection.type_name != () && endpoint.type_name != ()
-                && connection.type_name != endpoint.type_name {
-                return failure("wiring_plan", source_id + ": explicit type does not match source endpoint");
-            }
-            if sink.type_name != () && endpoint.type_name != ()
-                && sink.type_name != endpoint.type_name {
+            if endpoint.type_name != () && !usd_types_agree(endpoint.type_name, type_name) {
                 return failure("wiring_plan", sink_id + ": source and sink USD types differ");
             }
             source_ids.push(source_id);
             source_endpoints.push(endpoint);
-        }
-        let type_name = if connection.type_name == () { sink.type_name } else { connection.type_name };
-        if type_name == () || type_name == "" {
-            return failure("wiring_plan", sink_id + ": connection type cannot be resolved");
         }
         ops.push(#{ SetConnection: #{
             edit_target: edit_target,

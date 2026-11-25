@@ -426,8 +426,7 @@ read path (extractors read a `StageView` over the live stage via the `UsdRead`
 trait), and `flatten → sdf::Data → ECS` demoted to a derived cache slated for
 deletion (*"remove flatten entirely, canonical only"*). ECS is a **projection
 membrane** — render / physics / cosim / **terrain** read Send ECS components, never
-the `!Send` Stage. (Full design: see `21-domain-usd.md` §USD layers and the
-canonical USD architecture notes in `usd-source-of-truth.md`.)
+the `!Send` Stage. See the [USD stage and layer contract](21-domain-usd.md).
 
 Terrain is **one more projection consumer** on that membrane, exactly like the
 policy-as-projection pattern in networking. This is not a parallel pipeline;

@@ -206,12 +206,9 @@ orchestration; it does not add a second collider reader or Rust asset rule.
 
 ## Live joint detachment is one lifecycle
 
-`DetachJoint` is the generic entity-detach command. It is deliberately not
-limited to entities carrying `PhysicsJointLink`: an ordinary non-joint target
-uses the normal entity-removal path. A target carrying native or pending joint
-state is classified as a joint and must use the physics lifecycle marker. The
-command records any authored endpoint invalidation and never directly removes a
-native joint. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker
+`DetachJoint` requires a live joint carrying `PhysicsJointLink`. Interactive
+detachment records its endpoint invalidation and requests solver-safe release.
+Persistent detachment submits the removal to the joint's USD document. The `lunco-usd-avian-joints::JointAttachPlugin` consumes that marker
 through one retirement owner at `PreUpdate` and `FixedPreUpdate`. Both boundaries
 are outside native physics execution. `PreUpdate` services commands while paused
 or preparing; `FixedPreUpdate` guarantees that a simulation-originated request

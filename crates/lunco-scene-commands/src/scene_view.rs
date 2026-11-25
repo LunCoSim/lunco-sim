@@ -1,10 +1,9 @@
 //! Validated component updates for the mounted scene's presentation.
 
 use bevy::prelude::*;
-use lunco_command_contracts::{Ack, Reject};
-use lunco_core::{
-    ActiveCommandId, CommandOrigin, CommandResults, GlobalEntityId, SceneMountState, on_command,
-};
+use lunco_command_contracts::Ack;
+use lunco_core::{ActiveCommandId, CommandOrigin, GlobalEntityId, SceneMountState, on_command};
+use lunco_render::{PbrLook, PbrViewColor, ViewColorChannel};
 use lunco_scene_command_contracts::{SceneViewBatch, SceneViewValue, SetSceneView};
 use lunco_scripting_bridge_core::ScriptInstanceRetired;
 use lunco_usd_bevy_scene::billboard::{BillboardViewText, UsdBillboard};
@@ -61,11 +60,19 @@ impl SceneViewProperties {
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<SceneViewProperties>()
+        .register_type::<PbrLook>()
+        .register_type::<PbrViewColor>()
+        .add_observer(retire_script_colors)
+        .add_observer(transfer_split_color)
         .add_observer(retire_script_billboards)
         .add_observer(retire_script_visibility)
         .add_systems(
             lunco_core::SceneTeardown,
-            (clear_billboard_views, clear_visibility_views),
+            (
+                clear_billboard_views,
+                clear_visibility_views,
+                clear_color_views,
+            ),
         );
     app.world_mut()
         .resource_mut::<SceneViewProperties>()
@@ -83,53 +90,53 @@ pub(crate) fn install(app: &mut App) {
             apply_visibility,
             Some(reconcile_runtime_visibility),
         );
+    app.world_mut()
+        .resource_mut::<SceneViewProperties>()
+        .register(
+            "material.base_color",
+            validate_color,
+            |world, target, value, script| {
+                apply_color(world, target, value, script, |color| &mut color.base_color)
+            },
+            None,
+        );
+    app.world_mut()
+        .resource_mut::<SceneViewProperties>()
+        .register(
+            "material.emissive",
+            validate_color,
+            |world, target, value, script| {
+                apply_color(world, target, value, script, |color| &mut color.emissive)
+            },
+            None,
+        );
 }
 
 #[on_command(SetSceneView)]
 pub(crate) fn on_set_scene_view(
     trigger: On<SetSceneView>,
     active: Res<ActiveCommandId>,
+    reply: lunco_api::executor::CommandReply,
     mut commands: Commands,
-) {
-    let command_id = active.get();
+) -> lunco_core::CommandOutcome {
     let origin = active.origin();
-    let batches = &trigger.event().batches;
-    const MAX_WRITES: usize = 256;
-    if batches.len() > MAX_WRITES
-        || batches
-            .iter()
-            .map(|batch| batch.writes.len())
-            .sum::<usize>()
-            > MAX_WRITES
-    {
-        commands.queue(move |world: &mut World| {
-            finish(
-                world,
-                command_id,
-                Err("SetSceneView accepts at most 256 writes".into()),
-            );
-        });
-        return;
-    }
-    let batches = batches.clone();
-    commands.queue(move |world: &mut World| {
-        let result = apply_writes(world, origin, batches).map(|()| Ack::default());
-        finish(world, command_id, result);
-    });
+    let batches = trigger.event().batches.clone();
+    reply.queue(&mut commands, move |world| {
+        if batches.len() > 256
+            || batches
+                .iter()
+                .map(|batch| batch.writes.len())
+                .sum::<usize>()
+                > 256
+        {
+            return Err("SetSceneView accepts at most 256 writes".into());
+        }
+        apply_writes(world, origin, batches)?;
+        Ok(Ack::default())
+    })
 }
 
-fn finish(world: &mut World, id: Option<u64>, result: Result<Ack, String>) {
-    if let Err(detail) = &result {
-        warn!("SetSceneView rejected: {detail}");
-    }
-    if let Some(id) = id {
-        world
-            .resource_mut::<CommandResults>()
-            .record_handler_result(id, result.map_err(Reject::InvalidOp));
-    }
-}
-
-fn apply_writes(
+pub(crate) fn apply_writes(
     world: &mut World,
     origin: Option<CommandOrigin>,
     batches: Vec<SceneViewBatch>,
@@ -222,7 +229,9 @@ fn apply_billboard_text(
                 true
             }
         }
-        SceneViewValue::Bool { .. } => unreachable!("validated billboard text"),
+        SceneViewValue::Bool { .. } | SceneViewValue::LinearRgb { .. } => {
+            unreachable!("validated billboard text")
+        }
         SceneViewValue::Clear => {
             if script.is_none()
                 || entity
@@ -279,7 +288,9 @@ fn apply_visibility(
     let value = match value {
         SceneViewValue::Bool { value } => Some(value),
         SceneViewValue::Clear => None,
-        SceneViewValue::Text { .. } => unreachable!("validated visibility"),
+        SceneViewValue::Text { .. } | SceneViewValue::LinearRgb { .. } => {
+            unreachable!("validated visibility")
+        }
     };
     write_runtime_visibility(world, target, value, script)
 }
@@ -325,4 +336,111 @@ fn clear_visibility_views(world: &mut World) {
             .remove::<RuntimeVisibilityOverride>();
     }
     reconcile_runtime_visibility(world, &roots);
+}
+
+fn color_target(world: &World, target: Entity) -> Entity {
+    world
+        .get::<lunco_usd_bevy_scene::UsdVisualMeshTarget>(target)
+        .map_or(target, |mesh| mesh.0)
+}
+
+fn validate_color(world: &World, target: Entity, value: &SceneViewValue) -> Result<(), String> {
+    let target = color_target(world, target);
+    if !world.entities().contains(target) {
+        return Err("material draw entity is no longer live".into());
+    }
+    match value {
+        SceneViewValue::Clear => Ok(()),
+        SceneViewValue::LinearRgb { value } if value.iter().all(|v| v.is_finite() && *v >= 0.0) => {
+            world
+                .get::<PbrLook>(target)
+                .map(|_| ())
+                .ok_or_else(|| format!("{target:?} has no PBR appearance"))
+        }
+        _ => Err("PBR colour requires a finite non-negative LinearRgb or Clear".into()),
+    }
+}
+
+fn apply_color(
+    world: &mut World,
+    target: Entity,
+    value: SceneViewValue,
+    script: Option<GlobalEntityId>,
+    channel: fn(&mut PbrViewColor) -> &mut Option<ViewColorChannel>,
+) -> bool {
+    let target = color_target(world, target);
+    let mut entity = world.entity_mut(target);
+    let old = entity.get::<PbrViewColor>().copied().unwrap_or_default();
+    let mut new = old;
+    let slot = channel(&mut new);
+    match value {
+        SceneViewValue::LinearRgb { value: rgb } => *slot = Some(ViewColorChannel { rgb, script }),
+        SceneViewValue::Clear if script.is_none() || slot.is_some_and(|c| c.script == script) => {
+            *slot = None
+        }
+        SceneViewValue::Clear => return false,
+        _ => unreachable!("validated PBR colour"),
+    }
+    if new == old {
+        return false;
+    }
+    if new == PbrViewColor::default() {
+        entity.remove::<PbrViewColor>();
+    } else {
+        entity.insert(new);
+    }
+    true
+}
+
+fn transfer_split_color(
+    split: On<Insert<lunco_usd_bevy_scene::UsdVisualMeshTarget>>,
+    targets: Query<(&lunco_usd_bevy_scene::UsdVisualMeshTarget, &PbrViewColor)>,
+    mut commands: Commands,
+) {
+    if let Ok((mesh, color)) = targets.get(split.entity) {
+        commands.entity(mesh.0).try_insert(*color);
+        commands.entity(split.entity).try_remove::<PbrViewColor>();
+    }
+}
+
+fn retire_script_colors(
+    retired: On<ScriptInstanceRetired>,
+    targets: Query<(Entity, &PbrViewColor)>,
+    mut commands: Commands,
+) {
+    let owner = Some(retired.script);
+    for (target, color) in &targets {
+        if [color.base_color, color.emissive]
+            .into_iter()
+            .flatten()
+            .any(|channel| channel.script == owner)
+        {
+            commands.queue(move |world: &mut World| {
+                let Ok(mut entity) = world.get_entity_mut(target) else {
+                    return;
+                };
+                let Some(current) = entity.get::<PbrViewColor>() else {
+                    return;
+                };
+                let next = PbrViewColor {
+                    base_color: current.base_color.filter(|channel| channel.script != owner),
+                    emissive: current.emissive.filter(|channel| channel.script != owner),
+                };
+                if next == *current {
+                    return;
+                }
+                if next == PbrViewColor::default() {
+                    entity.remove::<PbrViewColor>();
+                } else {
+                    entity.insert(next);
+                }
+            });
+        }
+    }
+}
+
+fn clear_color_views(targets: Query<Entity, With<PbrViewColor>>, mut commands: Commands) {
+    for target in &targets {
+        commands.entity(target).try_remove::<PbrViewColor>();
+    }
 }

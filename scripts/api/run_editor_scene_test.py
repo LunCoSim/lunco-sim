@@ -175,6 +175,16 @@ def run(port: int, timeout: float, scene: str, log_path: Path, scenario: str | N
                     error = f"no authored verdict within {timeout:g}s"
                 else:
                     error = "production editor exited before an authored verdict"
+            if session.process.poll() is None:
+                # This private fixture owns its edits. Discard them before the
+                # normal editor Exit opens the interactive save dialog.
+                documents = session.post({"type": "ExecuteCommand", "command": "ListOpenDocuments", "params": {}})
+                for document in documents["data"]["open_documents"]:
+                    if document["dirty"]:
+                        closed = session.post({"type": "ExecuteCommand", "command": "CloseDocument",
+                                               "params": {"doc_id": document["doc_id"]}})
+                        if closed.get("error"):
+                            raise RuntimeError(f"could not close fixture document: {closed}")
     except Exception as exc:
         error = str(exc)
 

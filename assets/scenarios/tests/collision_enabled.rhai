@@ -4,7 +4,7 @@ fn simulation_dependencies(me,ctx) {
     let paths=["Disabled","Enabled","DisabledUnsupportedGeometry","DisabledTrigger","EnabledTrigger","Body","ProbeDisabled","ProbeEnabled"];
     let entities=[];
     for path in paths {entities.push(find_path("/World/"+path));}
-    #{modelica_entities:[],entity_reads:entities,entity_writes:[find_path("/World/Enabled")],query_reads:["QueryPhysicsState","QueryUsdPrim"],required_inputs:[]}
+    #{modelica_entities:[],entity_reads:entities,entity_writes:[find_path("/World/Enabled"),find_path("/World/ProbeEnabled"),find_path("/World/Disabled")],query_reads:["QueryPhysicsState","QueryUsdPrim"],required_inputs:[]}
 }
 fn state(name) {query("QueryPhysicsState",#{id:find_path("/World/"+name)})}
 fn on_start(me,ctx) {this.started=sim_tick();this.done=false;this.pending=();this.checks=[];}
@@ -46,8 +46,33 @@ fn on_tick(me,ctx) {
     let live_disabled=state("Enabled");
     let enable=cmd("SetColliderEnabled",#{target:target,enabled:true});
     let live_enabled=state("Enabled");
+    let probe=find_path("/World/ProbeEnabled");
+    let hide=#{target:target,writes:[#{property:"visibility",value:#{Bool:#{value:false}}}]};
+    let invalid=#{target:target,writes:[#{property:"visibility",value:#{Text:#{value:"invalid"}}}]};
+    let transition=#{bodies:[#{target:probe,active:false}],colliders:[#{target:target,enabled:false}],views:[invalid]};
+    let bad_duplicate=cmd("SetSceneParticipation",#{colliders:[#{target:target,enabled:false},#{target:target,enabled:false}]});
+    let bad_view=cmd("SetSceneParticipation",transition);
+    let no_physics_change=!state("ProbeEnabled").rigid_body_disabled && !state("Enabled").collider_disabled;
+    transition.views=[hide];transition.occluders=[#{target:target,enabled:false}];
+    let bad_radio=cmd("SetSceneParticipation",transition);
+    let no_view_change=!get(target,"Visibility").to_string().contains("Hidden");
+    transition.occluders=[];
+    let suspended=cmd("SetSceneParticipation",transition);
+    let inactive=state("ProbeEnabled");
+    let contacts_off=state("Enabled").collider_disabled && inactive.collider_disabled;
+    let view_off=get(target,"Visibility").to_string().contains("Hidden");
+    let restored=cmd("SetSceneParticipation",#{bodies:[#{target:probe,active:true}],
+        colliders:[#{target:target,enabled:true}],views:[#{target:target,writes:[#{property:"visibility",value:"Clear"}]}]});
+    let active=state("ProbeEnabled");
     let after=query("QueryUsdPrim",#{path:"/World/Enabled",attrs:["physics:collisionEnabled"]});
     this.checks=[
+        t_true(!bad_duplicate.ok && !bad_view.ok && no_physics_change && !bad_radio.ok && no_view_change,
+            "duplicate collider or invalid view or radio targets reject the transition before physics and visibility change"),
+        t_true(suspended.ok && inactive.rigid_body_disabled && contacts_off && view_off,
+            "one handoff suspends an independent body and both shapes and hides the selected geometry"),
+        t_true(restored.ok && !active.rigid_body_disabled && !active.collider_disabled &&
+            !state("Enabled").collider_disabled && !get(target,"Visibility").to_string().contains("Hidden"),
+            "reversing the handoff restores physics participation and authored visibility"),
         t_true(!rejected.ok,"a source prim with no admitted collider rejects live enablement"),
         t_true(disable.ok && live_disabled.collider_disabled && live_disabled.collider_present,
             "runtime disable keeps the already admitted native collider"),

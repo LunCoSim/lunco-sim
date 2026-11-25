@@ -144,6 +144,7 @@ fn install_environment_projection_state(app: &mut App) {
 
 #[derive(Default)]
 struct CachedEnvironmentProjection {
+    namespace: String,
     projection_plan: Option<std::sync::Arc<lunco_usd_bevy_stage::UsdStageProjectionPlan>>,
     observed_generation: u64,
     valid: bool,
@@ -248,7 +249,11 @@ fn apply_authored_env(
 fn project_env_settings(
     stages: Res<Assets<UsdStageAsset>>,
     canonical: NonSend<lunco_usd_bevy_stage::canonical::CanonicalStages>,
-    roots: Query<&lunco_usd_bevy_scene::UsdPrimPath, With<lunco_usd_bevy_scene::UsdSceneRoot>>,
+    mount: Res<lunco_core::SceneMountState>,
+    scene_roots: Query<
+        &lunco_usd_bevy_scene::UsdPrimPath,
+        With<lunco_usd_bevy_scene::UsdSceneRoot>,
+    >,
     mut authored: ResMut<AuthoredEnv>,
     bloom_override: Option<ResMut<lunco_render::SceneBloomOverride>>,
     // Ambient is NOT projected here any more — it is composed from authored
@@ -261,6 +266,9 @@ fn project_env_settings(
     mut scene_changes: Option<MessageReader<lunco_usd_bevy_scene::UsdSceneChangeBatch>>,
     mut cache: ResMut<EnvironmentProjectionCache>,
 ) {
+    let roots = mount
+        .active_root()
+        .and_then(|entity| scene_roots.get(entity).ok());
     let EnvironmentProjectionCache { cached, last } = &mut *cache;
     if let Some(changes) = scene_changes.as_mut() {
         for change in changes.read() {
@@ -272,6 +280,7 @@ fn project_env_settings(
             }
             if snapshot.observed_generation.checked_add(1) != Some(change.stage_generation)
                 || !change.resynced_prim_paths.is_empty()
+                || change.info_paths.iter().any(|path| !path.contains('.'))
                 || change
                     .info_prim_paths
                     .iter()
@@ -292,7 +301,7 @@ fn project_env_settings(
     let mut signal_matches = previous_signal.is_some();
     let mut cache_needs_refresh = false;
     let mut root_count = 0;
-    for prim in roots.iter() {
+    for prim in roots.iter().copied() {
         let stage_id = prim.stage_handle.id();
         let plan_identity = stages
             .get(stage_id)
@@ -309,6 +318,7 @@ fn project_env_settings(
         };
         cache_needs_refresh |= cached.get(&stage_id).is_none_or(|snapshot| {
             !snapshot.valid
+                || snapshot.namespace != prim.path
                 || snapshot
                     .projection_plan
                     .as_ref()
@@ -322,7 +332,7 @@ fn project_env_settings(
     if !signal_matches {
         *last = Some(
             roots
-                .iter()
+                .into_iter()
                 .map(|prim| {
                     let stage_id = prim.stage_handle.id();
                     let plan_identity = stages
@@ -332,14 +342,18 @@ fn project_env_settings(
                 })
                 .collect(),
         );
-        cached.retain(|stage_id, _| roots.iter().any(|prim| prim.stage_handle.id() == *stage_id));
+        cached.retain(|stage_id, _| {
+            roots
+                .into_iter()
+                .any(|prim| prim.stage_handle.id() == *stage_id)
+        });
     }
     if signal_matches && !cache_needs_refresh {
         return;
     }
 
     let mut scene_bloom = None;
-    for prim in roots.iter() {
+    for prim in roots.iter().copied() {
         let stage_id = prim.stage_handle.id();
         let Some(stage_asset) = stages.get(stage_id) else {
             continue;
@@ -348,6 +362,7 @@ fn project_env_settings(
         let generation = canonical.generation_for(stage_id);
         let reusable = cached.get(&stage_id).and_then(|snapshot| {
             (snapshot.valid
+                && snapshot.namespace == prim.path
                 && snapshot
                     .projection_plan
                     .as_ref()
@@ -383,14 +398,29 @@ fn project_env_settings(
                 canonical.reader_for(stage_id, stage_asset)
             };
         let mut snapshot = CachedEnvironmentProjection {
+            namespace: prim.path.clone(),
             projection_plan: Some(stage_asset.projection_plan.clone()),
             observed_generation: generation,
             valid: true,
             ..Default::default()
         };
+        if !canonical.type_paths_ready(stage_id) {
+            return;
+        }
         let environment_prims = {
             let _span = bevy::log::info_span!("usd_environment_type_lookup").entered();
-            reader.prim_paths_matching(&[lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE], &[])
+            match canonical.paths_of_type(
+                stage_id,
+                stage_asset,
+                &prim.path,
+                lunco_environment::LUNCO_ENVIRONMENT_PRIM_TYPE,
+            ) {
+                Ok(paths) => paths,
+                Err(message) => {
+                    warn!("Cannot project mounted environment settings: {message}");
+                    return;
+                }
+            }
         };
         for prim in environment_prims {
             snapshot.environment_paths.insert(prim.to_string());

@@ -10,17 +10,14 @@ const BASE   = [ 0.0, 0.0,  0.0];
 const SPEED  = 1.0;
 const RADIUS = 2.0;
 
-// Supply the USD document that owns the rover prim. The default scene in the
-// headless/API example is DocumentId 1; editor scripts should use the id from
-// ListOpenDocuments instead.
-fn mission_document(me) { 1 }
+fn mission_document(me) { assembly_edit::document_for_entity(me) }
 
 // The checkpoint is written only when a phase completes. On hot reload or
 // restart, task(me) resumes from the last authored phase rather than replaying
 // already-completed work.
 fn task(me, ctx) {
     let doc = mission_document(me);
-    let phase = mission_checkpoint_read(me, "phase");
+    let phase = mission_checkpoint_read(me, doc, "phase");
 
     if phase == "site_b" {
         return seq([

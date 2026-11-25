@@ -65,18 +65,8 @@ fn point_position(doc, path) {
     result.attrs["xformOp:translate"]
 }
 
-fn marker_color(doc, path) {
-    let result = query("QueryUsdPrim", #{
-        doc_id: doc,
-        path: path + "/Dome",
-        attrs: ["primvars:displayColor"],
-    });
-    if result == () || result.ok == false || result.attrs == ()
-        || result.attrs["primvars:displayColor"] == ()
-        || result.attrs["primvars:displayColor"].len() != 1 {
-        return ();
-    }
-    result.attrs["primvars:displayColor"][0]
+fn marker_color_for(doc, point) {
+    t_pbr_base_color(find_path_in_document(doc, point + "/Dome"))
 }
 
 fn color_is(actual, expected) {
@@ -165,7 +155,7 @@ fn on_tick(me, ctx) {
     if this.phase == 1 {
         let points = point_paths(this.doc);
         if points.len() != 3 || !color_is(
-            marker_color(this.doc, points[0]), [0.55, 0.55, 0.55]
+            marker_color_for(this.doc, points[0]), [0.55, 0.55, 0.55]
         ) { return; }
         let sensor = find_path(points[0] + "/Trigger");
         let contacts = query("SensorOccupants", #{ sensor: sensor });
@@ -201,7 +191,7 @@ fn on_tick(me, ctx) {
         if this.transition_elapsed < 0.1 { return; }
         let points = point_paths(this.doc);
         let later_point_stays_unvisited = points.len() == 3
-            && color_is(marker_color(this.doc, points[2]), [0.10, 0.95, 0.22]);
+            && color_is(marker_color_for(this.doc, points[2]), [0.10, 0.95, 0.22]);
         this.checks.push(t_true(later_point_stays_unvisited,
             "an out-of-order arrival leaves the later point unvisited"));
         if !later_point_stays_unvisited { finish(this, false); return; }
@@ -217,7 +207,7 @@ fn on_tick(me, ctx) {
         if this.started == 0 || points.len() != 3 || active == () || active < 0.5 {
             return;
         }
-        let start_visited = color_is(marker_color(this.doc, points[0]), [0.55, 0.55, 0.55]);
+        let start_visited = color_is(marker_color_for(this.doc, points[0]), [0.55, 0.55, 0.55]);
         let starts_at_next = target_is(this.subject, this.doc, points[1]);
         if !start_visited || !starts_at_next { return; }
         this.checks.push(t_true(start_visited,
@@ -233,11 +223,11 @@ fn on_tick(me, ctx) {
             || this.reached[0] != 1 { return; }
         let points = point_paths(this.doc);
         if points.len() != 3 { return; }
-        if !color_is(marker_color(this.doc, points[1]), [0.55, 0.55, 0.55]) {
+        if !color_is(marker_color_for(this.doc, points[1]), [0.55, 0.55, 0.55]) {
             return;
         }
         this.checks.push(t_true(
-            color_is(marker_color(this.doc, points[1]), [0.55, 0.55, 0.55]),
+            color_is(marker_color_for(this.doc, points[1]), [0.55, 0.55, 0.55]),
             "the next sensor event marks its route point visited"));
         let stopped = emit("runtime.ui.action", #{ action: "program.toggle", parameters: #{} });
         if !stopped { finish(this, false); return; }

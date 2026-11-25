@@ -18,10 +18,7 @@ const SITES = [
     [  0.0, 0.0,  0.0],
 ];
 
-// Supply the USD document that owns the coordinator prim. The default scene in
-// the headless/API example is DocumentId 1; editor scripts should use the id
-// from ListOpenDocuments instead.
-fn mission_document(me) { 1 }
+fn mission_document(me) { assembly_edit::document_for_entity(me) }
 
 fn robot_key(robot) { robot.to_string() }
 

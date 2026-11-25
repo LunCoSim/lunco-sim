@@ -9,6 +9,68 @@ use bevy::{math::DQuat, prelude::*};
 
 use crate::Earthshine;
 
+/// Resolved USD photometry before environment and render overrides.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct AuthoredDirectionalLight {
+    pub illuminance_lux: f32,
+}
+
+/// Directional light identities for the primary scene. Asset previews and lights
+/// scoped to a render layer have separate consumers.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct MountedDirectionalLights<'w, 's> {
+    mount: Option<Res<'w, lunco_core::SceneMountState>>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    lights: Query<
+        'w,
+        's,
+        (Entity, Has<Earthshine>),
+        (
+            With<AuthoredDirectionalLight>,
+            With<bevy::light::DirectionalLight>,
+            Without<bevy::camera::visibility::RenderLayers>,
+            Without<lunco_render::EditorPreviewLight>,
+        ),
+    >,
+}
+
+impl MountedDirectionalLights<'_, '_> {
+    pub(crate) fn membership(&self, earthshine: bool) -> SourceMembership {
+        let Some(mount) = self.mount.as_deref() else {
+            return SourceMembership::Missing;
+        };
+        let Some(root) = mount.active_root() else {
+            return SourceMembership::Missing;
+        };
+        source_membership(self.lights.iter().filter_map(|(entity, fill)| {
+            (fill == earthshine
+                && std::iter::once(entity)
+                    .chain(self.parents.iter_ancestors(entity))
+                    .find(|candidate| mount.contains_root(*candidate))
+                    == Some(root))
+            .then_some(entity)
+        }))
+    }
+
+    pub fn sun(&self) -> Result<Entity, &'static str> {
+        match self.membership(false) {
+            SourceMembership::One(entity) => Ok(entity),
+            SourceMembership::Missing => Err("active scene has no unscoped authored Sun"),
+            SourceMembership::Multiple => Err("active scene has multiple unscoped authored Suns"),
+        }
+    }
+
+    pub fn earthshine(&self) -> Result<Entity, &'static str> {
+        match self.membership(true) {
+            SourceMembership::One(entity) => Ok(entity),
+            SourceMembership::Missing => Err("active scene has no unscoped earthshine light"),
+            SourceMembership::Multiple => {
+                Err("active scene has multiple unscoped earthshine lights")
+            }
+        }
+    }
+}
+
 /// Semantic sun state produced by the selected physical/provider model.
 ///
 /// Direction belongs to [`crate::EnvironmentDirections`], shared with every
@@ -58,19 +120,6 @@ impl SunState {
         if self.irradiance_lux.take().is_some() {
             self.revision = self.revision.wrapping_add(1);
         }
-    }
-
-    /// Change only calibrated irradiance. Direction is resolved independently
-    /// from the shared direction-target system.
-    pub fn set_irradiance(&mut self, irradiance_lux: Option<f32>) -> bool {
-        if irradiance_lux.is_some_and(|lux| !lux.is_finite() || lux < 0.0) {
-            return false;
-        }
-        if self.irradiance_lux != irradiance_lux {
-            self.irradiance_lux = irradiance_lux;
-            self.revision = self.revision.wrapping_add(1);
-        }
-        true
     }
 }
 
@@ -191,6 +240,16 @@ pub(crate) enum SourceMembership {
     Multiple,
 }
 
+impl SourceMembership {
+    fn entity(self) -> Option<Entity> {
+        if let Self::One(entity) = self {
+            Some(entity)
+        } else {
+            None
+        }
+    }
+}
+
 fn source_membership(mut entities: impl Iterator<Item = Entity>) -> SourceMembership {
     match entities.next() {
         None => SourceMembership::Missing,
@@ -244,6 +303,7 @@ pub fn project_environment_sun_to_light(
         (Option<&big_space::prelude::CellCoord>, &Transform),
         Without<bevy::light::DirectionalLight>,
     >,
+    mounted_lights: MountedDirectionalLights,
     mut q_sun: Query<
         (
             Entity,
@@ -275,44 +335,27 @@ pub fn project_environment_sun_to_light(
     let active_scene = mount
         .as_deref()
         .is_some_and(|mount| mount.active_root().is_some());
-    let mut suns = q_sun.iter_mut();
-    let Some((scene_sun, mut transform, mut light, parent)) = suns.next() else {
-        if !active_scene {
+    let (scene_sun, mut transform, mut light, parent) = match mounted_lights.sun() {
+        Ok(entity) => q_sun
+            .get_mut(entity)
+            .expect("mounted Sun matches the render query"),
+        Err(detail) => {
+            *projection_cache = SunProjectionCache::default();
+            if active_scene {
+                replace_sun_diagnostic(
+                    &mut diagnostics,
+                    Some(lunco_core::RuntimeDiagnostic {
+                        code: "sun-contract".into(),
+                        severity: lunco_core::DiagnosticSeverity::Error,
+                        producer: "environment-sun".into(),
+                        subject: "scene-sun".into(),
+                        message: detail.into(),
+                    }),
+                );
+            }
             return;
         }
-        *projection_cache = SunProjectionCache::default();
-        replace_sun_diagnostic(
-            &mut diagnostics,
-            Some(lunco_core::RuntimeDiagnostic {
-                code: "sun-contract".to_string(),
-                severity: lunco_core::DiagnosticSeverity::Error,
-                producer: "environment-sun".to_string(),
-                subject: "scene-sun".to_string(),
-                message:
-                    "active scene has no unscoped scene sun; author exactly one UsdLux DistantLight"
-                        .to_string(),
-            }),
-        );
-        return;
     };
-    if suns.next().is_some() {
-        *projection_cache = SunProjectionCache::default();
-        if active_scene {
-            replace_sun_diagnostic(
-                &mut diagnostics,
-                Some(lunco_core::RuntimeDiagnostic {
-                    code: "sun-contract".to_string(),
-                    severity: lunco_core::DiagnosticSeverity::Error,
-                    producer: "environment-sun".to_string(),
-                    subject: "scene-sun".to_string(),
-                    message:
-                        "active scene has multiple unscoped scene suns; author exactly one UsdLux DistantLight"
-                            .to_string(),
-                }),
-            );
-        }
-        return;
-    }
     let mut diagnostics = diagnostics;
     replace_sun_diagnostic(&mut diagnostics, None);
     let Some(source_frame) = active_frame.as_deref().map(|frame| frame.0) else {
@@ -514,6 +557,7 @@ fn sun_light_projection_needed(
     directions: Option<Res<crate::EnvironmentDirections>>,
     active_frame: Option<Res<lunco_spatial::ActivePhysicsFrame>>,
     mount: Option<Res<lunco_core::SceneMountState>>,
+    mounted_lights: MountedDirectionalLights,
     q_sun: Query<
         (
             Entity,
@@ -546,12 +590,16 @@ fn sun_light_projection_needed(
     // Bevy may mark a component changed even when a writer stores the same
     // value. Only the exact fields read by the sun projection are inputs;
     // its own writes must not sustain a self-invalidating condition.
+    let membership = mounted_lights.membership(false);
+    let scene_light = membership
+        .entity()
+        .and_then(|entity| q_sun.get(entity).ok());
     let inputs = SunProjectionGateInputs {
         render: SunRenderInputs::capture(sun.as_deref(), directions.as_deref()),
         scene: mount.as_deref().and_then(|state| state.active_root()),
         frame: active_frame.as_deref().map(|frame| frame.0),
-        light: source_membership(q_sun.iter().map(|(entity, _, _, _)| entity)),
-        light_values: q_sun.single().ok().map(|(_, transform, light, parent)| {
+        light: membership,
+        light_values: scene_light.map(|(_, transform, light, parent)| {
             (
                 parent.map(ChildOf::parent),
                 transform.rotation,
@@ -579,9 +627,9 @@ fn sun_light_projection_needed(
         || q_targets.iter().any(|(entity, target)| {
             target.as_str() == crate::SUN_DIRECTION_SOURCE && changed_pose(entity)
         })
-        || q_sun
-            .iter()
-            .any(|(_, _, _, parent)| parent.is_some_and(|parent| changed_pose(parent.parent())))
+        || scene_light.is_some_and(|(_, _, _, parent)| {
+            parent.is_some_and(|parent| changed_pose(parent.parent()))
+        })
 }
 
 /// Keep the last committed render-sun sample while a scene transaction is
@@ -612,6 +660,7 @@ pub fn finalize_sun_render_state(
     q_targets: Query<(Entity, &crate::DirectionTargetId)>,
     poses: lunco_physics::SimulationPoseQuery,
     q_frames: Query<&GlobalTransform>,
+    mounted_lights: MountedDirectionalLights,
     q_sun: Query<
         &GlobalTransform,
         (
@@ -632,7 +681,11 @@ pub fn finalize_sun_render_state(
         clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
-    let Ok(sun_gt) = q_sun.single() else {
+    let Some(sun_gt) = mounted_lights
+        .sun()
+        .ok()
+        .and_then(|entity| q_sun.get(entity).ok())
+    else {
         clear_render_sun_if_scene_is_idle(&mut render_state, coordinator.as_deref());
         return;
     };
@@ -690,6 +743,7 @@ pub fn finalize_sun_render_state(
 /// propagated scene-sun transform changes.
 pub(crate) fn sun_render_finalize_needed(
     directions: Option<Res<crate::EnvironmentDirections>>,
+    mounted_lights: MountedDirectionalLights,
     q_sun: Query<
         (Entity, Ref<GlobalTransform>),
         (
@@ -703,11 +757,13 @@ pub(crate) fn sun_render_finalize_needed(
     let ray = directions
         .as_deref()
         .and_then(|state| state.get_named(crate::SUN_DIRECTION_SOURCE));
-    let key = (
-        ray,
-        source_membership(q_sun.iter().map(|(entity, _)| entity)),
-    );
-    previous.replace(key) != Some(key) || q_sun.iter().any(|(_, transform)| transform.is_changed())
+    let key = (ray, mounted_lights.membership(false));
+    previous.replace(key) != Some(key)
+        || key
+            .1
+            .entity()
+            .and_then(|entity| q_sun.get(entity).ok())
+            .is_some_and(|(_, transform)| transform.is_changed())
 }
 
 #[cfg(test)]
@@ -724,9 +780,18 @@ mod tests {
             Update,
             (|mut runs: ResMut<ProjectionRuns>| runs.0 += 1).run_if(sun_light_projection_needed),
         );
+        let root = app.world_mut().spawn_empty().id();
+        app.init_resource::<lunco_core::SceneMountState>()
+            .world_mut()
+            .resource_mut::<lunco_core::SceneMountState>()
+            .register_root(root, true);
         let light = app
             .world_mut()
             .spawn((
+                ChildOf(root),
+                AuthoredDirectionalLight {
+                    illuminance_lux: 100_000.0,
+                },
                 Transform::IDENTITY,
                 bevy::light::DirectionalLight::default(),
             ))

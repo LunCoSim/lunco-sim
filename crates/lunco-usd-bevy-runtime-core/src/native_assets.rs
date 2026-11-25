@@ -258,10 +258,28 @@ pub(crate) fn admit_stage_changes(world: &mut World, incoming: Vec<Changes>) -> 
             })
             .filter(|paths| paths.is_for_origin(origin.as_ref()))
             .unwrap_or_else(|| Arc::new(PreparedAssetPaths::for_origin(origin.clone())));
-        let references = lunco_usd_bevy_stage::native_paths::changed_native_references(
-            &current.view(),
-            &stage.changes,
-        );
+        let Some(references) =
+            world
+                .get_non_send_mut::<CanonicalStages>()
+                .and_then(|mut stages| {
+                    stages
+                        .get_mut(id)
+                        .map(|stage_owner| stage_owner.discover_changed_assets(&stage.changes))
+                })
+        else {
+            continue;
+        };
+        let references = match references {
+            Ok(references) => references,
+            Err(error) => {
+                report_failure(
+                    world,
+                    format!("Cannot read changed USD namespace in {id:?}: {error}"),
+                );
+                stage.failed = true;
+                continue;
+            }
+        };
         let missing = references
             .into_iter()
             .filter(|reference| !existing.contains(reference))

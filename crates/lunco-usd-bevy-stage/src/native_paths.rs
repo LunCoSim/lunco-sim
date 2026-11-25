@@ -3,7 +3,7 @@
 use crate::UsdReadObject;
 use lunco_assets_core::asset_path::AssetReference;
 use openusd::sdf::{AssetPath, Path as SdfPath, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 fn native_reference(reference: &str) -> bool {
     reference
@@ -250,12 +250,20 @@ pub fn composed_layer_identifiers_for_active_prims(
     references
 }
 
-/// Discover only the authored changed properties and structurally affected
-/// subtrees. Ordinary transform changes do not snapshot or scan a whole stage.
-pub fn changed_native_references(
-    reader: &dyn UsdReadObject,
+pub(crate) struct ChangedNativeFacts {
+    pub roots: Vec<SdfPath>,
+    pub changed_prims: BTreeSet<SdfPath>,
+    pub types: HashMap<String, BTreeSet<String>>,
+    pub references: BTreeSet<AssetReference>,
+}
+
+/// Discover changed asset addresses and composed prim types together. Property
+/// changes do not walk the hierarchy; native namespace resyncs visit their
+/// affected subtrees once, including asset dependencies in instance proxies.
+pub(crate) fn changed_native_facts(
+    reader: &crate::view::StageView<'_>,
     changes: &[crate::canonical::RawStageChange],
-) -> BTreeSet<AssetReference> {
+) -> anyhow::Result<ChangedNativeFacts> {
     let _span = bevy::log::info_span!("usd_native_reference_discovery").entered();
     let mut references = BTreeSet::new();
     let mut structural = BTreeSet::new();
@@ -281,28 +289,69 @@ pub fn changed_native_references(
             structural.insert(prim.clone());
         }
     }
-    let roots = structural
+    let roots: Vec<_> = structural
         .iter()
-        .filter(|path| {
-            !structural.iter().any(|parent| {
-                parent != *path
-                    && path
-                        .as_str()
-                        .strip_prefix(parent.as_str())
-                        .is_some_and(|suffix| suffix.starts_with('/'))
-            })
+        .filter(|root| !root.strict_ancestors().any(|p| structural.contains(&p)))
+        .cloned()
+        .collect();
+    // Native typeName changes can be info-only at a prim. A metadata
+    // change on a prim never requires enumerating its children here.
+    let changed_prims: BTreeSet<_> = changes
+        .iter()
+        .flat_map(|c| c.info_only.iter())
+        .filter(|p| {
+            p.is_prim() && !p.is_abs_root() && !p.ancestors().any(|a| structural.contains(&a))
         })
         .cloned()
-        .collect::<Vec<_>>();
+        .collect();
     let mut prims = BTreeSet::new();
-    let mut stack = roots;
-    while let Some(prim) = stack.pop() {
-        if prims.insert(prim.clone()) {
-            stack.extend(reader.children(&prim));
+    let mut types = HashMap::<String, BTreeSet<String>>::new();
+    let stage = reader.stage();
+    let mut record_type = |prim: &openusd::usd::Prim| -> openusd::Result<()> {
+        let path = prim.path();
+        if !path.is_abs_root()
+            && stage.prim_matches(path, openusd::usd::PrimPredicate::DEFAULT)?
+            && !prim.is_instance_proxy()?
+            && let Some(kind) = prim.type_name()?
+        {
+            types
+                .entry(kind.to_string())
+                .or_default()
+                .insert(path.to_string());
+        }
+        Ok(())
+    };
+    for root in &roots {
+        let prim = stage.prim(root.clone())?;
+        if !root.is_abs_root() && !prim.is_valid()? {
+            continue;
+        }
+        let region = if root.is_abs_root() {
+            prims.insert(root.clone());
+            prim.filtered_descendants(openusd::usd::PrimPredicate::ALL)?
+        } else {
+            prim.filtered_subtree(openusd::usd::PrimPredicate::ALL)?
+        };
+        for item in region {
+            let prim = item?;
+            if prims.insert(prim.path().clone()) {
+                record_type(&prim)?;
+            }
+        }
+    }
+    for path in &changed_prims {
+        let prim = stage.prim(path.clone())?;
+        if prim.is_valid()? {
+            record_type(&prim)?;
         }
     }
     references.extend(native_references_for_prims(reader, prims));
-    references
+    Ok(ChangedNativeFacts {
+        roots,
+        changed_prims,
+        types,
+        references,
+    })
 }
 
 #[cfg(test)]
@@ -419,13 +468,15 @@ def Scope "World" {
         );
         let stage = crate::canonical::CanonicalStage::from_recipe(&recipe).unwrap();
         let refs = |path: &str| {
-            changed_native_references(
+            changed_native_facts(
                 &stage.view(),
                 &[crate::canonical::RawStageChange {
                     resynced: vec![SdfPath::new(path).unwrap()],
                     ..Default::default()
                 }],
             )
+            .unwrap()
+            .references
         };
         let image = AssetReference::Native(format!("{prefix}/image.png"));
         let frame = AssetReference::Native(format!("{prefix}/frame.png"));

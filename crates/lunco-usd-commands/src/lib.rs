@@ -2792,7 +2792,9 @@ fn validate_attribute_types_in_stage(
                     "USD connection `{path}.{name}` source `{source}` references missing property `{source_name}` on `{source_prim}`"
                 ));
             };
-            if source_type != *type_name {
+            if !openusd::sdf::ValueTypeName::from(source_type.as_str())
+                .agrees_with(&openusd::sdf::ValueTypeName::from(type_name.as_str()))
+            {
                 return Err(format!(
                     "USD connection `{path}.{name}` source `{source}` declares `{source_type}`, but the sink declares `{type_name}`"
                 ));

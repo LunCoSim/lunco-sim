@@ -499,6 +499,7 @@ honor that permission. Modal, dock-panel and essential surfaces declaring
 runtime permission is its only user visibility row. The celestial-view
 application preference is its only user visibility row.
 Scene-local overrides retire with the scene and never persist into another Twin.
+`SetRuntimeHudVisibility {id, visible}` applies the same scene-scoped display choice to a dismissible surface. A capture can retain its initial value and restore it after the take.
 `InspectRuntimeHuds` reports the user permission, authored eligibility, actual
 retained root visibility, actual rectangle and measured menu row for each
 dismissible surface. A window placement may opt into `"region":"scene_viewport"`;

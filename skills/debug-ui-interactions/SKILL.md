@@ -410,6 +410,12 @@ verdict includes empty-Editor Requirements/details and rejected panel admission.
 Capture compact layouts after ResetWorkspaceLayout so manually opened audit
 tools are not mistaken for defaults.
 
+For Inspector appearance checks, exercise the same surface in the live scene
+and its focused USD preview. Live material changes update the rendered surface
+with a stable document generation. In the USD preview, change multiple inputs,
+discard them, then apply another draft. Verify the selected layer and one
+undoable transaction. A draft can only be applied to its originating preview and revision.
+
 Behaviour Editor has separate Run draft and Apply running source to document
 actions. File → Save writes the USD document. `InspectBehaviourEditor` exposes
 selected document, retained draft count, source, dirty/pending state and admission

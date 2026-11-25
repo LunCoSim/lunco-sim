@@ -15,11 +15,8 @@ lunco-core-runtime = { path = "../lunco-core-runtime" }
 # `bevy_render`, so gravity, the earthshine fill, universal direction-to-cosim
 # projection AND the heightfield-shadow bakes all build and run without wgpu.
 #
-# The two things that used to force `bevy_pbr` here have MOVED to the binder crate:
-#   1. `wire_terrain_materials` → `lunco-render-bevy::horizon_shade`
-#   2. the `Bloom` arm of `SetEnvironmentLight`           → `lunco-render-bevy::env_light`
-# DO NOT add `bevy_pbr` / `bevy_post_process` back — see
-# docs/architecture/render-decoupling.md.
+# The environment publishes camera bloom intent. The render binder applies it
+# and feeds the terrain shader from the horizon bakes.
 #
 # `zstd_rust`: `bevy_image` refuses to build without a zstd backend chosen; name it
 # here so a per-crate `cargo check/test -p lunco-environment` stands alone.

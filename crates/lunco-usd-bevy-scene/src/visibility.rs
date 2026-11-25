@@ -8,9 +8,10 @@ use crate::{
     UsdVisualVisibility, prim_index::UsdPrimIndex, scene_root_in_world,
 };
 use bevy::prelude::*;
-use lunco_usd_bevy_stage::{UsdInstanceMember, UsdInstanceRoot, canonical::CanonicalStages};
-use openusd::{sdf::Path, tf::Token, usd::Stage};
-use openusd_schemas::geom::{Imageable, ImageableExt, ImageableSchema, Purpose, PurposeVisibility};
+use lunco_usd_bevy_stage::{
+    UsdInstanceMember, UsdInstanceRoot, UsdRead, UsdStageAsset, canonical::CanonicalStages,
+};
+use openusd::sdf::Path;
 use std::collections::{BTreeSet, HashMap};
 
 /// Validate the presentation origin before a local view mutation is admitted.
@@ -68,12 +69,20 @@ pub fn validate_runtime_visibility(world: &World, target: Entity) -> Result<(), 
     let path = world
         .get::<UsdPrimPath>(target)
         .ok_or("visibility target has no USD identity")?;
-    if world
+    let stages = world
         .get_non_send::<CanonicalStages>()
-        .and_then(|stages| stages.get(path.stage_handle.id()))
-        .is_none()
-    {
-        return Err("visibility target has no committed native stage".into());
+        .ok_or("USD stage registry is unavailable")?;
+    let asset = world
+        .get_resource::<Assets<UsdStageAsset>>()
+        .and_then(|assets| assets.get(&path.stage_handle))
+        .ok_or("visibility target's stage asset is unavailable")?;
+    let (reader, _) = stages.reader_for_composed_query(path.stage_handle.id(), asset);
+    let prim = Path::new(&path.path).map_err(|e| e.to_string())?;
+    if !reader.has_prim(&prim) {
+        return Err(format!(
+            "visibility target {} is absent from the current composed stage",
+            path.path
+        ));
     }
     Ok(())
 }
@@ -119,64 +128,6 @@ fn scope(world: &World, entity: Entity) -> Option<(Entity, Option<Entity>)> {
         .map(|member| member.root)
         .or_else(|| world.get::<UsdInstanceRoot>(entity).map(|_| entity));
     Some((root, instance))
-}
-
-/// Resolve the native primary visibility walk with non-persistent opinions.
-/// Native schema accessors still supply the authored values, purpose and
-/// purpose-specific opinions. The override substitutes only the ordinary
-/// visibility channel of that exact prim; it cannot clear a hidden descendant
-/// or reveal a guide suppressed by its purpose.
-fn resolve_with_overrides(
-    stage: &Stage,
-    path: &str,
-    overrides: &HashMap<String, bool>,
-) -> Result<Visibility, String> {
-    let result = (|| -> openusd::Result<Visibility> {
-        let prim = stage.prim(Path::new(path)?)?;
-        let imageable = Imageable::from_prim_unchecked(prim.clone());
-        for ancestor in prim.ancestors() {
-            match overrides.get(ancestor.path().as_str()) {
-                Some(false) => return Ok(Visibility::Hidden),
-                Some(true) => continue,
-                None => {}
-            }
-            if let Some(imageable) = Imageable::from_prim(ancestor)? {
-                if imageable
-                    .visibility_attr()
-                    .get_at::<Token>(None)?
-                    .as_deref()
-                    == Some("invisible")
-                {
-                    return Ok(Visibility::Hidden);
-                }
-            }
-        }
-        let purpose = imageable.compute_purpose()?;
-        if purpose != Purpose::Default {
-            for ancestor in prim.ancestors() {
-                let Some(imageable) = Imageable::from_prim(ancestor)? else {
-                    continue;
-                };
-                let Some(attr) = imageable.purpose_visibility_attr(purpose)? else {
-                    continue;
-                };
-                if attr.has_authored_value()? {
-                    if let Some(value) = attr.get_at::<PurposeVisibility>(None)? {
-                        return Ok(if value == PurposeVisibility::Invisible {
-                            Visibility::Hidden
-                        } else {
-                            Visibility::Inherited
-                        });
-                    }
-                }
-            }
-            if purpose == Purpose::Guide {
-                return Ok(Visibility::Hidden);
-            }
-        }
-        Ok(Visibility::Inherited)
-    })();
-    result.map_err(|error| format!("{path}: {error}"))
 }
 
 /// Apply committed runtime visibility opinions only to affected projected
@@ -237,9 +188,6 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
             let Some(prim) = world.get::<UsdPrimPath>(entity) else {
                 continue;
             };
-            let Some(stage) = stages.get(prim.stage_handle.id()) else {
-                continue;
-            };
             let Some(target_scope) = cached_scope(entity) else {
                 continue;
             };
@@ -284,7 +232,23 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
             } else if overrides.is_empty() || state.authored != Visibility::Hidden {
                 Ok(state.authored)
             } else {
-                resolve_with_overrides(stage.view().stage(), &prim.path, &overrides)
+                world
+                    .get_resource::<Assets<UsdStageAsset>>()
+                    .and_then(|assets| assets.get(&prim.stage_handle))
+                    .ok_or_else(|| format!("{}: stage asset is unavailable", prim.path))
+                    .and_then(|asset| {
+                        stages
+                            .reader_for_composed_query(prim.stage_handle.id(), asset)
+                            .0
+                            .invisible_with_overrides(&path, &overrides)
+                    })
+                    .map(|hidden| {
+                        if hidden {
+                            Visibility::Hidden
+                        } else {
+                            Visibility::Inherited
+                        }
+                    })
             };
             updates.push((entity, value));
         }

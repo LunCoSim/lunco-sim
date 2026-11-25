@@ -55,9 +55,10 @@ pub struct UsdPrimProjectionPlan {
     binary_asset_uri: Option<String>,
     documentation: Option<String>,
     active: bool,
-    has_composition_arc: bool,
+    has_source_spec: bool,
     purpose: openusd_schemas::geom::Purpose,
     effective_visibility: openusd_schemas::geom::PurposeVisibility,
+    pub(crate) hidden_visibility: Option<Box<crate::visibility::HiddenVisibility>>,
     bound_materials: HashMap<MaterialPurpose, String>,
     bound_shader: Option<SdfPath>,
 }
@@ -480,12 +481,20 @@ impl UsdStageProjectionPlan {
                 binary_asset_uri: reader.binary_asset_uri(&path),
                 documentation: reader.documentation(&path),
                 active,
-                has_composition_arc: reader
-                    .has_composition_arc(&path)
+                has_source_spec: reader
+                    .has_source_spec(&path)
                     .map_err(|error| anyhow!(error))?,
                 transform_might_be_time_varying: prepared_transform.might_vary,
                 resets_xform_stack: prepared_transform.resets_stack,
                 purpose: purpose_info.purpose,
+                hidden_visibility: (effective_visibility
+                    == openusd_schemas::geom::PurposeVisibility::Invisible)
+                    .then(|| {
+                        Box::new(crate::visibility::HiddenVisibility::from_prim(
+                            &native_prim,
+                            purpose_info.purpose,
+                        ))
+                    }),
                 effective_visibility,
                 bound_materials,
                 bound_shader,
@@ -992,8 +1001,8 @@ impl UsdRead for UsdStageProjectionPlan {
         Ok(self.prim(prim).is_some_and(|prim| prim.active))
     }
 
-    fn has_composition_arc(&self, prim: &SdfPath) -> Result<bool, String> {
-        Ok(self.prim(prim).is_some_and(|prim| prim.has_composition_arc))
+    fn has_source_spec(&self, prim: &SdfPath) -> Result<bool, String> {
+        Ok(self.prim(prim).is_some_and(|prim| prim.has_source_spec))
     }
 
     fn has_prim(&self, prim: &SdfPath) -> bool {
@@ -1061,42 +1070,54 @@ def Xform "Body" {}
     }
 
     #[test]
-    fn native_composition_arc_facts_survive_prepared_admission() {
-        let recipe = StageRecipe::from_source(
-            "scene.usda",
+    fn native_spec_provenance_survives_prepared_admission() {
+        use lunco_usd_authoring::author::{open_doc_stage_with_layers, usda_to_data};
+        let base = usda_to_data(
             r#"#usda 1.0
-(metersPerUnit = 1)
-def Xform "Source" { def Cube "Child" {} }
-def Xform "Instance" (prepend references = </Source>) {}
+(metersPerUnit = 1
+ subLayers = [@assets.usda@])
+def Xform "Instance" (prepend references = </Asset>) {}
 "#,
+        )
+        .unwrap();
+        let runtime = usda_to_data(
+            r#"#usda 1.0
+over "Asset" { double value = 2 }
+def Xform "Spawned" {}
+"#,
+        )
+        .unwrap();
+        let view = usda_to_data(
+            r#"#usda 1.0
+def Xform "Preview" {}
+"#,
+        )
+        .unwrap();
+        let recipe = StageRecipe::new(
+            "scene.usda",
+            HashMap::from([(
+                "assets.usda".into(),
+                br#"#usda 1.0
+def Xform "Asset" { def Cube "Child" {} }
+"#
+                .to_vec(),
+            )]),
         );
-        let (stage, _) = crate::compose::build_stage_with_resolver(&recipe).unwrap();
+        let stage = open_doc_stage_with_layers(&base, &runtime, &view, Some(&recipe)).unwrap();
         let live = StageView::new(&stage);
         let prepared = UsdStageProjectionPlan::from_stage(&stage).unwrap();
-        for path in [
-            "/Source",
-            "/Source/Child",
-            "/Instance",
-            "/Instance/Child",
-            "/Missing",
+        for (path, expected) in [
+            ("/Asset", true),
+            ("/Asset/Child", true),
+            ("/Instance/Child", true),
+            ("/Spawned", false),
+            ("/Preview", false),
+            ("/Missing", false),
         ] {
             let path = SdfPath::new(path).unwrap();
-            assert_eq!(
-                prepared.has_composition_arc(&path).unwrap(),
-                live.has_composition_arc(&path).unwrap(),
-                "{path}"
-            );
+            assert_eq!(live.has_source_spec(&path).unwrap(), expected, "{path}");
+            assert_eq!(prepared.has_source_spec(&path).unwrap(), expected, "{path}");
         }
-        assert!(
-            !prepared
-                .has_composition_arc(&SdfPath::new("/Source").unwrap())
-                .unwrap()
-        );
-        assert!(
-            prepared
-                .has_composition_arc(&SdfPath::new("/Instance/Child").unwrap())
-                .unwrap()
-        );
     }
 
     #[test]
@@ -1702,6 +1723,28 @@ def Xform "Hidden" {
             assert_eq!(
                 prepared.effective_visibility(&path),
                 live.effective_visibility(&path)
+            );
+        }
+        let reveal = HashMap::from([("/Hidden".to_string(), true)]);
+        for source in [
+            crate::UsdReadSource::Prepared(&prepared),
+            crate::UsdReadSource::Live(StageView::new(&stage)),
+        ] {
+            assert_eq!(
+                source.invisible_with_overrides(&SdfPath::new("/Hidden/Child").unwrap(), &reveal),
+                Ok(false)
+            );
+            assert_eq!(
+                source
+                    .invisible_with_overrides(&SdfPath::new("/Guide/Suppressed").unwrap(), &reveal),
+                Ok(true)
+            );
+            assert_eq!(
+                source.invisible_with_overrides(
+                    &SdfPath::new("/Hidden/Child").unwrap(),
+                    &HashMap::new()
+                ),
+                Ok(true)
             );
         }
         let missing = SdfPath::new("/Missing").unwrap();

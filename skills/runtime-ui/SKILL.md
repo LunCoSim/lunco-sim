@@ -130,7 +130,7 @@ owner. Restore hidden cards from the menu. The global show/hide actions reach
 all current user-controlled HUD owners. Modal, dock-panel and essential overlay
 surfaces are not dismissible HUDs. Camera-status uses the runtime row without editing Twin policy, while
 celestial-view uses the native application preference, not a second hide bit. Inspect HTML HUD permission, eligibility, and root visibility with
-`InspectRuntimeHuds`. Window HUDs anchored to the scene may set
+`InspectRuntimeHuds`. Use `SetRuntimeHudVisibility {id, visible}` to change a listed HUD for the current scene. Restore the captured `enabled` value after a temporary recording override. Window HUDs anchored to the scene may set
 `"region": "scene_viewport"` to constrain their authored and dragged rectangles
 to its measured dock leaf. Verify native interactions with `scripts/api/test_hud_visibility.py --port <free-port>`.
 

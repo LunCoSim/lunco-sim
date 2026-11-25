@@ -89,17 +89,7 @@ pub struct FrozenForReadiness {
 #[derive(Component)]
 pub struct RuntimeColliderDisabled;
 
-/// Toggle one already admitted native collider without rebuilding its shape,
-/// body, or joint topology. Other disable owners cannot be cleared by this
-/// command; readiness must finish before collision can be changed.
-pub fn set_runtime_collider_enabled(
-    world: &mut World,
-    entity: Entity,
-    enabled: bool,
-) -> Result<(), String> {
-    if world.get::<Collider>(entity).is_none() {
-        return Err(format!("{entity:?} has no admitted native collider"));
-    }
+pub(crate) fn validate_participation_owner(world: &World, entity: Entity) -> Result<(), String> {
     let mut ancestor = entity;
     for depth in 0..lunco_spatial::coords::MAX_SPATIAL_HIERARCHY_DEPTH {
         if world.get::<crate::PhysicsObjectPaused>(ancestor).is_some() {
@@ -119,22 +109,6 @@ pub fn set_runtime_collider_enabled(
             ));
         }
         ancestor = parent.parent();
-    }
-    let runtime_disabled = world.get::<RuntimeColliderDisabled>(entity).is_some();
-    let disabled = world.get::<ColliderDisabled>(entity).is_some();
-    if disabled && !runtime_disabled {
-        return Err(format!("{entity:?} is disabled by another physics owner"));
-    }
-    if enabled {
-        if runtime_disabled {
-            world
-                .entity_mut(entity)
-                .remove::<(RuntimeColliderDisabled, ColliderDisabled)>();
-        }
-    } else if !runtime_disabled {
-        world
-            .entity_mut(entity)
-            .insert((RuntimeColliderDisabled, ColliderDisabled));
     }
     Ok(())
 }

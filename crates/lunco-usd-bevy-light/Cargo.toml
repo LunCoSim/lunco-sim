@@ -6,11 +6,13 @@ license.workspace = true
 description = "USD light and dome projection for Bevy"
 
 [dependencies]
+lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-assets-core = { path = "../lunco-assets-core" }
 lunco-usd-authoring = { path = "../lunco-usd-authoring" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 bevy = { workspace = true, features = ["bevy_asset", "bevy_image", "bevy_light", "hdr", "ktx2", "zstd_rust"] }
 half = "2"
+lunco-environment = { path = "../lunco-environment" }
 lunco-core = { path = "../lunco-core" }
 lunco-port-core = { path = "../lunco-port-core" }
 lunco-render = { path = "../lunco-render" }

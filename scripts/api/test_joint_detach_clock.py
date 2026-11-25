@@ -47,7 +47,7 @@ def run(port, windowed, mode, log):
         if mode == "clock":
             execute("StepSimulation", steps=3)
         title = "JOINT DETACH CLOCK" if mode == "clock" else "PAUSED JOINT DETACH"
-        wait_for_authored_verdict(session, title=title, check_count=4,
+        wait_for_authored_verdict(session, title=title, check_count=5 if mode == "clock" else 4,
                                   offset=offset, timeout_s=30)
     print(f"API Exit completed; port {port} released", flush=True)
 

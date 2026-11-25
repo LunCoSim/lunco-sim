@@ -17,9 +17,11 @@ use lunco_core::{Command, on_command, register_commands};
 use lunco_doc_bevy::{RedoDocument, UndoDocument};
 use lunco_hooks::HookValue;
 
+/// Evaluate code with the installed Python scripting backend and return its output.
 #[cfg(feature = "python")]
 #[Command(default)]
 pub struct RunPython {
+    /// Python source to evaluate.
     pub code: String,
 }
 

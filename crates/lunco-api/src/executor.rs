@@ -324,6 +324,70 @@ pub fn finish_command_result(
     }
 }
 
+/// Reply context for a deferred command that can finish locally or delegate to another owner.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct CommandReply<'w> {
+    active: Res<'w, lunco_core::ActiveCommandId>,
+    pending: Res<'w, PendingApiRequest>,
+}
+
+impl CommandReply<'_> {
+    /// Preserve the originating command and transport identities through the nested dispatch.
+    pub fn forward<E>(&self, commands: &mut Commands, event: E) -> lunco_core::CommandOutcome
+    where
+        E: Event,
+        for<'a> E::Trigger<'a>: Default,
+    {
+        let active = self.active.clone();
+        let correlation = (self.pending.correlation_id != 0).then_some(self.pending.correlation_id);
+        commands.queue(move |world: &mut World| {
+            trigger_command_with_context(world, event, active, correlation);
+        });
+        lunco_core::CommandOutcome::Pending
+    }
+
+    /// Run validation and application together on the exclusive world, then deliver its terminal result.
+    pub fn queue(
+        &self,
+        commands: &mut Commands,
+        apply: impl FnOnce(&mut World) -> Result<lunco_command_contracts::Ack, String> + Send + 'static,
+    ) -> lunco_core::CommandOutcome {
+        let id = self.active.get();
+        let correlation = (self.pending.correlation_id != 0).then_some(self.pending.correlation_id);
+        commands.queue(move |world: &mut World| {
+            let result = apply(world);
+            if let Err(error) = &result {
+                warn!("command rejected: {error}");
+            }
+            finish_command_result(
+                world,
+                id,
+                correlation,
+                result,
+                ApiErrorCode::CommandRejected,
+            );
+        });
+        lunco_core::CommandOutcome::Pending
+    }
+
+    /// Return the terminal outcome to the command macro and its waiting transport.
+    pub fn complete(
+        &self,
+        commands: &mut Commands,
+        ack: lunco_command_contracts::Ack,
+    ) -> lunco_core::CommandOutcome {
+        let correlation = self.pending.correlation_id;
+        if correlation != 0
+            && let Some(id) = self.active.get()
+        {
+            commands.queue(move |world: &mut World| {
+                emit_command_response(world, Some(correlation), id);
+            });
+        }
+        lunco_core::CommandOutcome::Succeeded(ack)
+    }
+}
+
 /// Trigger a typed command with the exact captured request context. Deferred
 /// observers copy the context before it is restored; nested local commands never
 /// inherit an unrelated transport correlation.
@@ -581,7 +645,8 @@ pub fn globalize_command_ids_value(
     )
 }
 
-/// Read every global ID marked `#[authz_target]` anywhere in a command's reflected shape.
+/// Return distinct authorization identities in their first reflected occurrence
+/// order. The command owner validates individual operations on each identity.
 pub fn authz_target_gids_value(
     params: &ApiValue,
     type_id: std::any::TypeId,
@@ -590,9 +655,7 @@ pub fn authz_target_gids_value(
     let mut targets = Vec::new();
     collect_authz_targets(params, type_id, reg, &mut targets)?;
     let mut unique = std::collections::HashSet::with_capacity(targets.len());
-    if targets.iter().any(|target| !unique.insert(*target)) {
-        return Err("authorization target identities must be unique".to_owned());
-    }
+    targets.retain(|target| unique.insert(*target));
     Ok(targets)
 }
 
@@ -2167,6 +2230,29 @@ mod id_codec_tests {
         assert_eq!(
             authz_target_gids_value(&none, TypeId::of::<TColl>(), &reg),
             Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn repeated_roles_authorize_each_identity_once_in_command_order() {
+        #[derive(Reflect)]
+        struct TRoles {
+            primary: TControl,
+            related: Vec<TControl>,
+        }
+        let (mut reg, _, _, _) = setup();
+        reg.register::<TRoles>();
+        let role = |id| ApiValue::map([("target", api_value_from_u64(id))]);
+        let params = ApiValue::map([
+            ("primary", role(9000)),
+            (
+                "related",
+                ApiValue::Array(vec![role(8000), role(9000), role(8000)]),
+            ),
+        ]);
+        assert_eq!(
+            authz_target_gids_value(&params, TypeId::of::<TRoles>(), &reg),
+            Ok(vec![9000, 8000])
         );
     }
 

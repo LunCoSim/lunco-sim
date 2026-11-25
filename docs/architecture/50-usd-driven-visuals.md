@@ -45,13 +45,23 @@ simulation state. Authored updates reconcile value/dependency owners in place
 when possible and reinstantiate only affected subtrees when necessary.
 The projection owner reports actual work in `usd.document.projected` via
 `projection_mode` (`initial_load`, `in_place`, `subtree`, `full_stage`).
-Document publication makes the composed revision available to scripts. For a
-subtree or full rebuild, the USD edit indicator stays active while prims,
-deferred children or meshes in its stage and namespace are pending. The
-projection owner publishes `usd.projection.visuals_ready` after those queues
-drain and `usd.projection.visuals_failed` for a failed visual. This presentation
-boundary runs independently of simulation admission. The status UI distinguishes initial scene loading, USD edits, simulation
-preparation and visual streaming. Live interactions produce no projection event.
+Document publication makes the composed revision available to scripts. The USD
+edit indicator follows queued prims, deferred geometry and PBR texture admission
+within the affected stage and namespace. A shading-network edit also follows
+the surfaces bound to its changed producers, including producers outside the
+surface's namespace. The projection owner emits `usd.projection.visuals_ready`
+once those owners settle and `usd.projection.visuals_failed` with the affected
+prim and diagnostic on rejection. Simulation admission is independent. Live
+values produce no projection event.
+
+While a replacement PBR texture loads, the renderer retains the previous
+concrete material. A newly projected surface waits for its first concrete
+binding. The renderer removes Bevy's pink default standard-material handle
+before extraction. Custom WESL meshes select their authored fragment shader
+during pipeline specialization. A declared image still awaiting GPU upload
+defers the bind group. Terrain and globe streaming use `ShaderLookReady` to
+select drawable cover. The USD visual event reports scoped scene and PBR
+admission. A rendered frame is the evidence for GPU pipeline and pixel output.
 
 A custom annotation on any prim remains queryable through the document. Projection
 work requires a schema property, a projected USD interface (such as a primvar),
@@ -76,9 +86,14 @@ Use the current value's owner to choose the update path:
 | Discrete live pose (e.g. a door or a cart) | `TransformEntity` (live by default) in the active physics frame | `TransformEntity` with `intent: "Persistent"` |
 | Runtime object creation, deletion or joint release | `SpawnEntity`, `DeleteEntity`, `DetachJoint` (live by default) | Explicit Persistent intent or typed USD composition edit |
 | Environment lighting | `SetEnvironmentLight` (live by default) | Explicit Persistent intent for supported USD lighting settings |
+| Solver and contact participation of independent bodies | `SetSceneParticipation` validates independent bodies, contact shapes, radio blockers and view writes before applying them together | Author the initial body definitions and masses when preparing the scene |
 | Contact participation of an admitted collider | `SetColliderEnabled` on the native collider entity | Author `PhysicsCollisionAPI` and `physics:collisionEnabled` |
 | Object appearance during interactive tuning | `SetObjectProperty` (live by default) | Commit with `intent: "Persistent"` when the user accepts the setting |
 | Topology, composition or authoring metadata | Commit typed USD operations and reconcile the affected projection | The same document transaction |
+
+Lighting commands validate all supplied fields together. A persistent request uses the document and generation that supplied the mounted light. A committed multi-field edit produces one undo entry. The active editor tab does not select the lighting destination. Environment settings and ambient lights resolve under the active mount from the prepared type index. Native namespace admission updates that index in the same traversal that discovers changed asset references. A change to a prim’s type updates its own membership. Ambient authoring validates each matched DomeLight against its current composed fields, including lights the renderer could not instantiate.
+
+For authored changes, distinguish a changed property from a resynced namespace. A changed property can update its consumers in place. A structural resync can invalidate the subtree at the reported path. Material bindings and other dependencies can reach consumers outside that subtree. [OpenUSD object-change notices](https://openusd.org/release/api/class_usd_notice_1_1_objects_changed.html)
 
 `SetSceneView` takes a bounded batch of typed writes. The dispatcher resolves
 live ECS entities, validates the complete batch against the active mount and
@@ -87,7 +102,7 @@ entity. Owners apply changes to their own components. This command does not
 advance document generation or publish a USD stage change. Use the ordinary
 document path if the new value needs to participate in USD composition.
 
-Opening a physical door is a runtime action, not a document edit.
+Opening a physical door is a runtime action.
 Read its authored initial state, limits, travel, or hinge configuration from
 USD; keep the current open/closed state in the scenario or actuator owner.
 Use joint input ports for continuously simulated hinges and sliders.
@@ -126,7 +141,11 @@ time-sampled visibility retains its animation owner and rejects a direct
 independent visibility write. The animation owner publishes the sampled opinion
 to the same subtree visibility resolver; an animated ancestor and runtime hide
 therefore compose using one visibility owner. A transform-only animated prim may still have
-independently controlled visibility. The runtime resolver uses native
+independently controlled visibility. At initial admission, the prepared stage
+retains each hidden prim's local pruning and purpose-specific visibility facts.
+Live reveal reads those facts immediately. Once a canonical stage is mounted
+the same query reads its current composed namespace, including view-layer edits.
+The runtime resolver uses native
 Imageable schema accessors to substitute the live ordinary visibility opinion;
 no USD layer is mutated. `SetObjectProperty(visible, Interactive)` is the
 same visibility owner, not a direct Bevy component write; persistent visibility

@@ -137,9 +137,7 @@ fn on_tick(me, ctx) {
         return;
     }
 
-    // The live command is synchronous, while the USD operation is deliberately
-    // deferred through the normal command observer. Give both projections a
-    // tick before measuring them.
+    // Wait for the committed authored pose to reach the scene consumers.
     if this.elapsed < 1.0 { return; }
 
     let position = world_pos(this.target);

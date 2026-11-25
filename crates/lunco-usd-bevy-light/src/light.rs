@@ -54,7 +54,7 @@
 
 use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
-use lunco_render::{LightRangeAuthorship, LunarSunShadow, ShadowRangeAuthorship};
+use lunco_render::LightRangeAuthorship;
 use lunco_usd_bevy_stage::read::get_attribute_as_vec3;
 use openusd::sdf::Path as SdfPath;
 use openusd_schemas::lux::tokens as ltok;
@@ -109,108 +109,45 @@ pub(crate) struct UsdDomeAmbient {
 /// dedicated fill. USD owns traversal, activity, defaults and opinion strength.
 /// The authoring solve stays in f64; rendering performs its own GPU conversion.
 pub fn untextured_dome_intensity_sum(
-    stage: &openusd::usd::Stage,
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
+    domes: impl IntoIterator<Item = SdfPath>,
     exclude: Option<&SdfPath>,
 ) -> Result<f64, LightReadError> {
-    let mut paths = Vec::new();
-    stage
-        .traverse(openusd::usd::PrimPredicate::DEFAULT, |path| {
-            paths.push(path.clone())
-        })
-        .map_err(|_| LightReadError)?;
-    let mut total = 0.0_f64;
-    for path in paths {
+    let mut total = 0.0;
+    for path in domes {
         if exclude == Some(&path) {
             continue;
         }
-        let prim = stage.prim(path.clone()).map_err(|_| LightReadError)?;
-        if prim
-            .type_name()
-            .map_err(|_| LightReadError)?
-            .as_ref()
-            .map(|name| name.as_str())
-            != Some(ltok::DOME_LIGHT)
-        {
-            continue;
+        for name in [
+            ltok::INPUTS_TEXTURE_FILE,
+            ltok::INPUTS_INTENSITY,
+            ltok::INPUTS_EXPOSURE,
+        ] {
+            if reader.has_time_samples(&path, name) || !reader.connections(&path, name).is_empty() {
+                return Err(LightReadError);
+            }
         }
-        let texture = prim.attribute(ltok::INPUTS_TEXTURE_FILE);
-        require_static_dome_input(&texture)?;
-        // UsdLux declares texture:file without a default. An omitted texture
-        // is the standard untextured dome; a failed native read still rejects.
-        let texture = texture
-            .get::<openusd::sdf::AssetPath>()
+        let texture = reader
+            .asset_identifier(&path, ltok::INPUTS_TEXTURE_FILE)
             .map_err(|_| LightReadError)?;
-        if texture.is_some_and(|asset| !asset.as_str().is_empty()) {
+        if texture.is_none() && reader.has_authored_attribute(&path, ltok::INPUTS_TEXTURE_FILE) {
+            return Err(LightReadError);
+        }
+        if texture.is_some_and(|asset| !asset.is_empty()) {
             continue;
         }
-        let intensity = prim.attribute(ltok::INPUTS_INTENSITY);
-        let exposure = prim.attribute(ltok::INPUTS_EXPOSURE);
-        require_static_dome_input(&intensity)?;
-        require_static_dome_input(&exposure)?;
-        let intensity = f64::from(
-            intensity
-                .get::<f32>()
-                .map_err(|_| LightReadError)?
-                .ok_or(LightReadError)?,
-        );
-        let exposure = f64::from(
-            exposure
-                .get::<f32>()
-                .map_err(|_| LightReadError)?
-                .ok_or(LightReadError)?,
-        );
+        let intensity = f64::from(read_required_real(reader, &path, ltok::INPUTS_INTENSITY)?);
+        let exposure = f64::from(read_required_real(reader, &path, ltok::INPUTS_EXPOSURE)?);
         let contribution = intensity * exposure.exp2();
         if !contribution.is_finite() || contribution < 0.0 {
             return Err(LightReadError);
         }
         total += contribution;
     }
-    if total.is_finite() {
-        Ok(total)
-    } else {
-        Err(LightReadError)
-    }
-}
-
-fn require_static_dome_input(attribute: &openusd::usd::Attribute) -> Result<(), LightReadError> {
-    if attribute
-        .might_be_time_varying()
-        .map_err(|_| LightReadError)?
-        || !attribute
-            .connections()
-            .map_err(|_| LightReadError)?
-            .is_empty()
-    {
+    if !total.is_finite() {
         return Err(LightReadError);
     }
-    Ok(())
-}
-
-/// The intensity to author on a *dedicated* ambient-fill dome so that the
-/// scene's composed ambient total — the sum over all untextured domes, see
-/// [`untextured_dome_intensity_sum`] — lands exactly on `requested_total`.
-///
-/// # Why subtract rather than author the total
-///
-/// The inspector READS the composed total (`GlobalAmbientLight::brightness`) but
-/// WRITES a single dome. Author the total on that dome and a scene that already
-/// has an untextured dome (say a regolith bounce at 2600) composes
-/// `2600 + requested`; the slider then reads that back and visibly jumps away
-/// from where the user put it, every drag.
-///
-/// Clamps at 0 — a dome cannot emit negatively — which means a request *below*
-/// what other domes already contribute is unsatisfiable. Callers should surface
-/// that rather than silently render the wrong brightness; see
-/// [`ambient_fill_saturates`].
-pub fn ambient_fill_intensity(requested_total: f64, other_domes_total: f64) -> f64 {
-    (requested_total - other_domes_total).max(0.0)
-}
-
-/// Whether [`ambient_fill_intensity`] had to clamp — i.e. the other authored
-/// domes alone already exceed `requested_total`, so the composed ambient will be
-/// brighter than asked no matter what the fill dome does.
-pub fn ambient_fill_saturates(requested_total: f64, other_domes_total: f64) -> bool {
-    other_domes_total > requested_total
+    Ok(total)
 }
 
 /// Read native USD intensity and exposure at the rendering boundary.
@@ -234,7 +171,7 @@ pub fn read_intensity_with_exposure(
     }
 }
 
-fn read_required_real(
+pub(crate) fn read_required_real(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
@@ -252,7 +189,7 @@ fn read_required_real(
     }
 }
 
-fn read_required_bool(
+pub(crate) fn read_required_bool(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
@@ -271,7 +208,7 @@ fn read_required_bool(
 /// Missing attributes retain the documented USD/Graphics default; malformed or
 /// non-finite authored values are rejected instead of being converted into a
 /// plausible-looking light.
-fn read_authored_real(
+pub(crate) fn read_authored_real(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     name: &str,
@@ -323,9 +260,17 @@ pub(crate) fn read_light_color(
         );
         return Err(LightReadError);
     }
+    Ok(color * light_temperature_multiplier(reader, path)?)
+}
+
+/// Native UsdLux multiplier applied to the authored tint.
+pub fn light_temperature_multiplier(
+    reader: &impl lunco_usd_bevy_stage::UsdRead,
+    path: &SdfPath,
+) -> Result<Vec3, LightReadError> {
     let enabled = read_required_bool(reader, path, ltok::INPUTS_ENABLE_COLOR_TEMPERATURE)?;
     if !enabled {
-        return Ok(color);
+        return Ok(Vec3::ONE);
     }
     let kelvin = read_required_real(reader, path, ltok::INPUTS_COLOR_TEMPERATURE)?;
     let Some(temperature) = blackbody_rgb(kelvin) else {
@@ -335,7 +280,7 @@ pub(crate) fn read_light_color(
         );
         return Err(LightReadError);
     };
-    Ok(color * temperature)
+    Ok(temperature)
 }
 
 /// Read an authored USD boolean, preserving the distinction between an omitted
@@ -488,7 +433,7 @@ fn read_light_range(
 /// authored `-1` value means "engine default" here. An author who applies the
 /// API without overriding the attribute therefore lands on the engine default,
 /// while other invalid negative/zero values are rejected.
-fn read_shadow_distance(
+pub(crate) fn read_shadow_distance(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
     default: f32,
@@ -534,7 +479,7 @@ const USDLUX_SHADOW_ENABLE: bool = true;
 /// The same rule applies to every light type: an authored value is preserved,
 /// and the `UsdLuxShadowAPI` schema fallback is used only when the attribute is
 /// omitted.
-fn read_shadow_enable(
+pub(crate) fn read_shadow_enable(
     reader: &impl lunco_usd_bevy_stage::UsdRead,
     path: &SdfPath,
 ) -> Result<bool, LightReadError> {
@@ -548,7 +493,7 @@ fn read_shadow_enable(
 /// illuminance. With `normalize`, USD defines intensity directly in lux. With
 /// normalization off, intensity is emitted luminance and USD scales received
 /// illuminance by the distant source's angular size factor.
-fn distant_light_illuminance(intensity: f32, normalize: bool, angle_degrees: f32) -> f32 {
+pub fn distant_light_illuminance(intensity: f32, normalize: bool, angle_degrees: f32) -> f32 {
     if normalize {
         return intensity;
     }
@@ -602,128 +547,12 @@ pub fn instantiate_light_prim(
     };
     match prim_type {
         Some(ltok::DISTANT_LIGHT) => {
-            // Resolve the current USD DistantLight schema fallback (50,000) if
-            // intensity is omitted. This is scene data resolved by USD, not a
-            // value selected by the render-quality profile.
-            let Ok(illuminance_lux) = read_intensity_with_exposure(reader, sdf_path) else {
-                return false;
-            };
-            let Ok(c) = read_light_color(reader, sdf_path) else {
-                return false;
-            };
-            let color = Color::linear_rgb(c.x, c.y, c.z);
-
-            // Start from the canonical lunar sun (single source of truth) and
-            // override only the attributes the prim authors. An unauthored
-            // attribute therefore lands on engine policy by construction — no
-            // copy of the cascade split / bias / atlas values can drift here.
-            //
-            // `firstCascadeFarBound` is the near/far split inside ONE light:
-            // tight near cascades keep contact shadows crisp while the far
-            // cascades carry mesh-accurate terrain self-shadow out to
-            // `inputs:shadow:distance` (the heightfield march covers beyond).
-            // `inputs:angle` is the sun's angular diameter driving the
-            // horizon-shadow penumbra.
-            let d = LunarSunShadow::for_profile(quality);
-            // Physical identity (illuminance + apparent size) follows USD's
-            // `normalize`, `intensity`, `exposure`, and `angle` semantics. USD
-            // schema fallbacks resolve through the composed reader.
-            let Ok(angle) = read_required_real(reader, sdf_path, ltok::INPUTS_ANGLE) else {
-                return false;
-            };
-            if !(0.0..=360.0).contains(&angle) {
-                error!(
-                    "[usd-bevy] {} has out-of-range DistantLight inputs:angle = {angle}",
-                    sdf_path.as_str()
-                );
-                return false;
-            }
-            let angular_diameter_deg = angle;
-            let Ok(normalize) = read_required_bool(reader, sdf_path, ltok::INPUTS_NORMALIZE) else {
-                return false;
-            };
-            let usd_illuminance_scale =
-                distant_light_illuminance(1.0, normalize, angular_diameter_deg);
-            let illuminance_lux = illuminance_lux * usd_illuminance_scale;
-            // Renderer settings supply defaults. Authored content overrides
-            // only the two range attributes below, and the provenance marker
-            // preserves that distinction for live Graphics edits.
-            let first_cascade_authored =
-                reader.has_authored_attribute(sdf_path, "lunco:shadow:firstCascadeFarBound");
-            let first_cascade_far_bound = match read_authored_real(
-                reader,
-                sdf_path,
-                "lunco:shadow:firstCascadeFarBound",
-            ) {
-                Ok(Some(distance)) => {
-                    let metres = convention.length(distance as f64) as f32;
-                    if metres.is_finite() {
-                        metres
-                    } else {
-                        error!(
-                            "[usd-bevy] {} has a first shadow cascade bound that is not finite after unit conversion",
-                            sdf_path.as_str()
-                        );
-                        return false;
-                    }
-                }
-                Ok(None) => d.first_cascade_far_bound,
-                Err(_) => return false,
-            };
-            let Ok((maximum_distance, maximum_authored)) =
-                read_shadow_distance(reader, sdf_path, d.maximum_distance, convention)
+            let Ok(settings) =
+                crate::distant::DistantSettings::read(reader, sdf_path, convention, quality)
             else {
                 return false;
             };
-            if first_cascade_far_bound <= d.minimum_distance
-                || first_cascade_far_bound >= maximum_distance
-            {
-                error!(
-                    "[usd-bevy] {} has invalid shadow cascade bounds: minimum {}, first {}, maximum {}",
-                    sdf_path.as_str(),
-                    d.minimum_distance,
-                    first_cascade_far_bound,
-                    maximum_distance
-                );
-                return false;
-            }
-            let sun = LunarSunShadow {
-                maximum_distance,
-                first_cascade_far_bound,
-                ..d
-            };
-
-            // A body's reflected fill authors `false` — see
-            // `lunco://lighting/earthshine.usda`.
-            let Ok(casts_shadows) = read_shadow_enable(reader, sdf_path) else {
-                return false;
-            };
-            let Some(cascade_config) = sun.cascade_config() else {
-                error!(
-                    "[usd-bevy] {} has invalid resolved shadow cascade settings; refusing the DistantLight",
-                    sdf_path.as_str()
-                );
-                return false;
-            };
-
-            commands.insert_resource(sun.shadow_map());
-            commands.entity(entity).try_insert((
-                lunco_core::SunAngularDiameter(angular_diameter_deg),
-                sun.directional_light(color, illuminance_lux, casts_shadows),
-                cascade_config,
-                ShadowRangeAuthorship {
-                    first_cascade_far_bound: first_cascade_authored,
-                    maximum_distance: maximum_authored,
-                },
-                UsdAuthoredLight,
-            ));
-            debug!(
-                "[usd-bevy] {} DistantLight illuminance={} shadow range {}..{} m",
-                sdf_path.as_str(),
-                illuminance_lux,
-                sun.first_cascade_far_bound,
-                sun.maximum_distance,
-            );
+            settings.spawn(commands, entity);
             true
         }
         Some(ltok::DOME_LIGHT) => {
