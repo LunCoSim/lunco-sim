@@ -170,34 +170,25 @@ used; the route program does not invent a second terrain-derived path.
 
 ## Route line: derive a bounded runtime annotation
 
-The scene-level Rhai route program and composed USD points are the single source
-for the route that drives the subject. The reusable `waypoint_editor` Rhai tool
-derives one disposable `@view@` `BasisCurves` annotation from those same active point
-children. It uses exact composed paths and writes the route view only after a
-route revision changes and the canonical projection has settled; it does not
-create a second authored route, a subject component, or a per-frame document
-write. Waypoint labels remain separate: the
-marker prim authors `lunco:billboard*`, and the generic billboard renderer owns
-their screen-space presentation.
+Composed USD points define the initial route; the scene-level Rhai program
+owns the active route plan and is the sole source for guidance. The reusable `waypoint_editor` Rhai tool
+derives a live ribbon from the active point children. The route program
+refreshes geometry when their ordered positions change. The mounted
+route owns a keyed presentation object with an emissive, shadowless material.
+On a DEM the terrain surface displays its annotation. A scene without terrain
+uses the narrow open mesh anchored at the first point. With fewer than two
+points the curve is hidden and retains its identity. The generic billboard
+renderer displays each marker's authored waypoint label.
 
-The route ribbon is intentionally a lightweight world-space annotation. It is an
-oriented `BasisCurves` surface: standard `normals` make its narrow `widths` a flat
-strip rather than a tube. It is anchored at the first point and stores the remaining
-points in local curve coordinates, so large-world coordinates do not need to be
-duplicated into every vertex. The reusable USD asset owns its material, depth behavior,
-and shadowless/additive presentation; the tool owns only the current point topology.
-It is not a terrain mesh, a physics surface, or a camera-path preview. If fewer
-than two active points remain, the tool removes the view-layer ribbon atomically.
-
-USD remains authoritative for point identity, composed transforms, active state,
-and mission topology. A transient generation gap while a typed edit is being
+USD remains authoritative for authored point identity, initial transforms and
+authored mission topology. Live waypoint additions, positions, removals and
+colors reside in the program's active plan and native marker/sensor entities. A transient generation gap while a typed edit is being
 projected is retried by the route program; a point-name read that is not
 synchronized is rejected instead of guessing a duplicate path. A missing
 subject, malformed point, or persistent unavailable USD generation is a visible
 route-program error and leaves the subject safely braked. The selected program
 path, not a hardcoded `/Route`, determines which plan receives an edit or a
-control edge. Because the ribbon is generated in the disposable view layer,
-closing that view leaves the authored Twin and its route points unchanged.
+control edge. Closing the scene retires the route’s presentation children.
 
 ## Difficulty tiers as a variantSet
 

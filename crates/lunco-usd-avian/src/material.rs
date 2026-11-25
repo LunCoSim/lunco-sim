@@ -1,6 +1,6 @@
 //! USD physics material authoring and Avian surface mapping.
 
-use avian3d::prelude::CoefficientCombine;
+use avian3d::prelude::{CoefficientCombine, Friction, Restitution};
 use openusd::sdf::Path as SdfPath;
 
 /// How two contacting surfaces' coefficients are combined — `PhysxMaterialAPI`'s
@@ -49,6 +49,35 @@ pub struct PhysicsMaterial {
     pub(crate) friction_combine: Option<CoefficientCombine>,
     /// `physxMaterial:restitutionCombineMode`.
     pub(crate) restitution_combine: Option<CoefficientCombine>,
+}
+
+impl PhysicsMaterial {
+    /// Native contact components from the same validated material facts used
+    /// for authored prims and generated runtime colliders.
+    pub fn friction(&self) -> Option<Friction> {
+        if self.dynamic_friction.is_none() && self.static_friction.is_none() {
+            return None;
+        }
+        let defaults = Friction::default();
+        Some(Friction {
+            dynamic_coefficient: self
+                .dynamic_friction
+                .map_or(defaults.dynamic_coefficient, Into::into),
+            static_coefficient: self
+                .static_friction
+                .map_or(defaults.static_coefficient, Into::into),
+            combine_rule: self.friction_combine.unwrap_or(defaults.combine_rule),
+        })
+    }
+
+    pub fn restitution(&self) -> Option<Restitution> {
+        self.restitution.map(|value| Restitution {
+            coefficient: value.into(),
+            combine_rule: self
+                .restitution_combine
+                .unwrap_or(Restitution::default().combine_rule),
+        })
+    }
 }
 
 /// Resolve the physics material bound to `prim` and read its surface properties.
@@ -108,8 +137,6 @@ pub fn read_physics_material(
     reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
     prim: &SdfPath,
 ) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
-    use openusd_schemas::physics::tokens as ptok;
-
     let Some(mat_path) = reader
         .bound_material(prim, lunco_usd_bevy_stage::MaterialPurpose::Physics)
         .map_err(|detail| {
@@ -120,7 +147,16 @@ pub fn read_physics_material(
     };
     let mat = SdfPath::new(&mat_path)
         .map_err(|_| PhysicsMaterialReadError::new("material:binding:physics"))?;
-    if !reader.has_api_schema(&mat, "PhysicsMaterialAPI") {
+    read_material_prim(reader, &mat)
+}
+
+/// Decode a material explicitly selected by a runtime object's creator.
+pub fn read_material_prim(
+    reader: &dyn lunco_usd_bevy_stage::read::UsdReadObject,
+    mat: &SdfPath,
+) -> Result<Option<PhysicsMaterial>, PhysicsMaterialReadError> {
+    use openusd_schemas::physics::tokens as ptok;
+    if !reader.has_api_schema(mat, "PhysicsMaterialAPI") {
         return Ok(None);
     }
     let read_coefficient =

@@ -44,10 +44,10 @@ is refreshed by its external owner — a disk-backed `.rhai` file, USD
 `FileBacked::reload_base` contract. It updates the live document generation,
 parse/compile invalidation, and clean baseline without creating a second
 `DocumentHost` undo entry or duplicating the source owner's journal entry.
-Likewise, a derived presentation such as the USD route ribbon uses a typed
-transient projection command. It updates the document's disposable `@view@` layer and its
-projection cursor, but it is not authored content and therefore is not saved,
-undone, or journaled.
+Disposable USD opinions submitted through `ApplyUsdTransientOps` advance their
+document's projection cursor outside undo, save and journal history. Runtime
+route ribbons and drag previews live on their mounted ECS owner and preserve
+the document generation.
 
 User changes remain different: Rhai/ScriptDocument source and pin edits,
 Modelica source/structural edits, and USD authored operations all go through

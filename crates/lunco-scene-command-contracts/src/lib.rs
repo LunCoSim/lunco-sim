@@ -139,6 +139,70 @@ pub struct SetSceneParticipation {
     pub views: Vec<SceneViewBatch>,
 }
 
+/// One generated cuboid in a scene-scoped runtime object group.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct RuntimeObjectSpec {
+    pub key: String,
+    /// Position in the active physics frame in metres.
+    pub translation: [f64; 3],
+    /// Full dimensions in metres.
+    pub size: [f64; 3],
+    /// Linear render RGB.
+    pub color: [f32; 3],
+    /// A positive mass creates a dynamic rigid body; omitted means static or visual.
+    #[serde(default)]
+    #[reflect(default)]
+    pub mass: Option<f64>,
+    pub collider: bool,
+    pub active: bool,
+    pub visible: bool,
+    /// Optional composed PhysicsMaterialAPI prim in the mounted document.
+    #[serde(default)]
+    #[reflect(default)]
+    pub physics_material: Option<String>,
+    /// Optional composed PhysicsCollisionGroup prim in the mounted document.
+    #[serde(default)]
+    #[reflect(default)]
+    pub collision_group: Option<String>,
+}
+
+/// Atomically replace a named group of generated native runtime objects in an
+/// admitted scene. An empty group retires its existing objects. No USD layer is
+/// written. Physical groups are prepared between simulation runs.
+#[Command]
+pub struct ReplaceRuntimeObjects {
+    pub doc_id: u64,
+    pub group: String,
+    pub objects: Vec<RuntimeObjectSpec>,
+}
+
+/// A live spherical marker in the active physics frame. Dimensions are metres.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct RuntimeMarkerSpec {
+    pub center: [f64; 3],
+    pub radius: f64,
+    /// Linear RGB at the rendering boundary.
+    pub color: [f32; 3],
+    pub opacity: f32,
+    /// Optional radius of a separate Avian overlap sensor.
+    #[serde(default)]
+    #[reflect(default)]
+    pub sensor_radius: Option<f64>,
+}
+
+/// Create or update a single live marker, or retire it by supplying a null marker.
+#[Command]
+pub struct SetRuntimeMarker {
+    /// Mounted USD prim owning this marker's lifetime.
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub owner: Entity,
+    /// Identity within this owner.
+    pub key: String,
+    pub marker: Option<RuntimeMarkerSpec>,
+}
+
 /// Remove a scene entity, optionally persisting the edit to its USD document.
 ///
 /// Persistent intent authors a journaled, undoable runtime-layer edit. A

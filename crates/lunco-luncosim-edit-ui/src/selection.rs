@@ -472,7 +472,7 @@ pub fn on_select_entity(
 }
 
 #[on_command(SelectUsdPrim)]
-pub fn on_select_usd_prim(
+pub(crate) fn on_select_usd_prim(
     trigger: On<SelectUsdPrim>,
     viewport: Option<Res<UsdViewportState>>,
     q_paths: Query<(Entity, &UsdPrimPath)>,
@@ -480,6 +480,7 @@ pub fn on_select_usd_prim(
     mut selected: ResMut<SelectedEntities>,
     mut inspector_target: ResMut<SelectionTarget>,
     q_old: Query<Entity, With<Selected>>,
+    mut sessions: ResMut<crate::ui::EditorSessionSelections>,
     mut commands: Commands,
 ) {
     let cmd = trigger.event();
@@ -508,6 +509,13 @@ pub fn on_select_usd_prim(
         );
         return;
     };
+    if !session.projection_ready() {
+        warn!(
+            "SELECT_USD_PRIM: preview {} is preparing its selection surface",
+            cmd.preview.0
+        );
+        return;
+    }
     let Some(target) = resolve_usd_prim_in_preview(
         session.scene_root(),
         stage.id(),
@@ -516,12 +524,13 @@ pub fn on_select_usd_prim(
         &q_parents,
     ) else {
         warn!(
-            "SELECT_USD_PRIM: preview {} has no composed prim at `{}`",
+            "SELECT_USD_PRIM: preview {} has no unique projected prim at `{}`",
             cmd.preview.0, cmd.path
         );
         if usd_selection_intent(cmd.extend, cmd.toggle) == SelectionIntent::Replace {
             clear_selection(&mut commands, &mut selected, q_old.iter());
             inspector_target.part = None;
+            sessions.record_command(session, &selected, &inspector_target, &q_paths, &q_parents);
         }
         return;
     };
@@ -534,6 +543,7 @@ pub fn on_select_usd_prim(
         usd_selection_intent(cmd.extend, cmd.toggle),
     );
     inspector_target.part = None;
+    sessions.record_command(session, &selected, &inspector_target, &q_paths, &q_parents);
     info!(
         "SELECT_USD_PRIM: preview {} selected {}",
         cmd.preview.0, cmd.path
@@ -546,21 +556,21 @@ pub fn on_select_usd_prim(
 /// the hierarchy check prevents a live-scene entity that happens to share the
 /// stage handle from entering the editor selection. The preview session owns
 /// both inputs, so callers never need a second identity map.
-fn resolve_usd_prim_in_preview(
+pub(crate) fn resolve_usd_prim_in_preview(
     preview_root: Entity,
     stage_id: bevy::asset::AssetId<UsdStageAsset>,
     path: &str,
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
-    q_paths
-        .iter()
-        .find(|(entity, prim)| {
-            prim.stage_handle.id() == stage_id
-                && prim.path == path
-                && lunco_usd_bevy_scene::is_preview_entity(*entity, preview_root, q_parents)
-        })
-        .map(|(entity, _)| entity)
+    let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
+        (prim.stage_handle.id() == stage_id
+            && prim.path == path
+            && lunco_usd_bevy_scene::is_preview_entity(entity, preview_root, q_parents))
+        .then_some(entity)
+    });
+    let entity = matches.next()?;
+    matches.next().is_none().then_some(entity)
 }
 
 /// Finds the most appropriate entity to select from a hit entity.

@@ -50,7 +50,7 @@ fn document_generation(doc) {
 }
 
 fn inspect_route_curve_view(doc) {
-    let entity = find_path_in_document(doc, ROUTE + "/RouteRibbon/Geometry");
+    let entity = waypoint_editor::ribbon_entity(doc, ROUTE);
     if entity < 0 { return (); }
     query("InspectUsdCurveView", #{ doc_id: doc, entity_id: entity })
 }
@@ -128,7 +128,7 @@ fn delete_last_route_point_for_view_test(state, next_count, visibility, needs_me
     }
     let target = route.paths[route.paths.len() - 1];
     let deleted = waypoint_editor::on_delete(#{
-        doc_id: state.doc, route_path: ROUTE, selected_path: target,
+        edit_intent:"Persistent", doc_id: state.doc, route_path: ROUTE, selected_path: target,
     });
     if deleted == () || deleted.ok != true || deleted.path != target {
         state.failure = label + " was rejected: "
@@ -147,7 +147,7 @@ fn add_route_point_for_view_test(state, position, next_count, visibility, needs_
     if !expectation.ok { return state; }
     let point = point3(position, "active_physics");
     let added = waypoint_editor::on_click(#{
-        button: "primary",
+        edit_intent:"Persistent", button: "primary",
         doc_id: state.doc,
         scene_root_path: ROOT,
         route_path: ROUTE,
@@ -192,14 +192,6 @@ fn add_second_route_point(me) {
         "restoring two route points");
 }
 
-fn live_render_translation(entity) {
-    if entity < 0 { return (); }
-    try {
-        let translation = get(entity, "Transform.translation");
-        [translation.x, translation.y, translation.z]
-    } catch (error) { () }
-}
-
 fn report(me, passed, message) {
     if me.done { return me; }
     me.done = true;
@@ -213,7 +205,7 @@ fn simulation_dependencies(me, ctx) {
     let subject = find_path(ROOT + "/Subject");
     let reads = [subject, find_path(ROOT + "/Avatar")];
     #{ modelica_entities: [subject], entity_reads: reads, entity_writes: [],
-       query_reads: ["InspectSelection", "InspectUsdCurveView", "InspectUsdSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "ReadExposures", "QueryEntity"],
+       query_reads: ["InspectSceneContextMenu", "InspectSelection", "InspectUsdCurveView", "InspectUsdSelection", "ListOpenDocuments", "QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "ReadExposures", "QueryEntity"],
        required_inputs: [] }
 }
 
@@ -358,7 +350,7 @@ fn prepare_route_and_add_unpossessed(me) {
         && unassigned_programs.contains(program_path)
         && unassigned_programs.contains(ROOT + "/AlternateRoute/Program"),
         "unpossessed discovery finds source-bound programs without attribute payloads"));
-    let ambiguous_pointer = #{
+    let ambiguous_pointer = #{edit_intent:"Persistent",
         button: "primary", doc_id: this.doc, scene_root_path: ROOT,
         target_path: ROOT + "/Ground", hit_path: ROOT + "/Ground",
         prim_paths: [ROOT + "/Ground", ROOT],
@@ -423,17 +415,11 @@ fn prepare_route_and_add_unpossessed(me) {
         path: ROUTE + "/P0/Dome",
         attrs: ["lunco:interaction:right"], schemas: true,
     });
-    let ribbon_api = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: ROUTE + "/RouteRibbon/Geometry",
-        attrs: ["lunco:interaction:right", "curveVertexCounts"], schemas: true,
-    });
+    let ribbon_api = waypoint_editor::route_view(this.doc, ROUTE, "route.ribbon");
     this.subject = find_path_in_document(this.doc, ROOT + "/Subject");
     this.point = find_path_in_document(this.doc, ROUTE + "/P0");
     this.marker = find_path_in_document(this.doc, ROUTE + "/P0/Dome");
-    let ribbon_entity = find_path_in_document(
-        this.doc, ROUTE + "/RouteRibbon/Geometry",
-    );
+    let ribbon_entity = ribbon_api.entity_id;
     if unused == () || unused.ok == false
         || route == () || route.ok == false
         || pointer_api == () || pointer_api.ok == false
@@ -442,18 +428,14 @@ fn prepare_route_and_add_unpossessed(me) {
         || !pointer_api.api_schemas.contains("LunCoPointerInteractionAPI")
         || pointer_api.attrs == ()
         || pointer_api.attrs["lunco:interaction:right"] != "context"
-        || ribbon_api.api_schemas == ()
-        || !ribbon_api.api_schemas.contains("LunCoPointerInteractionAPI")
-        || ribbon_api.attrs == ()
-        || ribbon_api.attrs["curveVertexCounts"] == ()
-        || ribbon_api.attrs["lunco:interaction:right"] != "context"
+        || ribbon_api.right != "context" || ribbon_api.left != "pass_through"
         || this.subject < 0 || this.point < 0 || this.marker < 0
         || route.children == () || !route.children.contains(ROUTE + "/P2")
         || route.doc_id != this.doc {
         this.failure = "route fixture identities or pointer schemas did not compose";
         return;
     }
-    if ribbon_entity < 0 {
+    if ribbon_entity == () {
         this.failure = "route ribbon geometry has no live view identity";
         return;
     }
@@ -471,8 +453,8 @@ fn prepare_route_and_add_unpossessed(me) {
 
     this.route_children_before_edit = route.children;
     this.generation_before_add = document_generation(this.doc);
-    this.ribbon_seed_count = ribbon_api.attrs["curveVertexCounts"][0];
-    let add = #{
+    this.ribbon_entity = ribbon_entity;
+    let add = #{edit_intent:"Persistent",
         button: "primary",
         doc_id: this.doc,
         scene_root_path: ROOT,
@@ -499,7 +481,6 @@ fn prepare_route_and_add_unpossessed(me) {
         this.failure = "route add reused a waypoint path that existed before the unpossessed edit";
         return;
     }
-    this.generation_after_add = document_generation(this.doc);
     this.added_without_possession = added.path;
     this.waiting_for = "the unpossessed waypoint trigger projection";
 }
@@ -517,19 +498,11 @@ fn unpossessed_waypoint_ready(me) {
     let ribbon = route_curve_view_is_ready_after_edit_state(this);
     this = ribbon.state;
     if !ribbon.ready { return false; }
-    let curve = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: ROUTE + "/RouteRibbon/Geometry",
-        attrs: ["curveVertexCounts"],
-    });
+    let curve = waypoint_editor::ribbon_entity(this.doc, ROUTE);
     let generation = document_generation(this.doc);
-    this.checks.push(t_true(to_int(this.generation_after_add)
-        == to_int(this.generation_before_add) + 3
-        && generation == this.generation_after_add,
+    this.checks.push(t_true(to_int(generation) == to_int(this.generation_before_add) + 3,
         "adding one point applies its three USD ops once with no follow-up document projection"));
-    this.checks.push(t_true(curve != () && curve.ok != false && curve.attrs != ()
-        && curve.attrs["curveVertexCounts"] != ()
-        && curve.attrs["curveVertexCounts"][0] == this.ribbon_seed_count,
+    this.checks.push(t_true(curve == this.ribbon_entity,
         "route ribbon geometry stays outside the edited USD document"));
     true
 }
@@ -542,7 +515,7 @@ fn delete_unpossessed_waypoint(me) {
     this = expectation.state;
     if !expectation.ok { return; }
     let deleted = waypoint_editor::on_delete(#{
-        doc_id: this.doc,
+        edit_intent:"Persistent", doc_id: this.doc,
         selected_path: this.added_without_possession,
     });
     if deleted == () || deleted.ok != true
@@ -550,7 +523,6 @@ fn delete_unpossessed_waypoint(me) {
         this.failure = "route delete failed when no rover was possessed";
         return;
     }
-    this.generation_after_delete = document_generation(this.doc);
     this.waiting_for = "the unpossessed waypoint deletion projection";
 }
 
@@ -565,9 +537,7 @@ fn unpossessed_waypoint_deleted(me) {
     this = ribbon.state;
     if !ribbon.ready { return false; }
     let generation = document_generation(this.doc);
-    this.checks.push(t_true(to_int(this.generation_after_delete)
-        == to_int(this.generation_before_delete) + 1
-        && generation == this.generation_after_delete,
+    this.checks.push(t_true(to_int(generation) == to_int(this.generation_before_delete) + 1,
         "deleting one point projects one authored change without a ribbon projection"));
     true
 }
@@ -713,18 +683,39 @@ fn check_possession_and_selection(me) {
     if !is_controlled(this.subject) {
         this.failure = "rover possession was lost during the injected context click";
     } else if !selected_only(this.doc, ROOT + "/Subject") {
-        this.failure = "the possessed right-click changed the existing rover selection";
+        this.failure = "the possessed right-click changed the rover selection: live "
+            + query("InspectSelection", #{}).to_string() + ", editor "
+            + query("InspectUsdSelection", #{}).to_string();
     }
+}
+
+fn menu_item_center(label) {
+    let menu = query("InspectSceneContextMenu",#{});
+    if menu != () && menu.open == true {
+        for item in menu.items {
+            if item.label == label && item.center != () { return item.center; }
+        }
+    }
+    ()
+}
+fn select_menu_is_painted(me) { menu_item_center("Select route point") != () }
+fn move_menu_is_painted(me) { menu_item_center("Author move point (click destination)") != () }
+fn delete_menu_is_painted(me) { menu_item_center("Author delete point") != () }
+fn point_at_menu_item(state, label) {
+    let center = menu_item_center(label);
+    if center == () { state.failure = "scene menu has no painted button for " + label; return state; }
+    state.menu_x = center[0]; state.menu_y = center[1];
+    input_pointer_move(state.menu_x,state.menu_y);
+    state
 }
 
 fn prepare_select_menu_row(me) {
     this.waiting_for = "the Select menu callback to select P0";
-    this.menu_x = this.screen[0] + 58.0;
-    this.menu_y = this.screen[1] + 16.0;
-    input_pointer_move(this.menu_x, this.menu_y);
+    this = point_at_menu_item(this, "Select route point");
 }
 
 fn click_menu_primary(me) {
+    if this.failure != "" { return; }
     let result = input_click("primary", this.menu_x, this.menu_y);
     if result == () || !result.ok {
         this.failure = "the native menu click was rejected: " + result.to_string();
@@ -753,12 +744,8 @@ fn move_pointer_to_p1(me) {
 }
 
 fn selection_did_not_arm_move(me) {
-    let ghost = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        edit_target: "@view@",
-    });
-    ghost != () && ghost.ok != false && ghost.authored_here != true
+    let ghost = waypoint_editor::move_preview_target(this.doc, ROUTE);
+    ghost.ok && !ghost.armed
 }
 
 fn prepare_second_context(me) {
@@ -784,46 +771,14 @@ fn second_context_is_valid(me) {
 }
 
 fn prepare_move_menu_row(me) {
-    this.menu_x = this.screen[0] + 58.0;
-    this.menu_y = this.screen[1] + 37.0;
-    input_pointer_move(this.menu_x, this.menu_y);
+    this.before_arm = document_generation(this.doc);
+    this = point_at_menu_item(this, "Author move point (click destination)");
 }
 
 fn move_preview_is_armed(me) {
-    let target = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview/Target_P0",
-        edit_target: "@view@",
-    });
-    let preview = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        edit_target: "@view@",
-        authored_children: true,
-    });
-    let ghost = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        attrs: ["lunco:interaction:left", "lunco:interaction:right", "xformOp:translate"],
-        schemas: true,
-    });
-    let preview_entity = find_path_in_document(this.doc, ROUTE + "/MovePreview");
-    let target_is_direct_child = false;
-    if preview != () && preview.ok != false && preview.authored_children != () {
-        for child in preview.authored_children {
-            if child == ROUTE + "/MovePreview/Target_P0" {
-                target_is_direct_child = true;
-            }
-        }
-    }
-    target != () && target.ok != false && target.authored_here == true
-        && target_is_direct_child
-        && ghost != () && ghost.ok != false && ghost.attrs != () && ghost.api_schemas != ()
-        && ghost.api_schemas.contains("LunCoPointerInteractionAPI")
-        && ghost.attrs["lunco:interaction:left"] == "pass_through"
-        && ghost.attrs["lunco:interaction:right"] == "pass_through"
-        && ghost.attrs["xformOp:translate"] != ()
-        && preview_entity >= 0
+    let view = waypoint_editor::route_view(this.doc, ROUTE, "route.drag");
+    view.ok && view.entity_id != () && view.subject_path == ROUTE + "/P0"
+        && view.left == "pass_through" && view.right == "pass_through"
 }
 
 fn prepare_cursor_trace(me) {
@@ -835,26 +790,8 @@ fn prepare_cursor_trace(me) {
         this.failure = "starting a route move released rover possession";
         return;
     }
-    let ghost = query("QueryUsdPrim", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview",
-        attrs: ["lunco:interaction:left", "lunco:interaction:right", "xformOp:translate"],
-        schemas: true,
-    });
-    let target = query("ResolveUsdTarget", #{
-        doc_id: this.doc,
-        path: ROUTE + "/MovePreview/Target_P0",
-        edit_target: "@view@",
-    });
-    if ghost == () || ghost.ok == false || ghost.attrs == () || ghost.api_schemas == ()
-        || !ghost.api_schemas.contains("LunCoPointerInteractionAPI")
-        || ghost.attrs["lunco:interaction:left"] != "pass_through"
-        || ghost.attrs["lunco:interaction:right"] != "pass_through"
-        || ghost.attrs["xformOp:translate"] == ()
-        || target == () || target.ok == false || target.authored_here != true {
-        this.failure = "Move did not arm a pass-through preview for P0";
-        return;
-    }
+    this.checks.push(t_true(document_generation(this.doc) == this.before_arm,
+        "arming a route drag preserves the document generation"));
     let point = query("QueryUsdPrim", #{ doc_id: this.doc, path: this.context_delete_path });
     if point == () || point.ok == false || point.world_position == () {
         this.failure = "could not read P0 position before injected placement";
@@ -872,15 +809,15 @@ fn prepare_cursor_trace(me) {
     this.checks.push(t_true(stale_clear.ok == false,
         "stale cleanup cannot clear another interaction"));
     this.point_position_before_move = point.world_position;
-    this.move_preview_entity = find_path_in_document(this.doc, ROUTE + "/MovePreview");
+    this.move_preview_entity = waypoint_editor::move_preview_target(this.doc, ROUTE).entity_id;
     if this.move_preview_entity < 0
         || !track_entity_read(this.move_preview_entity) {
         this.failure = "the projected move ghost has no declared live entity read";
         return;
     }
-    let ghost_position = live_render_translation(this.move_preview_entity);
+    let ghost_position = world_pos(this.move_preview_entity);
     if ghost_position == () {
-        this.failure = "the declared move ghost has no live render transform (entity "
+        this.failure = "the declared move ghost has no active-frame pose (entity "
             + this.move_preview_entity.to_string() + ")";
         return;
     }
@@ -898,9 +835,9 @@ fn prepare_cursor_trace(me) {
 }
 
 fn observe_ghost_cursor_sample(me) {
-    let ghost_position = live_render_translation(this.move_preview_entity);
+    let ghost_position = world_pos(this.move_preview_entity);
     if ghost_position == () {
-        this.failure = "the live move ghost lost its render transform during pointer movement";
+        this.failure = "the live move ghost lost its active-frame pose during pointer movement";
         return;
     }
     if positions_differ(ghost_position, this.last_ghost_position) {
@@ -1009,17 +946,13 @@ fn third_context_is_valid(me) {
 }
 
 fn prepare_delete_menu_row(me) {
-    // P0 is an endpoint in the three-point fixture, so its menu contains
-    // Select, Move, Add before, Add after, and Delete in that order.
-    // The placement keeps the whole menu inside the viewport at its anchor.
-    this.menu_x = this.screen[0] + 20.0;
-    this.menu_y = this.screen[1] + 16.0 + 4.0 * 21.0;
+    this.waiting_for = "the Delete menu callback and its ribbon projection";
     let expectation = begin_curve_view_expectation(
         this, 2, "inherited", true, "deleting the moved route point",
     );
     this = expectation.state;
     if !expectation.ok { return; }
-    input_pointer_move(this.menu_x, this.menu_y);
+    this = point_at_menu_item(this, "Author delete point");
 }
 
 fn moved_waypoint_is_inactive(me) {
@@ -1043,7 +976,7 @@ fn insert_after_p1(me) {
     this = expectation.state;
     if !expectation.ok { return; }
     let inserted = waypoint_editor::on_insert_after(#{
-        doc_id: this.doc,
+        edit_intent:"Persistent", doc_id: this.doc,
         route_path: ROUTE,
         selected_path: ROUTE + "/P1",
         target_path: ROUTE + "/P1",
@@ -1089,7 +1022,7 @@ fn delete_p2_for_inactive_order_check(me) {
     this = expectation.state;
     if !expectation.ok { return; }
     let deleted = waypoint_editor::on_delete(#{
-        doc_id: this.doc, selected_path: ROUTE + "/P2",
+        edit_intent:"Persistent", doc_id: this.doc, selected_path: ROUTE + "/P2",
     });
     if deleted == () || deleted.ok != true || deleted.path != ROUTE + "/P2" {
         this.failure = "could not deactivate P2 before testing order against inactive points";
@@ -1113,7 +1046,7 @@ fn insert_before_p1(me) {
     this = expectation.state;
     if !expectation.ok { return; }
     let inserted = waypoint_editor::on_insert_before(#{
-        doc_id: this.doc,
+        edit_intent:"Persistent", doc_id: this.doc,
         route_path: ROUTE,
         selected_path: ROUTE + "/P1",
         target_path: ROUTE + "/P1",
@@ -1158,7 +1091,7 @@ fn insert_after_final_point(me) {
     this = expectation.state;
     if !expectation.ok { return; }
     let inserted = waypoint_editor::on_insert_after(#{
-        doc_id: this.doc,
+        edit_intent:"Persistent", doc_id: this.doc,
         route_path: ROUTE,
         selected_path: this.inserted_after,
         target_path: this.inserted_after,
@@ -1354,9 +1287,6 @@ fn route_interaction_tree() {
         check(Fn("test_state_is_valid")),
         wait_until(Fn("unpossessed_waypoint_deleted")),
         once(Fn("record_route_curve_view_edit")),
-        once(Fn("select_rover")),
-        check(Fn("test_state_is_valid")),
-        wait_until(Fn("rover_is_selected")),
         once(Fn("possess_rover")),
         check(Fn("test_state_is_valid")),
         wait_until(Fn("rover_is_possessed")),
@@ -1364,6 +1294,9 @@ fn route_interaction_tree() {
         check(Fn("test_state_is_valid")),
         once(Fn("move_pointer_to_p0")),
         next_input_frame(),
+        once(Fn("select_rover")),
+        check(Fn("test_state_is_valid")),
+        wait_until(Fn("rover_is_selected")),
         once(Fn("press_secondary")),
         next_input_frame(),
         once(Fn("release_secondary")),
@@ -1372,6 +1305,7 @@ fn route_interaction_tree() {
         once(Fn("check_possession_and_selection")),
         check(Fn("test_state_is_valid")),
         next_input_frame(),
+        wait_until(Fn("select_menu_is_painted")),
         once(Fn("prepare_select_menu_row")),
         next_input_frame(),
         once(Fn("click_menu_primary")),
@@ -1389,6 +1323,7 @@ fn route_interaction_tree() {
         once(Fn("release_secondary")),
         wait_until(Fn("second_secondary_context_arrived")),
         check(Fn("second_context_is_valid")),
+        wait_until(Fn("move_menu_is_painted")),
         once(Fn("prepare_move_menu_row")),
         next_input_frame(),
         once(Fn("click_menu_primary")),
@@ -1420,6 +1355,7 @@ fn route_interaction_tree() {
         once(Fn("release_secondary")),
         wait_until(Fn("third_secondary_context_arrived")),
         check(Fn("third_context_is_valid")),
+        wait_until(Fn("delete_menu_is_painted")),
         once(Fn("prepare_delete_menu_row")),
         next_input_frame(),
         once(Fn("click_menu_primary")),

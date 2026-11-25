@@ -68,10 +68,10 @@ fn __obj_ready(m, requires) {
 /// Advance one ACTIVE objective: fail check → completion (with optional dwell).
 /// Completion requires the `done` closure (if any) AND the `requires_event`
 /// latch (if any); an objective with neither completes immediately (narration).
-fn __advance_objective(me, o, now, doc) {
+fn __advance_objective(me, o, now, progress) {
     if o.fail != () && o.fail.call(me) {
         o.state = "failed";
-        if doc != () { mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "failed"); }
+        if progress != () && progress.save { mission_checkpoint_write(progress.id, "objective:" + o.id, "failed"); }
         emit("OBJECTIVE_FAILED", o.id);
         return o;
     }
@@ -83,7 +83,7 @@ fn __advance_objective(me, o, now, doc) {
         if (now - o.t0) < o.dwell { return o; }
     }
     o.state = "complete";
-    if doc != () { mission_checkpoint(me, doc, "@root@", "objective:" + o.id, "complete"); }
+    if progress != () && progress.save { mission_checkpoint_write(progress.id, "objective:" + o.id, "complete"); }
     emit("OBJECTIVE_COMPLETE", o.id);
     if o.on_complete != () { o.on_complete.call(me); }
     o
@@ -91,14 +91,14 @@ fn __advance_objective(me, o, now, doc) {
 
 /// Tick one objective: latch any matching event, unlock from pending when its
 /// requires are met, then advance if active. Returns the updated objective.
-fn __tick_objective(me, o, m, now, evs, doc) {
+fn __tick_objective(me, o, m, now, evs, progress) {
     if o.state == "complete" || o.state == "failed" { return o; }
     if o.state == "pending" && __obj_ready(m, o.requires) { o.state = "active"; }
     // Events only belong to an objective after its prerequisites unlock. An
     // early global event must not be latched and replayed as a later success.
     if o.state == "active" {
         if o.requires_event != () && __obj_saw_event(evs, o.requires_event, o.requires_event_source) { o.__evfired = true; }
-        o = __advance_objective(me, o, now, doc);
+        o = __advance_objective(me, o, now, progress);
     }
     o
 }
@@ -122,12 +122,12 @@ fn __mission_status(m) {
 /// into persistent `this` state. Emits MISSION_COMPLETE / MISSION_FAILED once
 /// when the mission resolves.
 fn __run_mission(me, evs, ctx) {
-    if this.mission == () { return; }
+    if this.mission == () || this.__mission_ready != true { return; }
     let now = elapsed_seconds();
     let m = this.mission;
-    let doc = if this.__mission_doc == () { () } else { this.__mission_doc };
+    let progress = this.__mission_progress;
     for i in 0..m.len() {
-        m[i] = __tick_objective(me, m[i], m, now, evs, doc);
+        m[i] = __tick_objective(me, m[i], m, now, evs, progress);
     }
     this.mission = m;
     // Auto-publish the objectives checklist to the tutorial HUD when it changes,
@@ -154,32 +154,42 @@ fn __mission_hud(m) {
 /// Restore only terminal objective transitions. Dwell timers and event latches
 /// are deliberately transient: replaying an event or pretending a partially
 /// held condition survived a restart would make a mission non-deterministic.
-fn __restore_mission(me, doc, m) {
+fn __restore_mission(id, m) {
     for i in 0..m.len() {
-        let saved = mission_checkpoint_read(me, doc, "objective:" + m[i].id);
-        if saved == "complete" { m[i].state = "complete"; }
-        if saved == "failed"   { m[i].state = "failed"; }
+        let saved = mission_checkpoint_read(id, "objective:" + m[i].id);
+        if saved == () { continue; }
+        if saved != "complete" && saved != "failed" {
+            throw "Invalid saved state for objective " + m[i].id + ": " + saved;
+        }
+        m[i].state = saved;
     }
     m
 }
 
 /// Engine driver — called once after setup; seeds `this.mission` from a user
 /// `mission(me, ctx)` if defined and not already set. A mission may define
-/// `mission_document(me)` to identify the USD document used for checkpoints.
+/// `mission_progress()` to opt into saving or restoring terminal objectives.
 fn __init_mission(me, ctx) {
-    if this.__mission_restored == true { return; }
-    this.__mission_doc = if is_def_fn("mission_document", 1) {
-        mission_document(me)
-    } else { () };
+    if this.__mission_ready == true { return; }
     if this.mission == () && is_def_fn("mission", 2) { this.mission = mission(me, ctx); }
     if this.mission != () {
-        if this.__mission_doc != () {
-            this.mission = __restore_mission(me, this.__mission_doc, this.mission);
+        if is_def_fn("mission_progress", 0) {
+            let progress = mission_progress();
+            if type_of(progress) != "map" || type_of(progress.id) != "string"
+                || type_of(progress.save) != "bool"
+                || type_of(progress.restore) != "bool" {
+                throw "mission_progress() requires a nonempty id and boolean save and restore fields";
+            }
+            let id = progress.id;
+            id.trim();
+            if id == "" { throw "mission_progress() requires a nonempty id"; }
+            this.__mission_progress = progress;
+            if progress.restore { this.mission = __restore_mission(progress.id, this.mission); }
         }
         let s = __mission_status(this.mission);
         if s.all_done || s.any_failed { this.__mission_done = true; }
-        this.__mission_restored = true;
     }
+    this.__mission_ready = true;
 }
 
 // ── Timeline (Layer 2: a mission as DATA, interpreted onto Layer 1) ──────────

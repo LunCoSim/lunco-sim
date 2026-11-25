@@ -83,7 +83,7 @@ def main():
             route_path = json.dumps(args.route_path)
             while time.monotonic() < deadline:
                 doc_id = execute('QueryUsdPrim', path=args.route_path)['doc_id']
-                code = f'let d=query("QueryUsdPrim", #{{path:{route_path}}}).doc_id; print(find_path_in_document(d,waypoint_editor::ribbon_geometry_path({route_path})));'
+                code = f'let d=query("QueryUsdPrim", #{{path:{route_path}}}).doc_id; print(waypoint_editor::ribbon_entity(d,{route_path}));'
                 curve_id = int(rhai(code)['stdout'].strip())
                 if curve_id > 0:
                     try:

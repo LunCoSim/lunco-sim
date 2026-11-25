@@ -419,7 +419,7 @@ pub struct WorldScope {
     previous_context: lunco_core::RuntimeExecutionContext,
     previous_authority: Option<SessionId>,
     previous_client_local: bool,
-    previous_actor: u64,
+    previous_actor: ScriptActor,
     previous_rejects: Vec<String>,
 }
 
@@ -431,7 +431,7 @@ impl WorldScope {
             previous_context: EXECUTION_CONTEXT.with(|c| c.replace(context)),
             previous_authority: SCRIPT_AUTHORITY.with(|a| a.replace(None)),
             previous_client_local: SCRIPT_CLIENT_LOCAL.with(|c| c.replace(false)),
-            previous_actor: CURRENT_SELF.with(|c| c.replace(0)),
+            previous_actor: CURRENT_SELF.with(|c| c.replace(ScriptActor::Caller(0))),
             previous_rejects: SCRIPT_REJECTS.with(|r| std::mem::take(&mut *r.borrow_mut())),
         }
     }
@@ -715,7 +715,10 @@ pub fn ensure_script_command_allowed(name: &str) -> Result<(), String> {
     if execution_context().phase == lunco_core::RuntimePhase::Visualization
         && matches!(
             name,
-            "SetSceneView" | "ApplyUsdTransientOps" | "UpdateUsdCurveView"
+            "SetSceneView"
+                | "SetSceneViewObject"
+                | "SetSceneViewObjectPosition"
+                | "UpdateUsdCurveView"
         )
     {
         Ok(())
@@ -2051,13 +2054,30 @@ thread_local! {
     static RNG_STATE: Cell<u64> = const { Cell::new(0) };
     /// The gid of the entity whose script evaluation is currently running.
     /// ScriptEntityScope binds it so access checks and `emit` use that actor.
-    static CURRENT_SELF: Cell<u64> = const { Cell::new(0) };
+    static CURRENT_SELF: Cell<ScriptActor> = const { Cell::new(ScriptActor::Caller(0)) };
 }
 
 /// The gid of the script entity whose evaluation is currently executing (`0`
 /// if none).
 pub fn current_self() -> u64 {
-    CURRENT_SELF.with(|c| c.get())
+    CURRENT_SELF.with(|current| match current.get() {
+        ScriptActor::Instance(gid) | ScriptActor::Caller(gid) => gid,
+    })
+}
+
+/// Host of the scenario instance currently on the evaluator stack. A queued
+/// command retains its caller's authority but cannot publish for that instance.
+pub fn executing_scenario() -> Option<u64> {
+    CURRENT_SELF.with(|current| match current.get() {
+        ScriptActor::Instance(gid) if gid != 0 => Some(gid),
+        _ => None,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ScriptActor {
+    Instance(u64),
+    Caller(u64),
 }
 
 /// Published by the script lifecycle owner after an instance is stopped or
@@ -2074,14 +2094,22 @@ pub struct ScriptInstanceRetired {
 /// checks can resolve the actor during initialization and lifecycle hooks. A
 /// nested evaluation restores its caller's identity on every exit path.
 pub struct ScriptEntityScope {
-    previous: u64,
+    previous: ScriptActor,
 }
 
 impl ScriptEntityScope {
-    /// Set the script entity identity for the scope's lifetime.
+    /// Bind a directly executing scenario instance.
     pub fn enter(gid: u64) -> Self {
-        let previous = CURRENT_SELF.with(|current| current.replace(gid));
-        Self { previous }
+        Self {
+            previous: CURRENT_SELF.with(|current| current.replace(ScriptActor::Instance(gid))),
+        }
+    }
+
+    /// Restore a queued caller's logical identity without re-entering its instance.
+    pub fn enter_caller(gid: u64) -> Self {
+        Self {
+            previous: CURRENT_SELF.with(|current| current.replace(ScriptActor::Caller(gid))),
+        }
     }
 }
 
@@ -2211,6 +2239,13 @@ mod tests {
         rng_begin(99, None, 0);
         assert_eq!(current_self(), 0);
         let outer = ScriptEntityScope::enter(41);
+        assert_eq!(executing_scenario(), Some(41));
+        {
+            let _caller = ScriptEntityScope::enter_caller(41);
+            assert_eq!(current_self(), 41);
+            assert_eq!(executing_scenario(), None);
+        }
+        assert_eq!(executing_scenario(), Some(41));
         rng_begin(99, None, 0);
         assert_eq!(current_self(), 41);
         {
@@ -2480,7 +2515,10 @@ mod tests {
         assert!(ensure_script_command_allowed("SetPorts").is_err());
         assert!(ensure_script_command_allowed("ApplyUsdOp").is_err());
         assert!(ensure_script_command_allowed("SpawnEntity").is_err());
-        assert!(ensure_script_command_allowed("ApplyUsdTransientOps").is_ok());
+        assert!(ensure_script_command_allowed("ApplyUsdTransientOps").is_err());
+        assert!(ensure_script_command_allowed("ReplaceRuntimeObjects").is_err());
+        assert!(ensure_script_command_allowed("SetSceneViewObject").is_ok());
+        assert!(ensure_script_command_allowed("SetSceneViewObjectPosition").is_ok());
         assert!(ensure_script_command_allowed("UpdateUsdCurveView").is_ok());
         assert!(ensure_script_command_allowed("SetSceneView").is_ok());
     }

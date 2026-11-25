@@ -20,13 +20,13 @@ const ADD_Y = 700.0;
 
 fn simulation_dependencies(me, ctx) {
     #{ modelica_entities: [find_path(SUBJECT)], entity_reads: [], entity_writes: [],
-       query_reads: ["InspectSelection", "QueryUsdPrim", "QueryUsdPrims", "ReadExposures",
-           "ReadPorts", "ResolveUsdTarget"], required_inputs: [] }
+       query_reads: ["InspectUsdCurveView", "InspectSelection", "QueryUsdPrim", "QueryUsdPrims", "ReadExposures",
+           "ReadPorts", "ResolveUsdTarget", "InspectSceneContextMenu"], required_inputs: [] }
 }
 
 fn route_points(doc) {
     if doc < 0 { return (); }
-    let result = waypoint_editor::route_positions(doc, ROUTE);
+    let result = waypoint_editor::live_route_snapshot(doc, ROUTE);
     if result == () || result.ok != true { return (); }
     result.paths
 }
@@ -161,8 +161,26 @@ fn timeout(me) {
     }
 }
 
-fn begin_input_frame_boundary(me) { this.input_frame_samples = 0; }
-fn advance_input_frame_boundary(me) { this.input_frame_samples += 1; }
+fn input_frame_revision() {
+    let result = query("ReadExposures", #{ surface: "engine-health" });
+    if result == () || result.surfaces == () { return (); }
+    let surface = result.surfaces["engine-health"];
+    if surface == () || surface.properties == () { return (); }
+    surface.properties.engine_revision
+}
+
+fn begin_input_frame_boundary(me) {
+    this.input_frame_samples = 0;
+    this.input_frame_revision = input_frame_revision();
+}
+
+fn advance_input_frame_boundary(me) {
+    let revision = input_frame_revision();
+    if revision != () && revision != this.input_frame_revision {
+        this.input_frame_revision = revision;
+        this.input_frame_samples += 1;
+    }
+}
 fn input_frame_boundary_reached(me) { this.input_frame_samples > 1 }
 
 fn next_input_frame() {
@@ -198,6 +216,7 @@ fn route_fixture_ready(me) {
         return false;
     }
     this.doc = route.doc_id;
+    this.generation = usd_document_generation(this.doc);
     this.subject = subject;
     this.before = positions.paths;
     this.waiting_for = "stable rover projection";
@@ -479,7 +498,7 @@ fn sky_click_is_ignored(me) {
     let points = route_points(this.doc);
     if points == () { return false; }
     if points.len() != this.before.len() {
-        this = fail(this, "Alt-clicking the sky changed the authored route");
+        this = fail(this, "Alt-clicking the sky changed the live route");
         return false;
     }
     this.checks.push(t_true(true, "Alt-clicking the sky does not append a route point"));
@@ -506,7 +525,8 @@ fn release_first_add(me) {
 fn inspect_added_point(state, me, previous_paths, expected_count, click_x, click_y,
     before_pose, label) {
     if state.done { return #{ state: state, ready: false }; }
-    let paths = route_points(state.doc);
+    let plan = waypoint_editor::live_route_snapshot(state.doc,ROUTE);
+    let paths = if plan.ok == true {plan.paths} else {()};
     if paths == () || paths.len() < expected_count {
         return #{ state: state, ready: false };
     }
@@ -522,8 +542,11 @@ fn inspect_added_point(state, me, previous_paths, expected_count, click_x, click
         state = fail(state, label + " did not create a distinct route point");
         return #{ state: state, ready: false };
     }
-    let marker = find_path(added + "/Dome");
-    let point = find_path(added);
+    if plan.bindings == () || !plan.bindings.contains(added) { return #{state:state,ready:false}; }
+    let binding = plan.bindings[added];
+    let marker = binding.visual_id;
+    let point = binding.point_id;
+    track_entity_read(point);
     if marker < 0 || point < 0 || !track_entity_read(marker) {
         return #{ state: state, ready: false };
     }
@@ -555,39 +578,34 @@ fn inspect_added_point(state, me, previous_paths, expected_count, click_x, click
             return #{ state: state, ready: false };
         }
     }
-    let ribbon = query("QueryUsdPrim", #{
-        path: ROUTE + "/RouteRibbon/Geometry",
-        attrs: ["wrap", "curveVertexCounts", "points"],
-    });
-    if ribbon == () || ribbon.ok != true || ribbon.attrs == ()
-        || ribbon.attrs["wrap"] == () || ribbon.attrs["curveVertexCounts"] == ()
-        || ribbon.attrs["points"] == () {
-        return #{ state: state, ready: false };
+    let curve = waypoint_editor::ribbon_entity(state.doc, ROUTE);
+    if curve < 0 { return #{state:state, ready:false}; }
+    let view = query("InspectUsdCurveView", #{doc_id:state.doc, entity_id:curve});
+    if view == () || view.state != "ready" || to_int(view.result_segment_count) != paths.len() - 1 {
+        return #{state:state, ready:false};
     }
-    if ribbon.attrs["wrap"] != "nonperiodic"
-        || ribbon.attrs["curveVertexCounts"].len() != 1
-        || ribbon.attrs["curveVertexCounts"][0] != ribbon.attrs["points"].len() {
-        state = fail(state, label + " did not leave the route ribbon as an open polyline");
-        return #{ state: state, ready: false };
+    if usd_document_generation(state.doc) != state.generation {
+        state = fail(state,label+" wrote USD instead of the live route");
+        return #{state:state,ready:false};
     }
     if label == "first terrain add" {
         state.after_add = paths;
         state.added = added;
         state.marker = marker;
-        state.checks.push(t_true(true, "Alt-click on terrain appends one authored route point"));
+        state.checks.push(t_true(true, "Alt-click on terrain appends one live route point"));
         state.checks.push(t_true(true, "the added point has a live viewport projection"));
         state.checks.push(t_true(true, "the added point stays anchored at the terrain click"));
-        state.checks.push(t_true(true, "the added marker uses the authored unlit translucent style"));
+        state.checks.push(t_true(true, "the added marker uses the native unlit translucent style"));
         state.checks.push(t_true(true, "adding a route point does not teleport the rover"));
         state.checks.push(t_true(true, "the route ribbon remains an open polyline"));
     } else {
         state.after_second_add = paths;
         state.added_second = added;
         state.second_marker = marker;
-        state.checks.push(t_true(true, "a second Alt-click appends another authored route point"));
+        state.checks.push(t_true(true, "a second Alt-click appends another live route point"));
         state.checks.push(t_true(true, "the second waypoint has an independent viewport projection"));
         state.checks.push(t_true(true, "the second point stays anchored at its terrain click"));
-        state.checks.push(t_true(true, "the second marker uses the authored unlit translucent style"));
+        state.checks.push(t_true(true, "the second marker uses the native unlit translucent style"));
         state.checks.push(t_true(true, "adding a second route point does not teleport the rover"));
         state.checks.push(t_true(true, "the second route update remains an open polyline"));
     }
@@ -661,11 +679,26 @@ fn press_route_context(me) {
 fn release_route_context(me) {
     if !this.done { input_pointer_release("secondary", this.point_x, this.point_y); }
 }
+fn delete_menu_is_painted(me) {
+    let menu=query("InspectSceneContextMenu",#{});
+    if menu!=() && menu.open==true {
+        for item in menu.items { if item.label=="Delete live point" && item.center!=() {return true;} }
+    }
+    false
+}
 fn prepare_delete_menu_row(me) {
     if this.done { return; }
-    this.delete_x = this.point_x + 60.0;
-    this.delete_y = this.point_y + 30.0;
-    input_pointer_move(this.delete_x, this.delete_y);
+    let menu = query("InspectSceneContextMenu",#{});
+    if menu != () && menu.open == true {
+        for item in menu.items {
+            if item.label == "Delete live point" && item.center != () {
+                this.delete_x = item.center[0]; this.delete_y = item.center[1];
+                input_pointer_move(this.delete_x,this.delete_y);
+                return;
+            }
+        }
+    }
+    this = fail(this,"live Delete menu item is not rendered");
 }
 fn press_delete_menu_row(me) {
     if !this.done { input_pointer_press("primary", this.delete_x, this.delete_y); }
@@ -677,16 +710,17 @@ fn deleted_route_point_is_visible(me) {
     if this.done { return true; }
     let paths = route_points(this.doc);
     if paths == () { return false; }
-    if paths.len() > this.before.len() + 1 {
-        this = fail(this, "context-menu Delete left an unexpected number of route points");
+    if paths.len() == this.before.len()+2 { return false; }
+    if paths.len() != this.before.len()+1 || paths.contains(this.added) || !paths.contains(this.added_second) {
+        this = fail(this,"context-menu Delete changed the wrong live waypoint set");
         return false;
     }
-    if paths.len() != this.before.len() + 1 || paths.contains(this.added)
-        || !paths.contains(this.added_second) {
-        return false;
-    }
-    this.checks.push(t_true(true,
-        "the injected context-menu Delete removes the first authored point and retains the second"));
+    let curve=waypoint_editor::ribbon_entity(this.doc,ROUTE);
+    if curve<0 {return false;}
+    let view=query("InspectUsdCurveView",#{doc_id:this.doc,entity_id:curve});
+    if view==() || view.state!="ready" || to_int(view.result_segment_count)!=paths.len()-1 {return false;}
+    this.checks.push(t_true(usd_document_generation(this.doc) == this.generation,
+        "the injected context-menu Delete removes the first live point and retains the second without USD writes"));
     true
 }
 
@@ -816,6 +850,7 @@ fn delete_route_point_tree() {
         next_input_frame(),
         once(Fn("release_route_context")),
         next_input_frame(),
+        wait_until(Fn("delete_menu_is_painted")),
         once(Fn("prepare_delete_menu_row")),
         next_input_frame(),
         once(Fn("press_delete_menu_row")),

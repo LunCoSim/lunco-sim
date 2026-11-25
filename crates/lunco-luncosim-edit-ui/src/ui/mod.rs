@@ -60,6 +60,8 @@ pub(crate) struct EditorSessionSelection {
     pub(crate) paths: Vec<String>,
     /// Canonical path of the Inspector's drilled target, if any.
     pub(crate) target_path: Option<String>,
+    projection: Option<(AssetId<lunco_usd_bevy_stage::UsdStageAsset>, u64)>,
+    realized: LiveSceneSelection,
 }
 
 /// Session-owned editor selection. `SelectedEntities` remains the shared ECS
@@ -89,6 +91,16 @@ struct LiveSceneSelection {
     target: Option<Entity>,
 }
 
+impl LiveSceneSelection {
+    fn matches(
+        &self,
+        selected: &lunco_scene_selection::SelectedEntities,
+        target: &lunco_scene_selection::SelectionTarget,
+    ) -> bool {
+        self.entities == selected.entities && self.target == target.part
+    }
+}
+
 fn preview_path_for_entity(
     entity: Entity,
     preview: &lunco_usd_viewport_core::UsdPreviewSession,
@@ -109,15 +121,61 @@ fn preview_entity_for_path(
     q_paths: &Query<(Entity, &UsdPrimPath)>,
     q_parents: &Query<&ChildOf>,
 ) -> Option<Entity> {
-    let stage = preview.stage_handle()?.id();
-    let mut matches = q_paths.iter().filter_map(|(entity, prim)| {
-        (prim.stage_handle.id() == stage
-            && prim.path == path
-            && lunco_usd_bevy_scene::is_preview_entity(entity, preview.scene_root(), q_parents))
-        .then_some(entity)
-    });
-    let entity = matches.next()?;
-    matches.next().is_none().then_some(entity)
+    crate::selection::resolve_usd_prim_in_preview(
+        preview.scene_root(),
+        preview.stage_handle()?.id(),
+        path,
+        q_paths,
+        q_parents,
+    )
+}
+
+impl EditorSessionSelections {
+    pub(crate) fn record_command(
+        &mut self,
+        session: &lunco_usd_viewport_core::UsdPreviewSession,
+        selected: &lunco_scene_selection::SelectedEntities,
+        target: &lunco_scene_selection::SelectionTarget,
+        paths: &Query<(Entity, &UsdPrimPath)>,
+        parents: &Query<&ChildOf>,
+    ) {
+        let entry = self.sessions.entry(session.id()).or_default();
+        entry.capture(session, selected, target, paths, parents, true);
+        entry.projection = session
+            .stage_handle()
+            .map(|stage| (stage.id(), session.projected_generation()));
+    }
+}
+
+impl EditorSessionSelection {
+    fn capture(
+        &mut self,
+        session: &lunco_usd_viewport_core::UsdPreviewSession,
+        selected: &lunco_scene_selection::SelectedEntities,
+        target: &lunco_scene_selection::SelectionTarget,
+        paths: &Query<(Entity, &UsdPrimPath)>,
+        parents: &Query<&ChildOf>,
+        explicit: bool,
+    ) {
+        // A fresh gesture replaces only the identity it changed. Drilling the
+        // Inspector cannot discard a selected path with a missing projection.
+        if explicit || selected.entities != self.realized.entities {
+            self.paths.clear();
+            self.realized.entities.clear();
+            for &entity in &selected.entities {
+                if let Some(path) = preview_path_for_entity(entity, session, paths, parents) {
+                    self.paths.push(path);
+                    self.realized.entities.push(entity);
+                }
+            }
+        }
+        if explicit || target.part != self.realized.target {
+            self.target_path = target
+                .part
+                .and_then(|entity| preview_path_for_entity(entity, session, paths, parents));
+            self.realized.target = target.part.filter(|_| self.target_path.is_some());
+        }
+    }
 }
 
 /// Keep the generic ECS selection projection scoped to the focused USD lease.
@@ -139,7 +197,7 @@ fn sync_editor_session_selection(
 ) {
     let focused = viewport
         .as_deref()
-        .and_then(|state| state.focused_preview_id());
+        .and_then(|state| state.focused_projected_preview());
     let open: std::collections::HashSet<_> = viewport
         .as_deref()
         .into_iter()
@@ -149,122 +207,94 @@ fn sync_editor_session_selection(
         .sessions
         .retain(|preview, _| open.contains(preview));
 
-    if *last_preview != focused {
+    let changed_focus = *last_preview != focused;
+    if changed_focus {
         if let Some(previous) = *last_preview {
-            if open.contains(&previous) {
-                if let Some(session) = viewport
-                    .as_deref()
-                    .and_then(|state| state.session(previous))
-                {
-                    let entry = sessions.sessions.entry(previous).or_default();
-                    entry.paths = selected
-                        .entities
-                        .iter()
-                        .filter_map(|entity| {
-                            preview_path_for_entity(*entity, session, &q_paths, &q_parents)
-                        })
-                        .collect();
-                    entry.target_path = inspector_target.part.and_then(|entity| {
-                        preview_path_for_entity(entity, session, &q_paths, &q_parents)
-                    });
-                }
+            if let Some(session) = viewport
+                .as_deref()
+                .and_then(|state| state.session(previous))
+                && session.projection_ready()
+                && let Some(stage) = session.stage_handle()
+                && let Some(entry) = sessions.sessions.get_mut(&previous)
+                && entry.projection == Some((stage.id(), session.projected_generation()))
+                && !entry.realized.matches(&selected, &inspector_target)
+            {
+                entry.capture(
+                    session,
+                    &selected,
+                    &inspector_target,
+                    &q_paths,
+                    &q_parents,
+                    false,
+                );
             }
         } else {
             sessions.live.entities.clone_from(&selected.entities);
             sessions.live.target = inspector_target.part;
         }
+    }
+    *last_preview = focused;
 
-        for entity in q_selected.iter() {
-            commands
-                .entity(entity)
-                .remove::<crate::selection::Selected>()
-                .remove::<edit_gizmo::GizmoSelected>();
+    let desired = if let Some(session) =
+        focused.and_then(|preview| viewport.as_deref()?.session(preview))
+    {
+        let entry = sessions.sessions.entry(session.id()).or_default();
+        let projection = session
+            .stage_handle()
+            .filter(|_| session.projection_ready())
+            .map(|stage| (stage.id(), session.projected_generation()));
+        if changed_focus || entry.projection != projection {
+            entry.projection = projection;
+            entry.realized = LiveSceneSelection::default();
+            if projection.is_some() {
+                entry.realized.entities = entry
+                    .paths
+                    .iter()
+                    .filter_map(|path| preview_entity_for_path(path, session, &q_paths, &q_parents))
+                    .collect();
+                entry.realized.target = entry
+                    .target_path
+                    .as_deref()
+                    .and_then(|path| preview_entity_for_path(path, session, &q_paths, &q_parents));
+            }
+        } else if !entry.realized.matches(&selected, &inspector_target) && projection.is_some() {
+            entry.capture(
+                session,
+                &selected,
+                &inspector_target,
+                &q_paths,
+                &q_parents,
+                false,
+            );
         }
-        selected.entities.clear();
-        inspector_target.part = None;
+        &entry.realized
+    } else if changed_focus {
+        &sessions.live
+    } else {
+        return;
+    };
 
-        if let Some(preview) = focused {
-            let Some(session) = viewport.as_deref().and_then(|state| state.session(preview)) else {
-                *last_preview = focused;
-                return;
-            };
-            let entry = sessions.sessions.entry(preview).or_default();
-            entry.paths.retain(|path| {
-                preview_entity_for_path(path, session, &q_paths, &q_parents).is_some()
-            });
-            entry.target_path = entry.target_path.take().filter(|path| {
-                preview_entity_for_path(path, session, &q_paths, &q_parents).is_some()
-            });
-            let paths = entry.paths.clone();
-            let target_path = entry.target_path.clone();
-            let restored: Vec<Entity> = paths
-                .iter()
-                .filter_map(|path| preview_entity_for_path(path, session, &q_paths, &q_parents))
-                .collect();
-            selected.entities.clone_from(&restored);
-            inspector_target.part = target_path
-                .as_deref()
-                .and_then(|path| preview_entity_for_path(path, session, &q_paths, &q_parents));
-            for entity in restored {
-                commands
-                    .entity(entity)
-                    .try_insert((crate::selection::Selected, edit_gizmo::GizmoSelected));
-            }
-        } else {
-            selected.entities.clone_from(&sessions.live.entities);
-            inspector_target.part = sessions.live.target;
-            for &entity in &sessions.live.entities {
-                commands
-                    .entity(entity)
-                    .try_insert((crate::selection::Selected, edit_gizmo::GizmoSelected));
-            }
-        }
-        *last_preview = focused;
+    if desired.matches(&selected, &inspector_target) {
         return;
     }
-
-    if let Some(preview) = focused {
-        let Some(session) = viewport.as_deref().and_then(|state| state.session(preview)) else {
-            return;
-        };
-        // Keep the shared ECS projection inside the focused lease. A generic
-        // SelectEntity command may arrive while a USD preview is focused; it
-        // must not leak a live-scene entity into the authored Editor context.
-        let valid: Vec<Entity> = selected
-            .entities
-            .iter()
-            .copied()
-            .filter(|entity| {
-                preview_path_for_entity(*entity, session, &q_paths, &q_parents).is_some()
-            })
-            .collect();
-        if valid != selected.entities {
-            for entity in q_selected.iter().filter(|entity| !valid.contains(entity)) {
-                commands
-                    .entity(entity)
-                    .remove::<crate::selection::Selected>()
-                    .remove::<edit_gizmo::GizmoSelected>();
-            }
-            selected.entities = valid;
-            if inspector_target.part.is_some_and(|entity| {
-                preview_path_for_entity(entity, session, &q_paths, &q_parents).is_none()
-            }) {
-                inspector_target.part = None;
-            }
-        }
-        let entry = sessions.sessions.entry(preview).or_default();
-        entry.paths = selected
-            .entities
-            .iter()
-            .filter_map(|entity| preview_path_for_entity(*entity, session, &q_paths, &q_parents))
-            .collect();
-        entry.target_path = inspector_target
-            .part
-            .and_then(|entity| preview_path_for_entity(entity, session, &q_paths, &q_parents));
-    } else {
-        sessions.live.entities.clone_from(&selected.entities);
-        sessions.live.target = inspector_target.part;
+    for entity in q_selected
+        .iter()
+        .filter(|entity| !desired.entities.contains(entity))
+    {
+        commands
+            .entity(entity)
+            .remove::<crate::selection::Selected>()
+            .remove::<edit_gizmo::GizmoSelected>();
     }
+    for &entity in &desired.entities {
+        if !q_selected.contains(entity) {
+            commands
+                .entity(entity)
+                .try_insert((crate::selection::Selected, edit_gizmo::GizmoSelected));
+        }
+    }
+    selected.entities.clone_from(&desired.entities);
+    inspector_target.part = desired.target;
 }
 
 // `every_frame()` (an always-true gate handed to `add_view_model`) is gone: it
@@ -479,6 +509,9 @@ impl Plugin for SceneEditUiPlugin {
         app.world_mut()
             .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
             .register(selection_context::InspectUsdSelectionProvider);
+        app.world_mut()
+            .resource_mut::<lunco_api::queries::ApiQueryRegistry>()
+            .register(scene_context_menu::InspectSceneContextMenu);
         app.add_systems(Update, sync_editor_session_selection.before(ViewModelSet));
 
         app.init_resource::<cinematic::CinematicViz>();

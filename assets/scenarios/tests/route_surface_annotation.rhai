@@ -24,8 +24,8 @@ fn on_start(me, ctx) {
     this.route_path = ctx.route_path;
     this.points = route.points;
     this.paths = route.paths;
-    this.root = find_path_in_document(this.doc, waypoint_editor::ribbon_path(this.route_path));
-    this.curve = find_path_in_document(this.doc, waypoint_editor::ribbon_geometry_path(this.route_path));
+    this.curve = waypoint_editor::ribbon_entity(this.doc, this.route_path);
+    this.root = this.curve;
     this.checks = [];
     this.phase = 0;
     this.ticks = 0;

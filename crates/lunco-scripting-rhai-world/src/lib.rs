@@ -6,11 +6,13 @@
 //! composition, command registration, tools, and timeline persistence remain
 //! in [`lunco-scripting-rhai-runtime`](../lunco-scripting-rhai-runtime).
 
-#[cfg(feature = "native-plugins")]
-pub mod native_plugins;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
+pub mod mission_progress;
+#[cfg(feature = "native-plugins")]
+pub mod native_plugins;
 pub mod policy;
+pub mod public_state;
 pub mod source_asset;
 pub mod tool_libs;
 pub mod world_bridge;

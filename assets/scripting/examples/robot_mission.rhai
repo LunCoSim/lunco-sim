@@ -1,8 +1,6 @@
 // A production-style robot mission: no on_tick loop. The task tree owns
 // sequencing, while the mission declaration owns success/failure reporting.
-// Attach this to a rover or to a mission-control entity and edit the points.
-// If the control entity is not movable, add `subject: "/World/Rover"` to the
-// timeline form instead; this example keeps the task subject as `me`.
+// Attach this to the mounted rover whose pose and drive ports control the survey.
 
 const SITE_A = [12.0, 0.0,  0.0];
 const SITE_B = [12.0, 0.0, 25.0];
@@ -10,63 +8,31 @@ const BASE   = [ 0.0, 0.0,  0.0];
 const SPEED  = 1.0;
 const RADIUS = 2.0;
 
-fn mission_document(me) { assembly_edit::document_for_entity(me) }
+fn simulation_dependencies(me, ctx) {
+    #{ modelica_entities: [], entity_reads: [me], entity_writes: [me],
+       query_reads: [], required_inputs: [] }
+}
 
-// The checkpoint is written only when a phase completes. On hot reload or
-// restart, task(me) resumes from the last authored phase rather than replaying
-// already-completed work.
+const PROGRESS_ID = "robot-survey-v1";
+fn mission_progress() { #{ id: PROGRESS_ID, save: true, restore: true } }
+
+// Each terminal objective records one arrival. A resumed task starts at
+// the first outstanding leg and never re-emits arrivals for finished legs.
 fn task(me, ctx) {
-    let doc = mission_document(me);
-    let phase = mission_checkpoint_read(me, doc, "phase");
-
-    if phase == "site_b" {
-        return seq([
-            step(|m| nav_to(m, BASE, SPEED, RADIUS),
-                 |m| arrived(m, BASE, RADIUS)),
-            once(|m| {
-                mission_checkpoint(m, doc, "@root@", "phase", "complete");
-                emit("ROBOT_MISSION_COMPLETE", true);
-            }),
-        ]);
+    let legs = [];
+    for leg in [
+        ["site_a", SITE_A, "ROBOT_SITE_A_REACHED"],
+        ["site_b", SITE_B, "ROBOT_SITE_B_REACHED"],
+        ["return", BASE, "ROBOT_MISSION_COMPLETE"],
+    ] {
+        if mission_checkpoint_read(PROGRESS_ID, "objective:" + leg[0]) == "complete" { continue; }
+        let point = leg[1];
+        let signal = leg[2];
+        legs.push(step(|m| nav_to(m, point, SPEED, RADIUS),
+                       |m| arrived(m, point, RADIUS)));
+        legs.push(once(|m| emit(signal, true)));
     }
-
-    if phase == "site_a" {
-        return seq([
-            step(|m| nav_to(m, SITE_B, SPEED, RADIUS),
-                 |m| arrived(m, SITE_B, RADIUS)),
-            once(|m| {
-                mission_checkpoint(m, doc, "@root@", "phase", "site_b");
-                emit("ROBOT_SITE_B_REACHED", true);
-            }),
-            step(|m| nav_to(m, BASE, SPEED, RADIUS),
-                 |m| arrived(m, BASE, RADIUS)),
-            once(|m| {
-                mission_checkpoint(m, doc, "@root@", "phase", "complete");
-                emit("ROBOT_MISSION_COMPLETE", true);
-            }),
-        ]);
-    }
-
-    seq([
-        step(|m| nav_to(m, SITE_A, SPEED, RADIUS),
-             |m| arrived(m, SITE_A, RADIUS)),
-        once(|m| {
-            mission_checkpoint(m, doc, "@root@", "phase", "site_a");
-            emit("ROBOT_SITE_A_REACHED", true);
-        }),
-        step(|m| nav_to(m, SITE_B, SPEED, RADIUS),
-             |m| arrived(m, SITE_B, RADIUS)),
-        once(|m| {
-            mission_checkpoint(m, doc, "@root@", "phase", "site_b");
-            emit("ROBOT_SITE_B_REACHED", true);
-        }),
-        step(|m| nav_to(m, BASE, SPEED, RADIUS),
-             |m| arrived(m, BASE, RADIUS)),
-        once(|m| {
-            mission_checkpoint(m, doc, "@root@", "phase", "complete");
-            emit("ROBOT_MISSION_COMPLETE", true);
-        }),
-    ])
+    seq(legs)
 }
 
 fn mission(me, ctx) {

@@ -793,9 +793,10 @@ The viewport panel paints the session selected by the focused `UsdPreviewViewId`
 session projection while keeping independent camera/render-target state. The
 viewport applies `UsdPreviewRenderBudget` to visible view targets (2048 px per
 axis, 4,194,304 pixels per view, and 8,388,608 visible pixels per frame by
-default) and leaves hidden cameras inactive. The generic ECS selection is a
-focused-session projection and must be restored from editor-owned session
-selection on focus changes. Dispatch edits with the session's explicit
+default) and leaves hidden cameras inactive. The live scene owns selection until the focused preview has a mounted
+stage. A text-only preview leaves live selection active. A mounted lease
+keeps its selected paths throughout reprojection and resolves each unique
+path to the new entity when its generation is ready. Dispatch edits with the session's explicit
 document, authored layer, and generation through the typed USD command surface.
 The full-width Prims tree owns a single vertical scroll surface; a newly
 selected primary row opens its ancestors and scrolls into view, while a stable

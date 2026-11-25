@@ -4,7 +4,7 @@
 //! facts to the language-neutral bridge without making its generic reflection,
 //! command, or authority mechanism depend on the USD runtime packages.
 
-use bevy::prelude::Entity;
+use bevy::prelude::{Entity, World};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_scripting_bridge_core::{resolve_entity, with_world};
 use lunco_usd_bevy_scene::prim_index::UsdPrimIndex;
@@ -31,6 +31,44 @@ pub fn usd_document_generation(doc_id: u64) -> Option<u64> {
             .map(|host| host.generation())
     })
     .flatten()
+}
+
+/// Stable scene and prim identity for progress owned by a mounted scenario host.
+pub fn mounted_host_location(world: &World, gid: u64) -> Result<(String, String), String> {
+    use lunco_usd_bevy_scene::{UsdPrimPath, scene_root_in_world};
+
+    let host =
+        resolve_entity(world, gid).ok_or("mission checkpoints require a live scenario host")?;
+    let root = scene_root_in_world(world, host)
+        .map_err(|err| format!("invalid mission host hierarchy: {err:?}"))?
+        .ok_or("mission host is outside a mounted scene")?;
+    if world
+        .get_resource::<lunco_core::SceneMountState>()
+        .and_then(|state| state.active_root())
+        != Some(root)
+        || lunco_usd_bevy_scene::is_preview_only_entity(world, host)
+    {
+        return Err("mission checkpoints require a host in the active scene".into());
+    }
+    let stage = world
+        .get::<UsdPrimPath>(root)
+        .ok_or("scene root has no USD stage")?;
+    let path = stage
+        .stage_handle
+        .path()
+        .ok_or("scene has no durable source path")?;
+    let scene = lunco_assets_core::asset_path::source_uri(
+        path,
+        world.get_resource::<lunco_assets_core::TwinRoots>(),
+    )
+    .map_err(|err| format!("cannot identify mission scene: {err}"))?;
+    let prim = world
+        .get::<UsdPrimPath>(host)
+        .ok_or("mission host has no authored prim path")?;
+    if prim.stage_handle.id() != stage.stage_handle.id() {
+        return Err("mission host needs a stable prim path in the mounted scene".into());
+    }
+    Ok((scene, prim.path.clone()))
 }
 
 /// Multiple mounts can project the same path. The API identity determines

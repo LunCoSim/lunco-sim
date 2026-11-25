@@ -50,6 +50,7 @@ fn active_points(doc) {
 fn context(doc, path, position) {
     #{
         button: "primary",
+        edit_intent:"Persistent",
         screen_position: [64.0, 64.0],
         doc_id: doc,
         scene_root_path: ROOT,

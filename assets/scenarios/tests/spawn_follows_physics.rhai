@@ -65,10 +65,7 @@ fn on_tick(me, ctx) {
 
         let stage = query("QueryUsdPrim", #{path:"/SpawnFollowsPhysics"});
         this.generation = stage.document_generation;
-        let result = cmd("SpawnEntity", #{
-            entry_id: "modelica_balloon",
-            position: [0.0, 20.0, 0.0],
-        });
+        let result = spawn_robot("modelica_balloon", [0.0, 20.0, 0.0]);
         if result.ok {
             // The command has been admitted; set the guard before inspecting
             // its typed acknowledgement so a test assertion cannot resubmit it.

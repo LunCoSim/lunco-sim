@@ -1200,8 +1200,8 @@ simulation tick, and the visualization phase. The callback may prepare
 disposable visual views; authoritative actions, top-level initialization,
 dependency planning, and `on_start` remain behind the simulation admission
 boundary. Rhai mutation guards reject world writes and events in this phase;
-only `ApplyUsdTransientOps` is available, and the USD owner directs those edits
-to the disposable view layer. A new source or scene generation admits one new
+only the runtime presentation commands `SetSceneView`, `SetSceneViewObject`,
+`SetSceneViewObjectPosition`, and `UpdateUsdCurveView` are available. A new source or scene generation admits one new
 visualization call.
 
 Before a scenario's first lifecycle hook, a source may define the optional,

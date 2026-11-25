@@ -4,9 +4,10 @@
 
 A sensor beam or an exhaust plume may be authored USD geometry whose size tracks a live
 simulation value. A route ribbon is a different class: it is a derived scene annotation
-whose geometry is generated from USD mission topology and terrain. USD supplies its stable
-curve identity, material binding, and pointer schema. The reusable route tool submits the
-current point snapshot to `UpdateUsdCurveView`; bounded background work prepares a sparse
+whose geometry is generated from USD mission topology and terrain. The route's
+mounted prim supplies the owner identity and palette. The reusable route tool creates
+a keyed presentation child with `SetSceneViewObject` and submits the current point
+snapshot to `UpdateUsdCurveView`; bounded background work prepares a sparse
 surface annotation without editing a USD layer or advancing document generation.
 
 Three rules, in order of how often they are broken:
@@ -85,6 +86,9 @@ Use the current value's owner to choose the update path:
 | Scene presentation property | `SetSceneView` through the registered property owner, or a direct typed ECS write inside that owner | Author the presentation configuration in USD |
 | Discrete live pose (e.g. a door or a cart) | `TransformEntity` (live by default) in the active physics frame | `TransformEntity` with `intent: "Persistent"` |
 | Runtime object creation, deletion or joint release | `SpawnEntity`, `DeleteEntity`, `DetachJoint` (live by default) | Explicit Persistent intent or typed USD composition edit |
+| Generated run geometry | `ReplaceRuntimeObjects` creates or retires a named group of native cuboids, with live stable IDs returned by `QueryRuntimeObjects` | Author reusable equipment or component definitions in USD |
+| Generated live waypoint sensors and markers | `SetRuntimeMarker`, `QueryRuntimeMarkers` and the active route policy | Author waypoint definitions with an explicit Author action |
+| Generated route and drag presentation | `SetSceneViewObject`, `InspectSceneViewObject`, and `SetSceneViewObjectPosition` | Author route points and committed placement in USD |
 | Environment lighting | `SetEnvironmentLight` (live by default) | Explicit Persistent intent for supported USD lighting settings |
 | Solver and contact participation of independent bodies | `SetSceneParticipation` validates independent bodies, contact shapes, radio blockers and view writes before applying them together | Author the initial body definitions and masses when preparing the scene |
 | Contact participation of an admitted collider | `SetColliderEnabled` on the native collider entity | Author `PhysicsCollisionAPI` and `physics:collisionEnabled` |
@@ -101,6 +105,23 @@ registered owners, and publishes the last submitted value for each property and
 entity. Owners apply changes to their own components. This command does not
 advance document generation or publish a USD stage change. Use the ordinary
 document path if the new value needs to participate in USD composition.
+
+Native `SetRuntimeMarker` operations own one scene-mounted marker key and its
+separate visual and optional overlap sensor. Their original scenario can move
+or retire them; direct generic pose and delete commands reject those managed
+entities. An actor's markers retire with that actor or the mounted hierarchy.
+The active route program uses marker IDs for control and sensor IDs for arrival,
+with no USD property or namespace mutation.
+
+Generated physical object groups belong to the exact mounted document root.
+`ReplaceRuntimeObjects` validates the complete cuboid plan, resolves any
+composed physics material and collision group, and applies an exclusive scene
+mutation. Physical replacement and retirement require a paused standalone
+session. Each object has its own native identity, render intent, independently
+admitted collision shape and optional positive mass. An empty plan retires the
+group. Runtime group keys and IDs remain outside USD namespace and persistence.
+`MoveEntity`, `SetSceneParticipation`, and the physics query operate on those
+identities directly.
 
 Opening a physical door is a runtime action.
 Read its authored initial state, limits, travel, or hinge configuration from
@@ -222,11 +243,9 @@ existing three-dimensional curve path. Publication failures remain visible.
 owner in windowed and offscreen rendering, independently of pointer/editor UI.
 
 The route-point prims and the Rhai task program are the authored facts. The
-`waypoint_editor` tool derives a route view from those facts and materializes a
-standard `BasisCurves` identity from
-[`assets/markers/route_ribbon.usda`](../../assets/markers/route_ribbon.usda)
-in `@view@`. This retains the USD path, material, and hit policy while the mesh
-itself remains a live presentation resource. Route edits still pass through the
+`waypoint_editor` tool derives a route view as a keyed runtime child of the route
+scope. Its stable live identity and hit policy belong to the presentation owner,
+as does the generated mesh. Route edits still pass through the
 normal authored document and incremental scene projection once. They do not
 write a second ribbon edit. `UpdateUsdCurveView` coalesces ordered f64 points
 in the route parent's local coordinates and resolves them into one committed

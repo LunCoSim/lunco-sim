@@ -42,6 +42,7 @@ lunco-tools-rhai = { path = "../lunco-tools-rhai" }
 lunco-twin-journal = { path = "../lunco-twin-journal", features = ["hooks"] }
 lunco-workspace = { path = "../lunco-workspace" }
 lunco-hooks-native = { path = "../lunco-hooks-native", optional = true }
+lunco-settings = { path = "../lunco-settings" }
 lunco-storage = { path = "../lunco-storage" }
 lunco-tools = { path = "../lunco-tools" }
 lunco-sysml-rhai = { path = "../lunco-sysml-rhai", optional = true }

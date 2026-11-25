@@ -301,6 +301,11 @@ pub struct RuntimeVisibilityOverride {
     pub script: Option<lunco_core::GlobalEntityId>,
 }
 
+/// Initial visibility of a native runtime presentation entity with no USD
+/// prim. The shared visibility owner restores this value on Clear.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct NativeViewVisibility(pub bool);
+
 /// Current sampled ordinary visibility; animation publishes this fact, never
 /// writes Bevy Visibility directly. The namespace visibility owner consumes it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

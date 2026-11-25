@@ -1444,11 +1444,10 @@ material and overlay strokes. Check populated-cell coverage and compare actual
 GPU passes before adding index state or changing subdivision limits;
 verify idle camera/terrain changes do not rebuild the stroke index.
 Visited-marker recoloring uses the existing route-view key and must not resubmit
-unchanged ribbon geometry. A ribbon seed authors only its reference root and
-anchor; wait for the reference owner's projection before `UpdateUsdCurveView`.
-The marker asset owns its geometry and pointer-interaction defaults. A rejected
-view command is terminal; it must not keep the route's admission flag pending
-and submit the same rejected edit every tick.
+unchanged ribbon geometry. `SetSceneViewObject` provisions the curve under the
+mounted route. Resolve its stable identity with `InspectSceneViewObject` and
+submit geometry with `UpdateUsdCurveView`. A terminal presentation error is
+reported once for that route revision.
 Ribbon presentation preparation is presentation-only and must not issue another
 `ApplyUsdTransientOps`, change document generation, or run inside the fixed
 scenario event that observes a projected route. Compare the UI hook and fixed

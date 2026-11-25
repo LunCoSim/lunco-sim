@@ -11,6 +11,7 @@
 // Declare this dependency so the asynchronous script asset graph loads it
 // before the scenario's first lifecycle hook.
 import "lunco://scripting/tools/waypoint_editor" as waypoint_editor;
+import "lunco://scripting/tools/route_live_plan" as live_plan;
 
 fn route_failure(message) {
     #{ ok: false, error: message }
@@ -75,9 +76,9 @@ fn simulation_dependencies(me, ctx) {
         throw "route subject has no live entity while resolving its Modelica dependency: "
             + targets[0];
     }
-    #{ modelica_entities: [subject], entity_reads: [], entity_writes: [],
+    #{ modelica_entities: [subject], entity_reads: [], entity_writes: [me],
        query_reads: ["QueryUsdPrim", "QueryUsdPrims", "ResolveUsdTarget", "SensorOccupants", "InspectSelection",
-                     "InspectUsdDocument", "TerrainHeights"],
+                     "InspectUsdDocument", "TerrainHeights", "QueryRuntimeMarkers"],
        required_inputs: [] }
 }
 
@@ -301,6 +302,11 @@ fn route_is_selected(me) {
     let selection = query("InspectSelection", #{});
     if selection != () && selection.ok != false && selection.primary != () {
         let selected_path = usd_path(selection.primary);
+        if selected_path == () {
+            live_plan::track(selection.primary.to_int(),false);
+            let parent_id = parent(selection.primary.to_int());
+            if parent_id != () { selected_path = usd_path(parent_id); }
+        }
         if selected_path == program { return true; }
         if selected_path == subject && subject_selects_unique_program(subject, program) {
             return true;
@@ -457,7 +463,8 @@ fn mark_route_point_visited(state, point) {
     state.visited_points[point] = true;
     if !state.marker_sync_pending && state.route_marker_colors.contains(point) {
         let marker = waypoint_editor::sync_marker_snapshot(state.route_document,
-            #{ok:true, paths:[point], marker_colors:[state.route_marker_colors[point]]}, state.visited_points);
+            #{ok:true, paths:[point], marker_colors:[state.route_marker_colors[point]],
+                marker_ids:if state.live_route != () {state.live_route.marker_ids} else {()}}, state.visited_points);
         if marker.ok == true { return state; }
         if marker.retryable != true {
             emit("route_presentation_unavailable", marker.error);
@@ -472,6 +479,8 @@ fn mark_route_zone_visited(me, state, zone) {
     let next = next_route_visit_point(me, state);
     if next == () || next.path == () { return state; }
     let point = next.path;
+    if state.live_route != () && state.live_route.bindings.contains(point)
+        && state.live_route.bindings[point].native_key != () { return state; }
     let record = query("QueryUsdPrim", #{
         path: point + "/Trigger",
         attrs: ["lunco:triggerZone"],
@@ -491,10 +500,13 @@ fn mark_initial_route_occupancy(me, state) {
     }
     if next.path == () { return #{ ok: true, state: state }; }
     let point = next.path;
-    let sensor = find_path_in_stage(me, point + "/Trigger");
+    let sensor = if state.live_route != () && state.live_route.bindings.contains(point) {
+        state.live_route.bindings[point].sensor_id
+    } else { find_path_in_stage(me, point + "/Trigger") };
     if sensor < 0 {
         return route_failure("the route sensor has no live projection: " + point);
     }
+    live_plan::track(sensor,false);
     let contacts = query("SensorOccupants", #{ sensor: sensor });
     if contacts == () || contacts.ok == false || contacts.entrants == () {
         return route_failure("the route sensor occupancy is unavailable: " + point);
@@ -566,10 +578,13 @@ fn drive_current_point(me, state) {
         if stopped.ok == true { state.safe_stopped = true; }
         return #{ result: stopped, state: state };
     }
-    if state.commanded_path == point && state.commanded_view_key == state.route_view_key {
+    if state.commanded_path == point && state.commanded_revision == state.route_geometry_revision {
         return #{ result: #{ ok: true }, state: state };
     }
-    let target = find_path_in_stage(me, point);
+    let target = if state.live_route != () && state.live_route.bindings.contains(point) {
+        state.live_route.bindings[point].point_id
+    } else { find_path_in_stage(me, point) };
+    if target >= 0 { live_plan::track(target,false); }
     let position = if target >= 0 { world_pos(target) } else { () };
     if position == () {
         return #{
@@ -579,7 +594,9 @@ fn drive_current_point(me, state) {
     }
     let settings = route_drive_settings(me);
     if settings.ok != true { return #{result:settings, state:state}; }
-    let direction = route_drive_direction(point);
+    let direction = if state.live_route != () && state.live_route.bindings.contains(point)
+        && state.live_route.bindings[point].native_key != () { #{ok:true,value:1.0} }
+    else { route_drive_direction(point) };
     if direction.ok != true { return #{result:direction, state:state}; }
     let command = modelica_waypoint(subject, position,
         settings.throttle * direction.value, settings.radius, 0.0);
@@ -592,8 +609,7 @@ fn drive_current_point(me, state) {
     emit("route_leg_started", #{point:point, direction:direction.value,
         throttle:settings.throttle, radius:settings.radius});
     state.commanded_path = point;
-    state.commanded_revision = state.route_revision;
-    state.commanded_view_key = state.route_view_key;
+    state.commanded_revision = state.route_geometry_revision;
     state.safe_stopped = false;
     #{ result: #{ ok: true }, state: state }
 }
@@ -618,7 +634,7 @@ fn refresh_route_view(me, state, snapshot) {
     // Route topology is read only at the projected document boundary or when
     // visited-marker presentation is explicitly dirty.
     let read = if snapshot == () {
-        waypoint_editor::route_positions(doc, state.route_path)
+        if state.live_route != () { state.live_route } else { waypoint_editor::route_positions(doc, state.route_path) }
     } else { snapshot };
     if read == () || read.ok != true {
         return #{
@@ -656,9 +672,8 @@ fn refresh_route_view(me, state, snapshot) {
     let ribbon_color_changed = state.route_style_key == () || state.route_style_key.color != read.color;
     if state.route_view_key != view_key || ribbon_color_changed || state.ribbon_sync_pending {
         let result = waypoint_editor::update_ribbon_view(
-            doc, state.route_path, read.points, state.ribbon_edit_command,
+            doc, state.route_path, read.points, read.color,
         );
-        state.ribbon_edit_command = if result == () { () } else { result.command_id };
         // Presentation admission does not gate authoritative route progression.
         let presentation_ready = result != () && result.ok == true;
         if !presentation_ready {
@@ -686,6 +701,7 @@ fn refresh_route_view(me, state, snapshot) {
             state.marker_sync_pending = false;
         }
     }
+    if state.route_view_key != view_key { state.route_geometry_revision += 1; }
     state.route_view_key = view_key;
     state.route_style_key = style_key;
     let subject_state = route_subject_state_for(me, state);
@@ -772,7 +788,7 @@ fn advance_on_sensor(me, evt, state) {
         return #{ kind: "start" };
     }
     if !state.enabled { return (); }
-    if !evt.name.starts_with("enter:") { return; }
+    if !evt.name.starts_with("enter:") && evt.name != "SENSOR_ENTER" { return; }
     let subject = route_subject_for(me, state);
     // Avian sensors report the collider that crossed the zone. A nested body
     // is still an entrant of the authored route subject; follow the generic
@@ -782,6 +798,13 @@ fn advance_on_sensor(me, evt, state) {
     let cursor = current_point_info(me, state);
     let point = cursor.path;
     if point == () { return; }
+    if state.live_route != () && state.live_route.bindings.contains(point)
+        && state.live_route.bindings[point].native_key != () {
+        return if evt.name == "SENSOR_ENTER" && evt.source == state.live_route.bindings[point].sensor_id {
+            #{kind:"advance", index:cursor.index+1}
+        } else { () };
+    }
+    if evt.name == "SENSOR_ENTER" { return (); }
     let zone = current_zone(me, state);
     if zone == () || zone == "" { return; }
     let expected = "enter:" + zone;
@@ -820,7 +843,6 @@ fn begin_route_run(me, state, started) {
     state.current_path = ();
     state.commanded_path = ();
     state.commanded_revision = ();
-    state.commanded_view_key = ();
     state.completed = false;
     state.marker_sync_pending = true;
     state.route_error = "";
@@ -851,6 +873,9 @@ fn apply_toggle_transition(me, state, enabled) {
 }
 
 fn on_start(me, ctx) {
+    this.live_route = ();
+    this.live_route_pending = ();
+    this.route_occupancy_pending = false;
     this.route_path = route_path(me);
     this.program_path = program_path(me);
     this.route_document = route_document(me);
@@ -862,7 +887,6 @@ fn on_start(me, ctx) {
     this.safe_stopped = true;
     this.commanded_path = ();
     this.commanded_revision = ();
-    this.commanded_view_key = ();
     this.completed = false;
     this.visited_points = #{};
     this.marker_sync_pending = true;
@@ -870,10 +894,10 @@ fn on_start(me, ctx) {
     this.selected = route_is_selected(me);
     this.route_revision = ();
     this.route_view_key = ();
+    this.route_geometry_revision = 0;
     this.route_style_key = ();
     this.route_marker_colors = #{};
     this.ribbon_sync_pending = false;
-    this.ribbon_edit_command = ();
     this.route_error = "";
     this.start_requested = false;
     // The mounted USD stage can be projected before it is associated with a
@@ -906,6 +930,7 @@ fn on_start(me, ctx) {
     // event bus consumed by the Twin. UI/tests can wait for this authored
     // readiness edge before sending a one-shot command or pointer gesture.
     if this.route_document != () {
+        publish_route_plan(this);
         emit("program.ready", #{
             path: this.program_path,
             generation: this.route_revision,
@@ -927,7 +952,6 @@ fn bind_projected_route(me, state, expected_doc) {
     state.route_revision = ();
     state.route_view_key = ();
     state.route_style_key = ();
-    state.ribbon_edit_command = ();
     state.enabled = route_enabled_from_usd(me);
     state.selected = route_is_selected(me);
     state.route_index = route_resume_index(me, state);
@@ -946,7 +970,6 @@ fn projected_paths_touch_route(paths, route, structural) {
         if path == route || route.starts_with(path + "/") { return true; }
         if !path.starts_with(prefix) { continue; }
         let parts = path.sub_string(prefix.len()).split("/");
-        if parts.len() == 1 && parts[0] == "RouteRibbon" { continue; }
         if parts.len() == 1 || (parts.len() == 2 && (parts[1] == "Trigger"
             || (structural && parts[1] == "Dome"))) {
             return true;
@@ -955,7 +978,104 @@ fn projected_paths_touch_route(paths, route, structural) {
     false
 }
 
+fn advance_route(me,state,index) {
+    emit("route_point_reached",state.route_index);
+    state.route_index=index;
+    state.current_path=();
+    state.commanded_path=();
+    state.commanded_revision=();
+    let points=route_children_for(me,state);
+    if points!=() && state.route_index>=points.len() {
+        state.safe_stopped=false;
+        state.enabled=false;
+        let stopped=ensure_route_safe_stop(me,state);
+        if stopped.ok==true {state.safe_stopped=true;}
+        if stopped.ok==true && !state.completed {
+            state.completed=true;
+            emit("route_completed");
+        }
+    }
+    state
+}
+
+fn publish_route_plan(state) {
+    if state.route_document == () || state.route_path == () { return; }
+    // Only the active route actor writes this publication. It is a detached
+    // view of the acknowledged plan, not another mutable route store.
+    let plan = if state.live_route == () { () } else {
+        #{ok:true,paths:state.live_route.paths,points:state.live_route.points,
+            color:state.live_route.color,marker_colors:state.live_route.marker_colors,
+            bindings:state.live_route.bindings,marker_ids:state.live_route.marker_ids}
+    };
+    publish_scenario_state("route-plan",#{route_document:state.route_document,
+        route_path:state.route_path,live_route:plan,
+        live_route_pending:if state.live_route_pending == () {()} else {true}});
+}
+
+fn accept_live_route_edit(me, state, result) {
+    if result.ok != true {
+        notify_kind("Live route change rejected: " + result.error, "error");
+        emit("route.live.rejected", #{route:state.route_path,error:result.error});
+        publish_route_plan(state);
+        return state;
+    }
+    if result.pending == true {
+        state.live_route_pending = result;
+        publish_route_plan(state);
+        return state;
+    }
+    state.live_route_pending = ();
+    state.live_route = result.plan;
+    state.route_points = result.plan.paths;
+    if result.action == "delete" { state.visited_points.remove(result.key); }
+    // The same invalidation drives both guidance and the coalesced ribbon.
+    if result.action != "color" {
+        state.commanded_path = ();
+        state.route_occupancy_pending = true;
+    }
+    let refreshed = refresh_route_view(me,state,result.plan);
+    state = refreshed.state;
+    if refreshed.result.ok == true {
+        state.route_revision = refreshed.result.revision;
+        state.route_view_key = refreshed.result.view_key;
+    }
+    publish_route_plan(state);
+    emit("route.live.changed", #{doc_id:state.route_document,route:state.route_path,
+        action:result.action,key:result.key,point_count:state.live_route.paths.len()});
+    state
+}
+
 fn on_event(me, evt, ctx) {
+    if evt.name == "route.live.edit" && evt.value != ()
+        && same_document_id(evt.value.doc_id,this.route_document) && evt.value.route == this.route_path {
+        if this.live_route_pending != () {
+            notify_kind("A live route change is still being admitted", "warning");
+            return;
+        }
+        if evt.value.action == "reset" {
+            let cleared = live_plan::reset(this.route_document,this.route_path,this.live_route);
+            if cleared.ok != true { notify_kind(cleared.error,"error"); return; }
+            this.live_route = ();
+            this.route_points = ();
+            this.route_view_key = ();
+            this.ribbon_sync_pending = true;
+            this.marker_sync_pending = true;
+            this.commanded_path = ();
+            this.visited_points = #{};
+            this.route_index = 0;
+            this.current_path = ();
+            this.enabled = false;
+            this.safe_stopped = false;
+            this.route_occupancy_pending = true;
+            publish_route_plan(this);
+            emit("route.live.reset", #{doc_id:this.route_document,route:this.route_path});
+            return;
+        }
+        let plan = if this.live_route != () { this.live_route } else { live_plan::seed(this.route_document,this.route_path) };
+        if plan.ok != true { notify_kind(plan.error,"error"); return; }
+        this = accept_live_route_edit(me,this,live_plan::edit(plan,evt.value));
+        return;
+    }
     if evt.name == "usd.document.projected" && evt.value != () {
         let projected_doc = evt.value["doc_id"];
         let first_projected_binding = this.route_document == ();
@@ -966,6 +1086,7 @@ fn on_event(me, evt, ctx) {
             let bound = bind_projected_route(me, this, projected_doc);
             if bound.ok != true { return; }
             this = bound.state;
+            publish_route_plan(this);
             emit("program.ready", #{
                 path: this.program_path,
                 generation: route_revision_for(this),
@@ -979,6 +1100,25 @@ fn on_event(me, evt, ctx) {
         ) {
             this.route_revision = evt.value["generation"];
             return;
+        }
+        if this.live_route != () {
+            let restored = live_plan::reset(this.route_document,this.route_path,this.live_route);
+            if restored.ok != true {
+                notify_kind("Authored route changed; live route could not be restored: " + restored.error,"error");
+                this.enabled = false;
+                return;
+            }
+            this.live_route = ();
+            this.live_route_pending = ();
+            this.visited_points = #{};
+            this.route_index = 0;
+            this.current_path = ();
+            this.enabled = false;
+            this.safe_stopped = false;
+            this.route_occupancy_pending = true;
+            publish_route_plan(this);
+            notify_kind("Authored route changed; the live route plan was reset", "info");
+            this.route_view_key = ();
         }
         if full_stage || structural {
             this.marker_sync_pending = true;
@@ -1043,11 +1183,22 @@ fn on_event(me, evt, ctx) {
         // waypoint without claiming the user's session.
         this.commanded_path = ();
         this.commanded_revision = ();
-        this.commanded_view_key = ();
         return;
     }
     // A live enter uses the same visit path as the startup contact snapshot.
     // Visitation is runtime state regardless of whether guidance is enabled.
+    if evt.name == "SENSOR_ENTER" && this.live_route != () {
+        let next = next_route_visit_point(me,this);
+        if next != () && next.path != () && this.live_route.bindings.contains(next.path) {
+            let binding = this.live_route.bindings[next.path];
+            if binding.native_key != () && evt.source == binding.sensor_id {
+                let subject = route_subject_for(me,this);
+                if subject >= 0 && route_entrant_matches(subject,evt.value) {
+                    this = mark_route_point_visited(this,next.path);
+                }
+            }
+        }
+    }
     if evt.name.starts_with("enter:") {
         let subject = route_subject_for(me, this);
         let zone = evt.name.sub_string(6);
@@ -1072,33 +1223,22 @@ fn on_event(me, evt, ctx) {
             this.route_error = started.error;
         }
     } else if transition.kind == "advance" {
-        emit("route_point_reached", this.route_index);
-        this.route_index = transition.index;
-        this.current_path = ();
-        this.commanded_path = ();
-        this.commanded_revision = ();
-        this.commanded_view_key = ();
-        let points = route_children_for(me, this);
-        if points != () && this.route_index >= points.len() {
-            this.safe_stopped = false;
-            this.enabled = false;
-            let subject = route_subject_for(me, this);
-            let stopped = ensure_route_safe_stop(me, this);
-            if stopped.ok == true { this.safe_stopped = true; }
-            if stopped.ok == true && !this.completed {
-                this.completed = true;
-                emit("route_completed");
-            }
-        }
+        this = advance_route(me,this,transition.index);
     }
 }
 
 // The action stays live so route edits are visible without rebuilding the
 // subject. The route revision is the invalidation boundary for the disposable
-// ribbon; sensor events remain the sole progression authority.
+// ribbon; sensor transitions and admitted contact snapshots determine progression.
 // The task driver resolves this named callback against the scenario AST and
 // binds its persistent state map as `this`, exactly like an anonymous closure.
 fn route_task_tick(m) {
+    if this.live_route_pending != () {
+        let result = live_plan::finish_pending(this.live_route_pending);
+        if result.pending == true { return false; }
+        this.live_route_pending = ();
+        this = accept_live_route_edit(m,this,result);
+    }
     // A route without its mounted document is waiting for
     // `usd.document.projected`; do not retry document reads on every task pass.
     if this.route_document == () { return false; }
@@ -1134,7 +1274,25 @@ fn route_task_tick(m) {
         this.route_revision = view.revision;
         this.route_view_key = view.view_key;
     }
-    // Selection state is a transient USD projection and may appear one
+    // An admitted plan edit can put the next sensor over an already-present
+    // subject. Sample only that sensor at this change boundary; normal
+    // progression remains event-driven and does not poll contacts each tick.
+    if this.route_occupancy_pending {
+        let occupancy = mark_initial_route_occupancy(m,this);
+        this.route_occupancy_pending = false;
+        if occupancy.ok == true {
+            this = occupancy.state;
+            if this.enabled {
+                let cursor = current_point_info(m,this);
+                if cursor.path != () && this.visited_points[cursor.path] == true {
+                    this = advance_route(m,this,cursor.index+1);
+                }
+            }
+        } else {
+            emit("route_presentation_unavailable",occupancy.error);
+        }
+    }
+    // Selection state is a transient runtime value and may appear one
     // frame after a program hot-reload. Reconcile it at the same cadence
     // as the route view before driving; no route-specific Rust state is
     // needed.
@@ -1180,5 +1338,9 @@ fn route_task_never_done(me) {
 }
 
 fn on_stop(me, ctx) {
+    if this.live_route != () {
+        let cleared = live_plan::reset(this.route_document,this.route_path,this.live_route);
+        if cleared.ok != true { notify_kind(cleared.error,"error"); }
+    }
     ensure_route_safe_stop(me, this);
 }

@@ -358,11 +358,11 @@ sensors, use `SensorOccupants` in `on_start`.
 
 ### Examples
 
-`assets/scenarios/`: `route_follow.rhai` (route-point task program, emits
-checkpoints), `mission.rhai` (coordinator reacting via `on_event`),
-`mission_plan.rhai` (declarative task-tree mission), `robot_mission.rhai`
-(durable phase checkpoints), and `script_first_robot.rhai` (USD + Modelica
-authoring through explicit document ids).
+The route-point task in `assets/scenarios/route_follow.rhai` emits checkpoint
+events. Under `assets/scripting/examples/`, `mission.rhai` reacts to events,
+`mission_plan.rhai` declares a task tree, `robot_mission.rhai` resumes from
+saved terminal objectives, and `script_first_robot.rhai` authors USD and
+Modelica through explicit document IDs.
 
 ### Build notes / gotchas
 
@@ -1066,3 +1066,14 @@ Still open:
   params) so a `.usd`/Twin carries its scenario, like terrain recipes? (Rec: yes.)
 - **Action-envelope shape** — exact serializable goal/feedback/result/cancel struct
   for ROS2 action interop (defer until ROS2 bridge work starts).
+
+## Scenario-owned public snapshots
+
+`publish_scenario_state(key, value)` publishes a detached typed value from the
+currently executing scenario on its host. `scenario_public_state(target, key)`
+reads an admitted snapshot without borrowing the scenario driver or mutating
+the actor. Simulation reads and writes follow the declared entity access plan.
+The host, script instance, Twin and scene lifecycle retire the values. A unit
+value removes a key. These are transient read surfaces, not a second state store
+or document persistence. The live route policy uses this seam to publish its
+acknowledged plan.

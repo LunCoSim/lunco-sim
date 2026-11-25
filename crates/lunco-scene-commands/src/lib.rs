@@ -36,4 +36,6 @@ pub mod commands;
 mod environment_light;
 pub mod scene_view;
 
+mod runtime_markers;
+mod runtime_objects;
 mod scene_participation;

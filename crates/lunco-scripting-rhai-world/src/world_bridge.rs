@@ -2402,6 +2402,25 @@ fn build_world_engine_base(
         bridge_core::query(&RhaiBuilder, name.as_str(), HookValue::Map(Vec::new()))
     });
 
+    crate::mission_progress::register(&mut engine);
+    engine.register_fn(
+        "publish_scenario_state",
+        |key: ImmutableString, value: Dynamic| -> Result<(), Box<EvalAltResult>> {
+            let value = dynamic_to_hook_value(&value).map_err(value_boundary_error)?;
+            crate::public_state::publish(key.as_str(), value).map_err(script_runtime_error)
+        },
+    );
+    engine.register_fn(
+        "scenario_public_state",
+        |target: Dynamic, key: ImmutableString| -> Result<Dynamic, Box<EvalAltResult>> {
+            let target = unsigned_id(&target, "scenario_public_state")?;
+            let value =
+                crate::public_state::read(target, key.as_str()).map_err(script_runtime_error)?;
+            Ok(lunco_hooks_rhai::hook_to_dynamic(
+                &bridge_core::project_script_value(value),
+            ))
+        },
+    );
     engine.register_fn(
         "usd_types_agree",
         |source: ImmutableString, sink: ImmutableString| {
@@ -5565,7 +5584,7 @@ impl WorldScriptExecution {
         let scope = bridge_core::WorldScope::enter(world, context);
         bridge_core::set_script_authority(self.authority);
         bridge_core::set_script_client_local(self.client_local);
-        let actor = bridge_core::ScriptEntityScope::enter(self.actor);
+        let actor = bridge_core::ScriptEntityScope::enter_caller(self.actor);
         (scope, actor)
     }
 }

@@ -928,16 +928,12 @@ match or make ordinary runtime readers depend on this provisioning stack.
 
 For derived 3D annotations such as a waypoint route, keep one reusable
 presentation tool between authored/runtime facts and presentation consumers.
-Resolve authored identities through the authoritative binding map and write the
-derived USD view to `@view@` only when the route changes or the view is first
-materialized. Keep durable route edits in `@runtime@`, separately from the
-source scene. Use standard USD geometry and the existing renderer for depth and
-occlusion; do not create a Twin-specific ribbon prim or a per-frame document
-edit. A reusable route may be a separate composed USD plan; the tool follows
-the selected program's canonical parent scope rather than assuming `/Route`.
-The disposable view must use the typed transient USD projection command, so
-it is generation-checked and OpenUSD-backed without entering authored undo,
-save, or Twin journal history. Marker-root placement, annotation geometry,
+Resolve the selected program's canonical parent scope and read point positions
+from its composed USD route. Keep durable point edits in `@runtime@`. A graphics
+host provisions a keyed ECS child through `SetSceneViewObject`; the regular
+curve and terrain owners provide depth, picking and occlusion. The child's
+identity derives from its route owner and presentation key, and its lifetime
+ends with the scene. Marker-root placement, annotation geometry,
 labels, and look remain separate owners. Stable frames must do no route
 parsing, binding lookup, mesh generation, or marker writes; camera-dependent
 label projection is the only remaining per-frame presentation work.

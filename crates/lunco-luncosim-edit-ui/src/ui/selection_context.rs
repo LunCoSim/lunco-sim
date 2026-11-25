@@ -210,7 +210,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
             Ok(preview) => preview,
             Err(error) => return Err(error),
         };
-        let preview = requested_preview.or_else(|| viewport.focused_preview_id());
+        let preview = requested_preview.or_else(|| viewport.focused_projected_preview());
 
         let Some(preview) = preview else {
             return no_preview_selection_context();
@@ -228,37 +228,43 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
         };
         let stage_id = stage.id();
         let scene_root = session.scene_root();
-        let focused = viewport.focused_preview_id() == Some(preview);
+        let focused = viewport.focused_projected_preview() == Some(preview);
 
-        // Copy the identity source before constructing queries. The focused
-        // lease uses the shared selection projection; an unfocused lease uses
-        // its canonical path cache and is never inferred from the live scene.
-        let (selected_paths, target_path) = if focused {
-            let Some(selected) = world.get_resource::<lunco_scene_selection::SelectedEntities>()
-            else {
-                return Err(ApiQueryError::new(
-                    ApiErrorCode::InternalError,
-                    "InspectUsdSelection: SelectedEntities resource is not present",
-                ));
-            };
-            (SelectedPaths::Entities(selected.entities.clone()), None)
-        } else {
-            let Some(sessions) = world.get_resource::<EditorSessionSelections>() else {
-                return Err(ApiQueryError::new(
-                    ApiErrorCode::InternalError,
-                    "InspectUsdSelection: editor selection state is not present",
-                ));
-            };
-            let paths = sessions.sessions.get(&preview).cloned().unwrap_or_default();
-            (SelectedPaths::Paths(paths.paths), paths.target_path)
+        let Some(sessions) = world.get_resource::<EditorSessionSelections>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "InspectUsdSelection: editor selection state is not present",
+            ));
         };
-
+        let entry = sessions.sessions.get(&preview);
+        let Some(selected) = world.get_resource::<lunco_scene_selection::SelectedEntities>() else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "InspectUsdSelection: SelectedEntities resource is not present",
+            ));
+        };
         let Some(inspector_target) = world.get_resource::<lunco_scene_selection::SelectionTarget>()
         else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
                 "InspectUsdSelection: SelectionTarget resource is not present",
             ));
+        };
+        // Selection commands are visible within the calling frame. Between
+        // commands, especially during reprojection, the lease owns its paths.
+        let fresh_selection = focused
+            && session.projection_ready()
+            && entry.is_some_and(|entry| {
+                entry.projection == Some((stage_id, session.projected_generation()))
+                    && !entry.realized.matches(selected, inspector_target)
+            });
+        let (selected_paths, target_path) = if fresh_selection {
+            (SelectedPaths::Entities(selected.entities.clone()), None)
+        } else {
+            (
+                SelectedPaths::Paths(entry.map_or_else(Vec::new, |e| e.paths.clone())),
+                entry.and_then(|e| e.target_path.clone()),
+            )
         };
 
         let query = QueryState::<(
@@ -283,7 +289,7 @@ impl ApiQueryProvider for InspectUsdSelectionProvider {
 
         let (paths, mut stale_selection_count) =
             selected_paths.resolve(world, stage_id, scene_root, &mut q_paths, &mut q_parents);
-        let (target_path, mut stale_target) = if focused {
+        let (target_path, mut stale_target) = if fresh_selection {
             let target = inspector_target.part.and_then(|entity| {
                 q_paths.get(world, entity).ok().and_then(|(_, prim, ..)| {
                     (prim.stage_handle.id() == stage_id
