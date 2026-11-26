@@ -354,6 +354,7 @@ jobs:
             tests::portable_materialization_rejects_aliases_and_accepts_literal_names \
             tests::scenario_paths_admit_literal_names_and_reject_materialization_conflicts \
             manifest::tests::source_pool_names_preserve_literals_and_reject_nonportable_url_names \
+            registry::tests::bundled_engine_artifact_is_admitted_without_a_warm_cache \
             registry::tests::overlapping_process_outputs_are_rejected_during_registration \
             download::tests::every_download_scope_rejects_unsafe_dest_before_resolution \
             names::tests::accepts_one_normal_component \

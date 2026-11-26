@@ -2209,7 +2209,7 @@ checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 [[package]]
 name = "bevy_pbr"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=daed5647147acc49df25d827aa7b1d4fb7e2e122#daed5647147acc49df25d827aa7b1d4fb7e2e122"
+source = "git+https://github.com/LunCoSim/bevy?rev=e104a5d60f4aa6c8a724a73bf8e76981d8b456a6#e104a5d60f4aa6c8a724a73bf8e76981d8b456a6"
 dependencies = [
  "arrayvec",
  "bevy_app",
@@ -2377,7 +2377,7 @@ dependencies = [
 [[package]]
 name = "bevy_render"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=b33d65990122c80aa73f835cd0c77d5a22ab4dd0#b33d65990122c80aa73f835cd0c77d5a22ab4dd0"
+source = "git+https://github.com/LunCoSim/bevy?rev=4cea221a4792adb3922abffd522b5c779b5b5c0f#4cea221a4792adb3922abffd522b5c779b5b5c0f"
 dependencies = [
  "async-channel",
  "bevy_app",
@@ -2593,8 +2593,7 @@ dependencies = [
 [[package]]
 name = "bevy_sprite_render"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8918649806697740b61d3fd0559cb8c7de2ade5046aacf8abbef20e49ea1de0c"
+source = "git+https://github.com/LunCoSim/bevy?rev=4cea221a4792adb3922abffd522b5c779b5b5c0f#4cea221a4792adb3922abffd522b5c779b5b5c0f"
 dependencies = [
  "bevy_app",
  "bevy_asset",

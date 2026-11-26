@@ -253,10 +253,14 @@ and target-plan identity. Identical layer bytes skip plan replacement.
 `UsdStageAsset` shares its immutable `StageRecipe` through `Arc`, so ordinary
 asset and pending-job snapshots do not copy the layer closure on the app thread.
 Each recipe entry shares immutable layer bytes with the resolver and native
-decoder. Its first successful native dependency scan records the exact layer
+decoder, including during dependency discovery. Text nesting validation is
+performed once per immutable buffer and shared between discovery and resolver
+opens, including rejected buffers. Its first successful native dependency scan records the exact layer
 identifier. Reopening a stage from that recipe reuses the scan for that
 identifier. A different anchor resolves relative arcs afresh, and a replacement
-buffer requires its own validation. The scan lives as long as the layer bytes.
+buffer requires its own validation. The validation and scan live as long as the
+layer bytes. The dependency scan operates on a private native analysis layer;
+the canonical composed stage owns its own parsed layers.
 When the live stage and prepared plan were built from that same recipe, the
 canonical owner records the exact plan identity at the stage generation. The
 asset `Modified` notification then reuses the already-open stage instead of
