@@ -107,8 +107,16 @@ impl LiveStepper {
 
 /// Build a live session through Rumoca's authoritative solver constructor.
 pub fn live(dae: &Dae, options: SimOptions) -> Result<LiveStepper, SimulationDiagnosticError> {
+    live_with_constructor(dae, options, SimulationSession::new_with_diagnostics)
+}
+
+fn live_with_constructor(
+    dae: &Dae,
+    options: SimOptions,
+    construct: impl FnOnce(&Dae, SimOptions) -> Result<SimulationSession, SimulationDiagnosticError>,
+) -> Result<LiveStepper, SimulationDiagnosticError> {
     let parameter_values = parameter_values(dae, &options)?;
-    let session = SimulationSession::new_with_diagnostics(dae, options)?;
+    let session = construct(dae, options)?;
     Ok(LiveStepper {
         session,
         parameter_values,
@@ -122,6 +130,16 @@ pub fn live_for_solver(
     spec: &lunco_experiments::solver::SolverSpec,
     options: SimOptions,
 ) -> Result<LiveStepper, SimulationDiagnosticError> {
+    live_for_solver_with(dae, spec, options, SimulationSession::new_with_diagnostics)
+}
+
+/// Admit the registry contract before constructing a fresh Rumoca session.
+pub fn live_for_solver_with(
+    dae: &Dae,
+    spec: &lunco_experiments::solver::SolverSpec,
+    options: SimOptions,
+    construct: impl FnOnce(&Dae, SimOptions) -> Result<SimulationSession, SimulationDiagnosticError>,
+) -> Result<LiveStepper, SimulationDiagnosticError> {
     match spec.id.as_str() {
         "fixedrk4" => {
             if !spec.caps.fixed_step || !spec.caps.deterministic {
@@ -134,9 +152,9 @@ pub fn live_for_solver(
                     "fixed-rk4 requires Rumoca fixed-step options".into(),
                 ));
             }
-            live(dae, options)
+            live_with_constructor(dae, options, construct)
         }
-        "bdf" | "rk45" => live(dae, options),
+        "bdf" | "rk45" => live_with_constructor(dae, options, construct),
         _ => Err(SimulationDiagnosticError::Solver(format!(
             "registered solver '{}' has no live session adapter",
             spec.id

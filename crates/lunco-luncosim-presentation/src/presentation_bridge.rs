@@ -1214,7 +1214,7 @@ fn report_modelica_status(
         ),
         None if pending > 0 => bus.set_progress(
             SOURCE,
-            format!("loading {pending} Modelica source(s)"),
+            format!("loading Modelica sources ({pending} remaining)"),
             0,
             0,
         ),

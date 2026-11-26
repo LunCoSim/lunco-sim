@@ -464,6 +464,22 @@ memory. Native persistent reuse stores validated compiled DAEs under the
 versioned `compiled-dae-v6` namespace and its captured disk budgets. Each
 participant owns its Rumoca session and initialized state.
 
+The native preparation worker also stores immutable FMI components in
+`prepared-fmi-v1`. Its key includes the Rumoca build and wire schema, target,
+source and bound model identity, structural parameters, solver and exact
+parameter, input and state-start values. A cache hit passes through Rumoca's
+checked wire reader and creates a fresh session. A bounded writer publishes
+components through the same storage transaction and retention limits as compiled
+equations. The `artifact.cache.policy` hook can request a rebuild with artifact
+kind `modelica_prepared`. Components with external tables or lowering warnings
+that need their source context are prepared from the DAE.
+
+Live constructors share a worker-owned, byte-bounded in-memory Cranelift
+compilation cache. Cranelift keys the function stencil, target and codegen flags.
+Every JIT module binds its own relocations. The worker reports freshly compiled
+and reused functions per construction. The capacity is
+`ModelicaCacheLimits::native_compilation_bytes` (64 MiB by default).
+
 Generated-network compilation consumes its complete synthesized document and
 the admitted source roots, not other open Modelica documents. Their reserved
 bundled `generated/` filename namespace is classified by the runtime metadata

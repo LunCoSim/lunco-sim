@@ -367,7 +367,10 @@ Use `scripts/perf/twin_startup.py` for a windowed loading budget. Its
 in one read-only evaluation. Compare matching probe versions; removing
 inter-query delays improves measurement accuracy, not application performance.
 Inspect first-ready and final screenshots as well as the mission verdict.
-Record compiled-DAE cache hits alongside startup time; other workloads can evict
+Record compiled-DAE hits and checked FMI component hits separately. A cold
+Modelica run starts with both versioned directories empty. Read shared
+initialization and live construction times from the co-simulation receipt.
+Each live constructor logs fresh and reused native functions. Other workloads can evict
 bounded artifacts. An immediate repeat with unchanged inputs distinguishes cold
 compilation from recurring session-construction cost without changing retention
 limits.
