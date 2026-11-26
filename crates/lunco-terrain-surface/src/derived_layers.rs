@@ -3,7 +3,8 @@
 //!
 //! The pure math is [`lunco_terrain_core::derive`]; this is its Bevy half. For
 //! each terrain that carries a retained height field ([`DemHeightField`]) we
-//! bake — **off the main thread** — two mipped RGBA8 textures:
+//! bake two mipped RGBA8 textures (on native workers; cooperative CPU/OPFS
+//! work on the browser page executor):
 //!
 //! - `surface_map` (binding 6/7): R=roughness G=AO B=rockDensity A=unused, and
 //! - `normal_map`  (binding 8/9): the DEM-local ENU meso normal, with the
@@ -76,6 +77,8 @@ pub struct TerrainDerivedStatus {
     pub total: usize,
     /// Terrains waiting for final derived shading, including deferred upgrades.
     pub pending: usize,
+    /// Terminal failures for current source/quality requests.
+    pub failed: usize,
 }
 
 /// Physical spacing of texel-centred cells over a `[-half_extent, +half_extent]`
@@ -444,8 +447,7 @@ fn start_derived_bakes(
         if streamed
             && maps.is_some()
             && stale.is_none()
-            && demands.consumes_terrain(entity)
-            && !tiles.is_some_and(LodTiles::startup_near_cover_ready)
+            && !demands.near_covers_ready(entity, tiles)
         {
             continue;
         }
@@ -518,7 +520,7 @@ fn start_derived_bakes(
 /// authored visual target and source grid supply the available visual detail.
 /// Streamed terrain keeps the quality resolution because its geometry refines
 /// independently of the static `targetRes` product.
-fn profile_for_terrain(
+pub(crate) fn profile_for_terrain(
     mut profile: lunco_render::RenderQualityProfile,
     source_res: usize,
     visual_target_res: Option<usize>,
@@ -538,25 +540,7 @@ fn profile_for_terrain(
     profile
 }
 
-/// Bump when the bake math or packed layout changes, so stale cache entries are
-/// simply never matched (content-addressed → no explicit invalidation).
-/// v2: maps sample the composed `SurfaceOracle` (analytic craters/edits included)
-/// and the key folds the oracle's modifier `content_key`.
-/// v3: crater profile band-limited + continuous at reach (same crater
-/// `content_key`, different sampled surface).
-/// v4: albedo scalar packed into normal-map alpha; the map resolution became a
-/// Graphics setting after this version.
-/// v5: tone (albedo) derived with a 3-texel stencil on a 6-texel-limited source
-/// (1-texel stencil at the 2-texel band edge returned per-texel checker → the
-/// mid-field texel mosaic); AO marched at half res and bilinear-expanded.
-/// v6: surface-map alpha is no longer a baked slope hazard (nothing sampled it;
-/// hazard is evaluated by the separate terrain diagnostic material). The frozen
-/// safe/cliff angles left the key with it.
-/// v7: tone (albedo) marched at half res and bilinear-expanded — its source is
-/// band-limited to 6 texels, so full-res sampling was resolving detail the
-/// source cannot contain, at ~10 oracle evaluations per texel.
-/// v8: derived-map resolution and AO sample counts became Graphics settings.
-/// v9: AO radius and roughness transfer parameters became Graphics settings.
+/// The content key versions the current sampling math and packed raster layout.
 const CACHE_FORMAT_VERSION: u64 = 10;
 
 /// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
@@ -630,7 +614,10 @@ fn derived_maps_from_buffers(
     })
 }
 
-fn derived_key(oracle: &SurfaceOracle, profile: lunco_render::RenderQualityProfile) -> u64 {
+pub(crate) fn derived_key(
+    oracle: &SurfaceOracle,
+    profile: lunco_render::RenderQualityProfile,
+) -> u64 {
     use lunco_precompute::Bake;
     DerivedBake { oracle, profile }.key()
 }
@@ -972,15 +959,17 @@ fn update_derived_status(
     quality: Res<lunco_render::RenderingQualitySettings>,
     terrains: Query<
         (
+            Entity,
             &DemHeightField,
             Option<&TerrainDerivedMaps>,
             Option<&DerivedBakeTask>,
+            Option<&DerivedMapsFailed>,
             Has<DerivedMapsStale>,
             Option<&DemVisualTargetRes>,
             Has<TerrainLodViz>,
             Option<&lunco_core::HorizonShadowTerrain>,
             Has<bevy::camera::visibility::RenderLayers>,
-            Has<lunco_environment::HorizonMap>,
+            Option<&lunco_environment::HorizonMap>,
             Option<&GlobalTransform>,
             Option<&lunco_environment::HorizonShadowCache>,
             Option<&TileShadowCache>,
@@ -988,15 +977,18 @@ fn update_derived_status(
         With<DemHeightField>,
     >,
     mut status: ResMut<TerrainDerivedStatus>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if images.is_none() {
-        *status = TerrainDerivedStatus::default();
+        status.set_if_neq(TerrainDerivedStatus::default());
         return;
     }
 
     let mut ready = 0;
     let mut total = 0;
     let mut pending = 0;
+    let mut failed = 0;
+    let mut findings = Vec::new();
     let Ok(profile) = quality.validated_profile() else {
         return;
     };
@@ -1007,9 +999,11 @@ fn update_derived_status(
             .map(|direction| (direction, radius))
     });
     for (
+        entity,
         field,
         maps,
         task,
+        failure,
         stale,
         target,
         streamed,
@@ -1024,35 +1018,59 @@ fn update_derived_status(
         let horizon_enabled = horizon.is_some_and(|cfg| cfg.resolution >= 2)
             && !render_layers
             && !(streamed && cfg!(target_arch = "wasm32"));
-        let cache_required = horizon_enabled
-            && horizon_config.as_ref().is_some_and(|config| {
-                sun_sample
-                    .zip(transform)
-                    .is_some_and(|((direction, radius), transform)| {
-                        let sun_local = transform
-                            .affine()
-                            .inverse()
-                            .transform_vector3(direction)
-                            .normalize_or_zero();
-                        config.requires_sample(sun_local, radius)
-                    })
+        let local_sun = sun_sample
+            .zip(transform)
+            .map(|((direction, radius), transform)| {
+                (
+                    transform
+                        .affine()
+                        .inverse()
+                        .transform_vector3(direction)
+                        .normalize_or_zero(),
+                    radius,
+                )
             });
+        let cache_required = horizon_enabled
+            && horizon_config.as_ref().zip(local_sun).is_some_and(
+                |(config, (direction, radius))| config.requires_sample(direction, radius),
+            );
         let shadow_ready = !cache_required
             || shadow.is_some_and(|cache| {
-                horizon_config
-                    .as_ref()
-                    .zip(sun_sample)
-                    .is_some_and(|(config, (_, radius))| cache.matches_quality(config, radius))
-                    && (!streamed
-                        || wired_shadow
-                            .is_some_and(|wired| wired.on > 0.0 && wired.image == cache.image))
+                horizon_config.as_ref().zip(local_sun).is_some_and(
+                    |(config, (direction, radius))| {
+                        cache.matches_quality(config, radius)
+                            && cache.is_valid_for_sun(direction, config.sun_threshold_deg)
+                    },
+                ) && (!streamed
+                    || wired_shadow
+                        .is_some_and(|wired| wired.on > 0.0 && wired.image == cache.image))
             });
-        let height_ready = !horizon_enabled || (streamed && !cache_required) || horizon_ready;
+        let height_ready = !horizon_enabled
+            || (streamed && !cache_required)
+            || horizon
+                .zip(horizon_ready)
+                .is_some_and(|(cfg, map)| map.field.resolution() == cfg.resolution);
         let has_task = task.is_some();
         total += 1;
         let desired =
             profile_for_terrain(profile, field.0.grid().res, target.map(|t| t.0), streamed);
-        let complete = maps.is_some_and(|maps| maps.bake_key == derived_key(&field.0, desired))
+        let requested_key = derived_key(&field.0, desired);
+        if failure.is_some_and(|failure| {
+            Arc::ptr_eq(&failure.source, &field.0) && failure.requested_key == requested_key
+        }) {
+            failed += 1;
+            findings.push(lunco_core::RuntimeDiagnostic {
+                producer: "terrain-visual-preparation".into(),
+                code: "derived-bake-failed".into(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                subject: format!("{entity:?}"),
+                message:
+                    "terrain derived raster preparation failed for the current source and quality"
+                        .into(),
+            });
+            continue;
+        }
+        let complete = maps.is_some_and(|maps| maps.bake_key == requested_key)
             && !has_task
             && !stale
             && height_ready
@@ -1061,22 +1079,23 @@ fn update_derived_status(
         pending += usize::from(!complete);
     }
 
-    if pending == 0 {
-        *status = TerrainDerivedStatus {
-            active: false,
-            ready,
-            total,
-            pending,
-        };
-        return;
-    }
-
-    *status = TerrainDerivedStatus {
+    status.set_if_neq(TerrainDerivedStatus {
         active: pending > 0,
         ready,
         total,
         pending,
-    };
+        failed,
+    });
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        if diagnostics
+            .findings
+            .iter()
+            .filter(|finding| finding.producer == "terrain-visual-preparation")
+            .ne(findings.iter())
+        {
+            diagnostics.replace_producer("terrain-visual-preparation", findings);
+        }
+    }
 }
 
 /// A linear (non-sRGB) RGBA8 data texture with a full mip chain and
@@ -1149,7 +1168,55 @@ mod tests {
 
     fn terrain_profile() -> lunco_render::RenderQualityProfile {
         lunco_render::RenderQualityProfile {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            directional_cascades: 2,
+            shadow_budget_bytes: 1024 * 1024 * 1024,
+            horizon_shadow_cache_sun_threshold_deg: 0.2,
+            horizon_march_steps: 24,
+            horizon_cache_samples_per_axis: 1,
+            shadow_first_cascade_far_bound: 20.0,
+            shadow_maximum_distance: 600.0,
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: 5.0,
+            editor_preview_illuminance: 128_000.0,
+            local_light_default_range: 20.0,
+            dome_cubemap_face_size: 512,
+            primitive_sphere_longitudes: 24,
+            primitive_sphere_latitudes: 16,
+            primitive_radial_segments: 32,
+            primitive_capsule_longitudes: 16,
+            primitive_capsule_latitudes: 8,
+            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
             terrain_derived_map_resolution: 1024,
+            terrain_derived_ao_directions: 4,
+            terrain_derived_ao_steps: 4,
+            terrain_derived_ao_radius_fraction: 0.1,
+            terrain_derived_roughness_base: 0.6,
+            terrain_derived_roughness_saturation_radians: 0.6,
+            terrain_derived_texture_anisotropy: 1,
+            terrain_rock_max_instances: 2_000,
+            terrain_rock_mesh_buckets: 3,
+            terrain_rock_mesh_cube_count: 2,
+            terrain_rock_lod_fade_distance: 300.0,
+            terrain_lod_tile_resolution: 33,
+            terrain_lod_cinematic_resolution: 1025,
+            terrain_lod_pixel_error: 4.0,
+            terrain_lod_max_depth: 6,
+            terrain_lod_probe_resolution: 5,
+            terrain_lod_bakes_per_frame: 8,
+            terrain_lod_max_inflight_bakes: 16,
+            terrain_lod_tile_budget: 256,
+            terrain_lod_cover_edits_per_frame: 16,
+            terrain_lod_hysteresis_ratio: 1.2,
+            nurbs_surface_samples_per_control_span: 3,
+            nurbs_surface_minimum_subdivisions: 6,
+            nurbs_surface_maximum_subdivisions: 64,
+            nurbs_trim_curve_samples: 12,
+            nurbs_trim_minimum_subdivisions: 8,
+            nurbs_trim_maximum_subdivisions: 48,
+            curve_samples_per_segment: 4,
+            curve_radial_segments: 6,
             ..Default::default()
         }
     }
@@ -1341,6 +1408,47 @@ mod tests {
     }
 
     #[test]
+    fn terminal_current_raster_failure_is_not_indefinite_pending() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<lunco_render::RenderingQualitySettings>()
+            .init_resource::<TerrainDerivedStatus>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_systems(Update, update_derived_status);
+        app.world_mut()
+            .resource_mut::<lunco_render::RenderingQualitySettings>()
+            .apply_profile(terrain_profile());
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(crate::HeightGrid::new_flat(
+            2, 1.0,
+        ))));
+        let profile = app
+            .world()
+            .resource::<lunco_render::RenderingQualitySettings>()
+            .validated_profile()
+            .unwrap();
+        let desired = profile_for_terrain(profile, 2, None, false);
+        app.world_mut().spawn((
+            DemHeightField(oracle.clone()),
+            DerivedMapsFailed {
+                requested_key: derived_key(&oracle, desired),
+                source: oracle,
+            },
+        ));
+        app.update();
+        let status = app.world().resource::<TerrainDerivedStatus>();
+        assert_eq!(status.failed, 1);
+        assert_eq!(status.pending, 0);
+        assert!(!status.active);
+        assert_eq!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn scene_teardown_removes_derived_state_and_resets_status() {
         let mut app = App::new();
         app.init_resource::<TerrainDerivedStatus>().add_systems(
@@ -1353,6 +1461,7 @@ mod tests {
             ready: 0,
             total: 1,
             pending: 1,
+            failed: 0,
         };
 
         lunco_core::run_scene_teardown(app.world_mut());

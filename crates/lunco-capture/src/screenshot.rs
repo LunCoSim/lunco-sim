@@ -2236,6 +2236,7 @@ fn abort_recording_on_terminal_failure(
     state: Res<OfflineRecordingState>,
     pending: Option<Res<PendingShotStart>>,
     faults: Option<Res<lunco_core::RuntimeFaults>>,
+    diagnostics: Option<Res<lunco_core::RuntimeDiagnostics>>,
     renderer: Option<Res<lunco_render::RendererStatus>>,
     sampling: Res<lunco_render::OfflineImageSampling>,
     failure: Option<Res<OfflineRecordingFailure>>,
@@ -2247,7 +2248,20 @@ fn abort_recording_on_terminal_failure(
     let runtime_failure = faults
         .and_then(|faults| faults.first.clone())
         .map(|fault| format!("{}: {} ({})", fault.kind, fault.subject, fault.detail));
+    let terrain_failure = diagnostics
+        .as_ref()
+        .and_then(|diagnostics| {
+            diagnostics.findings.iter().find(|finding| {
+                finding.severity == lunco_core::DiagnosticSeverity::Error
+                    && matches!(
+                        finding.producer.as_str(),
+                        "terrain-mesh-residency" | "terrain-visual-preparation"
+                    )
+            })
+        })
+        .map(|finding| format!("{}: {}", finding.subject, finding.message));
     let reason = runtime_failure
+        .or(terrain_failure)
         .or_else(|| renderer.and_then(|renderer| renderer.error.clone()))
         .or_else(|| sampling.error.clone());
     let Some(reason) = reason else {
@@ -2437,6 +2451,35 @@ mod recording_readiness_tests {
                 "an explicit pause or hold must allow a stationary shot"
             );
         }
+    }
+
+    #[test]
+    fn terminal_terrain_preparation_failure_aborts_capture() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.insert_resource(OfflineRecordingState {
+            active: true,
+            ..Default::default()
+        });
+        world.init_resource::<lunco_render::OfflineImageSampling>();
+        world.insert_resource(lunco_core::RuntimeDiagnostics {
+            findings: vec![lunco_core::RuntimeDiagnostic {
+                code: "derived-bake-failed".into(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                producer: "terrain-visual-preparation".into(),
+                subject: "terrain".into(),
+                message: "derived raster failed".into(),
+            }],
+        });
+        world
+            .run_system_once(abort_recording_on_terminal_failure)
+            .unwrap();
+        assert!(
+            world
+                .resource::<OfflineRecordingFailure>()
+                .0
+                .contains("derived raster failed")
+        );
     }
 
     #[test]

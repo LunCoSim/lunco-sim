@@ -60,8 +60,8 @@ pub(crate) struct StreamedHorizonStale {
 
 /// Sample the oracle into a horizon `HeightField` for every streamed terrain
 /// that opted into horizon shadows and has no map yet. Native-only: the bake is
-/// a few million oracle samples on the async pool; the web build's horizon
-/// cache is config-disabled anyway.
+/// a few million oracle samples on the async pool. The browser currently
+/// has no streamed horizon-heightfield producer.
 #[allow(clippy::type_complexity)]
 pub(crate) fn start_streamed_horizon_bakes(
     mut commands: Commands,
@@ -91,9 +91,7 @@ pub(crate) fn start_streamed_horizon_bakes(
     }
     let now = Instant::now();
     for (entity, cfg, hf, stale, has_map, tiles) in &q {
-        if demands.consumes_terrain(entity)
-            && !tiles.is_some_and(LodTiles::startup_near_cover_ready)
-        {
+        if !demands.near_covers_ready(entity, tiles) {
             continue;
         }
         match stale {
@@ -208,6 +206,7 @@ pub(crate) fn finish_streamed_horizon_bakes(
 #[allow(clippy::type_complexity)]
 pub(crate) fn mark_streamed_horizon_stale(
     mut commands: Commands,
+    // Match every managed terrain while a bake or debounce is active.
     // NOTE: this must NOT filter `With<HorizonMap>`. The first edit removes the map,
     // so a `With<HorizonMap>` filter would stop matching mid-drag and never refresh
     // `since` — the debounce would then fire at edit+0.75 s against a still-editing
@@ -233,12 +232,7 @@ pub(crate) fn mark_streamed_horizon_stale(
         // (re)arm terrains that already have a horizon map, a pending debounce, or a
         // bake IN FLIGHT.
         //
-        // `is_baking` matters: `start_streamed_horizon_bakes` removes the stale marker
-        // when it starts, so while the task runs an edited terrain has no map AND no
-        // marker — this used to `continue`, the bake then installed a map from the
-        // PRE-EDIT oracle snapshot, and nothing ever re-armed. Brush a crater ~0.8 s
-        // into a multi-second bake and the sun-visibility cache stayed wrong
-        // for the whole session.
+        // The exact in-flight lease is retired by the finish boundary.
         if !has_map && !is_stale && !is_baking {
             continue;
         }
@@ -255,6 +249,53 @@ pub(crate) fn mark_streamed_horizon_stale(
     }
 }
 
+/// Retire products and their tasks when the authored configuration no longer
+/// owns them. A changed heightfield resolution requires a new current map.
+fn reconcile_streamed_horizon_configuration(
+    mut commands: Commands,
+    terrains: Query<
+        (
+            Entity,
+            Option<&HorizonShadowTerrain>,
+            Has<DemHeightField>,
+            Has<RenderLayers>,
+            Option<&HorizonMap>,
+            Option<&StreamedHorizonBake>,
+        ),
+        (
+            With<TerrainLodViz>,
+            Or<(
+                With<HorizonMap>,
+                With<StreamedHorizonBake>,
+                With<StreamedHorizonStale>,
+            )>,
+        ),
+    >,
+) {
+    for (entity, marker, has_source, scoped, map, task) in &terrains {
+        let Some(config) = marker.filter(|marker| marker.resolution >= 2 && has_source && !scoped)
+        else {
+            commands.entity(entity).try_remove::<(
+                HorizonMap,
+                HorizonShadowCache,
+                StreamedHorizonBake,
+                StreamedHorizonStale,
+            )>();
+            continue;
+        };
+        if map.is_some_and(|map| map.field.resolution() != config.resolution)
+            || task.is_some_and(|task| task.resolution != config.resolution)
+        {
+            commands
+                .entity(entity)
+                .try_remove::<(HorizonMap, HorizonShadowCache, StreamedHorizonBake)>()
+                .try_insert(StreamedHorizonStale {
+                    since: Instant::now(),
+                });
+        }
+    }
+}
+
 /// Mirror each streamed terrain's `HorizonShadowCache` into the
 /// terrain-surface `TileShadowCache` the tile materials consume. Writes only on
 /// actual change — an unconditional insert would trip the tile late-bind
@@ -268,17 +309,18 @@ pub(crate) fn wire_tile_shadow_cache(
             Entity,
             Option<&HorizonShadowCache>,
             Option<&TileShadowCache>,
+            Has<HorizonShadowTerrain>,
         ),
-        (With<TerrainLodViz>, With<HorizonShadowTerrain>),
+        With<TerrainLodViz>,
     >,
 ) {
     let cache_quality_valid = cfg.quality_is_valid();
 
-    for (entity, cache, wired) in &terrains {
+    for (entity, cache, wired, enabled) in &terrains {
         let (image, on) = match cache {
             Some(c) => (
                 Some(c.image.clone()),
-                f32::from(cache_quality_valid && cfg.enabled),
+                f32::from(enabled && cache_quality_valid && cfg.enabled),
             ),
             None => (wired.map(|w| w.image.clone()), 0.0),
         };
@@ -301,6 +343,7 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
         (
+            reconcile_streamed_horizon_configuration,
             mark_streamed_horizon_stale,
             start_streamed_horizon_bakes,
             finish_streamed_horizon_bakes,
@@ -319,4 +362,49 @@ pub(crate) fn register(app: &mut App) {
             .before(lunco_terrain_surface::TerrainSurfaceSet::RenderShadowBinding)
             .in_set(lunco_core::RuntimeCycleSet::Visualization),
     );
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn changed_or_removed_horizon_configuration_retires_published_map() {
+        let mut app = App::new();
+        app.add_systems(Update, reconcile_streamed_horizon_configuration);
+        let oracle = Arc::new(lunco_terrain_surface::SurfaceOracle::bare(Arc::new(
+            lunco_terrain_surface::HeightGrid::new_flat(2, 1.0),
+        )));
+        let entity = app
+            .world_mut()
+            .spawn((
+                TerrainLodViz,
+                DemHeightField(oracle),
+                HorizonShadowTerrain { resolution: 2 },
+                HorizonMap {
+                    field: HeightField::from_grid(
+                        2,
+                        Vec2::splat(-1.0),
+                        Vec2::splat(2.0),
+                        Arc::new(vec![0.0; 4]),
+                    ),
+                    image: Handle::default(),
+                },
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get::<HorizonMap>(entity).is_some());
+        app.world_mut()
+            .get_mut::<HorizonShadowTerrain>(entity)
+            .unwrap()
+            .resolution = 4;
+        app.update();
+        assert!(app.world().get::<HorizonMap>(entity).is_none());
+        assert!(app.world().get::<StreamedHorizonStale>(entity).is_some());
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<HorizonShadowTerrain>();
+        app.update();
+        assert!(app.world().get::<StreamedHorizonStale>(entity).is_none());
+    }
 }

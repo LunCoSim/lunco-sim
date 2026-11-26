@@ -207,7 +207,8 @@ camera collision admission still validates every candidate. Complete sibling
 groups refine from ready parents in camera-distance order; uploads use the
 current view's priority rather than worker arrival order. Hidden ancestors
 serve unfinished target branches and return to the reclaimable mesh cache
-when those branches publish. Every nonempty publication must cover the entire
+when those branches publish. The render extractor retires removed mesh rows
+from the actual ECS lifecycle; terrain geometry does not use a frame-delay timer. Every nonempty publication must cover the entire
 root exactly once with 2:1-restricted edges. Visible dirty neighbours switch
 height generations together; unchanged tiles retain their existing meshes.
 The selected tile budget and global byte admission bound work and residents.
@@ -215,7 +216,8 @@ The selected tile budget and global byte admission bound work and residents.
 Full-domain height certification is an exact-source, background request
 after the initial camera-near partition is published. Both the worker and
 finalized camera-demand publisher use the same source/certificate selection
-signature. Certification wakes conservative selection without blocking initial
+signature and the request snapshots the certified bounds. The node-probe memo
+is keyed by the exact source and probe lattice. Certification wakes conservative selection without blocking initial
 coverage. Incomplete cover convergence advances independently of the simulation
 clock; cover operations are allocated by the terrain owner, across view
 replacement, and only an admitted operation can own a pending completion.
@@ -233,7 +235,8 @@ Offline capture waits for the requested map identity and applicable horizon
 products, including the initial visibility cache wired into streamed
 materials when the configured sun requires one. Debounce uses an independent
 wall clock, so holding simulation time during capture cannot block either
-re-bake. A root publication count is a topology fact, not a guarantee of
+re-bake. Terminal current-lease failures are reported separately from pending
+preparation and abort a capture without faulting physics. A root publication count is a topology fact, not a guarantee of
 visible ground or a GPU pixel acknowledgement. Browser CPU baking remains
 cooperative on the existing page executor; native async timings do not
 certify web responsiveness.

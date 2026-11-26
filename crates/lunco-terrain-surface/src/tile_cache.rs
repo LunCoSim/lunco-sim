@@ -99,7 +99,7 @@ impl lunco_precompute::Bake for TileBake<'_> {
     }
 
     fn load(&self, dir: &Path) -> Option<TileMesh> {
-        tile_mesh_from_bytes(&lunco_precompute::load_blob(dir, "mesh.bin")?)
+        tile_mesh_from_bytes(&lunco_precompute::load_blob(dir, "mesh.bin")?, self.res)
     }
 }
 
@@ -164,7 +164,7 @@ pub async fn bake_tile_mesh_cached_async(
     };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(TileBake::NAMESPACE, &key_hex).await {
-        if let Some(mesh) = tile_mesh_from_bytes(&blob) {
+        if let Some(mesh) = tile_mesh_from_bytes(&blob, res) {
             return mesh;
         }
     }
@@ -210,7 +210,7 @@ fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     out
 }
 
-fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
+fn tile_mesh_from_bytes(b: &[u8], resolution: usize) -> Option<TileMesh> {
     let mut off = 0usize;
     let take = |off: &mut usize, n: usize| -> Option<&[u8]> {
         let end = off.checked_add(n)?;
@@ -221,6 +221,9 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     let verts = usize::try_from(u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?)).ok()?;
     let idx_count =
         usize::try_from(u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?)).ok()?;
+    if verts < resolution.max(2).checked_pow(2)? || idx_count == 0 || idx_count % 3 != 0 {
+        return None;
+    }
     // Sanity: total size must match exactly (corrupt / truncated → rebake).
     let expect = 16_usize
         .checked_add(verts.checked_mul((3 + 3 + 3 + 3 + 4 + 2) * 4)?)?
@@ -264,7 +267,26 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     }
     let mut indices = Vec::with_capacity(idx_count);
     for _ in 0..idx_count {
-        indices.push(u32::from_le_bytes(take(&mut off, 4)?.try_into().ok()?));
+        let index = u32::from_le_bytes(take(&mut off, 4)?.try_into().ok()?);
+        if index as usize >= verts {
+            return None;
+        }
+        indices.push(index);
+    }
+    if positions
+        .iter()
+        .chain(&morph_targets)
+        .chain(&morph_normals)
+        .chain(&normals)
+        .flatten()
+        .any(|v| !v.is_finite())
+        || edge_masks
+            .iter()
+            .flatten()
+            .chain(uvs.iter().flatten())
+            .any(|v| !v.is_finite())
+    {
+        return None;
     }
     Some(TileMesh {
         positions,
@@ -283,7 +305,7 @@ mod tests {
 
     #[test]
     fn corrupted_tile_header_cannot_overflow_decode() {
-        assert!(tile_mesh_from_bytes(&[255; 16]).is_none());
+        assert!(tile_mesh_from_bytes(&[255; 16], 2).is_none());
     }
 
     #[test]
@@ -348,23 +370,29 @@ mod tests {
     #[test]
     fn roundtrip_bytes() {
         let m = TileMesh {
-            positions: vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-            morph_targets: vec![[1.5, 2.0, 3.0], [4.0, 5.5, 6.0]],
-            // Deliberately distinct from `normals` so a serializer that dropped or
-            // aliased this array fails the roundtrip instead of passing by luck.
-            morph_normals: vec![[0.0, 0.6, 0.8], [1.0, 0.0, 0.0]],
-            normals: vec![[0.0, 1.0, 0.0], [0.0, 0.8, 0.6]],
-            edge_masks: vec![[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]],
-            uvs: vec![[0.0, 0.0], [1.0, 1.0]],
-            indices: vec![0, 1, 0],
+            positions: vec![[0., 1., 0.], [1., 2., 0.], [0., 3., 1.], [1., 4., 1.]],
+            morph_targets: vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.], [1., 0., 1.]],
+            morph_normals: vec![[1., 0., 0.]; 4],
+            normals: vec![[0., 1., 0.]; 4],
+            edge_masks: vec![[1., 0., 1., 0.]; 4],
+            uvs: vec![[0., 0.], [1., 0.], [0., 1.], [1., 1.]],
+            indices: vec![0, 1, 2, 2, 1, 3],
         };
         let b = tile_mesh_to_bytes(&m);
-        let r = tile_mesh_from_bytes(&b).expect("roundtrip");
+        let r = tile_mesh_from_bytes(&b, 2).expect("roundtrip");
         assert_eq!(m, r);
+        assert!(tile_mesh_from_bytes(&b, 3).is_none());
+        assert!(tile_mesh_from_bytes(&[0; 16], 2).is_none());
+        let mut invalid = m.clone();
+        invalid.indices[0] = 4;
+        assert!(tile_mesh_from_bytes(&tile_mesh_to_bytes(&invalid), 2).is_none());
+        invalid.indices[0] = 0;
+        invalid.positions[0][1] = f32::NAN;
+        assert!(tile_mesh_from_bytes(&tile_mesh_to_bytes(&invalid), 2).is_none());
         // Truncated / padded blobs are rejected (→ rebake), never mis-parsed.
-        assert!(tile_mesh_from_bytes(&b[..b.len() - 1]).is_none());
+        assert!(tile_mesh_from_bytes(&b[..b.len() - 1], 2).is_none());
         let mut padded = b;
         padded.push(0);
-        assert!(tile_mesh_from_bytes(&padded).is_none());
+        assert!(tile_mesh_from_bytes(&padded, 2).is_none());
     }
 }

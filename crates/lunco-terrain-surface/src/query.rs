@@ -898,6 +898,31 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             })
         }).collect();
         continuations.sort_by_key(|row| row.get("entity").and_then(ApiValue::as_u64));
+        let raster_rows = QueryState::<(
+            Entity,
+            &DemHeightField,
+            Option<&crate::TerrainDerivedMaps>,
+            Option<&crate::terrain::DemVisualTargetRes>,
+            Has<crate::stream_viz::TerrainLodViz>,
+        )>::try_new(world)
+        .map(|mut query| {
+            query
+                .iter(world)
+                .map(|(entity, field, maps, target, streamed)| {
+                    let desired = crate::derived_layers::profile_for_terrain(
+                        profile,
+                        field.0.grid().res,
+                        target.map(|t| t.0),
+                        streamed,
+                    );
+                    let requested_key = crate::derived_layers::derived_key(&field.0, desired);
+                    api_value!({"source": entity.to_bits(),
+                    "published_resolution": maps.map(|maps| maps.res),
+                    "requested_resolution": desired.terrain_derived_map_resolution,
+                    "current": maps.is_some_and(|maps| maps.bake_key == requested_key)})
+                })
+                .collect::<Vec<_>>()
+        });
         Ok(Some(api_value!({
             "config": {
                 "pixel_error": profile.terrain_lod_pixel_error,
@@ -929,6 +954,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "mesh_retired_bytes": status.mesh_retired_bytes,
                 "mesh_byte_limit": status.mesh_byte_limit,
                 "mesh_upload_refused": status.mesh_upload_refused,
+                "failed": status.failed,
                 "mesh_upload_required_bytes": status.mesh_upload_required_bytes,
                 "draw_revision_exhausted": status.draw_revision_exhausted,
                 "preparation_refused": status.preparation_refused,
@@ -938,6 +964,8 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "ready": derived.ready,
                 "total": derived.total,
                 "pending": derived.pending,
+                "failed": derived.failed,
+                "rasters": raster_rows,
             },
             "viewport_camera": world
                 .get_resource::<lunco_viewport_core::SceneViewport>()

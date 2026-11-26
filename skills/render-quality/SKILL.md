@@ -162,8 +162,8 @@ GPU acceptance still require the rendered fixture and a clean process log.
    draw revision on every presentation tick, exact opening/closing tile identities,
    camera position and direction, and full-cover readiness over the requested duration.
    For cold-cache startup, run `scripts/api/test_terrain_progressive_startup.py`
-   with a task-owned cache and `--require-progressive`. The first published
-   root publication must precede final shading and cover readiness; this is not
+   with a task-owned cache and `--require-progressive`. The first root
+   publication must precede final shading and cover readiness; this is not
    a pixel-level visibility milestone. The selected tree
    admits ready ancestor/child groups near-camera first with exact restricted
    partitions, retiring hidden ancestors when no longer needed;

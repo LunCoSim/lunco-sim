@@ -180,15 +180,15 @@ Laptop GPU, 1600 × 1000, High quality, independent main and StereoLeft outputs
 | --- | ---: | ---: |
 | First reported root partition (initial feed) | 5.515 | 4.746 |
 | Physical world ready | 7.534 | 6.437 |
-| Both views fully drawn in actual captured image | 8.318 | 7.267 |
+| Both views reported fully drawn (screenshot verified afterward) | 8.318 | 7.267 |
 | Final shading and current geometry | 38.114 | 7.376 |
 | Median settled frame time (240 frames) | 10.14 ms | 9.97 ms |
 | 95th-percentile settled frame time | 11.77 ms | 11.07 ms |
 | Median settled FPS | 98.65 | 100.25 |
 
-The first main root-publication count is not pixel visibility; the actual
-detailed cold and warm screenshots were accepted 0.784 s and 0.830 s after
-world readiness. The cold full shading upgrade preserved all 392 precise
+The first main root-publication count is not pixel visibility; the query milestones for complete drawn partitions were 0.784 s and 0.830 s after
+world readiness; subsequent screenshot inspection verified pixels. These timings
+are publication timings, not exact GPU readback timestamps. The cold full shading upgrade preserved all 392 precise
 drawn tile identities and camera poses. Both views (223 and 169 tiles)
 settled at 3.05 cm finest postings, with zero pending selection or
 presentation work and no mesh upload refusals. Approximate resident geometry
@@ -206,6 +206,58 @@ two precompute and five capture tests (three existing ignored tests). Evidence:
 `/tmp/luncosim-terrain-audit/warm2/`. The frame-time sample is a native
 settled interactive run, not a browser/physics-running performance claim.
 The browser still uses cooperative CPU preparation on the page executor.
+
+## Post-integration audit (2026-11-26)
+
+The follow-up removes the timed render-entity retirement shim against the
+change-driven native extraction contract, caches probes by source and lattice,
+accounts shared mesh eviction incrementally, and avoids constructing ancestor
+unions in settled frames. Terminal current-lease bake failures now report
+diagnostics instead of leaving numbered recording waiting indefinitely.
+Horizon configuration changes retire obsolete source leases and published maps.
+Malformed cached geometry is rejected before admission.
+
+The integrated renderer and current Summer Space School Twin (`235c862`)
+were tested on the RTX 5060 at 1600×1000, port 3743. This Twin revision
+opens two feeds as well as the main viewport (three covers, 567 drawn tiles),
+unlike the earlier two-view measurements above. The warm run reused the
+successful cold run's terrain cache. Simulation was paused for the settled
+frame-time measurement.
+
+| Milestone (seconds from launch) | Cold | Warm |
+| --- | ---: | ---: |
+| Initial feed root publication | 4.532 | 5.771 |
+| Physical world ready | 6.998 | 9.413 |
+| Complete main-world draw partition | 7.583 | 10.900 |
+| Interactive 256² raster preview | 7.750 | — |
+| Current 2048² raster and geometry | 42.076 | 11.074 |
+| Median settled frame time (240 frames) | 15.95 ms | 18.73 ms |
+| 95th-percentile settled frame time | 27.79 ms | 30.59 ms |
+| Median settled FPS | 62.71 | 53.39 |
+
+All 567 exact draw identities and camera poses were unchanged in the cold
+preview-to-final upgrade. Recording armed before final shading produced no
+numbered frames during the preparation hold, then delivered two full-quality
+frames; the warm test also delivered two. Both runs passed the three authored
+stationary-cover checks, with no runtime diagnostic errors or warnings. Both
+independent feeds were retired, the probe lattice changed from 9 to 11, and
+the remaining viewport settled and rendered correctly. The cold preview,
+numbered frames and warm final and retuned screenshots show uniform near
+crater detail and a continuous distant cover. The warm initial draw-partition
+screenshot was still missing main-view terrain and route; the next status
+sample 0.174 s after the partition query was followed by a screenshot showing
+both. This is why main-world publication is not a GPU
+visibility receipt. No settled disappearance was observed in the inspected
+numbered frames; this is not exhaustive per-pixel coverage of every frame.
+
+An additional warm run reached 72.61 median FPS with the three views; there
+was variable concurrent system load, and the older two-view results are not
+an isolated performance comparison. Earlier attempts also encountered private
+Wayland compositor failures; the matched runs completed on fresh GPU-backed
+private displays. The production build and 380 focused tests passed (three
+existing ignored). Evidence: `/tmp/luncosim-terrain-audit/postmerge-cold4/`,
+`/tmp/luncosim-terrain-audit/postmerge-warm3/`, and
+`/tmp/luncosim-terrain-audit/postmerge-warm2/`.
 
 ## External architecture references
 

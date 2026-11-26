@@ -27,6 +27,7 @@ def main():
                         help="Require root publication before visual preparation finishes (cold cache).")
     parser.add_argument("--verify-recording", action="store_true",
                         help="Verify numbered capture from the fully prepared terrain.")
+    parser.add_argument("--verify-view-retirement", action="store_true", help="Close an owned camera feed and retune the remaining cover to exercise native extraction retirement.")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -63,6 +64,8 @@ def main():
         deadline = time.monotonic() + args.timeout
         paused = False
         preview_cover = None
+        recording_started = False
+        recording_wait_observed = False
 
         def drawn_identity():
             status = execute("TerrainLodStatus", include_geometry=True,
@@ -89,6 +92,9 @@ def main():
             sample = {"elapsed_s": time.monotonic() - started,
                       "views": views, "stream": status["stream"], "derived": status["derived"]}
             evidence["samples"].append(sample)
+            if status["stream"]["failed"] or status["derived"]["failed"]:
+                (output / "validation.json").write_text(json.dumps(evidence, indent=2))
+                raise RuntimeError(f"terminal terrain preparation failure: {sample}")
             if views:
                 milestone("visual_demand", sample)
             if views and any(v["drawn"] > 0 for v in views):
@@ -104,18 +110,33 @@ def main():
             if paused and views and all(v["presented_ready"] and v["wanted"] == v["drawn"] == v["resident"] and v["wanted"] > 0 for v in views):
                 if milestone("complete_draw_partition", sample):
                     session.capture_screenshot(output / "complete-draw.png")
+                    evidence["milestones"]["complete_draw_partition"]["captured_elapsed_s"] = time.monotonic() - started
             if (views and all(v["ready"] and v["wanted"] == v["drawn"] == v["resident"]
                               for v in views) and status["stream"]["pending"] == 0):
                 milestone("geometry_ready", sample)
-                if paused and status["derived"]["pending"] > 0 and preview_cover is None:
+                rasters = status["derived"]["rasters"] or []
+                preview_published = any(r["published_resolution"] is not None
+                    and r["published_resolution"] < r["requested_resolution"] for r in rasters)
+                if paused and preview_published and preview_cover is None:
                     preview_cover = drawn_identity()
                     milestone("interactive_preview", sample)
                     session.capture_screenshot(output / "preview.png")
-                if status["derived"]["pending"] == 0 and paused:
+                    if args.verify_recording and args.require_progressive:
+                        execute("StartOfflineRecording", output_dir=str(output / "numbered"), fps=30)
+                        recording_started = True
+                if recording_started and status["derived"]["pending"] > 0:
+                    receipt = execute("GetOfflineRecordingStatus")
+                    assert not receipt["failure"], receipt
+                    if not receipt["visual_preparation_ready"]:
+                        assert receipt["frame_index"] == 0, receipt
+                        recording_wait_observed = True
+
+                if status["derived"]["pending"] == 0 and paused and rasters and all(r["current"] and r["published_resolution"] == r["requested_resolution"] for r in rasters):
                     milestone("complete", sample)
                     evidence["preview_cover"] = preview_cover
                     evidence["final_cover"] = drawn_identity()
-                    session.capture_screenshot(output / "final.png")
+                    if not recording_started:
+                        session.capture_screenshot(output / "final.png")
                     break
             time.sleep(.15)
         else:
@@ -134,6 +155,22 @@ def main():
             assert viewport["status"]["derived"]["pending"] > 0, "main viewport publication waited for final shading"
             assert preview_cover is not None, "full shading finished before a distinct interactive preview"
             assert preview_cover == evidence["final_cover"], "shading upgrade changed a settled geometric cover"
+        if recording_started:
+            assert recording_wait_observed, "numbered capture did not observe pending terrain preparation"
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                recording = execute("GetOfflineRecordingStatus")
+                assert not recording["failure"], recording
+                if recording["frame_index"] >= 2:
+                    assert recording["visual_preparation_ready"], recording
+                    evidence["recording"] = recording
+                    evidence["recording_wait_observed"] = True
+                    break
+                time.sleep(.2)
+            else:
+                raise RuntimeError("pending capture failed to resume")
+            execute("StopOfflineRecording")
+            session.capture_screenshot(output / "final.png")
         run_authored_scenario(
             session, "lunco://scenarios/tests/terrain_stationary_cover.rhai",
             title="TERRAIN STATIONARY COVER", check_count=3, params={"duration_s": 10.0},
@@ -151,6 +188,7 @@ def main():
             measured = execute("EnginePerformance")
             if measured["frame_sample_count"] - initial["frame_sample_count"] >= measured["history_capacity"]:
                 break
+        assert measured["frame_sample_count"] - initial["frame_sample_count"] >= measured["history_capacity"], "performance history still contains scenario observer frames"
         evidence["performance"] = measured
         frame_ms = sorted(measured["frame_time_samples_ms"])
         assert frame_ms and all(value > 0 for value in frame_ms), "no measured render frames"
@@ -161,7 +199,7 @@ def main():
             "median_fps": 1000.0 / statistics.median(frame_ms),
         }
         print("settled performance", evidence["settled_frame_time"], flush=True)
-        if args.verify_recording:
+        if args.verify_recording and not recording_started:
             execute("StartOfflineRecording", output_dir=str(output / "numbered"), fps=30)
             try:
                 recording_deadline = time.monotonic() + 45.0
@@ -179,6 +217,40 @@ def main():
             finally:
                 execute("StopOfflineRecording")
 
+        if args.verify_view_retirement:
+            before = execute("TerrainLodStatus")
+            main_camera = before["viewport_camera"]
+            feeds = execute("InspectCameraFeeds")["views"]
+            assert feeds and len(before["camera_cover"]) > 1, "expected a live independent feed"
+            for feed in feeds:
+                execute("RemoveCameraFeed", feed=feed["feed"])
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                remaining = execute("TerrainLodStatus")
+                if (remaining["stream"]["pending"] == 0 and remaining["camera_cover"]
+                    and all(v["camera"] == main_camera and v["ready"] for v in remaining["camera_cover"])):
+                    break
+                time.sleep(.2)
+            else:
+                raise RuntimeError(f"feed removal left unsettled geometry: {remaining}")
+            probe = remaining["config"]["probe_resolution"]
+            execute("SetTerrainRenderingQuality", probe_resolution=min(257, probe + 2))
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                retuned = execute("TerrainLodStatus")
+                if (retuned["config"]["probe_resolution"] != probe
+                    and retuned["stream"]["pending"] == 0 and all(v["ready"] for v in retuned["camera_cover"])):
+                    break
+                time.sleep(.2)
+            else:
+                raise RuntimeError(f"retuned cover failed to settle: {retuned}")
+            session.capture_screenshot(output / "view-retirement.png")
+            evidence["view_retirement"] = {"before": before["camera_cover"],
+                                          "remaining": retuned["camera_cover"],
+                                          "probe_resolution": retuned["config"]["probe_resolution"]}
+            diagnostics = execute("RuntimeDiagnostics")
+            assert diagnostics["errors"] == 0 and diagnostics["warnings"] == 0, diagnostics
+            print("feed retirement and probe retune PASS", flush=True)
         (output / "validation.json").write_text(json.dumps(evidence, indent=2))
         assert_render_log_clean(output / "runtime.log")
     assert not port_is_open(args.port), "owned test port was not released"
