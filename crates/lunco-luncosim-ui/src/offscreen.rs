@@ -108,6 +108,7 @@ impl Plugin for LunCoSimOffscreenPlugin {
         // acknowledgement is consumed by the recorder before it starts virtual time.
         if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
             render_app.init_resource::<lunco_capture::screenshot::OfflineRenderReadiness>();
+            render_app.init_resource::<OffscreenCaptureTargetId>();
             render_app.add_systems(
                 bevy::render::ExtractSchedule,
                 copy_offscreen_render_readiness_to_main_world,
@@ -154,11 +155,20 @@ fn report_offscreen_render_view(
         >,
     >,
     pipeline_cache: Res<bevy::render::render_resource::PipelineCache>,
+    target: Res<OffscreenCaptureTargetId>,
     mut readiness: ResMut<lunco_capture::screenshot::OfflineRenderReadiness>,
     mut ready_reported: Local<bool>,
 ) {
     *readiness = Default::default();
+    let Some(target) = target.0 else { return };
     for (_entity, camera, view, visible) in &cameras {
+        let is_capture_view = matches!(
+            camera.output_mode,
+            bevy::camera::CameraOutputMode::Write { .. }
+        ) && matches!(camera.target.as_ref(), Some(bevy::camera::NormalizedRenderTarget::Image(image)) if image.handle.id() == target);
+        let Some(view) = view.filter(|_| is_capture_view) else {
+            continue;
+        };
         let visible_entities = visible.map_or(0, |visible| {
             visible
                 .classes
@@ -166,107 +176,76 @@ fn report_offscreen_render_view(
                 .map(|class| class.entities_cpu_culling.len() + class.entities_gpu_culling.len())
                 .sum()
         });
-        let opaque_bins = view
-            .and_then(|view| {
-                opaque_phases
-                    .as_deref()
-                    .and_then(|phases| phases.0.get(&view.retained_view_entity))
-            })
-            .map(|phase| {
-                phase.multidrawable_meshes.len()
-                    + phase.batchable_meshes.len()
-                    + phase.unbatchable_meshes.len()
-                    + phase.non_mesh_items.len()
-            })
-            .unwrap_or(0);
-        let opaque_pipelines_ready = view.and_then(|view| {
-            opaque_phases.as_deref().and_then(|phases| {
-                phases.0.get(&view.retained_view_entity).map(|phase| {
-                    let has_items = !phase.multidrawable_meshes.is_empty()
-                        || !phase.batchable_meshes.is_empty()
-                        || !phase.unbatchable_meshes.is_empty()
-                        || !phase.non_mesh_items.is_empty();
-                    has_items
-                        && phase
-                            .multidrawable_meshes
-                            .keys()
-                            .all(|key| pipeline_cache.get_render_pipeline(key.pipeline).is_some())
-                        && phase.batchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                        && phase.unbatchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                })
-            })
+        let opaque = opaque_phases
+            .as_deref()
+            .and_then(|phases| phases.0.get(&view.retained_view_entity));
+        let masked = alpha_mask_phases
+            .as_deref()
+            .and_then(|phases| phases.0.get(&view.retained_view_entity));
+        let transparent = transparent_phases
+            .as_deref()
+            .and_then(|phases| phases.0.get(&view.retained_view_entity));
+        let (opaque_items, opaque_ready) =
+            phase_readiness(opaque, |key| key.pipeline, &pipeline_cache);
+        let (alpha_mask_items, alpha_mask_ready) =
+            phase_readiness(masked, |key| key.pipeline, &pipeline_cache);
+        let (transparent_items, transparent_ready) = transparent.map_or((0, true), |phase| {
+            (
+                phase.items.len(),
+                phase
+                    .items
+                    .values()
+                    .all(|item| pipeline_cache.get_render_pipeline(item.pipeline).is_some()),
+            )
         });
-        let alpha_mask_pipelines_ready = view.and_then(|view| {
-            alpha_mask_phases.as_deref().and_then(|phases| {
-                phases.0.get(&view.retained_view_entity).map(|phase| {
-                    let has_items = !phase.multidrawable_meshes.is_empty()
-                        || !phase.batchable_meshes.is_empty()
-                        || !phase.unbatchable_meshes.is_empty()
-                        || !phase.non_mesh_items.is_empty();
-                    has_items
-                        && phase
-                            .multidrawable_meshes
-                            .keys()
-                            .all(|key| pipeline_cache.get_render_pipeline(key.pipeline).is_some())
-                        && phase.batchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                        && phase.unbatchable_meshes.keys().all(|(key, _)| {
-                            pipeline_cache.get_render_pipeline(key.pipeline).is_some()
-                        })
-                })
-            })
-        });
-        let transparent_items = view
-            .and_then(|view| {
-                transparent_phases
-                    .as_deref()
-                    .and_then(|phases| phases.0.get(&view.retained_view_entity))
-            })
-            .map_or(0, |phase| phase.items.len());
-        let transparent_pipelines_ready = view.and_then(|view| {
-            transparent_phases.as_deref().and_then(|phases| {
-                phases.0.get(&view.retained_view_entity).map(|phase| {
-                    !phase.items.is_empty()
-                        && phase
-                            .items
-                            .values()
-                            .all(|item| pipeline_cache.get_render_pipeline(item.pipeline).is_some())
-                })
-            })
-        });
-        let is_capture_view = matches!(
-            camera.output_mode,
-            bevy::camera::CameraOutputMode::Write { .. }
-        ) && camera
-            .target
-            .as_ref()
-            .is_some_and(|target| matches!(target, bevy::camera::NormalizedRenderTarget::Image(_)));
-        if is_capture_view {
-            if let Some(view) = view {
-                readiness.camera = Some(view.retained_view_entity.main_entity.id());
-                readiness.visible_entities = visible_entities;
-                readiness.opaque_items = opaque_bins;
-                readiness.transparent_items = transparent_items;
-                readiness.pipelines_ready = opaque_pipelines_ready.unwrap_or(false)
-                    || alpha_mask_pipelines_ready.unwrap_or(false)
-                    || transparent_pipelines_ready.unwrap_or(false);
-                if !*ready_reported && opaque_bins + transparent_items > 0 {
-                    info!(
-                        "[offscreen] capture view submitted scene items: main={:?} world_translation={:?} visible_entities={visible_entities} opaque_bins={opaque_bins} transparent_items={transparent_items} pipelines_ready={}",
-                        view.retained_view_entity.main_entity,
-                        view.world_from_view.translation(),
-                        readiness.pipelines_ready,
-                    );
-                    *ready_reported = true;
-                }
-            }
+        let pipelines_ready = opaque_items + alpha_mask_items + transparent_items > 0
+            && opaque_ready
+            && alpha_mask_ready
+            && transparent_ready;
+        *readiness = lunco_capture::screenshot::OfflineRenderReadiness {
+            camera: Some(view.retained_view_entity.main_entity.id()),
+            target: Some(target),
+            visible_entities,
+            opaque_items,
+            alpha_mask_items,
+            transparent_items,
+            pipelines_ready,
+        };
+        if !*ready_reported && pipelines_ready {
+            info!(
+                "[offscreen] capture view pipelines ready: main={:?} visible={visible_entities} opaque={opaque_items} masked={alpha_mask_items} transparent={transparent_items}",
+                view.retained_view_entity.main_entity
+            );
+            *ready_reported = true;
         }
     }
+}
+
+#[cfg(feature = "api-transport")]
+#[derive(Resource, Default)]
+struct OffscreenCaptureTargetId(Option<AssetId<Image>>);
+
+/// Every occupied bin must have its concrete color pipeline available.
+#[cfg(feature = "api-transport")]
+fn phase_readiness<P: bevy::render::render_phase::BinnedPhaseItem>(
+    phase: Option<&bevy::render::render_phase::BinnedRenderPhase<P>>,
+    pipeline: impl Fn(&P::BatchSetKey) -> bevy::render::render_resource::CachedRenderPipelineId,
+    cache: &bevy::render::render_resource::PipelineCache,
+) -> (usize, bool) {
+    let Some(phase) = phase else { return (0, true) };
+    let keys = phase
+        .multidrawable_meshes
+        .keys()
+        .chain(phase.batchable_meshes.keys().map(|(key, _)| key))
+        .chain(phase.unbatchable_meshes.keys().map(|(key, _)| key))
+        .chain(phase.non_mesh_items.keys().map(|(key, _)| key));
+    let mut items = 0;
+    let mut ready = true;
+    for key in keys {
+        items += 1;
+        ready &= cache.get_render_pipeline(pipeline(key)).is_some();
+    }
+    (items, ready)
 }
 
 /// Copy the previous render-frame acknowledgement into the main world during
@@ -278,11 +257,19 @@ fn report_offscreen_render_view(
 fn copy_offscreen_render_readiness_to_main_world(
     mut main_world: ResMut<bevy::render::MainWorld>,
     readiness: Res<lunco_capture::screenshot::OfflineRenderReadiness>,
+    mut target: ResMut<OffscreenCaptureTargetId>,
 ) {
+    target.0 = main_world
+        .get_resource::<lunco_capture::screenshot::OfflineCaptureTarget>()
+        .map(|target| target.0.id());
     if let Some(mut main_readiness) =
         main_world.get_resource_mut::<lunco_capture::screenshot::OfflineRenderReadiness>()
     {
-        *main_readiness = *readiness;
+        *main_readiness = if readiness.target == target.0 {
+            *readiness
+        } else {
+            Default::default()
+        };
     }
 }
 

@@ -164,7 +164,8 @@ High quality, main view and StereoLeft feed):
 The native stream starts root geometry and projected cover planning concurrently,
 then admits exact, disjoint 2:1-restricted partition replacements in camera-near
 order. Hidden ancestor entities retire as their branches publish. Camera-near
-readiness means actually drawn geometry, not just completed CPU meshes. Full
+readiness means the main-world published drawable partition, not a GPU pixel
+receipt or just completed CPU meshes. Full
 derived rasters and horizon-cache work use bounded background admission;
 source and quality leases fence completion. The worker and finalized camera
 demand use one certificate-aware selection signature, so a paused camera can
@@ -305,6 +306,55 @@ deadline to collect all 240 fresh frames instead of implicitly enforcing a
 coverage but exceeded the original twelve-second sampling deadline.
 Evidence: `/tmp/luncosim-terrain-audit/startup-integrated-cold/` and
 `/tmp/luncosim-terrain-audit/startup-integrated-warm2/`.
+
+### Presentation and preparation contract audit
+
+The main viewport's exposed-camera authority is now shared by editing,
+picking, and window capture. Workbench hosts without a scene viewport retain
+their independent pointer routing. Offscreen numbered capture requires the
+actual output image and all occupied color-phase pipelines; a request entity
+owns each delivered frame. Terminal terrain diagnostics abort recording before
+another sampling ticket can be issued.
+
+Static horizon maps and pending bakes retire on mesh-handle or authored
+resolution changes. Mesh admission distinguishes a temporarily full cache from
+a single mesh larger than the entire configured ceiling. The latter is a
+terminal diagnostic until that lease or ceiling changes, not a repeated bake.
+The streamer also reuses its live mesh inventory and skips pose collection
+when no camera targets request terrain.
+
+The native driver samples the first observed exposed viewport independently of
+tile draw counts, requires a nonempty exact main-view cover, and checks pixels
+in numbered capture and after feed retirement. This is sampled evidence, not
+an assertion that every GPU frame has been inspected. The focused six-package
+test pass covered 363 passing tests and one existing ignored test.
+
+The production build on `8906e198a` plus the audit changes passed both the
+cold-terrain and warm workshop runs on port 3743 at 1600×1000. The first
+sampled exposed main viewport had 100% lit probe pixels; complete and final
+views had approximately 95%, with the numbered captures matching the final
+probe. The complete main-world partition followed physical readiness by
+1.67 s cold and 0.74 s warm. All 567 tile identities remained stable from
+interactive preview to final cold shading, three stationary-cover checks
+passed on both runs, and warm feed retirement/probe retuning passed. Median
+settled frame times were 16.98 ms cold and 17.94 ms warm (58.90 and 55.74 FPS).
+Final cold shading arrived 124.12 s after launch under shared machine load;
+this is not an isolated performance improvement measurement. Runtime
+diagnostics reported zero errors and warnings in both windowed runs.
+
+On the offscreen `sun_material_precision.usda` fixture, the actual image
+target acknowledged ready pipelines and the recorder started 38 ms later,
+then produced two valid 640×360 images and exited. The workshop's offscreen
+run at 640×360 did not complete: the pipeline receipt arrived, but two
+planetary covers and one terrain selection/presentation remained pending
+despite 208/208 resident tiles. This is a separate unresolved preparation
+blocker; the owned session was closed through `Exit`. No offscreen workshop
+recording acceptance is claimed.
+
+Evidence: `/tmp/luncosim-terrain-audit/deep-audit-warm/`,
+`/tmp/luncosim-terrain-audit/deep-audit-cold/`,
+`/tmp/luncosim-terrain-audit/deep-audit-offscreen-fixture/`, and
+`/tmp/luncosim-terrain-audit/deep-audit-offscreen/`.
 
 ## External architecture references
 

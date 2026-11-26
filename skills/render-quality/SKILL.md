@@ -444,6 +444,10 @@ The loading backdrop does not deactivate a physically admitted main camera:
 terrain cover and GPU pipeline preparation run concurrently with initial
 simulation preparation. Validate the first visible main-view screenshot as
 well as settled coverage, since main-world draw publication is not GPU receipt.
+Use `TerrainLodStatus.exposed_viewport_camera` for the exposed-camera milestone,
+not a nonzero tile count. The progressive-startup driver checks the first
+polled exposure independently of tile residency, and checks actual numbered
+and view-retirement pixels when `--viewport-probe` is supplied.
 
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the

@@ -183,6 +183,9 @@ unique uploaded geometry across views and sources, including live old generation
 and retiring tiles; retained CPU vertex/index payload is reported separately. Uploads wait
 before allocation if residents consume the configured limit. Lowering the limit
 does not discard visible coverage; pressure remains explicit in streaming status.
+A required tile larger than the entire byte ceiling is a terminal preparation
+failure for that source and ceiling, not a per-frame upload retry. A changed
+ceiling or surface makes a new admission eligible.
 The consumed-output registry and output pixel admission bound the number and size
 of views. New demands withdraw obsolete queued work; already-running
 work retains exact scene/source/view leases at publication. Ready ancestors remain
@@ -225,8 +228,8 @@ replacement, and only an admitted operation can own a pending completion.
 On a native cold cache, a shared-admission derived-layer worker first checks
 the final content-addressed map, otherwise publishes a 256-or-smaller texel
 preview. Each cache load validates the requested raster dimensions. The final
-map is admitted in the background after the consumed near-camera cover is
-actually drawn. Source and requested bake identity fence every completion;
+map is admitted in the background after the consumed near-camera draw
+partition is published. Source and requested bake identity fence every completion;
 cancelled scene or quality leases cannot publish stale material data.
 Material reconciliation upgrades resident meshes independently of geometry.
 The preview has lower-frequency shading, not final-map equivalence.
@@ -241,6 +244,12 @@ visible ground or a GPU pixel acknowledgement. Browser CPU baking remains
 cooperative on the existing page executor; native async timings do not
 certify web responsiveness.
 
+The final capture admission evaluates terminal failures before advancing or
+requesting an image. An outstanding numbered request has an exact entity
+identity; stopping a take retires it. Windowless capture acknowledges the
+actual target and all occupied color-phase pipelines from the render world,
+including alpha-masked and non-mesh bins, with no elapsed-time warm-up.
+
 `TerrainLodStatus.camera_cover` reports each view's local position and forward direction, draw revision, initial
 near-cover readiness, pending cover preparation, clearance, selected
 depth, effective maximum depth, metric spacing, readiness, pin state, wanted,
@@ -248,6 +257,9 @@ resident and drawn counts, and refused refinements. `contacts` reports physical
 support readiness and lattice parameters independently of rendered tiles.
 `presented_ready` describes the retained drawable cover; `ready` additionally
 requires the latest requested selection to be settled in its current generation.
+`exposed_viewport_camera` distinguishes the exposed, active main viewport from
+the selected camera preparing behind the loading backdrop. Startup pixel
+validation observes that exposure independently of the drawn tile count.
 `stream.selection_pending` counts unqueued follow-up work and newly consumed
 outputs as well as unfinished selections, so retained residency cannot authorize
 an unfinished numbered capture. Finalized demand publication updates this fence

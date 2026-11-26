@@ -1872,10 +1872,10 @@ fn pointer_surface_render_position(
     viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> Option<bevy::math::DVec3> {
+    let camera_entity = viewport.exposed_camera()?;
     if let Some(terrain_hit) = click.hit.extra_as::<lunco_terrain_surface::SurfaceHit>() {
         return surface.to_render(terrain_hit.point).map(|point| point.0);
     }
-    let camera_entity = viewport.active_camera?;
     let (camera, camera_transform) = q_scene_cameras.get(camera_entity).ok()?;
     let ray = lunco_viewport_core::scene_click_ray(
         false,
@@ -2298,6 +2298,7 @@ fn scene_pointer_move_args(
     world: &SceneToolWorld,
     move_hooks: &HashMap<DocumentId, ScenePointerMoveHook>,
 ) -> Option<ScenePointerMoveContext> {
+    let camera_entity = world.viewport.exposed_camera()?;
     let ScenePointerMoveSample {
         entity,
         position,
@@ -2326,7 +2327,6 @@ fn scene_pointer_move_args(
             if !hit_is_terrain {
                 return None;
             }
-            let camera_entity = world.viewport.active_camera?;
             let (camera, camera_transform) = world.q_scene_cameras.get(camera_entity).ok()?;
             let ray =
                 lunco_viewport_core::scene_click_ray(false, camera, camera_transform, position)?;

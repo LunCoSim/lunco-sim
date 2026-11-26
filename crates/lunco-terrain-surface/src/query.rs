@@ -971,6 +971,11 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 .get_resource::<lunco_viewport_core::SceneViewport>()
                 .and_then(|viewport| viewport.active_camera)
                 .map(|entity| entity.to_bits()),
+            "exposed_viewport_camera": world
+                .get_resource::<lunco_viewport_core::SceneViewport>()
+                .and_then(|viewport| viewport.exposed_camera())
+                .filter(|entity| world.get::<bevy::camera::Camera>(*entity).is_some_and(|camera| camera.is_active))
+                .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
             "contacts": contacts,
             "camera_cover": camera_cover,

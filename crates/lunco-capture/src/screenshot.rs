@@ -119,17 +119,18 @@ impl Plugin for ScreenshotPlugin {
             // `--offscreen` exits the process once the take is on disk.
             .add_systems(
                 Update,
-                (
-                    abort_recording_on_terminal_failure,
-                    stop_recording_at_limit,
-                    exit_when_recording_drained,
-                ),
+                (stop_recording_at_limit, exit_when_recording_drained),
             )
             // `Last`: the strategy written here is read by `TimeSystem` in `First`
             // next frame, so the decision is made after every other system has run.
             .add_systems(
                 Last,
-                (dispatch_pending_texture_readbacks, drive_offline_clock).chain(),
+                (
+                    abort_recording_on_terminal_failure,
+                    dispatch_pending_texture_readbacks,
+                    drive_offline_clock,
+                )
+                    .chain(),
             );
 
         // `init_resource` first: the registry is shared by every plugin that
@@ -670,6 +671,7 @@ pub struct CaptureFromCamera {
 fn on_capture_from_camera(
     trigger: On<CaptureFromCamera>,
     viewport: Option<Res<SceneViewport>>,
+    capture_target: Option<Res<OfflineCaptureTarget>>,
     pending_request: Option<Res<PendingApiRequest>>,
     // `RenderTarget` is a separate component (see `camera_switch.rs`), not a field on
     // `Camera` — query it alongside so we know which window to capture.
@@ -708,10 +710,13 @@ fn on_capture_from_camera(
         evidence: None,
     };
     let viewport_camera = viewport.as_deref().and_then(|v| v.active_camera);
-    let active_camera = || {
+    let offscreen_camera = || {
+        let target = capture_target.as_ref()?;
         let mut active = cameras
             .iter()
-            .filter(|(_, camera, _, _, _)| camera.is_active)
+            .filter(|(_, camera, _, render_target, _)| {
+                camera.is_active && matches!(render_target, bevy::camera::RenderTarget::Image(image) if image.handle == target.0)
+            })
             .map(|(entity, ..)| entity);
         let entity = active.next()?;
         active.next().is_none().then_some(entity)
@@ -749,8 +754,8 @@ fn on_capture_from_camera(
             }
         }
         // No target → the camera selected by the viewport authority. Offscreen has no
-        // window viewport, so its unique active SceneCamera is the explicit fallback.
-        None => match viewport_camera.or_else(active_camera) {
+        // window viewport; only the actual capture target can supply its pose owner.
+        None => match viewport_camera.or_else(offscreen_camera) {
             Some(entity) => entity,
             None => {
                 report_capture_failure(
@@ -785,6 +790,16 @@ fn on_capture_from_camera(
         report_capture_failure(
             &mut commands,
             "resolved camera is not active; capture would photograph a different viewport",
+            completion_correlation_id,
+        );
+        return;
+    }
+    if matches!(rt, bevy::camera::RenderTarget::Window(_))
+        && viewport.as_deref().and_then(SceneViewport::exposed_camera) != Some(camera_entity)
+    {
+        report_capture_failure(
+            &mut commands,
+            "resolved window camera is not exposed; capture would photograph the loading backdrop or another viewport",
             completion_correlation_id,
         );
         return;
@@ -1014,16 +1029,13 @@ pub struct OfflineRecordingState {
     pub output_dir: std::path::PathBuf,
     /// Video target FPS (determines input duration per frame).
     pub fps: u32,
-    /// Lock-step frame latch.
-    pub is_waiting_for_frame: bool,
+    /// Exact entity of the outstanding numbered image request.
+    pending_frame: Option<Entity>,
     /// Set by `deliver_offline_frame` when a frame lands; consumed by
     /// `drive_offline_clock` to schedule exactly one `1/fps` time step.
     pub frame_just_captured: bool,
     /// One sampling ticket per output image, after the fixed-cycle barriers.
     pub sampling_started: bool,
-    /// Cold-GPU warm-up fence for offscreen recording. No simulation time or
-    /// output frame is consumed while this is active.
-    pub render_warmup_until: Option<web_time::Instant>,
     /// Primary window present mode as it was before recording uncapped it,
     /// restored on stop.
     pub prev_present_mode: Option<bevy::window::PresentMode>,
@@ -1146,10 +1158,14 @@ pub struct OfflineCaptureTarget(pub Handle<bevy::image::Image>);
 pub struct OfflineRenderReadiness {
     /// Main-world camera entity represented by the acknowledged render view.
     pub camera: Option<Entity>,
+    /// Exact captured image target of the render receipt.
+    pub target: Option<AssetId<Image>>,
     /// Number of entities admitted to the view's visibility pass.
     pub visible_entities: usize,
     /// Number of submitted opaque phase items.
     pub opaque_items: usize,
+    /// Number of submitted alpha-masked phase items.
+    pub alpha_mask_items: usize,
     /// Number of submitted transparent phase items.
     pub transparent_items: usize,
     /// Whether every queued color-phase pipeline for the capture view is ready
@@ -1372,7 +1388,6 @@ fn activate_recording(
     pacing_demand: &mut lunco_core_runtime::FramePacingDemand,
     windows: &mut Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     commands: &mut Commands,
-    offscreen: bool,
 ) {
     let dir = pending.output_dir.clone();
     state.active = true;
@@ -1382,18 +1397,12 @@ fn activate_recording(
     state.video = output_is_video(&dir);
     state.output_dir = dir;
     state.fps = pending.fps;
-    state.is_waiting_for_frame = false;
+    state.pending_frame = None;
     // The presentation gate has already acknowledged a rendered UI frame. Capture
     // that state first; subsequent deliveries set this latch and advance virtual
     // time by exactly one frame before requesting the next capture.
     state.frame_just_captured = false;
     state.sampling_started = false;
-    // A camera can be structurally ready before its first offscreen render has
-    // completed pipeline compilation. Hold virtual time and frame numbering for
-    // one render-second so frame 0 cannot become a clear-color race on a cold GPU.
-    state.render_warmup_until =
-        offscreen.then(|| web_time::Instant::now() + std::time::Duration::from_secs(1));
-
     // Video mode needs a runnable `ffmpeg`. Probe NOW, not at the first frame:
     // a missing encoder must demote the recording to a PNG sequence with a loud
     // warning — never crash the shot, and never fail after frames were taken.
@@ -1484,9 +1493,10 @@ fn teardown_recording(
     commands: &mut Commands,
 ) {
     state.active = false;
-    state.is_waiting_for_frame = false;
+    if let Some(entity) = state.pending_frame.take() {
+        commands.entity(entity).try_despawn();
+    }
     state.frame_just_captured = false;
-    state.render_warmup_until = None;
     commands.queue(|world: &mut World| {
         if let Some(mut sampling) = world.get_resource_mut::<lunco_render::OfflineImageSampling>() {
             sampling.end_capture();
@@ -1635,7 +1645,7 @@ fn scene_visuals_ready(
     bus: Option<&lunco_status_core::status_bus::StatusBus>,
     cameras: &Query<(Entity, &Camera, &bevy::camera::RenderTarget)>,
     render_readiness: Option<&OfflineRenderReadiness>,
-    offscreen: bool,
+    capture_target: Option<&OfflineCaptureTarget>,
 ) -> Option<String> {
     // (1) Nothing spawned yet — not "ready", just "empty".
     let total = meshes.iter().len();
@@ -1671,7 +1681,7 @@ fn scene_visuals_ready(
     // gate: the armed recorder freezes virtual time, while USD/Avian admission
     // may need a live frame boundary to finish. `/api/ready` remains the
     // authoritative simulation-readiness contract.
-    if offscreen {
+    if let Some(capture_target) = capture_target {
         let active_image_cameras = cameras
             .iter()
             .filter(|(_, camera, target)| {
@@ -1680,7 +1690,7 @@ fn scene_visuals_ready(
                         camera.output_mode,
                         bevy::camera::CameraOutputMode::Write { .. }
                     )
-                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+                    && matches!(target, bevy::camera::RenderTarget::Image(image) if image.handle == capture_target.0)
             })
             .count();
         match active_image_cameras {
@@ -1704,21 +1714,25 @@ fn scene_visuals_ready(
                         camera.output_mode,
                         bevy::camera::CameraOutputMode::Write { .. }
                     )
-                    && matches!(target, bevy::camera::RenderTarget::Image(_))
+                    && matches!(target, bevy::camera::RenderTarget::Image(image) if image.handle == capture_target.0)
             })
             .map(|(entity, ..)| entity);
-        if readiness.camera != active_camera {
+        if readiness.camera != active_camera || readiness.target != Some(capture_target.0.id()) {
             return Some("offscreen scene camera has not reached the render world yet".into());
         }
         if !readiness.pipelines_ready {
             return Some("offscreen render pipelines are still compiling".into());
         }
         if readiness.visible_entities == 0
-            || readiness.opaque_items + readiness.transparent_items == 0
+            || readiness.opaque_items + readiness.alpha_mask_items + readiness.transparent_items
+                == 0
         {
             return Some(format!(
-                "offscreen scene camera has no submitted mesh phase items (visible={}, opaque={}, transparent={})",
-                readiness.visible_entities, readiness.opaque_items, readiness.transparent_items,
+                "offscreen scene camera has no submitted mesh phase items (visible={}, opaque={}, masked={}, transparent={})",
+                readiness.visible_entities,
+                readiness.opaque_items,
+                readiness.alpha_mask_items,
+                readiness.transparent_items,
             ));
         }
     }
@@ -1774,7 +1788,7 @@ fn start_recording_when_scene_ready(
         bus.as_deref(),
         &cameras,
         render_readiness.as_deref(),
-        capture_target.is_some(),
+        capture_target.as_deref(),
     );
     let blocker = blocker
         .or_else(|| {
@@ -1814,7 +1828,6 @@ fn start_recording_when_scene_ready(
         &mut pacing_demand,
         &mut windows,
         &mut commands,
-        capture_target.is_some(),
     );
     if state.active {
         sampling.capture_settings =
@@ -1890,15 +1903,10 @@ fn drive_offline_clock(
     // signal that startup authorship still needs a frame, so Automatic time is
     // retained until that camera is bound.
     if pending.is_some() && !state.active {
-        let startup_camera_bound = capture_target.is_none()
-            || cameras.iter().any(|(camera, target)| {
-                camera.is_active
-                    && matches!(
-                        camera.output_mode,
-                        bevy::camera::CameraOutputMode::Write { .. }
-                    )
-                    && matches!(target, bevy::camera::RenderTarget::Image(_))
-            });
+        let startup_camera_bound = capture_target.as_ref().is_none_or(|capture_target| cameras.iter().any(|(camera, target)| {
+            camera.is_active && matches!(camera.output_mode, bevy::camera::CameraOutputMode::Write { .. })
+                && matches!(target, bevy::camera::RenderTarget::Image(image) if image.handle == capture_target.0)
+        }));
         if startup_camera_bound {
             commands.insert_resource(TimeUpdateStrategy::ManualDuration(
                 std::time::Duration::ZERO,
@@ -1921,17 +1929,6 @@ fn drive_offline_clock(
         return;
     }
 
-    if let Some(until) = state.render_warmup_until {
-        if web_time::Instant::now() < until {
-            commands.insert_resource(TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::ZERO,
-            ));
-            return;
-        }
-        state.render_warmup_until = None;
-        info!("[offline-record] offscreen render warm-up complete; capturing frame 0");
-    }
-
     // Readiness can change after activation, including during the UI lifecycle.
     // Keep this logical image fixed until both domain work and the rendered
     // loading-overlay acknowledgement are clear. No dirty image is numbered.
@@ -1949,7 +1946,7 @@ fn drive_offline_clock(
 
     let frame_dur = std::time::Duration::from_secs_f64(1.0 / state.fps as f64);
 
-    if state.is_waiting_for_frame {
+    if state.pending_frame.is_some() {
         // Capture in flight — hold the clock so the pending frame stays the one
         // that was rendered when it was requested.
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
@@ -2023,12 +2020,12 @@ fn drive_offline_clock(
                 1
             },
         );
-        if let Some(target) = &capture_target {
-            commands.spawn(Readback::texture(target.0.clone()));
+        let request = if let Some(target) = &capture_target {
+            commands.spawn(Readback::texture(target.0.clone())).id()
         } else {
-            commands.spawn(Screenshot::primary_window());
-        }
-        state.is_waiting_for_frame = true;
+            commands.spawn(Screenshot::primary_window()).id()
+        };
+        state.pending_frame = Some(request);
         commands.insert_resource(TimeUpdateStrategy::ManualDuration(
             std::time::Duration::ZERO,
         ));
@@ -2045,7 +2042,6 @@ fn visual_work_pending(bus: Option<&lunco_status_core::status_bus::StatusBus>) -
 /// Observer for Bevy's ScreenshotCaptured event.
 fn deliver_offline_frame(
     trigger: On<ScreenshotCaptured>,
-    requests: Query<&PendingCapture>,
     mut state: ResMut<OfflineRecordingState>,
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
@@ -2054,22 +2050,27 @@ fn deliver_offline_frame(
     video_settings: Res<OfflineVideoSettings>,
     mut commands: Commands,
 ) {
-    if !state.active || !state.is_waiting_for_frame {
-        return;
-    }
-
     let event = trigger.event();
-    // A frame with a `PendingCapture` belongs to `deliver_screenshot` — an HTTP
-    // screenshot or a `take_photo` taken mid-recording, not the sequence's frame.
-    if requests.get(event.entity).is_ok() {
+    if !state.active || state.pending_frame != Some(event.entity) {
         return;
     }
+    state.pending_frame = None;
     let Ok(dyn_img) = event.image.clone().try_into_dynamic() else {
         error!(
             "[offline-record] failed to convert image for frame {}",
             state.frame_index
         );
-        state.is_waiting_for_frame = false;
+        commands.insert_resource(OfflineRecordingFailure(
+            "numbered capture image conversion failed".into(),
+        ));
+        teardown_recording(
+            &mut state,
+            &mut execution_mode,
+            &mut pacing_demand,
+            &mut windows,
+            &mut video_sink,
+            &mut commands,
+        );
         return;
     };
 
@@ -2202,7 +2203,6 @@ fn deliver_offline_frame(
     }
 
     state.frame_index += 1;
-    state.is_waiting_for_frame = false;
     // `drive_offline_clock` owns `TimeUpdateStrategy`; just signal that a frame
     // landed so it can schedule the single `1/fps` step.
     state.frame_just_captured = true;
@@ -2255,7 +2255,9 @@ fn abort_recording_on_terminal_failure(
                 finding.severity == lunco_core::DiagnosticSeverity::Error
                     && matches!(
                         finding.producer.as_str(),
-                        "terrain-mesh-residency" | "terrain-visual-preparation"
+                        "terrain-mesh-residency"
+                            | "terrain-visual-preparation"
+                            | "terrain-view-projection"
                     )
             })
         })
@@ -2289,7 +2291,7 @@ fn exit_when_recording_drained(
     if exit_requested.is_none() || *fired {
         return;
     }
-    if pending.is_some() || state.active || state.is_waiting_for_frame {
+    if pending.is_some() || state.active || state.pending_frame.is_some() {
         return;
     }
     if let Some(failure) = failure {
@@ -2342,7 +2344,7 @@ impl lunco_api::queries::ApiQueryProvider for GetOfflineRecordingStatusProvider 
             "frame_index": state.frame_index,
             "last_capture_sim_tick": state.last_capture_sim_tick,
             "last_capture_samples": state.last_capture_samples,
-            "is_waiting_for_frame": state.is_waiting_for_frame,
+            "is_waiting_for_frame": state.pending_frame.is_some(),
             "pending": world.contains_resource::<PendingShotStart>(),
             "ui_presentation_required": ui.is_some(),
             "ui_presentation_ready": ui.is_none_or(|ui| ui.ready()),
@@ -2393,7 +2395,8 @@ mod recording_readiness_tests {
         assert!(
             !world
                 .resource::<OfflineRecordingState>()
-                .is_waiting_for_frame
+                .pending_frame
+                .is_some()
         );
 
         world.resource_mut::<SimulationProgress>().release(key);
@@ -2401,7 +2404,8 @@ mod recording_readiness_tests {
         assert!(
             !world
                 .resource::<OfflineRecordingState>()
-                .is_waiting_for_frame,
+                .pending_frame
+                .is_some(),
             "releasing the hold cannot admit an image before the queued cycle completes"
         );
         assert!(
@@ -2415,7 +2419,8 @@ mod recording_readiness_tests {
         assert!(
             world
                 .resource::<OfflineRecordingState>()
-                .is_waiting_for_frame
+                .pending_frame
+                .is_some()
         );
     }
 
@@ -2447,7 +2452,8 @@ mod recording_readiness_tests {
             assert!(
                 world
                     .resource::<OfflineRecordingState>()
-                    .is_waiting_for_frame,
+                    .pending_frame
+                    .is_some(),
                 "an explicit pause or hold must allow a stationary shot"
             );
         }
@@ -2480,6 +2486,30 @@ mod recording_readiness_tests {
                 .0
                 .contains("derived raster failed")
         );
+    }
+
+    #[test]
+    fn previous_take_readback_cannot_complete_the_current_image() {
+        let mut world = World::new();
+        let old = world.spawn_empty().id();
+        let current = world.spawn_empty().id();
+        world.insert_resource(OfflineRecordingState {
+            active: true,
+            pending_frame: Some(current),
+            ..Default::default()
+        });
+        world.init_resource::<lunco_core_runtime::SimulationExecutionMode>();
+        world.init_resource::<lunco_core_runtime::FramePacingDemand>();
+        world.init_resource::<OfflineVideoSink>();
+        world.init_resource::<OfflineVideoSettings>();
+        world.add_observer(deliver_offline_frame);
+        world.trigger(ScreenshotCaptured {
+            entity: old,
+            image: Image::default(),
+        });
+        let state = world.resource::<OfflineRecordingState>();
+        assert_eq!(state.pending_frame, Some(current));
+        assert_eq!(state.frame_index, 0);
     }
 
     #[test]

@@ -25,9 +25,9 @@
 //!
 //! ## Pipeline
 //!
-//! 1. **Bake** (once per terrain, async, ~100 ms): rasterize the terrain
+//! 1. **Bake** (per source mesh and resolution, async): rasterize the terrain
 //!    `Mesh3d` into a heightmap over its local XZ bounds. The heightmap is
-//!    geometry, not lighting — it never needs re-baking. Terrains opt in
+//!    geometry, not lighting — it changes only with its source. Terrains opt in
 //!    via the [`HorizonShadowTerrain`] marker (USD:
 //!    `custom bool lunco:terrain:horizonShadows`).
 //! 2. **Material wiring** (idempotent, RENDER-SIDE): the heightfield
@@ -335,7 +335,53 @@ pub struct HorizonMap {
 
 /// In-flight async bake for a terrain entity.
 #[derive(Component)]
-pub struct HorizonBakeTask(Task<BakeResult>);
+pub struct HorizonBakeTask {
+    task: Task<BakeResult>,
+    source: StaticHorizonSource,
+}
+
+/// The exact mesh and authored resolution of the native static producer.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+struct StaticHorizonSource {
+    mesh: AssetId<Mesh>,
+    resolution: u32,
+}
+
+fn reconcile_static_horizon_source(
+    mut commands: Commands,
+    terrains: Query<
+        (
+            Entity,
+            Option<&HorizonShadowTerrain>,
+            Option<&Mesh3d>,
+            Has<RenderLayers>,
+            Option<&StaticHorizonSource>,
+            Option<&HorizonBakeTask>,
+        ),
+        Or<(With<StaticHorizonSource>, With<HorizonBakeTask>)>,
+    >,
+) {
+    for (entity, config, mesh, scoped, published, task) in &terrains {
+        let current = config
+            .zip(mesh)
+            .filter(|(config, _)| !scoped && config.resolution >= 2)
+            .map(|(config, mesh)| StaticHorizonSource {
+                mesh: mesh.0.id(),
+                resolution: config.resolution,
+            });
+        if current.is_none()
+            || published.is_some_and(|source| Some(*source) != current)
+            || task.is_some_and(|task| Some(task.source) != current)
+        {
+            commands.entity(entity).try_remove::<(
+                HorizonMap,
+                HorizonShadowCache,
+                HorizonBakeTask,
+                StaticHorizonSource,
+            )>();
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // 1b. Horizon shadow cache — pre-bake the ray-march into an R8Unorm texture
@@ -621,7 +667,13 @@ pub fn start_horizon_bakes(
             );
             let task = AsyncComputeTaskPool::get()
                 .spawn(async move { bake_heightfield(&positions, &indices, resolution) });
-            commands.entity(entity).try_insert(HorizonBakeTask(task));
+            commands.entity(entity).try_insert(HorizonBakeTask {
+                task,
+                source: StaticHorizonSource {
+                    mesh: mesh3d.0.id(),
+                    resolution,
+                },
+            });
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -745,16 +797,29 @@ pub fn finish_horizon_bakes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut q: Query<(
-        Entity,
-        &mut HorizonBakeTask,
-        &Mesh3d,
-        Has<lunco_render::SharedMeshAsset>,
-    )>,
+    mut q: Query<
+        (
+            Entity,
+            &mut HorizonBakeTask,
+            &Mesh3d,
+            &HorizonShadowTerrain,
+            Has<lunco_render::SharedMeshAsset>,
+        ),
+        Without<RenderLayers>,
+    >,
 ) {
     use bevy::tasks::futures_lite::future;
-    for (entity, mut task, mesh3d, shared) in &mut q {
-        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
+    for (entity, mut task, mesh3d, config, shared) in &mut q {
+        if task.source
+            != (StaticHorizonSource {
+                mesh: mesh3d.0.id(),
+                resolution: config.resolution,
+            })
+        {
+            commands.entity(entity).try_remove::<HorizonBakeTask>();
+            continue;
+        }
+        let Some(result) = future::block_on(future::poll_once(&mut task.task)) else {
             continue;
         };
         install_horizon_map(
@@ -827,7 +892,11 @@ fn install_horizon_map(
     // visibility term from double-darkening the same terrain pixels.
     commands
         .entity(entity)
-        .try_remove::<bevy::light::NotShadowReceiver>();
+        .try_remove::<bevy::light::NotShadowReceiver>()
+        .try_insert(StaticHorizonSource {
+            mesh: target.id(),
+            resolution: field.resolution,
+        });
     install_horizon_map_from_field(commands, images, entity, field, millis);
 }
 
@@ -1298,6 +1367,7 @@ impl Plugin for HorizonShadowPlugin {
         app.add_systems(
             Update,
             (
+                reconcile_static_horizon_source,
                 start_horizon_bakes,
                 finish_horizon_bakes,
                 finish_shadow_cache_bake,
@@ -1358,6 +1428,60 @@ mod tests {
             size,
             heights: Arc::new(heights),
         }
+    }
+
+    #[test]
+    fn static_horizon_retires_map_when_resolution_or_mesh_changes() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .add_systems(Update, reconcile_static_horizon_source);
+        let mesh = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .reserve_handle();
+        let replacement = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .reserve_handle();
+        let source = StaticHorizonSource {
+            mesh: mesh.id(),
+            resolution: 2,
+        };
+        let entity = app
+            .world_mut()
+            .spawn((
+                Mesh3d(mesh),
+                HorizonShadowTerrain { resolution: 2 },
+                source,
+                HorizonMap {
+                    field: make_field(2, Vec2::ZERO, Vec2::ONE, vec![0.0; 4]),
+                    image: Handle::default(),
+                },
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get::<HorizonMap>(entity).is_some());
+        app.world_mut()
+            .get_mut::<HorizonShadowTerrain>(entity)
+            .unwrap()
+            .resolution = 4;
+        app.update();
+        assert!(app.world().get::<HorizonMap>(entity).is_none());
+        app.world_mut().entity_mut(entity).insert((
+            HorizonMap {
+                field: make_field(4, Vec2::ZERO, Vec2::ONE, vec![0.0; 16]),
+                image: Handle::default(),
+            },
+            StaticHorizonSource {
+                resolution: 4,
+                ..source
+            },
+        ));
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(Mesh3d(replacement));
+        app.update();
+        assert!(app.world().get::<HorizonMap>(entity).is_none());
     }
 
     #[test]

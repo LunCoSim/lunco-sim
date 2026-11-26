@@ -650,7 +650,7 @@ pub(crate) fn collect_terrain_detail_demands(
     let defaults = terrain_settings.as_deref().cloned().unwrap_or_default();
     demands.visual.clear();
     let frame = active_frame.as_deref().map(|frame| frame.0);
-    let live_sources = frame.map(|frame| {
+    let live_sources = frame.filter(|_| !targets.targets.is_empty()).map(|frame| {
         sources
             .iter()
             .map(|(entity, field)| {
@@ -2716,10 +2716,10 @@ impl LodMeshCache {
         }
     }
 
-    /// Capture every live view's mesh identities, including retiring tiles.
-    fn begin_frame(&mut self, live: HashSet<AssetId<Mesh>>) {
-        if self.protected != live {
-            self.protected = live;
+    /// Capture all live tile mesh identities; reuse the caller's inventory buffer.
+    fn begin_frame(&mut self, live: &mut HashSet<AssetId<Mesh>>) {
+        if self.protected != *live {
+            std::mem::swap(&mut self.protected, live);
             self.accounting.take();
         }
         let before = self.retired.len();
@@ -2960,9 +2960,32 @@ pub struct PendingTileBakes {
     #[cfg(not(target_arch = "wasm32"))]
     capacity_wait_revision: Option<u64>,
     failed: HashSet<(QuadCoord, u32)>,
+    /// A mesh that cannot fit even in an otherwise empty cache. The exact
+    /// observed byte count permits recovery when its quality ceiling changes.
+    oversize: HashMap<(QuadCoord, u32), u64>,
 }
 
 impl PendingTileBakes {
+    fn refresh_upload_ceiling(&mut self, generation: u32, ceiling: u64) {
+        self.oversize.retain(|(_, baked_generation), bytes| {
+            *baked_generation == generation && *bytes > ceiling
+        });
+    }
+
+    fn reject_oversize(
+        &mut self,
+        coord: QuadCoord,
+        generation: u32,
+        bytes: u64,
+        ceiling: u64,
+    ) -> bool {
+        if bytes <= ceiling {
+            return false;
+        }
+        self.oversize.insert((coord, generation), bytes);
+        true
+    }
+
     fn len(&self) -> usize {
         #[cfg(not(target_arch = "wasm32"))]
         let jobs = self.jobs.len();
@@ -3071,6 +3094,8 @@ impl PendingTileBakes {
         root_half_extent: f64,
         admission: Option<&mut lunco_core_runtime::AsyncWorkAdmission>,
     ) {
+        // A changed surface can change the boundary lattice and mesh size.
+        self.oversize.clear();
         #[cfg(not(target_arch = "wasm32"))]
         let mut admission = admission;
         let Some(generation) = generation else {
@@ -3149,6 +3174,7 @@ impl PendingTileBakes {
             self.tasks.clear();
         }
         self.ready.clear();
+        self.oversize.clear();
     }
 
     fn cancel_for_missing_demand(
@@ -3163,6 +3189,20 @@ impl PendingTileBakes {
             self.cancel_jobs(None);
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn impossible_upload_is_held_until_its_ceiling_or_generation_changes() {
+    let mut pending = PendingTileBakes::default();
+    assert!(pending.reject_oversize(QuadCoord::ROOT, 7, 200, 100));
+    pending.refresh_upload_ceiling(7, 199);
+    assert_eq!(pending.oversize.get(&(QuadCoord::ROOT, 7)), Some(&200));
+    pending.refresh_upload_ceiling(7, 200);
+    assert!(pending.oversize.is_empty());
+    assert!(pending.reject_oversize(QuadCoord::ROOT, 7, 200, 100));
+    pending.refresh_upload_ceiling(8, 100);
+    assert!(pending.oversize.is_empty());
 }
 
 /// Apply one committed surface change to every visual cache owned by the
@@ -4141,14 +4181,13 @@ impl TerrainStreamStatus {
 fn publish_mesh_pressure(
     status: &TerrainStreamStatus,
     diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    mut findings: Vec<lunco_core::RuntimeDiagnostic>,
 ) {
     let Some(diagnostics) = diagnostics.as_deref_mut() else {
         return;
     };
-    let mut findings = if status.mesh_upload_refused > 0
-        || status.mesh_accounted_bytes > status.mesh_byte_limit
-    {
-        vec![lunco_core::RuntimeDiagnostic {
+    if status.mesh_upload_refused > 0 || status.mesh_accounted_bytes > status.mesh_byte_limit {
+        findings.push(lunco_core::RuntimeDiagnostic {
             producer: "terrain-mesh-residency".into(),
             code: "mesh-upload-waiting".into(),
             severity: lunco_core::DiagnosticSeverity::Info,
@@ -4160,10 +4199,20 @@ fn publish_mesh_pressure(
                 status.mesh_byte_limit,
                 status.mesh_upload_required_bytes
             ),
-        }]
-    } else {
-        Vec::new()
-    };
+        });
+    }
+    if status.mesh_upload_required_bytes > status.mesh_byte_limit {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(),
+            code: "mesh-upload-impossible".into(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            subject: "terrain mesh residency".into(),
+            message: format!(
+                "a required mesh needs {} bytes, exceeding the entire {} byte ceiling",
+                status.mesh_upload_required_bytes, status.mesh_byte_limit
+            ),
+        });
+    }
     if status.failed > 0 {
         findings.push(lunco_core::RuntimeDiagnostic {
             producer: "terrain-mesh-residency".into(),
@@ -4215,11 +4264,7 @@ fn publish_mesh_pressure(
 /// frames, even though they were still hidden and the selected cover was not
 /// complete. The root fallback is included while its readiness latch is false;
 /// it is required even though it is not part of the selected cover.
-fn render_pending_count(
-    pending_bakes: usize,
-    wanted: &HashSet<QuadCoord>,
-    tiles: &LodView,
-) -> usize {
+fn render_pending_count(wanted: &HashSet<QuadCoord>, tiles: &LodView) -> usize {
     let wanted_unready = wanted
         .iter()
         .filter(|coord| {
@@ -4236,7 +4281,7 @@ fn render_pending_count(
             .tiles
             .get(&QuadCoord::ROOT)
             .is_some_and(|slot| !slot.ready)) as usize;
-    pending_bakes + wanted_unready + root_unready
+    wanted_unready + root_unready
 }
 
 fn required_focus_depth(
@@ -5509,6 +5554,7 @@ pub struct StreamScratch {
     /// Results returned by bounded background cover preparation.
     cover_completions: HashMap<(Entity, Entity), Vec<TerrainCoverCompletion>>,
     cover_union: HashSet<QuadCoord>,
+    live_mesh_ids: HashSet<AssetId<Mesh>>,
     #[cfg(not(target_arch = "wasm32"))]
     /// Results returned by shared-priority streamed tile bakes.
     tile_completions: HashMap<Entity, Vec<TerrainTileBakeCompletion>>,
@@ -5565,13 +5611,27 @@ pub fn update_lod_tiles(
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = environment.overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
-    mesh_cache.begin_frame(
-        environment
-            .live_meshes
+    let mut input_failures = Vec::new();
+    let mut report_input_failure = |terrain: Entity, message: String| {
+        let subject = format!("{terrain:?}");
+        if !input_failures
             .iter()
-            .map(|mesh| mesh.0.id())
-            .collect(),
-    );
+            .any(|finding: &lunco_core::RuntimeDiagnostic| finding.subject == subject)
+        {
+            input_failures.push(lunco_core::RuntimeDiagnostic {
+                producer: "terrain-mesh-residency".into(),
+                code: "terrain-input-invalid".into(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                subject,
+                message,
+            });
+        }
+    };
+    scratch.live_mesh_ids.clear();
+    scratch
+        .live_mesh_ids
+        .extend(environment.live_meshes.iter().map(|mesh| mesh.0.id()));
+    mesh_cache.begin_frame(&mut scratch.live_mesh_ids);
     mesh_cache.trim(usize::MAX, profile.terrain_mesh_cache_bytes);
     let mut refused_uploads = HashSet::new();
     // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
@@ -5590,6 +5650,7 @@ pub fn update_lod_tiles(
         cover_union,
         #[cfg(not(target_arch = "wasm32"))]
         tile_completions,
+        ..
     } = &mut *scratch;
     cover_completions.clear();
     #[cfg(not(target_arch = "wasm32"))]
@@ -5633,7 +5694,7 @@ pub fn update_lod_tiles(
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
         mesh_cache.publish_accounting(&mut stream_status, profile.terrain_mesh_cache_bytes);
-        publish_mesh_pressure(&stream_status, &mut environment.diagnostics);
+        publish_mesh_pressure(&stream_status, &mut environment.diagnostics, input_failures);
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -5695,6 +5756,7 @@ pub fn update_lod_tiles(
             }
             stream_status.pending += pending.len();
             let generation = terrain_tiles.r#gen;
+            pending.refresh_upload_ceiling(generation, profile.terrain_mesh_cache_bytes);
             let live: HashSet<_> = demands
                 .visual
                 .iter()
@@ -5771,7 +5833,8 @@ pub fn update_lod_tiles(
                 let max_depth = match visual_max_depth(&hf.0, profile.terrain_lod_max_depth) {
                     Ok(depth) => depth,
                     Err(error) => {
-                        bevy::log::error!(target: "terrain", "{error}");
+                        stream_status.failed += 1;
+                        report_input_failure(terrain, error.to_string());
                         continue;
                     }
                 };
@@ -5780,18 +5843,18 @@ pub fn update_lod_tiles(
                     || tiles.cover.is_empty()
                     || tiles.cover.iter().any(|coord| coord.depth > max_depth);
                 let Some(template) = template else {
-                    bevy::log::error!(
-                        target: "terrain",
-                        entity = ?terrain,
-                        "streamed DEM terrain has no authored production material"
+                    stream_status.failed += 1;
+                    report_input_failure(
+                        terrain,
+                        "streamed DEM terrain has no authored production material".into(),
                     );
                     continue;
                 };
                 if template.vertex_shader.is_none() {
-                    bevy::log::error!(
-                        target: "terrain",
-                        entity = ?terrain,
-                        "streamed DEM terrain material has no authored CDLOD vertex source"
+                    stream_status.failed += 1;
+                    report_input_failure(
+                        terrain,
+                        "streamed DEM terrain material has no authored CDLOD vertex source".into(),
                     );
                     continue;
                 }
@@ -6376,6 +6439,14 @@ pub fn update_lod_tiles(
                         continue;
                     }
                     let upload_bytes = baked.bytes as u64;
+                    if pending.reject_oversize(
+                        coord,
+                        cur_gen,
+                        upload_bytes,
+                        profile.terrain_mesh_cache_bytes,
+                    ) {
+                        continue;
+                    }
                     if !mesh_cache.admit_upload(upload_bytes, profile.terrain_mesh_cache_bytes) {
                         refused_uploads.insert((terrain, coord, cur_gen));
                         stream_status.mesh_upload_refused += 1;
@@ -6508,7 +6579,9 @@ pub fn update_lod_tiles(
                     if fresh_tile(&tiles, &s.coord) || have_pending {
                         continue;
                     }
-                    if pending.failed.contains(&(s.coord, cur_gen)) {
+                    if pending.failed.contains(&(s.coord, cur_gen))
+                        || pending.oversize.contains_key(&(s.coord, cur_gen))
+                    {
                         continue;
                     }
                     let resolution = tile_res;
@@ -6578,7 +6651,6 @@ pub fn update_lod_tiles(
                     let oracle_arc = hf.0.clone();
                     let coord = s.coord;
                     let region = s.region;
-                    let half = h;
                     let center = s.region.center;
                     #[cfg(not(target_arch = "wasm32"))]
                     {
@@ -6619,8 +6691,6 @@ pub fn update_lod_tiles(
                                     coord,
                                     region,
                                     resolution,
-                                    half,
-                                    center,
                                 );
                                 assemble_baked_tile(
                                     tile_mesh,
@@ -6686,8 +6756,6 @@ pub fn update_lod_tiles(
                                 coord,
                                 region,
                                 resolution,
-                                half,
-                                center,
                             )
                             .await;
                             assemble_baked_tile(
@@ -6978,6 +7046,17 @@ pub fn update_lod_tiles(
                                 || *coord == QuadCoord::ROOT)
                     })
                     .count();
+                for (&(coord, baked_generation), &bytes) in &pending.oversize {
+                    if baked_generation == cur_gen
+                        && (wanted.contains(&coord)
+                            || parent_fallbacks.contains(&coord)
+                            || coord == QuadCoord::ROOT)
+                    {
+                        stream_status.failed += 1;
+                        stream_status.mesh_upload_required_bytes =
+                            stream_status.mesh_upload_required_bytes.max(bytes);
+                    }
+                }
 
                 // Streaming progress for the UI indicator (accumulated across terrains).
                 stream_status.wanted += wanted.len();
@@ -6988,8 +7067,7 @@ pub fn update_lod_tiles(
                 let selection_pending = usize::from(!tiles.latest_ready());
                 stream_status.selection_pending += selection_pending;
                 stream_status.presentation_pending += usize::from(tiles.presentation_pending);
-                stream_status.pending +=
-                    render_pending_count(0, wanted, &tiles) + selection_pending;
+                stream_status.pending += render_pending_count(wanted, &tiles) + selection_pending;
                 stream_status.budget_refused += tiles.budget_refused;
                 stream_status.preparation_refused += tiles.preparation_refusal_count(
                     demands.preparation_signature(view_camera, terrain),
@@ -7012,6 +7090,7 @@ pub fn update_lod_tiles(
             // Settled views do not allocate or revisit the entire ancestor tree.
             if !pending.is_empty()
                 || !pending.failed.is_empty()
+                || !pending.oversize.is_empty()
                 || errs.map.len() > NODE_GEOMETRY_CACHE_CAP
             {
                 cover_union.clear();
@@ -7045,6 +7124,9 @@ pub fn update_lod_tiles(
                 pending
                     .failed
                     .retain(|(coord, r#gen)| *r#gen == generation && keep(coord));
+                pending
+                    .oversize
+                    .retain(|(coord, r#gen), _| *r#gen == generation && keep(coord));
                 stream_status.stale_cancelled += before.saturating_sub(pending.len());
                 if errs.map.len() > NODE_GEOMETRY_CACHE_CAP {
                     errs.map.retain(|coord, _| keep(coord));
@@ -7068,7 +7150,7 @@ pub fn update_lod_tiles(
         })
         .sum();
     mesh_cache.publish_accounting(&mut stream_status, profile.terrain_mesh_cache_bytes);
-    publish_mesh_pressure(&stream_status, &mut environment.diagnostics);
+    publish_mesh_pressure(&stream_status, &mut environment.diagnostics, input_failures);
 }
 
 /// Reap LOD tiles whose owning terrain no longer exists (or no longer streams) —
@@ -9961,11 +10043,11 @@ mod draw_partition_tests {
             },
         );
 
-        assert_eq!(render_pending_count(2, &wanted, &tiles), 4);
+        assert_eq!(render_pending_count(&wanted, &tiles), 2);
         tiles.coarse_ready = true;
-        assert_eq!(render_pending_count(2, &wanted, &tiles), 3);
+        assert_eq!(render_pending_count(&wanted, &tiles), 1);
         tiles.tiles.get_mut(&unready).unwrap().ready = true;
-        assert_eq!(render_pending_count(2, &wanted, &tiles), 2);
+        assert_eq!(render_pending_count(&wanted, &tiles), 0);
     }
 
     #[test]
@@ -11325,7 +11407,7 @@ mod draw_partition_tests {
             handles.push(handle.clone());
             cache.insert(key(x), handle, 0.0, None, tile_mesh_bytes(tile_res));
         }
-        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.begin_frame(&mut HashSet::from([handles[3].id()]));
         cache.trim(4, u64::MAX);
         assert_eq!(
             cache.map.len(),
@@ -11334,7 +11416,7 @@ mod draw_partition_tests {
         );
         let initial = cache.accounted_bytes();
         assert!(cache.accounting.get().is_some());
-        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.begin_frame(&mut HashSet::from([handles[3].id()]));
         assert!(cache.accounting.get().is_some());
         assert_eq!(cache.accounted_bytes(), initial);
         // Touch 0 so 1 becomes the oldest unprotected entry.
@@ -11359,7 +11441,7 @@ mod draw_partition_tests {
                 .sum::<u64>()
         );
         // The byte ceiling alone also forces eviction.
-        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.begin_frame(&mut HashSet::from([handles[3].id()]));
         cache.trim(usize::MAX, (tile_mesh_bytes(tile_res)) as u64);
         assert_eq!(cache.map.len(), 1);
         assert!(cache.map.contains_key(&key(3)));
@@ -11381,7 +11463,7 @@ mod draw_partition_tests {
         let key = (source, QuadCoord::ROOT, 49);
         let bytes = (tile_mesh_bytes(49)) as u64;
         cache.insert(key, old.clone(), 0.0, None, bytes as usize);
-        cache.begin_frame(HashSet::from([old.id()]));
+        cache.begin_frame(&mut HashSet::from([old.id()]));
         cache.drop_region(source, None, 10.0);
         assert_eq!(
             cache.accounted_bytes(),
@@ -11403,14 +11485,14 @@ mod draw_partition_tests {
             bytes * 2,
             "shared views retain one mesh allocation"
         );
-        cache.begin_frame(HashSet::from([fresh.id()]));
+        cache.begin_frame(&mut HashSet::from([fresh.id()]));
         assert_eq!(
             cache.accounted_bytes(),
             bytes,
             "retired handles leave accounting only after all live geometry releases them"
         );
         assert!(!cache.admit_upload(bytes, bytes));
-        cache.begin_frame(HashSet::new());
+        cache.begin_frame(&mut HashSet::new());
         assert!(cache.admit_upload(bytes, bytes));
         assert!(
             cache.map.is_empty(),
@@ -11442,7 +11524,7 @@ mod draw_partition_tests {
             !cache.admit_upload(bytes, bytes * 2),
             "deferred tile spawns already own their admitted handles"
         );
-        cache.begin_frame(ids);
+        cache.begin_frame(&mut ids);
         assert!(
             !cache.admit_upload(bytes, bytes),
             "a lower cap cannot evict another source's residents"
