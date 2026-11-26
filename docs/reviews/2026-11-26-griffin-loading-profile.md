@@ -1,5 +1,64 @@
 # Griffin loading profile — 2026-11-26
 
+## Production result with checked component and native function reuse
+
+The release from the `usd` checkout reached Griffin lander physics readiness
+in **17.48 and 14.04 seconds** on two warm desktop opens. The immediate
+control reached it in **17.35 and 17.02 seconds**. The median fell from
+17.19 to 15.76 seconds (8%). Both candidate opens beat the 20-second target.
+The paired comparison does not establish a twofold end-to-end improvement.
+
+| Fresh process and Modelica cache | Control ready | Candidate ready | Control shared initialization | Candidate shared initialization |
+|---|---:|---:|---:|---:|
+| Empty, headless | 24.13 s | 21.76 s | 7.41 s | 7.75 s |
+| Warm, private desktop, candidate first | 17.35 s | 17.48 s | 7.63 s | 4.94 s |
+| Warm, private desktop, control first | 17.02 s | 14.04 s | 7.78 s | 4.56 s |
+| Warm, headless | 15.84 s | 11.75 s | 8.73 s | 3.75 s |
+
+The control was release `8906e198` with Rumoca `dc3574345`. The candidate
+pinned `429e3ff2765b` of the LunCoSim Rumoca fork. Each run used
+`scripts/perf/twin_startup.py --startup-only` to open
+`twins/astrobotic-griffin-1/scenes/griffin_1_surface_ops.usda` at model
+revision `269273031bec`. Timing starts at `OpenFile` from a ready bootstrap
+and ends at the first authoritative physics state for
+`/Griffin1SurfaceOps/Lander`. The desktop runs used private X displays and
+the NVIDIA Vulkan renderer. Each binary had its own Modelica cache and
+shared the other asset directories. Other simulator and linker processes
+were active on the machine during the first candidate desktop run.
+
+Every paired run admitted 15 participants, certified the eight coupled
+members, reported zero scene diagnostics, preserved the source snapshot,
+and released its process and API port. Across all four candidate processes
+the 115 named probes and 84 state starts at time zero matched bit for bit.
+The SHA-256 of the sorted role/name/binary64 snapshot was
+`2550c62f1d33e34085ce5f25c155fc9a923d038b38b0d0b2e4c43d85844614fe`.
+In a separate run a valid cached record placed under a different key
+was rejected and rebuilt. The lander reached readiness with all 15 participants.
+The initialization network and Twin-replacement gates passed 47 authored
+checks. The inconsistent system produced its expected terminal
+`modelica-initialization-failed` fault.
+
+**Remaining loading time.** Both warm desktop runs reused all 16 strict DAEs
+and respectively 15 and 16 checked components. Reading and validating the
+shared component took 2.45 and 2.30 seconds. Another 2.49 and 2.26 seconds
+went to the remaining initialization and observation. The longest live
+constructor took 5.91 and 3.29 seconds, overlapping the other constructors.
+In the second desktop run Cranelift reused 12,460 of 42,020 native function
+compilations across participants. The popup first reported source work, then
+eight participants in the shared solve and finally progress starting eight
+sessions. The captured popup showed elapsed scene time in both later phases.
+
+To reduce a repeat desktop open further, measure the roughly 29,560 fresh
+native functions by function family and the independent work that can start
+before the shared solve returns. The 2.3–2.5 seconds spent reading and
+validating the shared component also warrant a split between wire decoding and
+proof reconstruction. Preserve the fresh per-instance solve and compare the
+same named time-zero values on each path. On an empty headless cache, shared
+initialization took 7.75 seconds, including 4.98 seconds to prepare the
+component. Disk publication had no measurable queue wait for that component.
+
+## Earlier headless comparison
+
 The updated release reached first physics readiness in **15.01 and 16.33 s**
 on two warm headless loads, compared with **46.07 and 34.34 s** in alternating
 control runs. With an empty Modelica cache, the control took **33.67 s** and the

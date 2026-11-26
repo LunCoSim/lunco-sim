@@ -1,5 +1,8 @@
 //! In-memory and persistent compiled-DAE cache.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod prepared;
+
 use linked_hash_map::LinkedHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
@@ -125,12 +128,9 @@ impl CompiledArtifactCache {
     }
 
     fn disk_path(key: &CompiledArtifactDiskKey) -> std::path::PathBuf {
-        let bytes = key.input.to_bytes();
-        let first = lunco_hash::fnv1a64(&bytes);
-        let second = lunco_hash::fnv1a64(key.input.to_string().as_bytes());
         modelica_dir()
             .join(format!("compiled-dae-v{}", Self::DISK_VERSION))
-            .join(format!("{first:016x}-{second:016x}.bin.zst"))
+            .join(artifact_filename(&key.input))
     }
 
     pub(super) fn load_disk(
@@ -240,16 +240,7 @@ impl CompiledArtifactCache {
         }
         let compressed = Self::encode_disk(key, artifact, limits)?;
         let path = Self::disk_path(key);
-        let root = path.parent().ok_or(ModelicaCacheWriteError::InvalidPath)?;
-        let storage = FileStorage::new();
-        let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
-        let incoming = transaction.directory().join(
-            path.file_name()
-                .ok_or(ModelicaCacheWriteError::InvalidPath)?,
-        );
-        retain_disk_artifacts(&storage, &transaction, &incoming, compressed.len(), limits)?;
-        storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
-        Ok(())
+        publish_record(&path, &compressed, limits)
     }
 
     fn encode_disk(
@@ -275,6 +266,31 @@ impl CompiledArtifactCache {
         };
         encode_record(&record, limits)
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn artifact_filename(key: &lunco_hash::content::Cid) -> String {
+    let first = lunco_hash::fnv1a64(&key.to_bytes());
+    let second = lunco_hash::fnv1a64(key.to_string().as_bytes());
+    format!("{first:016x}-{second:016x}.bin.zst")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_record(
+    path: &std::path::Path,
+    compressed: &[u8],
+    limits: ModelicaArtifactDiskLimits,
+) -> Result<(), ModelicaCacheWriteError> {
+    let root = path.parent().ok_or(ModelicaCacheWriteError::InvalidPath)?;
+    let storage = FileStorage::new();
+    let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
+    let incoming = transaction.directory().join(
+        path.file_name()
+            .ok_or(ModelicaCacheWriteError::InvalidPath)?,
+    );
+    retain_disk_artifacts(&storage, &transaction, &incoming, compressed.len(), limits)?;
+    storage.write_sync(&StorageHandle::File(incoming), compressed)?;
+    Ok(())
 }
 
 /// Count-bounded least-recently-used retention. Successful reads and

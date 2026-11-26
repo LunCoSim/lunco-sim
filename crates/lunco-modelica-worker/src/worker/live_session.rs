@@ -45,6 +45,7 @@ pub(super) fn construct(
     lane: Lane<Sessions>,
     dae: std::sync::Arc<rumoca_ir_dae::Dae>,
     plan: LiveBuildPlan,
+    compiler: rumoca_sim::native_compilation::NativeCompilationCache,
     tx: Sender<WorkerPreparationResult>,
 ) -> Result<(), String> {
     let session_lane = lane.clone();
@@ -58,7 +59,13 @@ pub(super) fn construct(
         )
         .entered();
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            build_live_stepper(&dae, plan)
+            let (result, usage) = compiler.during(|| build_live_stepper(&dae, plan));
+            bevy::log::info!(
+                reused = usage.hits,
+                compiled = usage.compiled,
+                "Modelica native function preparation"
+            );
+            result
         }))
         .unwrap_or_else(|payload| {
             let message = payload
