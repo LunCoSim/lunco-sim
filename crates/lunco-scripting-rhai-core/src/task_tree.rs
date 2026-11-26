@@ -18,7 +18,7 @@
 //!   kind or a field belonging to another kind is rejected at compile time;
 //! - dwell is entry-stamped and cleared on [`Node::reset`] so `repeat`/`forever`
 //!   re-dwell; event matching uses name + optional source, with a string source
-//!   path re-resolved via `find_path()` each tick until it matches;
+//!   path resolved in the task host’s exact live mount when matching;
 //! - a closure error fails the leaf; the world-bound owner latches failure of
 //!   the complete task, emits its diagnostic and requires an explicit new task.
 //!
@@ -33,6 +33,7 @@ use lunco_behavior::{
     Repeat, Retry, Selector, Sequence,
 };
 use rhai::{Dynamic, FnPtr, ImmutableString, Map};
+use std::collections::HashSet;
 
 const NODE_KIND_FIELD: &str = "kind";
 const ACTION_FIELD: &str = "act";
@@ -156,15 +157,24 @@ pub struct CompiledTask {
     pub id: i64,
     pub tree: BoxNode<dyn TaskCtx>,
     pub done: bool,
+    event_interests: HashSet<(ImmutableString, Option<i64>)>,
 }
 
 impl CompiledTask {
-    pub fn new(id: i64, tree: BoxNode<dyn TaskCtx>) -> Self {
+    pub fn new(id: i64, compiled: CompiledTaskDefinition) -> Self {
         Self {
             id,
-            tree,
+            tree: compiled.tree,
             done: false,
+            event_interests: compiled.event_interests,
         }
+    }
+
+    pub fn accepts_event(&self, name: &str, source: i64) -> bool {
+        !self.done
+            && self.event_interests.iter().any(|(event, origin)| {
+                event.as_str() == name && origin.is_none_or(|origin| origin == source)
+            })
     }
 
     /// Placeholder for a spec that failed to compile: latched `done` so the
@@ -174,6 +184,7 @@ impl CompiledTask {
             id,
             tree: Box::new(Sequence::new(Vec::new())),
             done: true,
+            event_interests: HashSet::new(),
         }
     }
 
@@ -422,7 +433,24 @@ fn leaf_for(kind: TaskKind, m: &Map) -> Result<Leaf, String> {
 
 /// Compile one explicitly tagged Rhai task node into a kernel node. Missing or
 /// unknown `kind` values are errors; there is no leaf/composite inference.
-pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
+pub struct CompiledTaskDefinition {
+    tree: BoxNode<dyn TaskCtx>,
+    event_interests: HashSet<(ImmutableString, Option<i64>)>,
+}
+
+pub fn compile_node(v: &Dynamic) -> Result<CompiledTaskDefinition, String> {
+    let mut event_interests = HashSet::new();
+    let tree = compile_node_with_interests(v, &mut event_interests)?;
+    Ok(CompiledTaskDefinition {
+        tree,
+        event_interests,
+    })
+}
+
+fn compile_node_with_interests(
+    v: &Dynamic,
+    interests: &mut HashSet<(ImmutableString, Option<i64>)>,
+) -> Result<BoxNode<dyn TaskCtx>, String> {
     let m = v
         .read_lock::<Map>()
         .ok_or_else(|| format!("task node must be a map, got `{}`", v.type_name()))?;
@@ -469,22 +497,35 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
             | TaskKind::WaitForFrom
             | TaskKind::Check
     ) {
-        return Ok(Box::new(leaf_for(kind, &m)?));
+        let leaf = leaf_for(kind, &m)?;
+        if let Some(name) = &leaf.event {
+            let source = match &leaf.src {
+                SrcSpec::Gid(id) => Some(*id),
+                _ => None,
+            };
+            interests.insert((name.clone(), source));
+        }
+        return Ok(Box::new(leaf));
     }
 
-    let children = |field: &str| -> Result<Vec<BoxNode<dyn TaskCtx>>, String> {
+    let children = |field: &str,
+                    interests: &mut HashSet<(ImmutableString, Option<i64>)>|
+     -> Result<Vec<BoxNode<dyn TaskCtx>>, String> {
         let items = m
             .get(field)
             .ok_or_else(|| format!("task node missing `{field}`"))?;
         let arr = items
             .read_lock::<rhai::Array>()
             .ok_or_else(|| format!("task `{field}` must be an array"))?;
-        arr.iter().map(compile_node).collect()
+        arr.iter()
+            .map(|child| compile_node_with_interests(child, interests))
+            .collect()
     };
-    let body = || -> Result<BoxNode<dyn TaskCtx>, String> {
-        compile_node(
+    let body = |interests: &mut HashSet<(ImmutableString, Option<i64>)>| -> Result<BoxNode<dyn TaskCtx>, String> {
+        compile_node_with_interests(
             m.get(BODY_FIELD)
                 .ok_or_else(|| "task node missing `body`".to_string())?,
+            interests,
         )
     };
     let count = || -> Result<usize, String> {
@@ -505,24 +546,28 @@ pub fn compile_node(v: &Dynamic) -> Result<BoxNode<dyn TaskCtx>, String> {
         | TaskKind::WaitFor
         | TaskKind::WaitForFrom
         | TaskKind::Check => unreachable!("leaf kinds are returned before composite parsing"),
-        TaskKind::Sequence => Box::new(Sequence::new(children(ITEMS_FIELD)?)),
-        TaskKind::Selector => Box::new(Selector::new(children(ITEMS_FIELD)?)),
+        TaskKind::Sequence => Box::new(Sequence::new(children(ITEMS_FIELD, interests)?)),
+        TaskKind::Selector => Box::new(Selector::new(children(ITEMS_FIELD, interests)?)),
         TaskKind::All => Box::new(Parallel::new(
             ParallelPolicy::RequireAll,
-            children(ITEMS_FIELD)?,
+            children(ITEMS_FIELD, interests)?,
         )),
         TaskKind::Race => Box::new(Parallel::new(
             ParallelPolicy::RequireOne,
-            children(ITEMS_FIELD)?,
+            children(ITEMS_FIELD, interests)?,
         )),
-        TaskKind::Repeat => Box::new(Repeat::times(count()?, body()?)),
-        TaskKind::Forever => Box::new(Repeat::forever(body()?)),
-        TaskKind::Retry => Box::new(Retry::times(count()?, body()?)),
-        TaskKind::Invert => Box::new(Invert::new(body()?)),
-        TaskKind::ForceOk => Box::new(Force::succeed(body()?)),
-        TaskKind::ForceFail => Box::new(Force::fail(body()?)),
-        TaskKind::ReactiveSequence => Box::new(ReactiveSequence::new(children(ITEMS_FIELD)?)),
-        TaskKind::ReactiveSelector => Box::new(ReactiveSelector::new(children(ITEMS_FIELD)?)),
+        TaskKind::Repeat => Box::new(Repeat::times(count()?, body(interests)?)),
+        TaskKind::Forever => Box::new(Repeat::forever(body(interests)?)),
+        TaskKind::Retry => Box::new(Retry::times(count()?, body(interests)?)),
+        TaskKind::Invert => Box::new(Invert::new(body(interests)?)),
+        TaskKind::ForceOk => Box::new(Force::succeed(body(interests)?)),
+        TaskKind::ForceFail => Box::new(Force::fail(body(interests)?)),
+        TaskKind::ReactiveSequence => {
+            Box::new(ReactiveSequence::new(children(ITEMS_FIELD, interests)?))
+        }
+        TaskKind::ReactiveSelector => {
+            Box::new(ReactiveSelector::new(children(ITEMS_FIELD, interests)?))
+        }
     })
 }
 
@@ -548,6 +593,22 @@ mod tests {
             m.insert((*k).into(), v.clone());
         }
         Dynamic::from_map(m)
+    }
+
+    #[test]
+    fn compiled_event_interests_match_only_declared_names_and_sources() {
+        let leaf = tagged(
+            "wait_for_from",
+            &[
+                ("event", Dynamic::from("arrival")),
+                ("src", Dynamic::from_int(42)),
+            ],
+        );
+        let tree = tagged("seq", &[("items", Dynamic::from_array(vec![leaf]))]);
+        let task = CompiledTask::new(1, compile_node(&tree).unwrap());
+        assert!(task.accepts_event("arrival", 42));
+        assert!(!task.accepts_event("arrival", 43));
+        assert!(!task.accepts_event("diagnostic", 42));
     }
 
     #[test]

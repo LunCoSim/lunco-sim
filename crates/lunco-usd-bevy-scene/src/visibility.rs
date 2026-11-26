@@ -12,7 +12,7 @@ use lunco_usd_bevy_stage::{
     UsdInstanceMember, UsdInstanceRoot, UsdRead, UsdStageAsset, canonical::CanonicalStages,
 };
 use openusd::sdf::Path;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Validate the presentation origin before a local view mutation is admitted.
 pub fn presentation_actor(
@@ -97,37 +97,70 @@ pub fn validate_runtime_visibility(world: &World, target: Entity) -> Result<(), 
     Ok(())
 }
 
-/// Publish a validated root opinion. `None` withdraws the actor's own opinion.
-/// The caller reconciles all changed roots once the complete batch is applied.
-pub fn write_runtime_visibility(
-    world: &mut World,
-    target: Entity,
-    value: Option<bool>,
-    script: Option<lunco_core::GlobalEntityId>,
-) -> bool {
-    let mut entity = world.entity_mut(target);
-    match value {
-        Some(visible) => {
-            let next = RuntimeVisibilityOverride { visible, script };
-            if let Some(mut existing) = entity.get_mut::<RuntimeVisibilityOverride>() {
-                existing.set_if_neq(next)
-            } else {
-                entity.insert(next);
-                true
+/// A complete validated runtime visibility update. No USD reads occur at commit.
+pub struct PreparedRuntimeVisibility {
+    overrides: BTreeMap<Entity, Option<RuntimeVisibilityOverride>>,
+    facts: Vec<(Entity, Visibility)>,
+}
+
+impl PreparedRuntimeVisibility {
+    pub fn apply(self, world: &mut World) {
+        for (target, value) in self.overrides {
+            let mut entity = world.entity_mut(target);
+            match value {
+                Some(value) => {
+                    entity.insert(value);
+                }
+                None => {
+                    entity.remove::<RuntimeVisibilityOverride>();
+                }
             }
         }
-        None => {
-            if entity
-                .get::<RuntimeVisibilityOverride>()
-                .is_some_and(|value| script.is_none() || value.script == script)
-            {
-                entity.remove::<RuntimeVisibilityOverride>();
-                true
-            } else {
-                false
+        for (target, value) in self.facts {
+            if let Some(mut visibility) = world.get_mut::<Visibility>(target) {
+                visibility.set_if_neq(value);
             }
         }
     }
+}
+
+/// Validate the entire affected namespace against the proposed opinions, before
+/// publishing any runtime component. A Clear can only withdraw its own opinion.
+pub fn prepare_runtime_visibility(
+    world: &World,
+    writes: &[(Entity, Option<bool>)],
+    script: Option<lunco_core::GlobalEntityId>,
+) -> Result<PreparedRuntimeVisibility, String> {
+    let mut overrides = BTreeMap::new();
+    for &(target, value) in writes {
+        validate_runtime_visibility(world, target)?;
+        let old = world.get::<RuntimeVisibilityOverride>(target).copied();
+        let next = match value {
+            Some(visible) => Some(RuntimeVisibilityOverride { visible, script }),
+            None if old.is_some_and(|old| script.is_some() && old.script != script) => old,
+            None => None,
+        };
+        if old != next {
+            overrides.insert(target, next);
+        }
+    }
+    let roots: Vec<_> = overrides.keys().copied().collect();
+    let facts = visibility_facts(world, &roots, &overrides)?
+        .into_iter()
+        .map(|(target, value)| value.map(|value| (target, value)))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PreparedRuntimeVisibility { overrides, facts })
+}
+
+fn effective_override(
+    world: &World,
+    target: Entity,
+    proposed: &BTreeMap<Entity, Option<RuntimeVisibilityOverride>>,
+) -> Option<RuntimeVisibilityOverride> {
+    proposed
+        .get(&target)
+        .copied()
+        .unwrap_or_else(|| world.get::<RuntimeVisibilityOverride>(target).copied())
 }
 
 /// Identify the precise projected namespace instance, including spawned copies.
@@ -147,140 +180,15 @@ fn scope(world: &World, entity: Entity) -> Option<(Entity, Option<Entity>)> {
 /// Authored visibility errors stay owned by the USD projection. We never reveal
 /// a prim that another projection owner has withheld.
 pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
-    for &root in roots {
-        if let Some(base) = world.get::<NativeViewVisibility>(root) {
-            let visible = world
-                .get::<RuntimeVisibilityOverride>(root)
-                .map_or(base.0, |value| value.visible);
-            if let Some(mut visibility) = world.get_mut::<Visibility>(root) {
-                visibility.set_if_neq(if visible {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
-            }
-        }
-    }
-    let facts = {
-        let Some(stages) = world.get_non_send::<CanonicalStages>() else {
+    let facts = match visibility_facts(world, roots, &BTreeMap::new()) {
+        Ok(facts) => facts,
+        Err(message) => {
+            world.trigger(lunco_core::RuntimeError {
+                name: "usd-runtime-visibility-failed".to_owned(),
+                message,
+            });
             return;
-        };
-        let index = world.resource::<UsdPrimIndex>();
-        let mut affected = BTreeSet::new();
-        let mut scopes = HashMap::new();
-        let mut cached_scope =
-            |entity| *scopes.entry(entity).or_insert_with(|| scope(world, entity));
-        let mut branches = HashMap::<_, BTreeSet<String>>::new();
-        for &root in roots {
-            let Some(path) = world.get::<UsdPrimPath>(root) else {
-                continue;
-            };
-            let Some(root_scope) = cached_scope(root) else {
-                continue;
-            };
-            branches
-                .entry((path.stage_handle.id(), root_scope))
-                .or_default()
-                .insert(path.path.clone());
         }
-        for ((stage, root_scope), paths) in branches {
-            let mut covered: Option<String> = None;
-            for path in paths {
-                if covered.as_ref().is_some_and(|prefix| {
-                    path.strip_prefix(prefix)
-                        .is_some_and(|suffix| suffix.starts_with('/'))
-                }) {
-                    continue;
-                }
-                for entity in index.in_subtree(stage, &path) {
-                    if cached_scope(entity) == Some(root_scope) {
-                        affected.insert(entity);
-                    }
-                }
-                covered = Some(path);
-            }
-        }
-        let mut updates = Vec::new();
-        let mut ancestor_overrides = HashMap::new();
-        for entity in affected {
-            let Some(state) = world.get::<UsdVisualVisibility>(entity) else {
-                continue;
-            };
-            if state.failure.is_some() || world.get::<UsdSceneProjectionFailed>(entity).is_some() {
-                continue;
-            }
-            let Some(prim) = world.get::<UsdPrimPath>(entity) else {
-                continue;
-            };
-            let Some(target_scope) = cached_scope(entity) else {
-                continue;
-            };
-            let Ok(path) = Path::new(&prim.path) else {
-                continue;
-            };
-            let mut overrides = HashMap::new();
-            for ancestor in path.ancestors_below_root() {
-                let value = *ancestor_overrides
-                    .entry((prim.stage_handle.id(), target_scope, ancestor.clone()))
-                    .or_insert_with(|| {
-                        index
-                            .in_stage(prim.stage_handle.id(), ancestor.as_str())
-                            .iter()
-                            .find_map(|&candidate| {
-                                if cached_scope(candidate) != Some(target_scope) {
-                                    return None;
-                                }
-                                if world
-                                    .get::<UsdVisualVisibility>(candidate)
-                                    .is_some_and(|state| state.animated)
-                                {
-                                    world
-                                        .get::<UsdSampledVisibility>(candidate)
-                                        .map(|sample| sample.0)
-                                } else {
-                                    world
-                                        .get::<RuntimeVisibilityOverride>(candidate)
-                                        .map(|value| value.visible)
-                                }
-                            })
-                    });
-                if let Some(value) = value {
-                    overrides.insert(ancestor.to_string(), value);
-                }
-            }
-            // False opinions prune immediately. True opinions cannot change
-            // a surface already admitted by authored visibility. Only a reveal
-            // of an authored-hidden prim needs the native schema walk.
-            let value = if overrides.values().any(|value| !*value) {
-                Ok(Visibility::Hidden)
-            } else if overrides.is_empty() || state.authored != Visibility::Hidden {
-                Ok(state.authored)
-            } else {
-                world
-                    .get_resource::<Assets<UsdStageAsset>>()
-                    .and_then(|assets| assets.get(&prim.stage_handle))
-                    .ok_or_else(|| format!("{}: stage asset is unavailable", prim.path))
-                    .and_then(|asset| {
-                        stages
-                            .reader_for_composed_query(
-                                prim.stage_handle.id(),
-                                asset,
-                                lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
-                            )
-                            .0
-                            .invisible_with_overrides(&path, &overrides)
-                    })
-                    .map(|hidden| {
-                        if hidden {
-                            Visibility::Hidden
-                        } else {
-                            Visibility::Inherited
-                        }
-                    })
-            };
-            updates.push((entity, value));
-        }
-        updates
     };
     for (entity, value) in facts {
         match value {
@@ -301,6 +209,150 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
             }
         }
     }
+}
+
+fn visibility_facts(
+    world: &World,
+    roots: &[Entity],
+    proposed: &BTreeMap<Entity, Option<RuntimeVisibilityOverride>>,
+) -> Result<Vec<(Entity, Result<Visibility, String>)>, String> {
+    let mut updates = Vec::new();
+    for &root in roots {
+        if let Some(base) = world.get::<NativeViewVisibility>(root) {
+            let visible =
+                effective_override(world, root, proposed).map_or(base.0, |value| value.visible);
+            updates.push((
+                root,
+                Ok(if visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                }),
+            ));
+        }
+    }
+    if !roots
+        .iter()
+        .any(|root| world.get::<UsdPrimPath>(*root).is_some())
+    {
+        return Ok(updates);
+    }
+    let stages = world
+        .get_non_send::<CanonicalStages>()
+        .ok_or("USD stage registry is unavailable")?;
+    let index = world.resource::<UsdPrimIndex>();
+    let mut affected = BTreeSet::new();
+    let mut scopes = HashMap::new();
+    let mut cached_scope = |entity| *scopes.entry(entity).or_insert_with(|| scope(world, entity));
+    let mut branches = HashMap::<_, BTreeSet<String>>::new();
+    for &root in roots {
+        let Some(path) = world.get::<UsdPrimPath>(root) else {
+            continue;
+        };
+        let Some(root_scope) = cached_scope(root) else {
+            continue;
+        };
+        branches
+            .entry((path.stage_handle.id(), root_scope))
+            .or_default()
+            .insert(path.path.clone());
+    }
+    for ((stage, root_scope), paths) in branches {
+        let mut covered: Option<String> = None;
+        for path in paths {
+            if covered.as_ref().is_some_and(|prefix| {
+                path.strip_prefix(prefix)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+            }) {
+                continue;
+            }
+            for entity in index.in_subtree(stage, &path) {
+                if cached_scope(entity) == Some(root_scope) {
+                    affected.insert(entity);
+                }
+            }
+            covered = Some(path);
+        }
+    }
+    let mut ancestor_overrides = HashMap::new();
+    for entity in affected {
+        let Some(state) = world.get::<UsdVisualVisibility>(entity) else {
+            continue;
+        };
+        if state.failure.is_some() || world.get::<UsdSceneProjectionFailed>(entity).is_some() {
+            continue;
+        }
+        let Some(prim) = world.get::<UsdPrimPath>(entity) else {
+            continue;
+        };
+        let Some(target_scope) = cached_scope(entity) else {
+            continue;
+        };
+        let Ok(path) = Path::new(&prim.path) else {
+            continue;
+        };
+        let mut overrides = HashMap::new();
+        for ancestor in path.ancestors_below_root() {
+            let value = *ancestor_overrides
+                .entry((prim.stage_handle.id(), target_scope, ancestor.clone()))
+                .or_insert_with(|| {
+                    index
+                        .in_stage(prim.stage_handle.id(), ancestor.as_str())
+                        .iter()
+                        .find_map(|&candidate| {
+                            if cached_scope(candidate) != Some(target_scope) {
+                                return None;
+                            }
+                            if world
+                                .get::<UsdVisualVisibility>(candidate)
+                                .is_some_and(|state| state.animated)
+                            {
+                                world
+                                    .get::<UsdSampledVisibility>(candidate)
+                                    .map(|sample| sample.0)
+                            } else {
+                                effective_override(world, candidate, proposed)
+                                    .map(|value| value.visible)
+                            }
+                        })
+                });
+            if let Some(value) = value {
+                overrides.insert(ancestor.to_string(), value);
+            }
+        }
+        // False opinions prune immediately. True opinions cannot change
+        // a surface already admitted by authored visibility. Only a reveal
+        // of an authored-hidden prim needs the native schema walk.
+        let value = if overrides.values().any(|value| !*value) {
+            Ok(Visibility::Hidden)
+        } else if overrides.is_empty() || state.authored != Visibility::Hidden {
+            Ok(state.authored)
+        } else {
+            world
+                .get_resource::<Assets<UsdStageAsset>>()
+                .and_then(|assets| assets.get(&prim.stage_handle))
+                .ok_or_else(|| format!("{}: stage asset is unavailable", prim.path))
+                .and_then(|asset| {
+                    stages
+                        .reader_for_composed_query(
+                            prim.stage_handle.id(),
+                            asset,
+                            lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+                        )
+                        .0
+                        .invisible_with_overrides(&path, &overrides)
+                })
+                .map(|hidden| {
+                    if hidden {
+                        Visibility::Hidden
+                    } else {
+                        Visibility::Inherited
+                    }
+                })
+        };
+        updates.push((entity, value));
+    }
+    Ok(updates)
 }
 
 /// Visibility reconciliation consumes animation samples before render propagation.

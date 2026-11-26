@@ -228,7 +228,7 @@ fn on_start(me, ctx) {
     this.started = false;
     this.drive_hint_seen = false;
     this.inspection=""; this.last_hint="";
-    for event in ["scene.pointer","crater_relay.phase","cmd:AcquireControl","cmd:ReleaseControlSource",
+    for event in ["scene.activate","crater_relay.phase","cmd:AcquireControl","cmd:ReleaseControlSource",
                   "cmd:ReleaseControlClaim","SENSOR_ENTER","crater_cup.graph_opened","tutorial.action"] {subscribe(event);}
     this.subjects = #{mine:find_path("/World/Miner"),tail:find_path("/World/Tailings"),fuel:find_path("/World/Tanker"),
         lander:find_path("/World/HopperLander"),scout:find_path(SCOUT),comet:find_path(COMET),
@@ -248,7 +248,7 @@ fn on_start(me, ctx) {
 }
 
 fn on_event(me, evt, ctx) {
-    if evt.name=="scene.pointer" && evt.value["button"]=="primary"
+    if evt.name=="scene.activate" && evt.value["button"]=="primary"
         && evt.value["scene_interaction_mode"]=="simulation" && this.mode=="overview" {
         let path=evt.value["hit_path"];
         if path==() {path=evt.value["target_path"];}

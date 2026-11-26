@@ -559,8 +559,7 @@ fn apply_object_property(
     origin: Option<lunco_core::CommandOrigin>,
 ) -> Result<Option<ApplyUsdOps>, String> {
     use lunco_usd_bevy_scene::visibility::{
-        presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
-        write_runtime_visibility,
+        prepare_runtime_visibility, presentation_actor, validate_runtime_visibility,
     };
     let target = world
         .resource::<lunco_api::registry::ApiEntityRegistry>()
@@ -599,9 +598,7 @@ fn apply_object_property(
                 });
             } else {
                 let actor = presentation_actor(world, origin)?;
-                if write_runtime_visibility(world, target, Some(visible), actor) {
-                    reconcile_runtime_visibility(world, &[target]);
-                }
+                prepare_runtime_visibility(world, &[(target, Some(visible))], actor)?.apply(world);
             }
         }
         "shader" => {

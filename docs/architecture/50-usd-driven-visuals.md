@@ -153,9 +153,12 @@ hidden geometry remains prepared. Target the group root once: the scene
 visibility owner reconciles only its indexed composed namespace instance. A
 root reveal removes that root's blocking ordinary visibility opinion without
 revealing independently hidden descendants or purpose-suppressed guides.
-An invisible ancestor still dominates a descendant reveal. All writes in a
-batch are applied before derived visibility is reconciled; repeated unchanged
-opinions do not walk the subtree. `Clear` withdraws the root override, and
+An invisible ancestor still dominates a descendant reveal. The visibility
+owner prepares the affected subtree against the complete proposed batch before
+committing any runtime state; a derived read failure rejects the whole command.
+Repeated unchanged opinions do not walk the subtree. The view write limit applies
+at the shared owner, including compound participation commands. `Clear` withdraws
+the root override, and
 retiring the publishing script clears its overrides. Do not walk the USD tree
 or split a group toggle into per-descendant commands in Rhai. A prim with
 time-sampled visibility retains its animation owner and rejects a direct
@@ -171,6 +174,11 @@ Imageable schema accessors to substitute the live ordinary visibility opinion;
 no USD layer is mutated. `SetObjectProperty(visible, Interactive)` is the
 same visibility owner, not a direct Bevy component write; persistent visibility
 edits author the document and leave independent scene-view opinions intact.
+
+`MoveEntity`, `RotateEntity`, `TransformEntity`, and compound poses share one
+native pose preparation and commit owner. Partial poses preserve the omitted
+transform and velocity channel; only the scheduled joint propagation pulses
+are cleared after physics.
 
 Do not use `ApplyUsdOps`, `ApplyUsdTransientOps`, or authored time samples
 to record live door toggles, equipment status, or continuously changing cart

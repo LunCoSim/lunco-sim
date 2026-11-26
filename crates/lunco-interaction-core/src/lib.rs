@@ -114,12 +114,6 @@ impl SceneInteractionMode {
             Self::Editor => "editor",
         }
     }
-
-    /// Whether the configured semantic intents assign this click exclusively
-    /// to the simulation's ordinary selection/possession gesture.
-    pub fn possession_owns_pointer(self, intents: &[String]) -> bool {
-        matches!(self, Self::Simulation) && intents.len() == 1 && intents[0] == "selection.replace"
-    }
 }
 
 /// Marker resource indicating that a terrain-sculpt tool is armed.
@@ -166,9 +160,7 @@ impl CursorModeActive<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        PointerInteraction, PrimaryMousePointer, SceneInteractionMode, ScenePointerPolicy,
-    };
+    use super::{PointerInteraction, PrimaryMousePointer, ScenePointerPolicy};
     use bevy::picking::pointer::Location;
 
     #[derive(bevy::prelude::Resource, Default)]
@@ -227,20 +219,5 @@ mod tests {
                 right: PointerInteraction::Block,
             })
         );
-    }
-
-    #[test]
-    fn possession_requires_the_exclusive_semantic_pointer_intent() {
-        let selection = vec!["selection.replace".to_string()];
-        let overlapping = vec![
-            "selection.replace".to_string(),
-            "route.add_point".to_string(),
-        ];
-        let route = vec!["route.add_point".to_string()];
-        assert!(SceneInteractionMode::Simulation.possession_owns_pointer(&selection));
-        assert!(!SceneInteractionMode::Simulation.possession_owns_pointer(&overlapping));
-        assert!(!SceneInteractionMode::Simulation.possession_owns_pointer(&route));
-        assert!(!SceneInteractionMode::Simulation.possession_owns_pointer(&[]));
-        assert!(!SceneInteractionMode::Editor.possession_owns_pointer(&selection));
     }
 }
