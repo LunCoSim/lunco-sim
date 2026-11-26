@@ -454,6 +454,14 @@ support initialization on every `RenderStartup`, including recovery. A faster
 cohort with missing geometry is a failed visual comparison, regardless of FPS
 or readiness diagnostics.
 
+Native CPU mesh preparation uses a dense frame snapshot in the extraction
+owner and allocation-owned mesh offsets/slabs. Profile `prepare_cpu_mesh_uniforms`
+together with shadow, opaque and sorted phase preparation; include native
+memory-copy samples rather than declaring a win from a smaller batch zone alone.
+The storage-buffer writer borrows prepared values without cloning. Preserve
+shader-layout bytes, dynamic-uniform offsets, mesh replacement/removal and the
+live material/skin/morph/lightmap preparation boundaries.
+
 For GPU-only buffer layout, preserve deterministic scalar math and validate
 shader array stride at the native allocator. `UninitBufferVec` uses encase's
 `<[T; 1]>::SHADER_SIZE`: a shader element's minimum size alone does not include
