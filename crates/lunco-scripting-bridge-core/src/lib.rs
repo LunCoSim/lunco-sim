@@ -2173,18 +2173,20 @@ pub fn emit(name: &str, value: TelemetryValue) -> bool {
         if ensure_script_effect_allowed().is_err() {
             return false;
         }
-        world.trigger(TelemetryEvent {
-            name: name.to_string(),
-            // The emitter is the script bound by `ScriptEntityScope`.
-            source: current_self(),
-            severity: Severity::Info,
-            data: value,
-            // The telemetry core stamps this event from MissionClock at the
-            // current SimTick before any subscriber observes it.
-            timestamp: 0.0,
-            sim_secs: 0.0,
-            sim_tick: 0,
-        });
+        world.trigger(lunco_telemetry_core::OrderedTelemetryEvent(
+            TelemetryEvent {
+                name: name.to_string(),
+                // The emitter is the script bound by `ScriptEntityScope`.
+                source: current_self(),
+                severity: Severity::Info,
+                data: value,
+                // The telemetry core stamps this event from MissionClock at the
+                // current SimTick before any subscriber observes it.
+                timestamp: 0.0,
+                sim_secs: 0.0,
+                sim_tick: 0,
+            },
+        ));
         true
     })
     .unwrap_or(false)

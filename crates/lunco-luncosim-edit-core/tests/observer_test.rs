@@ -1,6 +1,6 @@
 //! Documents the load-bearing fact behind the click-routing fix: two *global*
 //! observers watching the same event BOTH run for a single trigger. That's why
-//! selection policy and possession (`avatar_raycast_possession`)
+//! selection policy and possession via the central scene interaction policy
 //! must therefore consult the shared scene-interaction mode and key intent
 //! rather than relying on one observer swallowing the click from the other.
 

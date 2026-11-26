@@ -6,7 +6,6 @@
 //! users from compiling the celestial and physics graph merely to use generic
 //! reflection and command/query access.
 
-use bevy::ecs::system::SystemState;
 use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use big_space::prelude::*;
@@ -83,27 +82,33 @@ pub fn world_pos(gid: u64) -> Option<DVec3> {
 pub fn geolocation(gid: u64) -> Option<lunco_celestial::Geodetic> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<(
-            Query<&ChildOf>,
-            Query<&Grid>,
-            Query<(Option<&CellCoord>, &Transform)>,
-            Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
-            Res<lunco_celestial::CelestialBodyRegistry>,
-            Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
-        )> = SystemState::new(world);
-        let (q_parents, q_grids, q_spatial, q_site, bodies, frame_index) = state.get(world).ok()?;
-        lunco_celestial_spatial_core::resolve_surface_pose(
-            entity,
-            &q_site,
-            &bodies,
-            &frame_index,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        )
-        .map(|pose| pose.geodetic)
+        world
+            .run_system_cached_with(read_geolocation, entity)
+            .ok()
+            .flatten()
     })
     .flatten()
+}
+
+fn read_geolocation(
+    In(entity): In<Entity>,
+    q_parents: Query<&ChildOf>,
+    q_grids: Query<&Grid>,
+    q_spatial: Query<(Option<&CellCoord>, &Transform)>,
+    q_site: Query<(Entity, &lunco_celestial::GeodeticAnchor), With<lunco_celestial::SiteAnchor>>,
+    bodies: Res<lunco_celestial::CelestialBodyRegistry>,
+    frame_index: Res<lunco_celestial_spatial_core::ReferenceFrameIndex>,
+) -> Option<lunco_celestial::Geodetic> {
+    lunco_celestial_spatial_core::resolve_surface_pose(
+        entity,
+        &q_site,
+        &bodies,
+        &frame_index,
+        &q_parents,
+        &q_grids,
+        &q_spatial,
+    )
+    .map(|pose| pose.geodetic)
 }
 
 /// `world_forward(id)` — unit heading in the active simulation frame, or `None`.
@@ -170,25 +175,35 @@ pub fn world_rotation_quat(gid: u64) -> Option<DQuat> {
 pub fn viewport_position(gid: u64) -> Option<Vec2> {
     with_world(|world| {
         let entity = resolve_entity(world, gid)?;
-        let mut state: SystemState<(
-            Query<(&GlobalTransform, &ViewVisibility)>,
-            Query<(&Camera, &GlobalTransform), (With<Camera3d>, With<lunco_render::SceneCamera>)>,
-            Res<lunco_viewport_core::SceneViewport>,
-        )> = SystemState::new(world);
-        let (q_transforms, q_cameras, scene_viewport) = state.get(world).ok()?;
-        let camera_entity = scene_viewport.exposed_camera()?;
-        let (camera, camera_transform) = q_cameras.get(camera_entity).ok()?;
-        if !camera.is_active {
-            return None;
-        }
-        let (transform, view_visibility) = q_transforms.get(entity).ok()?;
-        if !view_visibility.get() {
-            return None;
-        }
-        let position = transform.translation();
-        camera.world_to_viewport(camera_transform, position).ok()
+        world
+            .run_system_cached_with(read_viewport_position, entity)
+            .ok()
+            .flatten()
     })
     .flatten()
+}
+
+fn read_viewport_position(
+    In(entity): In<Entity>,
+    q_transforms: Query<(&GlobalTransform, &ViewVisibility)>,
+    q_cameras: Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera3d>, With<lunco_render::SceneCamera>),
+    >,
+    scene_viewport: Res<lunco_viewport_core::SceneViewport>,
+) -> Option<Vec2> {
+    let camera_entity = scene_viewport.exposed_camera()?;
+    let (camera, camera_transform) = q_cameras.get(camera_entity).ok()?;
+    if !camera.is_active {
+        return None;
+    }
+    let (transform, view_visibility) = q_transforms.get(entity).ok()?;
+    if !view_visibility.get() {
+        return None;
+    }
+    camera
+        .world_to_viewport(camera_transform, transform.translation())
+        .ok()
 }
 
 /// `list_entities()` — `[{ id, name, type, pos, catalog_id, input_surface,
@@ -200,62 +215,86 @@ pub fn viewport_position(gid: u64) -> Option<Vec2> {
 /// the USD bridge for callers that need canonical addressing.
 pub fn list_entities<B: ValueBuilder>(b: &B) -> B::Value {
     with_world(|world| {
-        let Some(pairs) = world
-            .get_resource::<ApiEntityRegistry>()
-            .map(ApiEntityRegistry::entities_by_identity)
-        else {
-            return b.array(Vec::new());
+        let rows = match world.run_system_cached(read_entity_rows) {
+            Ok(rows) => rows,
+            Err(error) => {
+                warn!("[script-entities] live entity query failed: {error}");
+                return b.array(Vec::new());
+            }
         };
-        // One SystemState carries every per-entity read so the loop never
-        // re-borrows the World.
-        let mut state: SystemState<(
-            lunco_physics::SimulationPoseQuery,
-            Query<(
-                Option<&Name>,
-                Option<&lunco_core::markers::Callsign>,
-                Has<lunco_control_core::ControlBinding>,
-                Has<lunco_port_core::InputPorts>,
-                Option<&CelestialBody>,
-                Option<&lunco_core::CatalogEntryId>,
-                Option<&lunco_core::UsdPrimKind>,
-            )>,
-        )> = SystemState::new(world);
-        let Some((poses, q_meta)) = state.get(world).ok() else {
-            return b.array(Vec::new());
-        };
-        let items = pairs
-            .into_iter()
-            .map(|(gid, entity)| {
-                let (name, callsign, accepts_commands, input_surface, body, catalog_id, usd_kind) =
-                    q_meta
-                        .get(entity)
-                        .unwrap_or((None, None, false, false, None, None, None));
-                let kind = usd_kind.map(|kind| kind.0.as_str()).unwrap_or("untyped");
-                let pos = poses
-                    .position(entity)
-                    .map(|v| vec3_value(b, v.0.x, v.0.y, v.0.z))
-                    .unwrap_or_else(|| b.unit());
-                b.map(vec![
-                    ("id".to_string(), b.int(gid.get() as i64)),
-                    (
-                        "name".to_string(),
-                        b.string(&lunco_core::entity_display_name(name, callsign, catalog_id)),
-                    ),
-                    ("type".to_string(), b.string(kind)),
-                    ("input_surface".to_string(), b.bool(input_surface)),
-                    ("control_bound".to_string(), b.bool(accepts_commands)),
-                    ("celestial_body".to_string(), b.bool(body.is_some())),
-                    (
-                        "catalog_id".to_string(),
-                        b.string(catalog_id.map(|id| id.0.as_str()).unwrap_or("")),
-                    ),
-                    ("pos".to_string(), pos),
-                ])
-            })
-            .collect();
-        b.array(items)
+        b.array(
+            rows.into_iter()
+                .map(|row| {
+                    let pos = row
+                        .position
+                        .map(|position| vec3_value(b, position.x, position.y, position.z))
+                        .unwrap_or_else(|| b.unit());
+                    b.map(vec![
+                        ("id".to_string(), b.int(row.id.get() as i64)),
+                        ("name".to_string(), b.string(&row.name)),
+                        ("type".to_string(), b.string(&row.kind)),
+                        ("input_surface".to_string(), b.bool(row.input_surface)),
+                        ("control_bound".to_string(), b.bool(row.control_bound)),
+                        ("celestial_body".to_string(), b.bool(row.celestial_body)),
+                        ("catalog_id".to_string(), b.string(&row.catalog_id)),
+                        ("pos".to_string(), pos),
+                    ])
+                })
+                .collect(),
+        )
     })
     .unwrap_or_else(|| b.array(Vec::new()))
+}
+
+struct EntitySpatialRow {
+    id: lunco_core::GlobalEntityId,
+    name: String,
+    kind: String,
+    input_surface: bool,
+    control_bound: bool,
+    celestial_body: bool,
+    catalog_id: String,
+    position: Option<DVec3>,
+}
+
+fn read_entity_rows(
+    registry: Res<ApiEntityRegistry>,
+    poses: lunco_physics::SimulationPoseQuery,
+    metadata: Query<(
+        Option<&Name>,
+        Option<&lunco_core::markers::Callsign>,
+        Has<lunco_control_core::ControlBinding>,
+        Has<lunco_port_core::InputPorts>,
+        Option<&CelestialBody>,
+        Option<&lunco_core::CatalogEntryId>,
+        Option<&lunco_core::UsdPrimKind>,
+    )>,
+) -> Vec<EntitySpatialRow> {
+    registry
+        .entities_by_identity()
+        .into_iter()
+        .filter_map(|(id, entity)| {
+            let Ok((name, callsign, control_bound, input_surface, body, catalog_id, usd_kind)) =
+                metadata.get(entity)
+            else {
+                warn!("[script-entities] registered entity {entity:?} is no longer live");
+                return None;
+            };
+            Some(EntitySpatialRow {
+                id,
+                name: lunco_core::entity_display_name(name, callsign, catalog_id),
+                kind: usd_kind
+                    .map(|kind| kind.0.as_str())
+                    .unwrap_or("untyped")
+                    .to_owned(),
+                input_surface,
+                control_bound,
+                celestial_body: body.is_some(),
+                catalog_id: catalog_id.map(|id| id.0.as_str()).unwrap_or("").to_owned(),
+                position: poses.position(entity).map(|position| position.0),
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

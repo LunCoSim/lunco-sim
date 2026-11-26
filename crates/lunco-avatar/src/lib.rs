@@ -178,7 +178,6 @@ impl Plugin for LunCoAvatarPlugin {
         app.init_resource::<lunco_interaction_core::ArmedScriptTool>();
         app.init_resource::<lunco_interaction_core::SceneInteractionMode>();
         app.init_resource::<lunco_input_core::ActiveInputBindings>();
-        app.add_observer(avatar_raycast_possession);
         // Native avatar construction receives the resolved command policy;
         // composed USD avatars receive the same policy from their `Controls` scope.
         app.add_observer(demote_former_avatar);
@@ -370,79 +369,37 @@ fn is_vessel_control_endpoint(
         .is_ok_and(|surface| !surface.values.is_empty())
 }
 
+/// Read-only possession capability used by the central scene pointer router.
+/// The avatar owns endpoint resolution; authored interaction policy decides
+/// whether the resolved endpoint consumes the gesture.
 #[derive(bevy::ecs::system::SystemParam)]
-/// Shared scene-click mode and egui gate for the avatar pointer observer.
-pub struct SceneInteractionGate<'w> {
-    mode: Res<'w, lunco_interaction_core::SceneInteractionMode>,
-    egui_focus: Res<'w, lunco_control_core::EguiFocus>,
-    input_bindings: Res<'w, lunco_input_core::ActiveInputBindings>,
-}
-
-/// Plain scene clicks acquire control for a hit entity whose authored hierarchy
-/// resolves to a valid input-port endpoint. Camera focus remains an explicit
-/// command; a model's domain label does not make it possessable.
-pub fn avatar_raycast_possession(
-    mut click: On<bevy::picking::events::PointerClick>,
-    keys: Res<ButtonInput<KeyCode>>,
-    local_avatar: Query<Entity, (With<Embodiment>, With<LocalEmbodiment>)>,
-    scene_interaction: SceneInteractionGate,
-    drag_mode_active: Res<lunco_interaction_core::DragModeActive>,
-    spawn_tool_active: Res<lunco_interaction_core::SpawnToolActive>,
-    terrain_tool_active: Res<lunco_interaction_core::TerrainToolActive>,
-    armed_script_tool: Res<lunco_interaction_core::ArmedScriptTool>,
-    mut commands: Commands,
-    q_input_ports: Query<&lunco_port_core::InputPorts, Without<Embodiment>>,
-    q_parents: Query<&ChildOf>,
-    q_vehicle_roots: Query<
+pub struct PossessionTargetQuery<'w, 's> {
+    parents: Query<'w, 's, &'static ChildOf>,
+    input_ports: Query<'w, 's, &'static lunco_port_core::InputPorts, Without<Embodiment>>,
+    roots: Query<
+        'w,
+        's,
         (),
         Or<(
             With<lunco_control_core::ControlBinding>,
             With<lunco_core::MobilityRoot>,
         )>,
     >,
-    q_preview_only: Query<(), With<UsdPreviewOnly>>,
-    q_ground: Query<Entity, With<lunco_core::Ground>>,
-) {
-    use bevy::picking::pointer::PointerButton;
-    if click.button != PointerButton::Primary {
-        return;
+    previews: Query<'w, 's, (), With<UsdPreviewOnly>>,
+    ground: Query<'w, 's, Entity, With<lunco_core::Ground>>,
+}
+
+impl PossessionTargetQuery<'_, '_> {
+    pub fn resolve(&self, hit: Entity) -> Option<Entity> {
+        find_control_owner_from_hit(
+            hit,
+            &self.parents,
+            &self.input_ports,
+            &self.roots,
+            &self.previews,
+            &self.ground,
+        )
     }
-    let intents = scene_interaction.input_bindings.pointer_intents(
-        "primary",
-        keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
-        keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-        keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
-    );
-    if !scene_interaction.mode.possession_owns_pointer(&intents)
-        || drag_mode_active.active
-        || spawn_tool_active.0
-        || terrain_tool_active.0
-        || armed_script_tool.armed()
-    {
-        return;
-    }
-    click.propagate(false);
-    if scene_interaction.egui_focus.wants_pointer {
-        return;
-    }
-    let Some(avatar_entity) = local_avatar.single().ok() else {
-        return;
-    };
-    let Some(target) = find_control_owner_from_hit(
-        click.entity,
-        &q_parents,
-        &q_input_ports,
-        &q_vehicle_roots,
-        &q_preview_only,
-        &q_ground,
-    ) else {
-        return;
-    };
-    commands.trigger(AcquireControl {
-        source: Some(avatar_entity),
-        target,
-        bind_camera: true,
-    });
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────

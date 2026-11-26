@@ -708,12 +708,19 @@ pub trait ScenarioRuntime: Send + Sync + 'static {
         Ok(ScenarioDependencyPlan::default())
     }
 
+    /// Whether this actor has a consumer for a particular event. The driver
+    /// checks this before enforcing source dependencies or constructing a hook.
+    fn accepts_event(&self, _entity: Entity, _event: &TelemetryEvent) -> bool {
+        true
+    }
+
     /// Deliver one event to `entity`'s event hook (no-op if undefined).
     fn deliver_event(
         &mut self,
         entity: Entity,
         self_gid: i64,
         event: &TelemetryEvent,
+        _event_ordinal: u64,
     ) -> Option<Diagnostic>;
 
     /// Drop all per-entity state for `entity` (after its `on_stop`).
@@ -2518,13 +2525,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         if work.is_empty() && !needs_teardown && diag_updates.is_empty() {
             // No scenario can consume this batch. Preserve the allocation for
             // the next pass, but intentionally discard the events themselves.
-            events.clear();
             if !startup_pass && let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
-                if presentation_pass {
-                    inbox.presentation_pending = events;
-                } else {
-                    inbox.pending = events;
-                }
+                inbox.recycle_delivered(events, presentation_pass);
             }
             return;
         }
@@ -2820,8 +2822,22 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                     }
                 }
                 if receive_events {
+                    let mut canonical_tick = None;
+                    let mut canonical_ordinal = 0_u64;
                     for ev in &events {
-                        if !event_after_start(ev.sequence, st.start_event_sequence) {
+                        if canonical_tick != Some(ev.event.sim_tick) {
+                            canonical_tick = Some(ev.event.sim_tick);
+                            canonical_ordinal = 0;
+                        }
+                        let event_identity = match ev.ordering {
+                            QueuedEventOrder::Causal { ordinal } => ordinal ^ (1 << 63),
+                            QueuedEventOrder::Simulation => {
+                                let ordinal = canonical_ordinal;
+                                canonical_ordinal += 1;
+                                ordinal
+                            }
+                        };
+                        if !event_after_start(ev.sequence, st.start_event_sequence) || !runtime.accepts_event(entity, &ev.event) {
                             continue;
                         }
                         if let Some(source) =
@@ -2858,7 +2874,7 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
                         );
                         let _script_entity =
                             bridge_core::ScriptEntityScope::enter(gid as u64);
-                        if let Some(d) = runtime.deliver_event(entity, gid, &ev.event) {
+                        if let Some(d) = runtime.deliver_event(entity, gid, &ev.event, event_identity) {
                             runtime_errors.push(d);
                         }
                     }
@@ -2970,20 +2986,8 @@ impl<R: ScenarioRuntime> ScenarioDriver<R> {
         // payloads. This matters for control paths that publish one telemetry
         // event per fixed tick: the queue remains bounded and allocation-free
         // after the first burst.
-        events.clear();
         if let Some(mut inbox) = world.get_resource_mut::<ScriptEventInbox>() {
-            // Hooks can emit events while this pass is delivering the batch.
-            // Those events are already in `inbox.pending` and belong to the
-            // next pass; never replace them with the recycled delivered batch.
-            // Reuse the old allocation only when no new event was produced.
-            let pending = if presentation_pass {
-                &mut inbox.presentation_pending
-            } else {
-                &mut inbox.pending
-            };
-            if pending.is_empty() {
-                *pending = events;
-            }
+            inbox.recycle_delivered(events, presentation_pass);
         }
     }
 
@@ -3545,6 +3549,8 @@ pub struct ScriptEventInbox {
     presentation_languages: HashSet<ScriptLanguage>,
     /// Sequence assigned to the next accepted event.
     next_sequence: u64,
+    causal_tick: Option<u64>,
+    next_causal_ordinal: u64,
     /// Whether the fixed-capacity boundary has been crossed.
     pub overflowed: bool,
     /// Number of events refused after the boundary was crossed.
@@ -3561,6 +3567,8 @@ impl Default for ScriptEventInbox {
             presentation_pending: Vec::new(),
             presentation_languages: HashSet::new(),
             next_sequence: 0,
+            causal_tick: None,
+            next_causal_ordinal: 0,
             overflowed: false,
             dropped: 0,
             faulted: false,
@@ -3579,6 +3587,8 @@ impl ScriptEventInbox {
         self.pending.clear();
         self.presentation_pending.clear();
         self.presentation_languages.clear();
+        self.causal_tick = None;
+        self.next_causal_ordinal = 0;
         self.overflowed = false;
         self.dropped = 0;
     }
@@ -3589,14 +3599,27 @@ impl ScriptEventInbox {
     /// the caller owns the policy for surfacing overflow, and no event is
     /// silently evicted from the front of the queue.
     pub fn enqueue(&mut self, event: TelemetryEvent) -> bool {
-        self.enqueue_with(|| event, true)
+        self.enqueue_with(
+            || event,
+            true,
+            lunco_telemetry_core::EventOrdering::Simulation,
+        )
     }
 
-    fn enqueue_borrowed(&mut self, event: &TelemetryEvent, simulation: bool) -> bool {
-        self.enqueue_with(|| event.clone(), simulation)
+    fn enqueue_borrowed(
+        &mut self,
+        event: &lunco_telemetry_core::StampedTelemetryEvent,
+        simulation: bool,
+    ) -> bool {
+        self.enqueue_with(|| (**event).clone(), simulation, event.ordering())
     }
 
-    fn enqueue_with(&mut self, event: impl FnOnce() -> TelemetryEvent, simulation: bool) -> bool {
+    fn enqueue_with(
+        &mut self,
+        event: impl FnOnce() -> TelemetryEvent,
+        simulation: bool,
+        ordering: lunco_telemetry_core::EventOrdering,
+    ) -> bool {
         if self.faulted
             || (simulation && self.pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY)
             || self.presentation_pending.len() >= SCRIPT_EVENT_INBOX_CAPACITY
@@ -3605,9 +3628,23 @@ impl ScriptEventInbox {
             self.dropped = self.dropped.saturating_add(1);
             return false;
         }
+        let event = event();
+        let ordering = match ordering {
+            lunco_telemetry_core::EventOrdering::Simulation => QueuedEventOrder::Simulation,
+            lunco_telemetry_core::EventOrdering::Causal => {
+                if self.causal_tick != Some(event.sim_tick) {
+                    self.causal_tick = Some(event.sim_tick);
+                    self.next_causal_ordinal = 0;
+                }
+                let ordinal = self.next_causal_ordinal;
+                self.next_causal_ordinal = ordinal.wrapping_add(1);
+                QueuedEventOrder::Causal { ordinal }
+            }
+        };
         let event = QueuedScenarioEvent {
             sequence: self.next_sequence,
-            event: event(),
+            ordering,
+            event,
         };
         if !self.presentation_languages.is_empty() {
             self.presentation_pending.push(event.clone());
@@ -3619,21 +3656,44 @@ impl ScriptEventInbox {
         true
     }
 
+    fn recycle_delivered(&mut self, mut delivered: Vec<QueuedScenarioEvent>, presentation: bool) {
+        delivered.clear();
+        let pending = if presentation {
+            &mut self.presentation_pending
+        } else {
+            &mut self.pending
+        };
+        // The pending lane can hold later-tick facts or events emitted during
+        // delivery. Only an empty lane may receive the recycled allocation.
+        if pending.is_empty() {
+            *pending = delivered;
+        }
+    }
+
     /// Clear pending events and the latched collection fault at a scene
     /// replacement boundary.
     pub fn reset(&mut self) {
         self.pending.clear();
         self.presentation_pending.clear();
         self.presentation_languages.clear();
+        self.causal_tick = None;
+        self.next_causal_ordinal = 0;
         self.overflowed = false;
         self.dropped = 0;
         self.faulted = false;
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum QueuedEventOrder {
+    Simulation,
+    Causal { ordinal: u64 },
+}
+
 #[derive(Debug, Clone)]
 struct QueuedScenarioEvent {
     sequence: u64,
+    ordering: QueuedEventOrder,
     event: TelemetryEvent,
 }
 
@@ -3642,7 +3702,15 @@ fn event_after_start(event_sequence: u64, start_sequence: u64) -> bool {
 }
 
 fn compare_queued_events(a: &QueuedScenarioEvent, b: &QueuedScenarioEvent) -> Ordering {
-    compare_telemetry_events(&a.event, &b.event).then_with(|| a.sequence.cmp(&b.sequence))
+    a.event
+        .sim_tick
+        .cmp(&b.event.sim_tick)
+        .then_with(|| a.ordering.cmp(&b.ordering))
+        .then_with(|| match a.ordering {
+            QueuedEventOrder::Simulation => compare_telemetry_events(&a.event, &b.event),
+            QueuedEventOrder::Causal { .. } => a.sequence.cmp(&b.sequence),
+        })
+        .then_with(|| a.sequence.cmp(&b.sequence))
 }
 
 fn compare_telemetry_events(a: &TelemetryEvent, b: &TelemetryEvent) -> Ordering {
@@ -3871,6 +3939,34 @@ mod tests {
     }
 
     #[test]
+    fn recycling_a_drained_batch_never_overwrites_ineligible_events() {
+        let mut inbox = ScriptEventInbox::default();
+        assert!(inbox.enqueue(event(1)));
+        let delivered = std::mem::take(&mut inbox.pending);
+        assert!(inbox.enqueue(event(2)));
+        inbox.recycle_delivered(delivered, false);
+        assert_eq!(inbox.pending.len(), 1);
+        assert_eq!(inbox.pending[0].event.name, "event:2");
+    }
+
+    #[test]
+    fn ordered_interaction_keeps_causal_order_within_a_tick() {
+        use lunco_telemetry_core::EventOrdering;
+        let mut inbox = ScriptEventInbox::default();
+        assert!(inbox.enqueue_with(|| event(9), true, EventOrdering::Causal));
+        assert!(inbox.enqueue_with(|| event(1), true, EventOrdering::Causal));
+        assert!(inbox.enqueue(event(3)));
+        assert!(inbox.enqueue(event(2)));
+        inbox.pending.sort_by(super::compare_queued_events);
+        let names: Vec<_> = inbox
+            .pending
+            .iter()
+            .map(|ev| ev.event.name.as_str())
+            .collect();
+        assert_eq!(names, ["event:2", "event:3", "event:9", "event:1"]);
+    }
+
+    #[test]
     fn event_inbox_is_bounded_and_reports_overflow() {
         let mut inbox = ScriptEventInbox::default();
         for index in 0..SCRIPT_EVENT_INBOX_CAPACITY {
@@ -4012,6 +4108,7 @@ mod lifecycle_readiness_tests {
             .pending
             .push(QueuedScenarioEvent {
                 sequence: 0,
+                ordering: QueuedEventOrder::Simulation,
                 event: lunco_telemetry_core::TelemetryEvent {
                     name: "other-language".into(),
                     source: 0,
@@ -4504,6 +4601,7 @@ mod lifecycle_readiness_tests {
             _entity: Entity,
             _self_gid: i64,
             event: &TelemetryEvent,
+            _event_ordinal: u64,
         ) -> Option<Diagnostic> {
             self.1
                 .lock()
@@ -4578,6 +4676,7 @@ mod lifecycle_readiness_tests {
             _entity: Entity,
             _self_gid: i64,
             event: &TelemetryEvent,
+            _event_ordinal: u64,
         ) -> Option<Diagnostic> {
             self.calls
                 .lock()
@@ -5067,6 +5166,7 @@ mod lifecycle_readiness_tests {
             _entity: Entity,
             _self_gid: i64,
             _event: &TelemetryEvent,
+            _event_ordinal: u64,
         ) -> Option<Diagnostic> {
             None
         }

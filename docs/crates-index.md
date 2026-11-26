@@ -17,7 +17,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-command-contracts`** | Pure mutation, session, acknowledgement, rejection, and synchronization-channel contracts shared by document, transport, networking, and runtime adapters without ECS. `Ack.data` uses the shared typed `HookValue` ABI; API JSON is created only at the external adapter. |
 | **`lunco-id`** | Platform-neutral 53-bit operation/entity ID generation shared by document and runtime identity boundaries. |
 | **`lunco-viewport-core`** | Renderer-independent viewport contract: explicit active-camera binding, scene visibility and layout state, monotonic initial-scene preparation start, viewport scheduling boundary, and the shared camera-ray construction used by scene-click owners. |
-| **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: registered USD button policy, semantic single-owner possession arbitration, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
+| **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: registered USD button policy, semantic pointer and tool-mode facts, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
 | **`lunco-port-core`** | Shared co-simulation port substrate: `Port`, slot-backed `PortMap<T>`/`ScalarPortMap`, incremental topology identity, endpoint/control-surface components, `PortRegistry` with typed owner-supplied initial algebraic expressions, shared immutable backend snapshots and copy-on-write registration, resolution, shared topology invalidation, metadata with borrowed static or owned dynamic source/authority text, collision reporting, and process-local resolved handles fenced by registry/World/entity/contract leases, plus alias-aware atomic input admission. It is independent of the general engine core. |
 | **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
 | **`lunco-core-session`** | Always-on session and authority substrate: network role/status, `SessionRegistry`, generic `ClaimControl`/`ReleaseControlClaim` transitions, typed replication scope, exact client connection and admitted remote scene, `ControlAuthorityChanged`, RBAC policy, prediction markers/input watermarks, bounded fixed-tick `PendingSessionInputs` with stable producer classification and reserved runtime-spawn identities, ordered typed commit events, capture, and session-dependent identity admission. |
@@ -89,7 +89,7 @@ The "Brains and Brawn" — Flight Software (FSW), On-Board Computer (OBC), mobil
 | :--- | :--- |
 | **`lunco-mobility`** | Parameterized surface-vehicle physics: contact-plane raycast wheels (incl. leaning bikes), suspension, drive mixing, rocker-bogie differential, and generic Avian sensor events plus current-occupancy queries. |
 | **`lunco-control-core`** | Generic semantic-control contracts: `ControlLink`, `AcquireControl`, `ReleaseControlSource`, the shared `UserIntent` vocabulary, authored intent-to-port bindings, input state, egui focus gate, interaction schedule boundary, bounded causal-edge trace, and scene-scoped per-tick `SimulationInputOrderAllocator`. Input producers and domain consumers depend on this focused package instead of placing control policy in `lunco-core`. |
-| **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: the primary mouse location shared by native and injected pointer events, registered USD button policy, semantic exclusive possession arbitration, editor tool gates, drag state, and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
+| **`lunco-interaction-core`** | Small cross-runtime cursor-interaction contract: the primary mouse location shared by native and injected pointer events, registered USD button policy, semantic pointer and tool-mode facts, editor tool gates, drag state, and the affected-entity marker consumed by camera, possession, and follow runtimes. It contains no editor implementation. |
 | **`lunco-input-core`** | Shared user input settings: the bundled keyboard/pointer map, persisted overrides, semantic labels, pointer-chord resolution, and Leafwing `InputMap` projection. It is the focused input contract used by controller, avatar, UI, and Rhai consumers. |
 | **`lunco-input-ui`** | Optional egui presentation for the shared input state: the recording/observation input overlay and its typed visibility command. It does not translate input or own vessel control. |
 | **`lunco-camera-core`** | Backend-neutral camera-rig contracts and reusable pose math: free-flight, orbit, spring-arm, surface, smoothing defaults, pose-transition state, adaptive clip-plane math, camera input accumulators, deterministic authored-camera display labels, and the `camera.default_presentation` and `camera.scene_avatar` policy-hook contracts. Device translation, rendering, and UI adapters consume these contracts. |
@@ -606,14 +606,15 @@ Small cross-runtime cursor-interaction contract package. The editor publishes
 `DragModeActive` and `GizmoDragging`; camera, possession, and follow runtimes
 consume those contracts to stand down during a transform drag. Its
 `ScenePointerPolicy` is projected from the registered
-`LunCoPointerInteractionAPI`, while possession only claims a click whose shared
-semantic intent is exclusively `selection.replace`. Keeping these types here
+`LunCoPointerInteractionAPI`. The authored scene router consumes route,
+selection, possession and unclaimed activation using these facts. Keeping these types here
 prevents the camera runtime from depending on the high-fan-out `lunco-core`
 package and keeps editor implementation details out of consumers.
 
 **`lunco-avatar`**
 Headless-safe local-avatar runtime. Implements control authority, scene
-interaction, and avatar control observers. A camera-bound possession emits a
+control transactions and a read-only possession-target query consumed by the
+scene-leased pointer router. A camera-bound possession emits a
 typed camera subject-binding event; the camera realization owns the spatial
 pose and mode transition. Avatar-specific semantic input projection lives in
 `lunco-avatar-input`; generic camera mode exclusivity, the
@@ -1639,7 +1640,7 @@ Production spatial bridge adapter for active-frame pose, rotation, navigation, g
 Production simulation-clock bridge adapter for deterministic tick/delta/elapsed reads and the complete clock-domain snapshot. It owns the physics/time-domain dependencies required by those projections; neither the neutral bridge nor the spatial adapter owns clock policy.
 
 **`lunco-scripting-bridge-usd`**
-Production USD bridge adapter for composed document generations and prim-path identity lookups, including `find_path_in_document(doc_id, path)` for scene paths that are only unique within one composed stage. It is the owner of the USD document and scene dependencies required by those projections; scene identity remains authored by USD rather than duplicated in scripting policy.
+Production USD bridge adapter for composed document generations and prim-path identity lookups, including `find_path_in_stage(source_gid, path)` for the exact live mount, and `find_path_in_document(doc_id, path)` for a unique live document projection. All path lookups reject ambiguity and exclude previews. It is the owner of the USD document and scene dependencies required by those projections; scene identity remains authored by USD rather than duplicated in scripting policy.
 
 **`lunco-tools`**
 Backend-agnostic, dependency-free tool registry. A *tool* is a named, reusable unit a scenario reaches as a **script-call library** (`name::fn(...)` from rhai). A tool's implementation is pluggable (rhai source, native Rust, or future runtimes). This crate owns only the bevy-free `Tool` trait (discovery metadata + `as_any` downcast hook), the layered standard/core/application/Twin registry, and discovery — no bevy, no rhai, so the rhai-binding adapter (`lunco-tools-rhai`) stays slim. Behaviour-tree *execution* of a tool (the `run_tool` leaf) is a bevy-aware capability and lives in `lunco-tools-bevy`, not here.

@@ -2,9 +2,9 @@
 //
 // Rust owns only the HUI action transport and dropdown state. Twin/scenario
 // policy decides what an action means. Camera actions are shared engine
-// capabilities, so they live here instead of inside one route program; other
-// actions remain available on the typed runtime.ui.action event bus to the
-// authored Twin policies that own them.
+// capabilities, so this policy consumes them before forwarding unclaimed
+// actions to their Twin owners through runtime.ui.action. Both native pointer
+// and UI actions cross the same ordered tool dispatch boundary.
 
 fn on_action(ctx) {
     if ctx == () || ctx.action == () || ctx.action == "" {
@@ -35,5 +35,6 @@ fn on_action(ctx) {
     if handle_camera_ui_action(action) {
         return #{ ok: true, handled: true };
     }
-    #{ ok: true, handled: false }
+    if !emit("runtime.ui.action", ctx) { throw "Runtime UI action could not be published"; }
+    #{ ok: true, handled: true }
 }

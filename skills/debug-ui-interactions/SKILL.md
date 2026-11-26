@@ -273,7 +273,9 @@ physical OS mouse input.
 Bevy emits one click observer per entity in its previous hover map, whose
 iteration order is unspecified. The runtime scene router resolves from that
 same event-source map by hit depth and the authored policy for the actual button
-before it dispatches one scene event. The runner waits for
+before recording one raw pointer observation. The scene-leased policy emits
+at most one semantic activation for an unclaimed gesture; route and possession
+claims are not Twin activation events. The runner waits for
 `/api/ready` and requires the API `Exit` command and port release after every
 verdict.
 

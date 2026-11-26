@@ -901,17 +901,8 @@ fn on_runtime_ui_action(
                 binding,
                 tool: "runtime_ui".to_owned(),
                 hook: "on_action".to_owned(),
-                args: action_args.clone(),
+                args: action_args,
                 owner_twin_id: trigger.event().scope.owner_twin_id,
-            });
-            commands.trigger(lunco_telemetry_core::TelemetryEvent {
-                name: "runtime.ui.action".to_owned(),
-                source: 0,
-                severity: lunco_telemetry_core::Severity::Info,
-                data: action_args,
-                timestamp: 0.0,
-                sim_secs: 0.0,
-                sim_tick: 0,
             });
         }
     }

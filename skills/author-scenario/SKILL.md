@@ -159,9 +159,13 @@ When the source entity identifies the owning scene but its USD document is not
 attached yet, use `find_path_in_stage(me, path)` to resolve another live
 unique identity in that same scene mount; ambiguous or preview-only matches are not live targets. Pass `source_entity_id: me` to `QueryUsdPrim` / `QueryUsdPrims` for the same authored read scope. Use
 `find_path_in_document(doc_id, path)` when the document identity is available.
-`find_path(path)` returns the lowest registered ID for the exact path across
-all mounts, including preview projections. Both scoped calls exclude previews.
-All three return `-1` for a missing path; `find_path_in_stage` also rejects ambiguity within the source mount.
+`find_path(path)` resolves only a unique live projection across mounts. All
+three lookups exclude previews and return `-1` for missing or ambiguous matches.
+Use an exact mounted source for live mutation. Raw `scene.pointer` is
+observational; use `scene.activate` for live scenario actions, after the
+scene-leased router has excluded route, possession and modified gestures.
+Unclaimed UI actions reach Twin owners as `runtime.ui.action` after the same
+ordered tool-dispatch boundary.
 
 All active Modelica entities share the fixed-step barrier. Declarations grant
 scenario access without changing clock membership. Required input
@@ -420,7 +424,7 @@ list. Highlights:
 - **Nav:** `drive(rover,fwd,steer)`, `brake(rover)`, `nav_to(entity,target,speed,radius)` (returns true on arrival). New missions return task trees. **`goto` is a reserved word — use `nav_to`.**
 - **Sensing:** `distance`, `arrived`, `velocity3`/`velocity`/`speed`, `raycast`, `obstacle_ahead`, `ground_height`, `nearest`, `entities_in_radius`.
 - **Selection:** `all_of_type`, `nearest_where`, `count_where`, `min_by`/`max_by`.
-- **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me, ctx)`; the kernel owns event delivery and there is one task progression path.
+- **Task tree:** `seq`/`par_all`/`par_race`/`repeat`/`forever`, leaves `step`/`once`/`act_for`/`wait`/`wait_until`/`wait_for`/`wait_for_from`, and failure nodes `check`/`sel`/`retry`/`invert`/`force_ok`/`force_fail`/`reactive_seq`/`reactive_sel`. Return the tree from `task(me, ctx)`; the kernel owns event delivery from the compiled event interests and there is one task progression path. `wait_for_from` paths resolve in the host’s exact mount.
 - **Testing** (`prelude/auto_tests.rhai`): `t_range` `t_max` `t_true` `t_rel` `t_present` `t_bounded` `t_moved` `report_verdict` `fail_fast` `expect_fault` `expect_runtime_fault` `expect_scene_load_failure` `seg` `find_or_none` `r2`/`r4`.
 
 Add helpers freely — edit the prelude, no rebuild.

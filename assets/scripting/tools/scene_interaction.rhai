@@ -28,7 +28,18 @@ fn on_pointer(context) {
         if context.pointer_intents.len() != 1 {
             return #{ ok: true, handled: true, action: "intent_conflict" };
         }
-        return #{ ok: true, handled: false, owner: "possession" };
+        // The avatar owner supplies the exact eligible control endpoint. The
+        // central policy consumes possession before any Twin activation.
+        if context.possession_target_unavailable == true { throw "Possession target has no runtime identity"; }
+        if context.possession_target_id != () {
+            let result = cmd("AcquireControl", #{target: context.possession_target_id, bind_camera: true});
+            if result.ok != true { throw "Possession rejected: " + result.to_string(); }
+            return #{ ok: true, handled: true, action: "possess" };
+        }
+        // Raw scene.pointer remains observational; only unclaimed simulation
+        // gestures enter the Twin's live interaction policy.
+        if !emit("scene.activate", context) { throw "Scene activation could not be published"; }
+        return #{ ok: true, handled: true, action: "activate" };
     }
 
     let target = if context.target_entity_id != () {
