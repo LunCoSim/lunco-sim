@@ -27,6 +27,16 @@ to improve a timing.
 
 ## Required separation
 
+- For authored metadata queries, use `QueryUsdPrim`/`QueryUsdPrims` with
+  `position: false` unless the consumer needs placement. Scope scenario reads with `source_entity_id`, and obtain position/orientation together with `world_pose(id)`. Read single or batch
+  attributes from the same composed owner. The canonical reader may borrow
+  the existing worker-prepared plan only while its exact asset recipe and
+  unmodified stage/resolver lease prove currency; native pre-commit and
+  composition-change notifications invalidate
+  that proof before the projection cursor advances. Do not prewarm all scene
+  properties or create a Twin-specific cache. Measure cold and repeated
+  interaction callbacks separately from startup and native frame history.
+
 - For long USD animation tracks, compare `sample_usd_animation` on the actual
   scene through a settled native desktop capture. Retain the canonical stage's
   native `XformQuery` handles across frames; stage edits invalidate the cache,
@@ -464,7 +474,12 @@ re-addition, generation reuse, owner recovery and frame-scoped motion flags.
 Profile `prepare_cpu_mesh_uniforms`
 together with shadow, opaque and sorted phase preparation; include native
 memory-copy samples rather than declaring a win from a smaller batch zone alone.
-The storage-buffer writer borrows prepared values without cloning. Preserve
+The storage-buffer writer borrows prepared values and their immutable data
+revisions without cloning. Identical transform writes retain preparation across
+frames; compact input keys validate independent render-world facts, and
+unchanged revisions at the same batch index retain encoded bytes.
+Profile instance buffer uploads together with batch preparation. Verify dirty
+extent writes, full upload on allocation growth, reordered and retired slots,
 shader-layout bytes, dynamic-uniform offsets, mesh replacement/removal and the
 live material/skin/morph/lightmap preparation boundaries.
 

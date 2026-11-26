@@ -33,6 +33,7 @@ fn on_set_scene_participation(
             .chain(&colliders)
             .map(|(target, _)| *target)
             .chain(command.occluders.iter().map(|occluder| occluder.target))
+            .chain(command.poses.iter().map(|pose| pose.target))
         {
             let root = lunco_usd_bevy_scene::scene_root_in_world(world, entity)
                 .map_err(|error| format!("Cannot resolve scene for {entity:?}: {error:?}"))?;
@@ -56,9 +57,49 @@ fn on_set_scene_participation(
                 ));
             }
         }
+        let mut pose_targets = HashSet::new();
+        for pose in &command.poses {
+            if !pose_targets.insert(pose.target) {
+                return Err(format!("Repeated pose target {:?}", pose.target));
+            }
+        }
+        for pose in &command.poses {
+            if world
+                .get::<lunco_usd_bevy_scene::UsdSceneRoot>(pose.target)
+                .is_some()
+            {
+                continue;
+            }
+            let mut ancestor = world.get::<ChildOf>(pose.target).map(ChildOf::parent);
+            while let Some(parent) = ancestor {
+                if pose_targets.contains(&parent) {
+                    return Err(format!(
+                        "Pose targets {:?} and {parent:?} share a moved ancestor",
+                        pose.target
+                    ));
+                }
+                if world
+                    .get::<lunco_usd_bevy_scene::UsdSceneRoot>(parent)
+                    .is_some()
+                {
+                    break;
+                }
+                ancestor = world.get::<ChildOf>(parent).map(ChildOf::parent);
+            }
+        }
+        let poses = if command.poses.is_empty() {
+            Vec::new()
+        } else {
+            world
+                .run_system_cached_with(crate::commands::prepare_runtime_poses, command.poses)
+                .map_err(|error| error.to_string())??
+        };
         let physics = lunco_physics::participation::prepare(world, &bodies, &colliders)?;
         if !command.views.is_empty() {
             crate::scene_view::apply_writes(world, origin, command.views)?;
+        }
+        for pose in poses {
+            pose.apply(world);
         }
         physics.apply(world);
         for blocker in command.occluders {

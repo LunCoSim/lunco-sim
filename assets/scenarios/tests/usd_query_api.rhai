@@ -64,6 +64,17 @@ fn on_tick(me, ctx) {
             || batch.records.len() != 1 || batch.records[0].world_position != expected {
             this = fail(this, "document placement lost authored f64 precision: " + single.to_string()); return;
         }
+        let compact = query("QueryUsdPrim", #{doc_id: this.doc, path: DELTA_TARGET,
+            position:false, attrs:["xformOp:orient"]});
+        let compact_batch = query("QueryUsdPrims", #{doc_id: this.doc, paths:[DELTA_TARGET],
+            position:false, attrs:["xformOp:orient"]});
+        if compact == () || compact.ok == false || compact.world_position != () || compact.position_frame != ()
+            || compact.attrs["xformOp:orient"] != single.attrs["xformOp:orient"]
+            || compact.document_generation != single.document_generation
+            || compact_batch == () || compact_batch.ok == false || compact_batch.records.len() != 1
+            || compact_batch.records[0] != compact {
+            this = fail(this, "selective read did not see the newly committed authored state: " + compact.to_string()); return;
+        }
         let expected_orientation = [0.7071067811865476, 0.7071067811865476, 0.0, 0.0];
         if single.attrs["xformOp:orient"] != expected_orientation
             || batch.records[0].attrs["xformOp:orient"] != expected_orientation {
@@ -77,6 +88,8 @@ fn on_tick(me, ctx) {
             t_true(true, "expired operation history returns the complete authored layer snapshot"),
             t_true(true, "single and batch document placement preserve f64 through the parent transform"),
             t_true(true, "quatd authoring and query conversion preserve f64 components"),
+            t_true(true, "selective single and batch queries omit position and preserve exact current metadata before and after authored edits"),
+            t_true(true, "explicit source entity binds exact stage and rejects stale or conflicting sources"),
         ]);
         return;
     }
@@ -125,6 +138,27 @@ fn on_tick(me, ctx) {
             return;
         }
 
+        let req = #{doc_id:this.doc,path:ARC_TARGET,attrs:["visibility","xformOp:translate"]};
+        let full = query("QueryUsdPrim", req);
+        req.position=false;
+        let compact = query("QueryUsdPrim", req);
+        let batch = query("QueryUsdPrims", #{doc_id:this.doc,paths:[ARC_TARGET],attrs:req.attrs,position:false});
+        let bad = query("QueryUsdPrim", #{doc_id:this.doc,path:ARC_TARGET,position:"false"});
+        let missing = query("QueryUsdPrim", #{doc_id:this.doc,path:ROOT+"/MissingPrim",position:false});
+        if full==() || full.ok==false || full.world_position==() || compact==() || compact.ok==false
+            || compact.world_position!=() || compact.position_frame!=() || compact.attrs!=full.attrs
+            || compact.document_generation!=full.document_generation
+            || batch==() || batch.ok==false || batch.records.len()!=1 || batch.records[0]!=compact
+            || bad==() || bad.ok!=false || missing==() || missing.ok!=false {
+            this = fail(this, "position-selective query changed the composed facts or accepted invalid options"); return;
+        }
+        let scoped = query("QueryUsdPrim", #{source_entity_id:me,path:ARC_TARGET,attrs:req.attrs,position:false});
+        let stale_source = query("QueryUsdPrim", #{source_entity_id:0,path:ARC_TARGET,position:false});
+        let conflicting_scope = query("QueryUsdPrim", #{source_entity_id:me,doc_id:this.doc,path:ARC_TARGET,position:false});
+        if scoped==() || scoped.ok==false || scoped.attrs!=compact.attrs || scoped.doc_id!=this.doc
+            || stale_source==() || stale_source.ok!=false || conflicting_scope==() || conflicting_scope.ok!=false {
+            this = fail(this, "explicit source-entity scope did not preserve its exact stage or reject invalid selectors"); return;
+        }
         let arc = query("ResolveUsdTarget", #{
             doc_id: this.doc,
             path: ARC_TARGET,

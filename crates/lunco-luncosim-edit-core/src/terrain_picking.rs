@@ -43,7 +43,7 @@ pub fn emit_terrain_hits(
     mut output: MessageWriter<PointerHits>,
     mut cache: ResMut<TerrainPickCache>,
 ) {
-    let Some(active_camera) = viewport.active_camera else {
+    let Some(active_camera) = viewport.exposed_camera() else {
         cache.rays.clear();
         cache.surface = None;
         return;

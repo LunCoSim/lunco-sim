@@ -832,7 +832,11 @@ fn restore_gizmo_dynamic(
                                         .and_then(|assets| assets.get(stage_id)),
                                 )
                                 .ok_or("USD preview has no composed stage")?;
-                            let (reader, _) = stages.reader_for_composed_query(stage_id, asset);
+                            let (reader, _) = stages.reader_for_composed_query(
+                                stage_id,
+                                asset,
+                                lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+                            );
                             let time_code =
                                 animation.map_or(0.0, |animation| animation.pose_time_code);
                             let (authored_scale, authored_rotation, authored_translation) =
@@ -1210,7 +1214,7 @@ fn sync_gizmo_camera(
         *options = saved_options;
     }
 
-    let live = viewport.active_camera.and_then(|requested| {
+    let live = viewport.exposed_camera().and_then(|requested| {
         q_cameras
             .get(requested)
             .ok()

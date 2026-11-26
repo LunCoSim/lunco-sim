@@ -46,6 +46,19 @@ fn simulation_pose(
     }
 }
 
+/// Read translation and orientation from one authoritative pose sample.
+pub fn world_pose(gid: u64) -> Option<(DVec3, DQuat)> {
+    with_world(|world| {
+        let entity = resolve_entity(world, gid)?;
+        let (position, rotation) = simulation_pose(world, entity)?;
+        let q = rotation.0;
+        let norm = q.length_squared();
+        (position.0.is_finite() && q.is_finite() && norm.is_finite() && norm >= 1.0e-24)
+            .then(|| (position.0, q.normalize()))
+    })
+    .flatten()
+}
+
 /// `world_pos(id)` — f64 position in the active simulation frame, or `None`.
 ///
 /// For a surface scene this is the authored site frame used by Avian, terrain,
@@ -141,12 +154,7 @@ pub fn world_rotation(gid: u64) -> Option<[f64; 4]> {
 /// immediately reconstruct the same quaternion. Invalid/non-finite samples are
 /// unavailable rather than entering a control calculation.
 pub fn world_rotation_quat(gid: u64) -> Option<DQuat> {
-    with_world(|world| {
-        let entity = resolve_entity(world, gid)?;
-        let q = simulation_pose(world, entity)?.1.0;
-        (q.is_finite() && q.length_squared() >= 1.0e-24).then_some(q.normalize())
-    })
-    .flatten()
+    world_pose(gid).map(|(_, rotation)| rotation)
 }
 
 /// `viewport_position(id)` — project a live render entity into the visible
@@ -168,10 +176,7 @@ pub fn viewport_position(gid: u64) -> Option<Vec2> {
             Res<lunco_viewport_core::SceneViewport>,
         )> = SystemState::new(world);
         let (q_transforms, q_cameras, scene_viewport) = state.get(world).ok()?;
-        if !scene_viewport.visible {
-            return None;
-        }
-        let camera_entity = scene_viewport.active_camera?;
+        let camera_entity = scene_viewport.exposed_camera()?;
         let (camera, camera_transform) = q_cameras.get(camera_entity).ok()?;
         if !camera.is_active {
             return None;

@@ -147,6 +147,33 @@ GPU acceptance still require the rendered fixture and a clean process log.
    pure `morphed_child_matches_every_parent_triangle` test in
    `lunco-terrain-surface`; changes to bake math also require a tile-cache
    version bump and a settled production camera traversal.
+   For patchy crater density, inspect the drawn camera cover, not just the
+   selected depth under its eye. Perspective views reserve whole camera-centred
+   minimum-detail disks before discretionary refinement. Missing replacement
+   meshes cannot publish an unselected ancestor over previously drawn finer
+   detail. Check stationary and moving views independently, with the same
+   authored overzoom, tile and cache budgets.
+   The visual overzoom filter retains resolvable crater diameters in medium
+   LODs while physical filtering retains its independent radius-based contract.
+   Compare geometry and material relief at each visual band; do not inflate
+   crater sizes or modify the authored collider lattice.
+   Run `terrain_stationary_cover.rhai` as a presentation scenario after
+   pausing transport and settling the camera outputs; its verdict compares
+   draw revision on every presentation tick, exact opening/closing tile identities,
+   camera position and direction, and full-cover readiness over the requested duration.
+   For cold-cache startup, run `scripts/api/test_terrain_progressive_startup.py`
+   with a task-owned cache and `--require-progressive`. The first root
+   publication must precede final shading and cover readiness; this is not
+   a pixel-level visibility milestone. The selected tree
+   admits ready ancestor/child groups near-camera first with exact restricted
+   partitions, retiring hidden ancestors when no longer needed;
+   the native derived-map preview is upgraded after the opening near cover.
+   Verify `selection_current`, `initial_near_cover_ready`, and
+   `cover_preparation_pending` independently; a complete drawn partition alone
+   does not prove the finalized demand matches the worker's selected cover.
+   Compare first, near and fully prepared screenshots and repeat against the
+   same warmed cache. Do not substitute a world-readiness flag for visual
+   publication or treat preview shading as final capture quality.
    If a crater remains irregular with native shadows disabled, inspect albedo
    and geometric normals separately. Missing orthophoto coverage can coincide
    with stereo-DEM voids. Follow `skills/geo-assets/SKILL.md` to regenerate those
@@ -413,6 +440,10 @@ For a fully prepared DEM screenshot or performance window, read
 `pending == 0`, and `ready == total`, as well as a resident selected cover with
 no pending stream work. Derived-map preparation is separate from simulation
 readiness; a usable viewport alone does not prove that preparation has finished.
+The loading backdrop does not deactivate a physically admitted main camera:
+terrain cover and GPU pipeline preparation run concurrently with initial
+simulation preparation. Validate the first visible main-view screenshot as
+well as settled coverage, since main-world draw publication is not GPU receipt.
 
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the

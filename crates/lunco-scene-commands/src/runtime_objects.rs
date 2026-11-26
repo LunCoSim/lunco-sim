@@ -174,7 +174,11 @@ fn prepare(
         .get_resource::<Assets<UsdStageAsset>>()
         .and_then(|assets| assets.get(stage))
         .ok_or("Mounted stage unavailable")?;
-    let (reader, _) = stages.reader_for_composed_query(stage, asset);
+    let (reader, _) = stages.reader_for_composed_query(
+        stage,
+        asset,
+        lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+    );
     let groups = world
         .get_resource::<lunco_usd_avian_filters::collision_groups::CollisionGroupTables>()
         .and_then(|tables| tables.get(stage));

@@ -1506,6 +1506,18 @@ fn build_world_engine_base(
     // `world_pos`'s array contract stable for existing authored scenarios; new
     // code opts in explicitly and lowers with `vec3_array` only at a report or
     // command boundary.
+    engine.register_fn("world_pose", |id: i64| -> Dynamic {
+        let Some((position, rotation)) = spatial_bridge::world_pose(id as u64) else {
+            return Dynamic::UNIT;
+        };
+        let mut pose = rhai::Map::new();
+        pose.insert(
+            "pos".into(),
+            lunco_scripting_rhai_core::rhai_math::to_native(position),
+        );
+        pose.insert("rot".into(), Dynamic::from(rotation));
+        Dynamic::from_map(pose)
+    });
     engine.register_fn("world_pos3", |id: i64| -> Dynamic {
         spatial_bridge::world_pos(id as u64)
             .map(lunco_scripting_rhai_core::rhai_math::to_native)

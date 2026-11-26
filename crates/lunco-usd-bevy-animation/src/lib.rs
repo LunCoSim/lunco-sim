@@ -258,11 +258,11 @@ pub fn plan_usd_animation(
         let Some(stage_asset) = stages.get(&prim.stage_handle) else {
             continue;
         };
-        let Some(recipe) = stage_asset.recipe.as_deref() else {
+        if stage_asset.recipe.is_none() {
             error!("[usd-animation] animated stage has no native composition recipe");
             continue;
-        };
-        let Some(stage) = canonical.get_or_build(prim.stage_handle.id(), recipe) else {
+        }
+        let Some(stage) = canonical.get_or_build(prim.stage_handle.id(), stage_asset) else {
             continue;
         };
         let view = stage.view();

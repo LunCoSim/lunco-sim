@@ -233,7 +233,7 @@ pub fn update_terrain_brush_ghost(
 
     // The viewport owns presentation selection. Query order is not a camera
     // contract, and sensor/RTT cameras may also be active.
-    let Some(camera_entity) = viewport.active_camera else {
+    let Some(camera_entity) = viewport.exposed_camera() else {
         hide_terrain_brush_ghost(&mut commands, &q_ghost);
         return;
     };

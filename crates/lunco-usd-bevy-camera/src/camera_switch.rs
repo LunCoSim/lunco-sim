@@ -919,7 +919,10 @@ pub fn reconcile_scene_viewport(
         vp.active_camera = active;
     }
 
-    let visible = vp.visible && !vp.is_loading();
+    // Loading controls the workbench backdrop, not render admission. Keep the
+    // selected, physically valid camera preparing terrain and pipelines behind
+    // that backdrop while simulation initialization completes.
+    let visible = vp.visible;
     let rect = vp.rect;
 
     // ── Actuate: the ONE writer of window-camera is_active + viewport ────
@@ -927,9 +930,9 @@ pub fn reconcile_scene_viewport(
         if !is_window_render_target(target) {
             continue; // RTT/offscreen cameras are self-managed
         }
-        // `active` is gated by pipeline, target, and cluster readiness, so a
-        // camera that is still binding or computing its first render frame is
-        // kept off until the complete window presentation is valid.
+        // `active` is gated by projection, target, and cluster admission, so an
+        // incomplete native camera never reaches extraction. Pipeline work can
+        // then prepare asynchronously behind the workbench backdrop.
         let want_active = Some(e) == active && visible;
         if cam.is_active != want_active {
             cam.is_active = want_active;
@@ -3184,7 +3187,7 @@ mod tests {
     /// When the viewport is not visible (workbench Design perspective), no
     /// window camera renders — but the binding is preserved for restore.
     #[test]
-    fn hidden_or_loading_viewport_preserves_the_camera_binding() {
+    fn hidden_viewport_retires_output_but_loading_prepares_the_bound_camera() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SceneViewport>()
@@ -3218,7 +3221,11 @@ mod tests {
             vp.loading_since = Some(bevy::platform::time::Instant::now());
         }
         app.update();
-        assert!(active_set(&mut app).is_empty());
+        assert!(app.world().get::<Camera>(b).unwrap().is_active);
+        assert_eq!(
+            app.world().resource::<SceneViewport>().exposed_camera(),
+            None
+        );
         assert_eq!(
             app.world().resource::<SceneViewport>().active_camera,
             Some(b)
@@ -3229,6 +3236,10 @@ mod tests {
             .loading_since = None;
         app.update();
         assert!(app.world().get::<Camera>(b).unwrap().is_active);
+        assert_eq!(
+            app.world().resource::<SceneViewport>().exposed_camera(),
+            Some(b)
+        );
     }
 
     #[test]

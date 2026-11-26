@@ -99,6 +99,16 @@ teardown follows the ordinary terminal scene-load failure boundary.
 Failed loads leave the viewport in its normal empty-scene presentation. The
 typed transition failure and runtime diagnostics retain the cause; the failure
 text does not replace the empty-state headline.
+
+The workbench loading backdrop covers the main viewport through initial
+simulation preparation. Its selected camera may render behind that backdrop
+once its projection, physical target and clustered-light admission are valid.
+Camera-local terrain selection and asynchronous GPU pipeline preparation can
+therefore run concurrently with simulation readiness, rather than starting
+only when the loading backdrop is removed. Hidden workbench perspectives
+still deactivate the window camera. The main-view interaction contract and
+pointer owner reject picking, placement and gizmo input while the backdrop
+is visible, independently of the render camera's preparation state.
 The accepted failure also publishes `scene-load-failed` through `RuntimeFaults`
 and the runtime error event. `GetReadiness` therefore remains `ready: false`,
 with the requested asset in `fault.subject` and the loader cause in

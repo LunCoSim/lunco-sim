@@ -206,7 +206,8 @@ When a UI hook reads a collection of USD prims, request the member list once
 and use `QueryUsdPrims` for their needed attributes, schemas, or relationships;
 declare that provider in the caller's `query_reads`. Avoid per-member
 `QueryUsdPrim` loops in input policy because every read occupies the same
-application thread. Resolve a live USD entity with its owning document identity
+application thread. Bind scenario queries with `source_entity_id`; pass `position:false` to metadata-only requests and reuse
+leaf facts within the interaction, rather than preloading independent caches. Resolve a live USD entity with its owning document identity
 when several documents can mount the same authored path. Generic `MoveEntity`
 persistence resolves the write document from the moved entity's stage, not the
 active editor tab.

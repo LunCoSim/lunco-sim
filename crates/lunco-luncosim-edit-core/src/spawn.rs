@@ -240,8 +240,8 @@ fn ensure_footprint(
             // recipe.
             let id = cached.handle.id();
             if canonical.get(id).is_none() {
-                if let Some(recipe) = stages.get(&cached.handle).and_then(|a| a.recipe.clone()) {
-                    canonical.get_or_build(id, &recipe);
+                if let Some(stage_asset) = stages.get(&cached.handle) {
+                    canonical.get_or_build(id, stage_asset);
                 }
             }
             if let Some(stage) = canonical.get(id) {
@@ -378,7 +378,7 @@ pub fn update_spawn_ghost(
 
     // Ray through the viewport's explicitly resolved window camera. Query order
     // is not presentation ownership, and sensor/RTT cameras may also be active.
-    let Some(camera_entity) = camera_frame.viewport.active_camera else {
+    let Some(camera_entity) = camera_frame.viewport.exposed_camera() else {
         if diagnostics.enabled {
             info!("[spawn-trace] ghost rejected: no active window Camera3d");
         }
@@ -633,7 +633,7 @@ pub fn on_scene_click_spawn(
     // Shared egui-vs-scene guard + camera ray (same path as possession/selection),
     // then resolve the world point from the shared analytic terrain and physics
     // queries. Placement remains independent of rendered tile residency.
-    let Some(camera_entity) = camera_frame.viewport.active_camera else {
+    let Some(camera_entity) = camera_frame.viewport.exposed_camera() else {
         hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: no active window Camera3d");

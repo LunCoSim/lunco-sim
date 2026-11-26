@@ -1,4 +1,4 @@
-//! Keep the main view closed while its initial simulation state is prepared.
+//! Cover the main view while its initial simulation state is prepared.
 
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -30,7 +30,7 @@ fn publish_scene_loading(
     mut viewport: ResMut<SceneViewport>,
 ) {
     let transitioning = transition.active().is_some() || transition.has_admitted();
-    // Keep the view closed through the preparation of the new mount. Once it
+    // Keep the workbench backdrop through the preparation of the new mount. Once it
     // opens, later edits and per-participant waits leave it available.
     let waiting_for_initial_state = viewport.is_loading()
         && mounts.active_root().is_some()

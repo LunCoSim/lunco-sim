@@ -482,7 +482,7 @@ fn prepared_policy_baseline_for_current_generation(
     if generation == 0 {
         return Some((policies, policy_prim_paths));
     }
-    if canonical.prepared_plan_is_current(stage_id, &stage_asset.projection_plan) {
+    if canonical.projection_plan_is_current(stage_id, &stage_asset.projection_plan) {
         let _span = bevy::log::info_span!(
             "usd_policy_prepared_plan_generation_reuse",
             generation,

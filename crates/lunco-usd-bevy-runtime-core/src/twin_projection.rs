@@ -1567,16 +1567,15 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
             .get_non_send::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
             .is_some_and(|stages| stages.get(scene_id).is_some());
         if has_work && !stage_ready {
-            let recipe = {
+            let stage_asset = {
                 let _span =
                     bevy::log::info_span!("usd_twin_projection_clone_stage_recipe").entered();
                 world
                     .resource::<Assets<UsdStageAsset>>()
                     .get(scene_id)
-                    .and_then(|asset| asset.recipe.as_ref())
                     .cloned()
             };
-            let Some(recipe) = recipe else {
+            let Some(stage_asset) = stage_asset else {
                 // The asset loader has not published the recipe yet. Keep the
                 // document generation pending until the asset boundary makes
                 // the canonical stage available.
@@ -1587,7 +1586,7 @@ pub(crate) fn sync_twin_overlays(world: &mut World) {
                     bevy::log::info_span!("usd_twin_projection_get_or_build_live_stage").entered();
                 world
                     .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
-                    .is_some_and(|mut stages| stages.get_or_build(scene_id, &recipe).is_some())
+                    .is_some_and(|mut stages| stages.get_or_build(scene_id, &stage_asset).is_some())
             };
             if !built {
                 continue;
@@ -2114,7 +2113,7 @@ fn apply_dependent_layer_patch(
 
     // Initial projection uses the immutable asset plan. Its first live edit
     // creates the same canonical owner used by primary-document edits.
-    let initial_recipe = if is_authoritative_scene_stage(world, stage_id)
+    let initial_asset = if is_authoritative_scene_stage(world, stage_id)
         && world
             .get_non_send::<CanonicalStages>()
             .is_none_or(|stages| stages.get(stage_id).is_none())
@@ -2123,24 +2122,17 @@ fn apply_dependent_layer_patch(
             .resource::<Assets<UsdStageAsset>>()
             .get(stage_id)
             .ok_or_else(|| "dependent stage asset retired before live patch".to_owned())?;
-        Some((
-            asset
-                .recipe
-                .clone()
-                .ok_or_else(|| "authoritative dependent stage has no admitted recipe".to_owned())?,
-            Arc::clone(&asset.projection_plan),
-        ))
+        Some(asset.clone())
     } else {
         None
     };
     let mut stages = world
         .get_non_send_mut::<CanonicalStages>()
         .ok_or_else(|| "dependent stage has no canonical-stage owner".to_owned())?;
-    if let Some((recipe, plan)) = initial_recipe {
-        stages.get_or_build(stage_id, &recipe).ok_or_else(|| {
+    if let Some(asset) = initial_asset {
+        stages.get_or_build(stage_id, &asset).ok_or_else(|| {
             format!("cannot initialize authoritative dependent stage {stage_id:?}")
         })?;
-        stages.mark_prepared_plan_snapshot(stage_id, plan);
     }
     let Some(stage) = stages.get_mut(stage_id) else {
         return Ok(false);
@@ -2507,7 +2499,7 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         if let Some(mut stages) = world
                             .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>(
                         ) {
-                            stages.mark_prepared_plan_snapshot(completion.stage, projection_plan);
+                            stages.admit_projection_snapshot(completion.stage, projection_plan);
                         }
                     }
                     release_dependent_stage_progress(world, pending_refresh.progress_key);
@@ -2541,31 +2533,25 @@ fn poll_dependent_stage_refreshes(world: &mut World) {
                         continue;
                     }
                 };
+                let projection_plan = Arc::new(refresh.projection_plan);
                 let replaced = world
                     .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>()
                     .is_some_and(|mut stages| {
-                        stages.replace_rebuilt(completion.stage, replacement);
+                        stages.replace_rebuilt(
+                            completion.stage,
+                            replacement,
+                            Some(projection_plan.clone()),
+                        );
                         true
                     });
                 if replaced {
                     let recipe = Arc::new(refresh.recipe);
-                    let projection_plan = Arc::new(refresh.projection_plan);
-                    let asset_updated = if let Some(mut asset) = world
+                    if let Some(mut asset) = world
                         .resource_mut::<Assets<UsdStageAsset>>()
                         .get_mut(completion.stage)
                     {
                         asset.recipe = Some(recipe);
-                        asset.projection_plan = Arc::clone(&projection_plan);
-                        true
-                    } else {
-                        false
-                    };
-                    if asset_updated {
-                        if let Some(mut stages) = world
-                            .get_non_send_mut::<lunco_usd_bevy_stage::canonical::CanonicalStages>(
-                        ) {
-                            stages.mark_prepared_plan_snapshot(completion.stage, projection_plan);
-                        }
+                        asset.projection_plan = projection_plan;
                     }
                 } else {
                     let error =
@@ -4345,7 +4331,7 @@ fn rebuild_scene_from_document(
     let rebuilt = {
         let _span = bevy::log::info_span!("usd_twin_rebuild_commit_live_stage").entered();
         if let Some(mut stages) = world.get_non_send_mut::<CanonicalStages>() {
-            stages.replace_rebuilt(scene_id, replacement);
+            stages.replace_rebuilt(scene_id, replacement, None);
             true
         } else {
             false

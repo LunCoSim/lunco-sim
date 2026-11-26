@@ -693,11 +693,8 @@ fn refresh_layered_terrain_layers(
         // this Modified event).
         let id = prim_path.stage_handle.id();
         if canonical.get(id).is_none() {
-            if let Some(recipe) = stages
-                .get(&prim_path.stage_handle)
-                .and_then(|a| a.recipe.clone())
-            {
-                canonical.get_or_build(id, &recipe);
+            if let Some(stage_asset) = stages.get(&prim_path.stage_handle) {
+                canonical.get_or_build(id, stage_asset);
             }
         }
         let Some(cs) = canonical.get(id) else {

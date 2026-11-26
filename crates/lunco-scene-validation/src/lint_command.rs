@@ -1208,10 +1208,10 @@ pub fn on_run_lint(
     let mut linted_ids = Vec::new();
     for id in ids {
         if canonical.get(id).is_none() {
-            let Some(recipe) = stages.get(id).and_then(|a| a.recipe.clone()) else {
+            let Some(stage_asset) = stages.get(id) else {
                 continue;
             };
-            canonical.get_or_build(id, &recipe);
+            canonical.get_or_build(id, stage_asset);
         }
         let Some(_cs) = canonical.get(id) else {
             continue;

@@ -1365,18 +1365,17 @@ pub(crate) fn needs_full_backdrop(
         || no_active_scene_camera
 }
 
-/// Return whether the camera bound by the viewport is currently rendering.
+/// Return whether the camera bound by the viewport is exposed to the user.
 ///
 /// `SceneViewport::active_camera` is the selection binding, while
 /// `Camera::is_active` is the renderer's actual state. A perspective switch
 /// can publish a new visible layout before the camera reconciler has activated
-/// the bound camera; treating the binding alone as rendered would expose an
-/// incomplete presentation during that transition.
-pub(crate) fn scene_camera_is_rendering(world: &World) -> bool {
+/// the bound camera. An active camera can also prepare behind the loading
+/// backdrop without exposing that incomplete presentation.
+pub(crate) fn scene_camera_is_exposed(world: &World) -> bool {
     let Some(active_camera) = world
         .get_resource::<lunco_viewport_core::SceneViewport>()
-        .filter(|viewport| !viewport.is_loading())
-        .and_then(|viewport| viewport.active_camera)
+        .and_then(lunco_viewport_core::SceneViewport::exposed_camera)
     else {
         return false;
     };
@@ -3424,13 +3423,16 @@ mod tests {
         assert!(!settings.egui_debug_overlays);
         let ctx = egui::Context::default();
         let draw = |id: u64| {
-            ctx.run_ui(Default::default(), |ui| {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
                 ui.interact(
                     egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(40.0, 40.0)),
                     ui.id().with(id),
                     egui::Sense::hover(),
                 );
-            })
+            });
+            // This headless fixture examines shapes, not the texture atlas.
+            output.textures_delta.clear();
+            output
         };
         let red_outlines =
             |output: &egui::FullOutput| {
@@ -3549,14 +3551,18 @@ mod tests {
             ..default()
         });
 
-        assert!(!scene_camera_is_rendering(&world));
+        assert!(!scene_camera_is_exposed(&world));
 
         world
             .entity_mut(camera)
             .get_mut::<Camera>()
             .unwrap()
             .is_active = true;
-        assert!(scene_camera_is_rendering(&world));
+        assert!(scene_camera_is_exposed(&world));
+        world
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .loading_since = Some(bevy::platform::time::Instant::now());
+        assert!(!scene_camera_is_exposed(&world));
     }
 
     struct SceneBackedTestPerspective;

@@ -386,7 +386,7 @@ fn project_env_settings(
         }
 
         let (reader, _generation) =
-            if canonical.prepared_plan_is_current(stage_id, &stage_asset.projection_plan) {
+            if canonical.projection_plan_is_current(stage_id, &stage_asset.projection_plan) {
                 let _span = bevy::log::info_span!("usd_environment_prepared_plan_reuse").entered();
                 (
                     lunco_usd_bevy_stage::read::UsdReadSource::Prepared(
@@ -622,8 +622,10 @@ fn report_terrain_stream_status(
     // render-material publication finishes. Keep the typed live state active
     // until both fulfilment dimensions settle; otherwise the readiness gate
     // sees a false idle transition and the overlay disappears too early.
-    let streaming = status.pending > 0 || (status.wanted > 0 && status.resident < status.wanted);
+    let streaming = status.failed == 0
+        && (status.pending > 0 || (status.wanted > 0 && status.resident < status.wanted));
     let completed = mirror.streaming
+        && status.failed == 0
         && status.wanted > 0
         && status.resident >= status.wanted
         && status.pending == 0;

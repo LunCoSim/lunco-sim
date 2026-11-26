@@ -702,8 +702,8 @@ fn produce_usd_canvas_session(
     let is_preview_entity =
         |entity: Entity| lunco_usd_bevy_scene::is_preview_entity(entity, preview_root, q_parents);
     if canonical.get(stage_id).is_none() {
-        if let Some(recipe) = stages.get(&handle).and_then(|a| a.recipe.clone()) {
-            canonical.get_or_build(stage_id, &recipe);
+        if let Some(stage_asset) = stages.get(&handle) {
+            canonical.get_or_build(stage_id, stage_asset);
         }
     }
     let Some(cs) = canonical.get(stage_id) else {

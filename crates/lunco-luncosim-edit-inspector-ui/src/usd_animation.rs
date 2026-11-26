@@ -157,8 +157,8 @@ pub fn produce_usd_animation_view(
         }
         let stage_id = handle.id();
         if canonical.get(stage_id).is_none() {
-            if let Some(recipe) = stages.get(handle).and_then(|asset| asset.recipe.clone()) {
-                canonical.get_or_build(stage_id, &recipe);
+            if let Some(stage_asset) = stages.get(handle) {
+                canonical.get_or_build(stage_id, stage_asset);
             }
         }
         let Some(stage) = canonical.get(stage_id).map(|value| value.view()) else {

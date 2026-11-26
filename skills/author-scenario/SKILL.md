@@ -157,11 +157,11 @@ initialization or `on_start`. For source-selected entities discovered there,
 call `track_entity_read(id)` or `track_entity_write(id)` before access.
 When the source entity identifies the owning scene but its USD document is not
 attached yet, use `find_path_in_stage(me, path)` to resolve another live
-identity in that same scene mount; editor preview projections are excluded. Use
+unique identity in that same scene mount; ambiguous or preview-only matches are not live targets. Pass `source_entity_id: me` to `QueryUsdPrim` / `QueryUsdPrims` for the same authored read scope. Use
 `find_path_in_document(doc_id, path)` when the document identity is available.
 `find_path(path)` returns the lowest registered ID for the exact path across
 all mounts, including preview projections. Both scoped calls exclude previews.
-All three return `-1` for a missing path.
+All three return `-1` for a missing path; `find_path_in_stage` also rejects ambiguity within the source mount.
 
 All active Modelica entities share the fixed-step barrier. Declarations grant
 scenario access without changing clock membership. Required input

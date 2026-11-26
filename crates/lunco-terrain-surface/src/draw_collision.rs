@@ -984,13 +984,12 @@ impl DrawTerrainQuery<'_, '_> {
                 {
                     continue;
                 }
-                let Some(metrics) = tiles.view_status(view) else {
+                let Some(max_depth) = tiles.effective_max_depth(view) else {
                     return unavailable(
                         Some(terrain),
                         "presented terrain view metrics are preparing",
                     );
                 };
-                let max_depth = metrics.effective_max_depth;
                 if tiles.draw_revision(view).is_none() {
                     return invalid(
                         Some(terrain),
