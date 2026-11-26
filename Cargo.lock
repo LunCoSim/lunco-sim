@@ -1299,8 +1299,7 @@ dependencies = [
 [[package]]
 name = "bevy_camera"
 version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f32c0d8436fb9373dc3b64fa30c3dec51d6a7cfda61de3c70fd1f62f8a903887"
+source = "git+https://github.com/LunCoSim/bevy?rev=87cb795e3f11da0d769d28e57df0ec42a7112aa8#87cb795e3f11da0d769d28e57df0ec42a7112aa8"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2063,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "bevy_light"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=daed5647147acc49df25d827aa7b1d4fb7e2e122#daed5647147acc49df25d827aa7b1d4fb7e2e122"
+source = "git+https://github.com/LunCoSim/bevy?rev=87cb795e3f11da0d769d28e57df0ec42a7112aa8#87cb795e3f11da0d769d28e57df0ec42a7112aa8"
 dependencies = [
  "bevy_app",
  "bevy_asset",
