@@ -24,6 +24,9 @@ a separate output directory. Use the same binary, source, scene and cache
 conditions, and interleave the hosts to see run-to-run variation. The receipt
 retains the co-simulation construction profiles and first-ready workload
 snapshot in both modes. The windowed run also captures the first-ready image.
+Use `--loading-progress` on a separate windowed diagnostic run to record the
+messages driving the popup and their offsets from scene open in
+`session.json`. Reading those messages adds an API round trip to each poll.
 
 Without `--startup-only`, the driver also qualifies a settled mission window.
 It requests High quality and uncapped rendering by default. Add `--desktop-pacing`

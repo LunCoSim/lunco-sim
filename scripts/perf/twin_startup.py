@@ -158,6 +158,8 @@ def main():
                         help="measure the settled scene with the application's normal window pacing and vsync")
     parser.add_argument("--headless", action="store_true",
                         help="run the startup measurement without presentation")
+    parser.add_argument("--loading-progress", action="store_true",
+                        help="record changes in the window's loading messages during scene preparation")
     parser.add_argument("--symbols", action="store_true")
     parser.add_argument("--tracy-port", type=int)
     parser.add_argument("--timeout", type=float, default=180)
@@ -179,6 +181,8 @@ def main():
     args = parser.parse_args()
     if args.headless and not args.startup_only:
         parser.error("--headless requires --startup-only")
+    if args.loading_progress and args.headless:
+        parser.error("--loading-progress requires a window")
     if args.desktop_pacing and args.headless:
         parser.error("--desktop-pacing requires a window")
     if args.compositor_timing and (not args.private_wayland or args.startup_only
@@ -354,6 +358,8 @@ def main():
             receipt["load_start_frame"] = command(session, "EnginePerformance")["frame_sample_count"]
             opened = time.monotonic()
             receipt["open_response"] = command(session, open_command, {"path": str(open_path)})
+            if args.loading_progress:
+                receipt["loading_progress"] = []
             last_readiness = None
             clear_since = measurement = None
             initial_frame = initial_tick = measured_body = None
@@ -363,6 +369,11 @@ def main():
                 if "first_scene_ready_s" not in receipt:
                     status = command(session, "RunRhai", {"code": probe})["stdout"].strip()
                     if status == "pending":
+                        if args.loading_progress:
+                            messages = command(session, "GetOfflineRecordingStatus")["visual_pending_reasons"]
+                            history = receipt["loading_progress"]
+                            if not history or messages != history[-1]["messages"]:
+                                history.append({"seconds": time.monotonic() - opened, "messages": messages})
                         time.sleep(0.05)
                         continue
                     if status == "faulted":

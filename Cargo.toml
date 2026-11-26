@@ -397,21 +397,21 @@ lunco-theme = { path = "crates/lunco-theme" }
 lunco-web = { path = "crates/lunco-web" }
 
 # The Modelica compiler, editor, and runtime share one upstream Rumoca revision.
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-tool-build-info = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
+rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-tool-build-info = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.

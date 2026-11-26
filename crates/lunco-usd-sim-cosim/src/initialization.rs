@@ -177,11 +177,28 @@ pub fn last_coupled_initialization(world: &World) -> Option<&CoupledInitializati
 }
 
 #[derive(Resource, Default)]
-pub(super) struct CoupledInitialization {
+pub struct CoupledInitialization {
     failed: bool,
     job: Option<Job>,
     certificate: Option<Certificate>,
     last_completed: Option<CoupledInitializationReceipt>,
+}
+
+/// Phase of the active initialization transaction and its fixed member count.
+pub enum CoupledInitializationPhase {
+    Solving(usize),
+    StartingSessions(usize),
+}
+
+impl CoupledInitialization {
+    pub fn phase(&self) -> Option<CoupledInitializationPhase> {
+        if let Some(job) = &self.job {
+            return Some(CoupledInitializationPhase::Solving(job.plan.members.len()));
+        }
+        self.certificate.as_ref().map(|certificate| {
+            CoupledInitializationPhase::StartingSessions(certificate.plan.members.len())
+        })
+    }
 }
 
 fn wire_snapshot(world: &mut World) -> Vec<WireSnapshot> {

@@ -42,7 +42,7 @@ pub(super) fn execute_wasm(
         &compiled.authored_bindings.parameter_overrides,
     );
     let inputs = merge_instance_values(&compiled.authored_bindings.initial_inputs, &initial_inputs);
-    let mut plan = live_build_plan(
+    let plan = live_build_plan(
         solver::RuntimeProfile {
             live: true,
             predicted: false,
@@ -54,7 +54,6 @@ pub(super) fn execute_wasm(
         Some(library_revision),
     )
     .map_err(|error| error.to_string())?;
-    plan.options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
     observe_initialization(
         &compiled.compiled.dae,
         plan,
@@ -77,11 +76,11 @@ fn observe_initialization(
         .chain(state_names)
         .cloned()
         .collect::<Vec<_>>();
-    let stepper = lunco_modelica_solver::simulation_session::live_for_solver(
-        dae,
-        &plan.spec,
-        plan.options.clone(),
-    )?;
+    // The coupled session is observed at its initial instant and then dropped.
+    let mut options = plan.options;
+    options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
+    let stepper =
+        lunco_modelica_solver::simulation_session::live_for_solver(dae, &plan.spec, options)?;
     let selected = stepper.selected_values(&requested)?;
     if selected.len() != requested.len() {
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
