@@ -280,7 +280,7 @@ another scripting runtime.
 
 The workspace pins its maintained Bevy crates to compatible revisions in the
 root manifest and lockfile. `bevy_render`, `bevy_pbr` and `bevy_sprite_render`
-share the revision that defines the borrowed batch-data contract.
+retain the same borrowed batch-data contract across those revisions.
 Every workspace consumer uses that source through Cargo's shared patch table;
 profiling does not require a local path override. The light/PBR owner excludes
 exactly zero-output local lights from clustering and extraction without changing
@@ -313,9 +313,16 @@ replacement. Missing authored material data reports a projection diagnostic
 instead of publishing the mesh with a debug surface.
 
 The native CPU instance owner retains dense visible-instance and prepared-uniform
-vectors behind one main-entity index. Extraction clears the admitted identities;
-preparation rebuilds the uniforms in the same dense order after material, morph
-and skin preparation. Per-mesh uniform offsets and slab identities are published
+vectors behind one generation-aware main-entity index. Extraction updates
+changed rows and reconciles required/optional component removals against the
+final source state. It removes hidden or retired rows and repairs the dense
+index after a swap. A new owner admits the complete visible inventory; render
+recovery requests reextraction of retained rows. The material owner publishes
+association deltas after both sweeps; binding-table changes refresh retained
+slots. Previous-skin and previous-morph flags are frame-scoped and cleared only
+on rows that carried them. Preparation rebuilds the uniforms in the current
+dense order after material, morph and skin preparation. Per-mesh uniform offsets
+and slab identities are published
 by `MeshAllocator` when its allocations settle and retired when a mesh is freed
 or re-extracted. Slab growth preserves the resident offsets. Shadow, opaque and
 sorted CPU batches borrow the same frame uniform through `GpuArrayElement` and
@@ -325,7 +332,8 @@ offset contract. Phase order, batch admission, GPU preprocessing, native shader
 layout and render quality are unchanged. These hot-path ownership mechanisms
 require no scenario or Rhai policy hook.
 The [native CPU preparation review](../reviews/cpu-mesh-preparation-2026-11-26.md)
-records the relative sampled work and production visual gates.
+and [incremental extraction review](../reviews/cpu-mesh-extraction-2026-11-26.md)
+record the relative sampled work and production visual gates.
 
 
 GPU-only output buffers allocate the shader array stride through

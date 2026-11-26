@@ -709,12 +709,13 @@ openusd-schemas = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797e
 openusd-build = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797eadfdb5e8759cb060b7733b7fc962747e" }
 # Native light adds receiver-frame cascade fitting to the receiver-culling renderer.
 bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f074587862e03bcd3e0b79ecc6" }
-# Native borrowed batch encoding, dense instances and allocation-owned facts require the coordinated render/PBR/sprite revision.
+# Native borrowed batch encoding and allocation-owned facts define the shared render/PBR/sprite contract.
 bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
 # Exact picking hit reuse shares the validated native presentation branch.
 bevy_picking = { git = "https://github.com/LunCoSim/bevy", rev = "b33d65990122c80aa73f835cd0c77d5a22ab4dd0" }
 bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "daed5647147acc49df25d827aa7b1d4fb7e2e122" }
-bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
+# Change-driven CPU extraction extends the compatible borrowed batch-data revision.
+bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "e104a5d60f4aa6c8a724a73bf8e76981d8b456a6" }
 bevy_sprite_render = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
 # Exposes the path-tracing schedule set used by native forward composition.
 bevy_solari = { git = "https://github.com/LunCoSim/bevy", rev = "89d20883269eee3bd1dac89b6e02536c74fbb4f8" }
