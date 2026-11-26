@@ -629,8 +629,12 @@ pub(crate) fn reset_scene_pick_gate(mut gate: ResMut<ScenePickGate>) {
 pub(crate) fn resolve_scene_pointer(
     mut gate: ResMut<ScenePickGate>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
+    viewport: Res<SceneViewport>,
 ) {
-    let mut state = EguiPointerState::default();
+    let mut state = EguiPointerState {
+        main_scene_blocked: viewport.loading || !viewport.visible,
+        ..Default::default()
+    };
     for mut ctx in q.iter_mut() {
         let c = ctx.get_mut();
         state.over_egui |= c.is_pointer_over_egui();
@@ -890,6 +894,7 @@ impl Plugin for WorkbenchViewportPlugin {
                 PostUpdate,
                 resolve_scene_pointer
                     .after(bevy_egui::EguiPostUpdateSet::ProcessOutput)
+                    .after(lunco_viewport_core::SceneViewportSet::Reconcile)
                     .before(egui_viewport_aware_picking)
                     .before(track_egui_focus),
             )
@@ -1141,8 +1146,23 @@ mod tests {
 
     #[test]
     fn design_layout_never_paints_scene() {
+        struct DesignPanel;
+        impl Panel for DesignPanel {
+            fn id(&self) -> PanelId {
+                PanelId("design-fixture")
+            }
+            fn title(&self) -> String {
+                "Design fixture".into()
+            }
+            fn default_slot(&self) -> PanelSlot {
+                PanelSlot::Center
+            }
+            fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+        }
         let mut layout = crate::WorkbenchLayout::default();
-        layout.center.push(PanelId("lunica::diagram"));
+        // Register the real panel and materialize its dock, rather than only
+        // declaring an unavailable slot with no central content.
+        layout.register(DesignPanel);
 
         let (visible, rect) = resolve_scene_viewport_layout(Some(&layout));
 

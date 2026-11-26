@@ -15,6 +15,31 @@ from runtime import (
 )
 
 
+def viewport_probe(output, rect):
+    """Measure an unobscured terrain rectangle, not merely an ECS draw count."""
+    from PIL import Image, ImageStat
+
+    probes = {}
+    for name in ("viewport-first.png", "complete-draw.png", "final.png"):
+        with Image.open(output / name) as image:
+            left, top, right, bottom = rect
+            assert 0 <= left < right <= image.width and 0 <= top < bottom <= image.height
+            region = image.convert("L").crop(rect)
+            histogram = region.histogram()
+            probes[name] = {"lit_fraction": sum(histogram[16:]) / sum(histogram),
+                            "luminance_stddev": ImageStat.Stat(region).stddev[0]}
+    return probes
+
+
+def assert_viewport_probe(probes):
+    final = probes["final.png"]
+    assert final["lit_fraction"] >= .2 and final["luminance_stddev"] >= 2.0, "probe must be on visibly lit, unobscured terrain"
+    for name in ("viewport-first.png", "complete-draw.png"):
+        early = probes[name]
+        assert early["lit_fraction"] >= .5 * final["lit_fraction"], (name, probes)
+        assert early["luminance_stddev"] >= .1 * final["luminance_stddev"], (name, probes)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scene", required=True)
@@ -28,6 +53,8 @@ def main():
     parser.add_argument("--verify-recording", action="store_true",
                         help="Verify numbered capture from the fully prepared terrain.")
     parser.add_argument("--verify-view-retirement", action="store_true", help="Close an owned camera feed and retune the remaining cover to exercise native extraction retirement.")
+    parser.add_argument("--viewport-probe", nargs=4, type=int, metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"),
+                        help="Unobscured terrain pixel rectangle; verify the first and complete main-view publications against the final screenshot.")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -171,6 +198,12 @@ def main():
                 raise RuntimeError("pending capture failed to resume")
             execute("StopOfflineRecording")
             session.capture_screenshot(output / "final.png")
+        if args.viewport_probe:
+            probes = viewport_probe(output, args.viewport_probe)
+            evidence["viewport_probe"] = probes
+            (output / "validation.json").write_text(json.dumps(evidence, indent=2))
+            assert_viewport_probe(probes)
+            print("main viewport startup pixel probe PASS", probes, flush=True)
         run_authored_scenario(
             session, "lunco://scenarios/tests/terrain_stationary_cover.rhai",
             title="TERRAIN STATIONARY COVER", check_count=3, params={"duration_s": 10.0},

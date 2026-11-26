@@ -440,6 +440,10 @@ For a fully prepared DEM screenshot or performance window, read
 `pending == 0`, and `ready == total`, as well as a resident selected cover with
 no pending stream work. Derived-map preparation is separate from simulation
 readiness; a usable viewport alone does not prove that preparation has finished.
+The loading backdrop does not deactivate a physically admitted main camera:
+terrain cover and GPU pipeline preparation run concurrently with initial
+simulation preparation. Validate the first visible main-view screenshot as
+well as settled coverage, since main-world draw publication is not GPU receipt.
 
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the

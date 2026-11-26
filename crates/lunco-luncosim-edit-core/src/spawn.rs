@@ -378,7 +378,7 @@ pub fn update_spawn_ghost(
 
     // Ray through the viewport's explicitly resolved window camera. Query order
     // is not presentation ownership, and sensor/RTT cameras may also be active.
-    let Some(camera_entity) = camera_frame.viewport.active_camera else {
+    let Some(camera_entity) = camera_frame.viewport.exposed_camera() else {
         if diagnostics.enabled {
             info!("[spawn-trace] ghost rejected: no active window Camera3d");
         }
@@ -633,7 +633,7 @@ pub fn on_scene_click_spawn(
     // Shared egui-vs-scene guard + camera ray (same path as possession/selection),
     // then resolve the world point from the shared analytic terrain and physics
     // queries. Placement remains independent of rendered tile residency.
-    let Some(camera_entity) = camera_frame.viewport.active_camera else {
+    let Some(camera_entity) = camera_frame.viewport.exposed_camera() else {
         hide_spawn_ghost(&mut commands, &q_ghost);
         if diagnostics.enabled {
             info!("[spawn-trace] click rejected: no active window Camera3d");

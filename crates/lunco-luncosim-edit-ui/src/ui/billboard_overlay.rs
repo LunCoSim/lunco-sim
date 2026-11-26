@@ -123,12 +123,8 @@ pub fn draw_billboard_overlay(
     if q_billboards.is_empty() {
         return;
     }
-    // A hidden workbench scene must not leave one frame of screen-space labels
-    // behind while the camera reconciler turns its window camera off.
-    if !scene_viewport.visible {
-        return;
-    }
-    let Some(camera_entity) = scene_viewport.active_camera else {
+    // Screen-space labels belong to the exposed view, not its preparation.
+    let Some(camera_entity) = scene_viewport.exposed_camera() else {
         return;
     };
     let Ok((camera, cam_gtf)) = q_camera.get(camera_entity) else {

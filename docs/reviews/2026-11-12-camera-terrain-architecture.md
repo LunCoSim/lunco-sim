@@ -259,6 +259,37 @@ existing ignored). Evidence: `/tmp/luncosim-terrain-audit/postmerge-cold4/`,
 `/tmp/luncosim-terrain-audit/postmerge-warm3/`, and
 `/tmp/luncosim-terrain-audit/postmerge-warm2/`.
 
+### Initial viewport presentation repair
+
+The workbench loading state owns its backdrop, not camera render admission.
+The selected physically admitted window camera now prepares terrain and GPU
+pipelines during initial simulation preparation, alongside independent feeds.
+The exposed-camera contract separately prevents screen-space labels, pointer
+presses, gizmo interaction, and terrain/placement editing behind the backdrop.
+No timer or synchronous pipeline compile is introduced.
+
+The production driver accepts `--viewport-probe 1000 330 1200 440` for the
+1600×1000 workshop view. It measures luminance occupancy and variation in
+the same unobscured ground rectangle at first main-view publication, complete
+draw publication, and final shading. The two original warm captures failed
+the probe (0% lit early; 95.17% final). With the repair, both final cold and
+warm runs passed (100% lit coarse cover in the first main-view screenshot;
+95.17% lit complete/final, with terrain luminance variation in all three).
+The complete detailed covers published 0.804 s and 0.616 s after physical
+world readiness, respectively. Cold shading still upgraded 256² to 2048²
+without changing the 567 drawn tile identities; numbered capture held until
+that upgrade completed. The warm run again passed feed retirement and probe
+retuning. All 166 camera/workbench/editor tests passed and both production
+runs passed stationary-cover and diagnostic gates. The test fixtures also
+register the actual design panel and handle headless egui texture deltas.
+
+Evidence: `/tmp/luncosim-terrain-audit/startup-final-cold/` and
+`/tmp/luncosim-terrain-audit/startup-final-warm/`. These runs used the native
+renderer pins at `a68de0251` with the presentation repair. Other worktree
+compilation competed for system resources, so the observed 41.85/30.80 median
+FPS is not an isolated speed comparison. Neither quality nor simulation
+cadence was reduced.
+
 ## External architecture references
 
 [Cesium Native view integration](https://cesium.com/learn/cesium-native/ref-doc/rendering-3d-tiles.html)
