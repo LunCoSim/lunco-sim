@@ -786,17 +786,20 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                     for (terrain, field, tiles) in query.iter(world) {
                         for (raw, _, _, _, _) in demands.visual_focus_snapshot() {
                             let camera = Entity::from_bits(raw);
-                            let Some((local, _)) = demands.terrain_pose_snapshot(camera, terrain) else { continue; };
+                            let Some((local, forward)) = demands.terrain_pose_snapshot(camera, terrain) else { continue; };
                             let leaf = tiles.focus_tile(camera, [local.x, local.z]);
                             let Some(view) = tiles.view_status(camera) else { continue; };
                             let height = field.0.height_at(local.x, local.z);
                             let envelope = world.get::<lunco_camera_core::CameraCollisionEnvelope>(camera);
                             rows.push(api_value!({
                                 "source": terrain.to_bits(), "camera": raw,
-                                "position_local_m": local.to_array(), "clearance_m": local.y-height,
+                                "position_local_m": local.to_array(), "forward_local": forward.to_array(), "clearance_m": local.y-height,
+                                "draw_revision": tiles.draw_revision(camera),
                                 "depth": leaf.map(|leaf| leaf.0),
                                 "ready": view.ready,
                                 "selection_current": view.selection_current,
+                                "initial_near_cover_ready": view.initial_near_cover_ready,
+                                "cover_preparation_pending": view.cover_preparation_pending,
                                 "presented_ready": view.presented_ready,
                                 "presentation_pending": view.presentation_pending,
                                 "presentation_reason": view.presentation_reason,

@@ -394,6 +394,13 @@ impl HorizonShadowCacheConfig {
             && self.min_refresh_interval_secs.is_finite()
             && self.min_refresh_interval_secs >= 0.0
     }
+    /// Whether this configured cache has a meaningful terrain visibility sample
+    /// for the given terrain-local sun. A fully set disc needs no terrain map.
+    pub fn requires_sample(&self, sun_local: Vec3, tan_radius: f32) -> bool {
+        self.enabled
+            && self.quality_is_valid()
+            && HorizonSun::new(sun_local, tan_radius).upper > 0.0
+    }
 }
 
 /// The baked sun-visibility cache on a terrain entity: an `R8Unorm` texture
@@ -413,7 +420,7 @@ pub struct HorizonShadowCache {
     /// Wall-clock timestamp at which the current replacement was requested.
     /// This is scheduling state, not a freshness claim; `last_sun_local` is
     /// the authoritative angular sample represented by the image.
-    last_refresh_real_secs: f64,
+    last_refresh: Instant,
     quality: ShadowCacheQuality,
 }
 
@@ -425,6 +432,16 @@ struct ShadowCacheQuality {
 }
 
 impl HorizonShadowCache {
+    /// Whether the committed texture uses the requested shadow-cache quality.
+    pub fn matches_quality(&self, config: &HorizonShadowCacheConfig, tan_radius: f32) -> bool {
+        self.quality
+            == ShadowCacheQuality {
+                tan_radius,
+                march_steps: config.march_steps,
+                samples_per_axis: config.samples_per_axis,
+            }
+    }
+
     /// Terrain-local angular sample represented by the committed visibility image.
     pub fn sampled_sun_local(&self) -> Vec3 {
         self.last_sun_local
@@ -523,10 +540,12 @@ struct ShadowCacheResult {
     bytes: Vec<u8>,
     resolution: u32,
     sun_local: Vec3,
-    requested_at_real_secs: f64,
+    requested_at: Instant,
     source_image: Handle<Image>,
     quality: ShadowCacheQuality,
     millis: u128,
+    #[cfg(not(target_arch = "wasm32"))]
+    _permit: lunco_core_runtime::async_work::ExternalWorkPermit,
 }
 
 struct BakeResult {
@@ -897,7 +916,7 @@ pub fn start_shadow_cache_bake(
     #[cfg(target_arch = "wasm32")] mut images: ResMut<Assets<Image>>,
     #[cfg(target_arch = "wasm32")] mut uploads: ResMut<DataTextureUpdates>,
     cfg: Res<HorizonShadowCacheConfig>,
-    real: Option<Res<Time<Real>>>,
+    #[cfg(not(target_arch = "wasm32"))] admission: Res<lunco_core_runtime::AsyncWorkAdmission>,
     sun: SunQuery,
     render_sun: Option<Res<SunRenderState>>,
     terrains: Query<
@@ -941,7 +960,7 @@ pub fn start_shadow_cache_bake(
     };
     let march_steps = cfg.march_steps;
     let samples_per_axis = cfg.samples_per_axis;
-    let now_real_secs = real.as_deref().map_or(0.0, Time::elapsed_secs_f64);
+    let requested_at = Instant::now();
 
     for (entity, terrain_gt, map, mut cache) in terrains {
         if map.field.resolution() < 2 {
@@ -957,21 +976,40 @@ pub fn start_shadow_cache_bake(
             render_sun.revision,
         );
         // The shader resolves a fully set solar disc without a terrain sample.
-        if HorizonSun::new(sun_local, tan_r).upper <= 0.0 {
+        if !cfg.requires_sample(sun_local, tan_r) {
             continue;
         }
         // Within the threshold of the last bake → cache still valid.
         if let Some(c) = cache.as_deref() {
-            if c.quality == quality && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg) {
+            if c.matches_quality(&cfg, tan_r)
+                && c.is_valid_for_sun(sun_local, cfg.sun_threshold_deg)
+            {
                 continue;
             }
-            if now_real_secs - c.last_refresh_real_secs < f64::from(cfg.min_refresh_interval_secs) {
+            if requested_at.duration_since(c.last_refresh).as_secs_f64()
+                < f64::from(cfg.min_refresh_interval_secs)
+            {
                 continue;
             }
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let permit = {
+            use lunco_core_runtime::{AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
+            let key = AsyncWorkKey::new(
+                AsyncWorkKind::VisualizationPreparation,
+                0,
+                entity.to_bits() as u128,
+                render_sun.revision,
+                u64::MAX - 3,
+            );
+            let Ok(permit) = admission.admit_external(AsyncWorkPriority::Background, key) else {
+                continue;
+            };
+            permit
+        };
         if let Some(c) = cache.as_deref_mut() {
-            c.last_refresh_real_secs = now_real_secs;
+            c.last_refresh = requested_at;
         }
 
         let target_res = map.field.resolution();
@@ -995,10 +1033,11 @@ pub fn start_shadow_cache_bake(
                     bytes,
                     resolution: target_res,
                     sun_local,
-                    requested_at_real_secs: now_real_secs,
+                    requested_at,
                     source_image,
                     quality,
                     millis: start.elapsed().as_millis(),
+                    _permit: permit,
                 }
             });
             commands.entity(entity).insert(ShadowCacheBakeTask(task));
@@ -1025,7 +1064,7 @@ pub fn start_shadow_cache_bake(
                 bytes,
                 target_res,
                 sun_local,
-                now_real_secs,
+                requested_at,
                 quality,
                 millis,
             );
@@ -1079,7 +1118,7 @@ pub fn finish_shadow_cache_bake(
             result.bytes,
             result.resolution,
             result.sun_local,
-            result.requested_at_real_secs,
+            result.requested_at,
             result.quality,
             result.millis,
         );
@@ -1111,7 +1150,7 @@ fn install_shadow_cache(
     bytes: Vec<u8>,
     resolution: u32,
     sun_local: Vec3,
-    requested_at_real_secs: f64,
+    requested_at: Instant,
     quality: ShadowCacheQuality,
     millis: u128,
 ) {
@@ -1153,7 +1192,7 @@ fn install_shadow_cache(
         .try_insert(HorizonShadowCache {
             image: image_handle,
             last_sun_local: sun_local,
-            last_refresh_real_secs: requested_at_real_secs,
+            last_refresh: requested_at,
             quality,
         });
 }
@@ -1244,6 +1283,9 @@ pub struct HorizonShadowPlugin;
 
 impl Plugin for HorizonShadowPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<lunco_core_runtime::AsyncWorkAdmissionPlugin>() {
+            app.add_plugins(lunco_core_runtime::AsyncWorkAdmissionPlugin);
+        }
         app.register_type::<HorizonShadowTerrain>();
         app.register_type::<HorizonShadowCacheConfig>();
         app.init_resource::<HorizonShadowCacheConfig>();
@@ -1452,7 +1494,7 @@ mod tests {
         let cache = HorizonShadowCache {
             image: Handle::default(),
             last_sun_local: Vec3::Y,
-            last_refresh_real_secs: 0.0,
+            last_refresh: Instant::now(),
             quality: ShadowCacheQuality {
                 tan_radius: 0.0046,
                 march_steps: 48,

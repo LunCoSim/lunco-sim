@@ -7,6 +7,14 @@
 > and benchmarked implementation internals. Re-run this investigation as an explicit benchmark
 > when terrain data or the bake pipeline changes.
 
+The current implementation is recorded in
+[progressive startup](terrain-substrate.md#progressive-startup): one root
+fallback prepared concurrently with camera selection, followed by
+camera-prioritized exact restricted subtree publication and shared-admission
+material preparation. Hidden ancestors become reclaimable after publication;
+cache loads validate the requested artifact dimensions. The historical pyramid measurements below
+are design evidence, not the current resident-tile count.
+
 Target architecture for the streamed terrain. It replaces the current
 runtime-bake selection path with a coarse resident cover and progressive
 refinement.

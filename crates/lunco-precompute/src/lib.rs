@@ -81,7 +81,7 @@ pub trait Bake {
     /// Restore a previously-stored output from `dir`, **validating integrity**
     /// (sizes/shape) so a truncated or partial write is treated as a miss.
     /// `None` → miss/corrupt → the orchestrator rebakes.
-    fn load(dir: &Path) -> Option<Self::Output>;
+    fn load(&self, dir: &Path) -> Option<Self::Output>;
 }
 
 /// Load `bake`'s artifact from the content-addressed cache under `root`, or bake
@@ -92,7 +92,7 @@ pub trait Bake {
 /// off-thread bake and move it into the task.
 pub fn bake_or_load<B: Bake>(bake: &B, root: &Path) -> B::Output {
     let dir = entry_dir(root, B::NAMESPACE, bake.key());
-    if let Some(out) = B::load(&dir) {
+    if let Some(out) = bake.load(&dir) {
         return out;
     }
     let out = bake.bake();
@@ -180,7 +180,7 @@ mod tests {
         fn store(dir: &Path, out: &Vec<u8>) -> StorageResult<()> {
             store_blob(dir, "data.bin", out)
         }
-        fn load(dir: &Path) -> Option<Vec<u8>> {
+        fn load(&self, dir: &Path) -> Option<Vec<u8>> {
             load_blob(dir, "data.bin")
         }
     }

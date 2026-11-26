@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use crate::crater::{CRATER_REACH, crater_profile_rim_limited};
-use crate::modifier::HeightModifier;
+use crate::modifier::{HeightModifier, SamplingPurpose};
 use crate::source::{
     HeightEnclosure, HeightPlane, bounds_add, bounds_mul, bounds_scale, hash01, vnoise,
     vnoise_bounds, vnoise_gradient_bounds,
@@ -61,6 +61,9 @@ pub struct Overzoom {
     /// serves. Features below ~this fade to zero instead of aliasing. `0` = no
     /// gate (full detail). Set per consumer via `with_min_wavelength`.
     pub min_wavelength: f64,
+    /// Visual reconstruction resolves the whole crater diameter rather than
+    /// the radius. Physical samples retain their authored sampling contract.
+    pub visual_crater_filter: bool,
 }
 
 impl Default for Overzoom {
@@ -82,6 +85,7 @@ impl Default for Overzoom {
             relief_amp: 0.08,
             relief_scale: 14.0,
             min_wavelength: 0.0,
+            visual_crater_filter: false,
         }
     }
 }
@@ -133,13 +137,38 @@ impl PoissonDistribution {
 }
 
 impl Overzoom {
+    #[inline]
+    fn crater_fade(&self, radius: f64) -> f64 {
+        nyquist_fade(
+            if self.visual_crater_filter {
+                2.0 * radius
+            } else {
+                radius
+            },
+            self.min_wavelength,
+        )
+    }
+
+    #[inline]
+    fn band_visible(&self, radius: f64) -> bool {
+        let fade = self.crater_fade(radius);
+        if self.visual_crater_filter {
+            fade > 0.0
+        } else {
+            fade >= 0.05
+        }
+    }
+
     /// The synthetic height delta (m) at `(x, z)` under the current Nyquist gate.
     pub fn delta_at(&self, x: f64, z: f64) -> f64 {
         let mut d = self.relief_delta(x, z);
         // Craterlet bands: halving radius ranges from max_radius down. Bands are
         // evaluated in a gently warped domain so rims come out irregular ovals
         // instead of perfect circles (no two craterlets look alike up close).
-        if self.crater_mean > 0.0 && self.max_radius > self.min_radius.max(0.05) {
+        if self.crater_mean > 0.0
+            && self.max_radius > self.min_radius.max(0.05)
+            && self.band_visible(self.max_radius)
+        {
             let (wx, wz) = self.warped(x, z);
             let mut r_hi = self.max_radius;
             let mut band: u64 = 0;
@@ -324,7 +353,7 @@ impl Overzoom {
             let mut band = 0;
             while high > self.min_radius.max(0.05) && band < 8 {
                 let low = (high * 0.5).max(self.min_radius);
-                let mut gradient = if nyquist_fade(high, self.min_wavelength) < 0.05 {
+                let mut gradient = if !self.band_visible(high) {
                     [[0.0; 2]; 2]
                 } else {
                     [[-global, global]; 2]
@@ -388,7 +417,7 @@ impl Overzoom {
         r_hi: f64,
         mut visit: impl FnMut(SyntheticCrater),
     ) {
-        if nyquist_fade(r_hi, self.min_wavelength) < 0.05 {
+        if !self.band_visible(r_hi) {
             return;
         }
         let cell = r_hi * CRATER_REACH;
@@ -420,7 +449,7 @@ impl Overzoom {
                     let center = [(cx as f64 + ux) * cell, (cz as f64 + uz) * cell];
                     let inv2 = (1.0 - ur) / (r_lo * r_lo) + ur / (r_hi * r_hi);
                     let radius = 1.0 / inv2.sqrt();
-                    let fade = nyquist_fade(radius, self.min_wavelength);
+                    let fade = self.crater_fade(radius);
                     if fade <= 0.0 {
                         continue;
                     }
@@ -634,7 +663,7 @@ impl HeightModifier for Overzoom {
                 // rim + apron and the subtracted reach tail are each in
                 // [0, 0.65 * (1 + APRON_FRAC) * d]. Negative depths reverse
                 // those signs. Keep both signs for authored inverted bowls.
-                let mut delta = if nyquist_fade(r_hi, self.min_wavelength) < 0.05 {
+                let mut delta = if !self.band_visible(r_hi) {
                     [0.0; 2]
                 } else {
                     let positive = r_hi * self.depth_ratio.0.max(self.depth_ratio.1).max(0.0);
@@ -669,9 +698,14 @@ impl HeightModifier for Overzoom {
         h_in + self.delta_at(x, z)
     }
 
-    fn with_min_wavelength(&self, min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
+    fn with_min_wavelength(
+        &self,
+        min_wavelength: f64,
+        purpose: SamplingPurpose,
+    ) -> Option<Arc<dyn HeightModifier>> {
         Some(Arc::new(Overzoom {
             min_wavelength,
+            visual_crater_filter: purpose == SamplingPurpose::Visual,
             ..self.clone()
         }))
     }
@@ -824,6 +858,36 @@ mod tests {
     }
 
     #[test]
+    fn visual_crater_band_keeps_resolvable_diameters_without_changing_physics() {
+        let authored = Overzoom {
+            min_radius: 0.18,
+            max_radius: 0.65,
+            relief_amp: 0.0,
+            min_wavelength: 0.48828125,
+            ..Default::default()
+        };
+        let visual = Overzoom {
+            visual_crater_filter: true,
+            ..authored.clone()
+        };
+        assert_eq!(authored.crater_fade(0.4), 0.0);
+        assert!(visual.crater_fade(0.4) > 0.2);
+        assert_eq!(visual.crater_fade(0.18), 0.0);
+        assert!(visual.crater_fade(0.65) > 0.9);
+        let physical = visual
+            .with_min_wavelength(authored.min_wavelength, SamplingPurpose::Physical)
+            .unwrap();
+        for i in 0..32 {
+            let x = f64::from(i) * 0.17 - 2.0;
+            let z = f64::from(i) * 0.23 + 0.5;
+            assert_eq!(physical.apply(x, z, 0.0), authored.delta_at(x, z));
+            let bounds = visual.height_bounds([x, z, x, z], [0.0; 2]).unwrap();
+            let value = visual.delta_at(x, z);
+            assert!(value >= bounds[0] && value <= bounds[1]);
+        }
+    }
+
+    #[test]
     fn continuous_no_cell_seams() {
         // Walk across band-cell boundaries: no discontinuities (craterlets are
         // generated per cell but evaluated as smooth profiles).
@@ -840,7 +904,7 @@ mod tests {
     fn with_min_wavelength_variant_differs_from_full() {
         let s = oz();
         let v = s
-            .with_min_wavelength(5.0)
+            .with_min_wavelength(5.0, SamplingPurpose::Physical)
             .expect("overzoom produces variants");
         // The gated variant is a genuinely different (reduced-detail) field.
         let differs = (0..200).any(|k| {
@@ -926,6 +990,7 @@ mod enclosure_tests {
                     relief_scale: 4.0,
                     depth_ratio,
                     min_wavelength: gate,
+                    visual_crater_filter: false,
                 };
                 for [x, z] in [
                     [-429.2789, -377.1646],

@@ -24,7 +24,7 @@ use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
 /// Current geometry/layout contract for persisted visual tile bakes. Bump on
 /// changes to sampling math, boundary topology, normals, morphs, or blob layout.
 /// The revision is part of the content key; incompatible bakes cannot be read.
-const CACHE_FORMAT_VERSION: u64 = 18;
+const CACHE_FORMAT_VERSION: u64 = 19;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -98,7 +98,7 @@ impl lunco_precompute::Bake for TileBake<'_> {
         lunco_precompute::store_blob(dir, "mesh.bin", &tile_mesh_to_bytes(out))
     }
 
-    fn load(dir: &Path) -> Option<TileMesh> {
+    fn load(&self, dir: &Path) -> Option<TileMesh> {
         tile_mesh_from_bytes(&lunco_precompute::load_blob(dir, "mesh.bin")?)
     }
 }
@@ -213,14 +213,18 @@ fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
 fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     let mut off = 0usize;
     let take = |off: &mut usize, n: usize| -> Option<&[u8]> {
-        let s = b.get(*off..*off + n)?;
-        *off += n;
+        let end = off.checked_add(n)?;
+        let s = b.get(*off..end)?;
+        *off = end;
         Some(s)
     };
-    let verts = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
-    let idx_count = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
+    let verts = usize::try_from(u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?)).ok()?;
+    let idx_count =
+        usize::try_from(u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?)).ok()?;
     // Sanity: total size must match exactly (corrupt / truncated → rebake).
-    let expect = 16 + verts * (3 + 3 + 3 + 3 + 4 + 2) * 4 + idx_count * 4;
+    let expect = 16_usize
+        .checked_add(verts.checked_mul((3 + 3 + 3 + 3 + 4 + 2) * 4)?)?
+        .checked_add(idx_count.checked_mul(4)?)?;
     if b.len() != expect {
         return None;
     }
@@ -276,6 +280,11 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrupted_tile_header_cannot_overflow_decode() {
+        assert!(tile_mesh_from_bytes(&[255; 16]).is_none());
+    }
 
     #[test]
     fn visual_bake_retains_submillimetre_measured_relief() {

@@ -1585,6 +1585,7 @@ struct PendingShotStart {
 /// [`MODELICA_SOURCE`](lunco_status_core::status_bus::MODELICA_SOURCE).
 const VISUAL_BUSY_SOURCES: &[&str] = &[
     lunco_status_core::status_bus::TERRAIN_SOURCE,
+    lunco_status_core::status_bus::TERRAIN_DERIVED_SOURCE,
     lunco_status_core::status_bus::TERRAIN_BUILD_SOURCE,
     lunco_status_core::status_bus::SCENE_SOURCE,
     lunco_status_core::status_bus::USD_PROJECTION_SOURCE,
@@ -1617,9 +1618,10 @@ const VISUAL_BUSY_SOURCES: &[&str] = &[
 ///    that produced the original half-loaded opening frame. `"scene-visuals"`
 ///    tracks generated geometry that remains after structural projection.
 ///    `"terrain"` is `TerrainStreamStatus`, the same read that gates camera paths
-///    and offline recording during camera-driven terrain changes. Optional
-///    derived terrain products use a separate source and do not block
-///    presentability. The workbench applies its own lifecycle-aware visibility
+///    and offline recording during camera-driven terrain changes. Derived
+///    terrain products use a separate source: the interactive viewport can
+///    present a preview, while recording waits for its final shading.
+///    The workbench applies its own lifecycle-aware visibility
 ///    policy without removing these entries from the bus.
 ///
 ///    Going through the bus rather than the resources keeps `lunco-workbench` a
@@ -2438,7 +2440,7 @@ mod recording_readiness_tests {
     }
 
     #[test]
-    fn visual_work_holds_capture_but_optional_derived_work_does_not() {
+    fn final_terrain_shading_and_geometry_both_hold_recording() {
         use lunco_status_core::status_bus::{
             RUNTIME_UI_SOURCE, StatusBus, TERRAIN_DERIVED_SOURCE, TERRAIN_SOURCE,
         };
@@ -2446,12 +2448,14 @@ mod recording_readiness_tests {
         let mut bus = StatusBus::default();
         assert!(!visual_work_pending(Some(&bus)));
 
-        bus.set_progress(TERRAIN_DERIVED_SOURCE, "optional", 0, 0);
-        assert!(!visual_work_pending(Some(&bus)));
+        bus.set_progress(TERRAIN_DERIVED_SOURCE, "terrain shading", 0, 0);
+        assert!(visual_work_pending(Some(&bus)));
 
         bus.set_progress(TERRAIN_SOURCE, "terrain tiles", 0, 0);
         assert!(visual_work_pending(Some(&bus)));
         bus.remove_progress(TERRAIN_SOURCE);
+        assert!(visual_work_pending(Some(&bus)));
+        bus.remove_progress(TERRAIN_DERIVED_SOURCE);
         assert!(!visual_work_pending(Some(&bus)));
         bus.set_progress(RUNTIME_UI_SOURCE, "recorded HUD extraction", 0, 0);
         assert!(visual_work_pending(Some(&bus)));

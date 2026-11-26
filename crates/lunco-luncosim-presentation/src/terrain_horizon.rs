@@ -23,15 +23,21 @@
 use std::sync::Arc;
 
 use bevy::camera::visibility::RenderLayers;
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
 
 use lunco_core::HorizonShadowTerrain;
+use lunco_core_runtime::async_work::ExternalWorkPermit;
+use lunco_core_runtime::{AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
 use lunco_environment::horizon::HorizonShadowCacheConfig;
 use lunco_environment::{
     HeightField, HorizonMap, HorizonShadowCache, install_horizon_map_from_field,
 };
-use lunco_terrain_surface::{DemHeightField, HeightSource, TerrainLodViz, TileShadowCache};
+use lunco_terrain_surface::stream_viz::TerrainDetailDemands;
+use lunco_terrain_surface::{
+    DemHeightField, HeightSource, LodTiles, TerrainLodViz, TileShadowCache,
+};
 
 /// Seconds of surface quiescence after a live edit before the horizon
 /// heightfield re-bakes (mirrors the derived-maps debounce so a brush-stroke
@@ -40,12 +46,16 @@ const REBAKE_DEBOUNCE_SECS: f64 = 0.75;
 
 /// In-flight off-thread oracle→heightfield bake for a streamed terrain.
 #[derive(Component)]
-pub(crate) struct StreamedHorizonBake(Task<(HeightField, u128)>);
+pub(crate) struct StreamedHorizonBake {
+    task: Task<(HeightField, u128, ExternalWorkPermit)>,
+    source: Arc<lunco_terrain_surface::SurfaceOracle>,
+    resolution: u32,
+}
 
 /// Debounce marker armed by [`mark_streamed_horizon_stale`].
 #[derive(Component)]
 pub(crate) struct StreamedHorizonStale {
-    since: f64,
+    since: Instant,
 }
 
 /// Sample the oracle into a horizon `HeightField` for every streamed terrain
@@ -55,7 +65,9 @@ pub(crate) struct StreamedHorizonStale {
 #[allow(clippy::type_complexity)]
 pub(crate) fn start_streamed_horizon_bakes(
     mut commands: Commands,
-    time: Res<Time>,
+    config: Res<HorizonShadowCacheConfig>,
+    demands: Res<TerrainDetailDemands>,
+    admission: Res<AsyncWorkAdmission>,
     q: Query<
         (
             Entity,
@@ -63,11 +75,9 @@ pub(crate) fn start_streamed_horizon_bakes(
             &DemHeightField,
             Option<&StreamedHorizonStale>,
             Has<HorizonMap>,
+            Option<&LodTiles>,
         ),
-        // NOT `Without<HorizonMap>`: an edit made WHILE a bake was in flight lands its
-        // (pre-edit) map and re-arms `StreamedHorizonStale` — "map present + stale
-        // armed" must therefore re-bake, or the sun-visibility cache stays
-        // wrong for the rest of the session (see `mark_streamed_horizon_stale`).
+        // A current source change retires the queued or running result.
         (
             With<TerrainLodViz>,
             Without<Mesh3d>,
@@ -76,23 +86,27 @@ pub(crate) fn start_streamed_horizon_bakes(
         ),
     >,
 ) {
-    if cfg!(target_arch = "wasm32") {
+    if cfg!(target_arch = "wasm32") || !config.enabled || !config.quality_is_valid() {
         return;
     }
-    let now = time.elapsed_secs_f64();
-    for (entity, cfg, hf, stale, has_map) in &q {
+    let now = Instant::now();
+    for (entity, cfg, hf, stale, has_map, tiles) in &q {
+        if demands.consumes_terrain(entity)
+            && !tiles.is_some_and(LodTiles::startup_near_cover_ready)
+        {
+            continue;
+        }
         match stale {
             // Debounce: wait for the surface to go quiescent (a drag keeps pushing
             // the deadline out → exactly one coalesced bake).
-            Some(stale) if now - stale.since < REBAKE_DEBOUNCE_SECS => continue,
+            Some(stale) if now.duration_since(stale.since).as_secs_f64() < REBAKE_DEBOUNCE_SECS => {
+                continue;
+            }
             Some(_) => {}
             // Map present and nothing armed → it is current; nothing to do.
             None if has_map => continue,
             // No map and nothing armed → this is the initial visual product. The
-            // DEM oracle is only published after its complete build, so start the
-            // first bake immediately. Delaying it behind the live-edit debounce
-            // lets the LOD streamer expose terrain without its final heightfield
-            // lighting inputs, producing a visible second appearance at startup.
+            // DEM oracle is already complete, so no live-edit debounce is needed.
             None => {}
         }
         let oracle = hf.0.clone();
@@ -108,6 +122,17 @@ pub(crate) fn start_streamed_horizon_bakes(
             "[horizon] baking {res}² heightfield for streamed terrain {entity:?} \
              from the surface oracle…"
         );
+        let key = AsyncWorkKey::new(
+            AsyncWorkKind::VisualizationPreparation,
+            0,
+            entity.to_bits() as u128,
+            oracle.surface_key(),
+            u64::MAX - 2,
+        );
+        let Ok(permit) = admission.admit_external(AsyncWorkPriority::Background, key) else {
+            continue;
+        };
+        let source = oracle.clone();
         let task = AsyncComputeTaskPool::get().spawn(async move {
             let start = std::time::Instant::now();
             let half = oracle.half_extent() as f64;
@@ -115,7 +140,7 @@ pub(crate) fn start_streamed_horizon_bakes(
             let step = size / (res as f64 - 1.0);
             // Band-limit to the grid's own step — sub-texel craterlets can't
             // shadow at this scale and would only alias the horizon march.
-            let oracle = oracle.detail_limited(step);
+            let oracle = lunco_terrain_surface::SurfaceBand::visual(step).limited(&oracle);
             let mut heights = Vec::with_capacity((res * res) as usize);
             for iz in 0..res {
                 let z = -half + iz as f64 * step;
@@ -130,12 +155,16 @@ pub(crate) fn start_streamed_horizon_bakes(
                 Vec2::splat(size as f32),
                 Arc::new(heights),
             );
-            (field, start.elapsed().as_millis())
+            (field, start.elapsed().as_millis(), permit)
         });
         commands
             .entity(entity)
             .try_remove::<StreamedHorizonStale>()
-            .try_insert(StreamedHorizonBake(task));
+            .try_insert(StreamedHorizonBake {
+                task,
+                source,
+                resolution: res,
+            });
     }
 }
 
@@ -144,11 +173,26 @@ pub(crate) fn start_streamed_horizon_bakes(
 pub(crate) fn finish_streamed_horizon_bakes(
     mut commands: Commands,
     images: Option<ResMut<Assets<Image>>>,
-    mut q: Query<(Entity, &mut StreamedHorizonBake)>,
+    mut q: Query<(
+        Entity,
+        &mut StreamedHorizonBake,
+        &DemHeightField,
+        &HorizonShadowTerrain,
+    )>,
 ) {
     let Some(mut images) = images else { return };
-    for (entity, mut task) in &mut q {
-        let Some((field, millis)) = future::block_on(future::poll_once(&mut task.0)) else {
+    for (entity, mut task, hf, cfg) in &mut q {
+        if !Arc::ptr_eq(&task.source, &hf.0) || task.resolution != cfg.resolution {
+            commands
+                .entity(entity)
+                .try_remove::<StreamedHorizonBake>()
+                .try_insert(StreamedHorizonStale {
+                    since: Instant::now(),
+                });
+            continue;
+        }
+        let Some((field, millis, _permit)) = future::block_on(future::poll_once(&mut task.task))
+        else {
             continue;
         };
         commands.entity(entity).try_remove::<StreamedHorizonBake>();
@@ -164,7 +208,6 @@ pub(crate) fn finish_streamed_horizon_bakes(
 #[allow(clippy::type_complexity)]
 pub(crate) fn mark_streamed_horizon_stale(
     mut commands: Commands,
-    time: Res<Time>,
     // NOTE: this must NOT filter `With<HorizonMap>`. The first edit removes the map,
     // so a `With<HorizonMap>` filter would stop matching mid-drag and never refresh
     // `since` — the debounce would then fire at edit+0.75 s against a still-editing
@@ -184,7 +227,7 @@ pub(crate) fn mark_streamed_horizon_stale(
         ),
     >,
 ) {
-    let now = time.elapsed_secs_f64();
+    let now = Instant::now();
     for (entity, has_map, is_stale, is_baking) in &changed {
         // An un-shadowed terrain's FIRST bake is handled by the bake system; only
         // (re)arm terrains that already have a horizon map, a pending debounce, or a

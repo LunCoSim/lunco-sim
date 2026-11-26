@@ -130,6 +130,83 @@ crater relief, seams, route/trail registration and native shadows. Status counts
 alone do not prove any image result. No FPS target or platform-wide result is claimed. Native Windows/macOS, web and
 planet-wide multiview rendering were not exercised by these gates.
 
+## Craterlet LOD appearance and stability
+
+The streamed surface reserves complete camera-centred minimum-detail zones
+within the existing tile budget. The visual craterlet reconstruction uses the
+bowl diameter for its Nyquist fade; physical sampling and contact lattices
+remain unchanged. An unavailable replacement mesh cannot publish an unselected
+ancestor over ready finer geometry. Constrained-cover preparation uses ancestor
+walks and indexed required nodes rather than scanning entire covers for each pin.
+
+Production Summer Space School / rover workshop evidence (Linux, RTX 5060
+Laptop GPU, private hardware-accelerated Weston output, 1600 × 1000,
+High quality, main view and StereoLeft feed):
+
+- Both covers settled at 223 and 169 tiles, respectively, with all selected
+  tiles drawn and 3.05 cm finest postings. Mesh accounting was 121.4 MiB.
+  A 68-second paused sample retained all 392 exact tile identities; moving the
+  workshop camera by 2 m produced a new settled main cover and kept the feed
+  independent. Images show continued medium-distance crater relief without
+  increasing the tile budget. Both coarser and finer bands remain represented.
+- Median application FPS was 83.8 while paused (34 samples), and 75.2 while
+  playing (15 samples). Runtime diagnostics contained zero errors or warnings.
+  These are measured on the stated native output, not a cross-platform FPS
+  guarantee or an apples-to-apples speedup against an earlier binary.
+- The first revised visual-cache bake took about one minute after world admission;
+  the warm run settled both covers within one second of world admission.
+  The authored `terrain_stationary_cover.rhai` gate passed its three checks.
+- Evidence: `/tmp/luncosim-lod-final/` (proof frames and sampled covers) and
+  `/tmp/luncosim-lod-warm/` (authored verdict and playing measurements).
+
+## Progressive startup and architecture acceptance
+
+The native stream starts root geometry and projected cover planning concurrently,
+then admits exact, disjoint 2:1-restricted partition replacements in camera-near
+order. Hidden ancestor entities retire as their branches publish. Camera-near
+readiness means actually drawn geometry, not just completed CPU meshes. Full
+derived rasters and horizon-cache work use bounded background admission;
+source and quality leases fence completion. The worker and finalized camera
+demand use one certificate-aware selection signature, so a paused camera can
+converge without another simulation tick. Offline recording requires the
+requested material product and applicable bound shadow cache; debounce is
+independent of the recording clock.
+
+Production Summer Space School / rover workshop tests on Linux RTX 5060
+Laptop GPU, 1600 × 1000, High quality, independent main and StereoLeft outputs
+(port 3743; isolated visual cache followed by the same warm cache):
+
+| Milestone (seconds from launch) | Cold visual cache | Warm visual cache |
+| --- | ---: | ---: |
+| First reported root partition (initial feed) | 5.515 | 4.746 |
+| Physical world ready | 7.534 | 6.437 |
+| Both views fully drawn in actual captured image | 8.318 | 7.267 |
+| Final shading and current geometry | 38.114 | 7.376 |
+| Median settled frame time (240 frames) | 10.14 ms | 9.97 ms |
+| 95th-percentile settled frame time | 11.77 ms | 11.07 ms |
+| Median settled FPS | 98.65 | 100.25 |
+
+The first main root-publication count is not pixel visibility; the actual
+detailed cold and warm screenshots were accepted 0.784 s and 0.830 s after
+world readiness. The cold full shading upgrade preserved all 392 precise
+drawn tile identities and camera poses. Both views (223 and 169 tiles)
+settled at 3.05 cm finest postings, with zero pending selection or
+presentation work and no mesh upload refusals. Approximate resident geometry
+was 123.0 MiB; 151.6 MiB was accounted including reclaimable cache entries.
+The remaining 110 refused refinements were discretionary tile-budget limits,
+not missing camera coverage. The cold cache contained both 256² and 2048²
+derived raster artifacts. Both runs passed the authored per-presentation-tick
+stationary-cover verdict and had zero runtime diagnostic errors or warnings.
+Warm numbered recording produced three actual frames and reported no pending
+visual preparation or capture failure.
+
+The production build passed, as did 241 terrain-surface, 123 terrain-core,
+two precompute and five capture tests (three existing ignored tests). Evidence:
+`/tmp/luncosim-terrain-audit/cold2/` and
+`/tmp/luncosim-terrain-audit/warm2/`. The frame-time sample is a native
+settled interactive run, not a browser/physics-running performance claim.
+The browser still uses cooperative CPU preparation on the page executor.
+
 ## External architecture references
 
 [Cesium Native view integration](https://cesium.com/learn/cesium-native/ref-doc/rendering-3d-tiles.html)

@@ -151,9 +151,10 @@ axis preserves scale; zoom and lateral motion change detail or its footprint.
 Both projections clip nodes against the finalized view volume using conservative
 full-source height bounds. A projected posting-size floor keeps unresolved small
 features eligible at every distance, including telephoto views where coarse probes
-filter them out. The immutable oracle caches its full-domain enclosure; native
-cover workers compute it, while synchronous web preparation only reads an already
-cached enclosure and otherwise keeps uncertain nodes eligible. Selection retains
+filter them out. The immutable oracle caches its full-domain enclosure; a native
+background job computes it after coarse geometry is admitted. Cover preparation
+only reads an already cached certificate and otherwise keeps uncertain nodes
+eligible. Selection retains
 conservative local clip envelopes with hysteresis; angular tolerances derive from
 the projection, output pixels and configured pixel error. The same retained envelope
 owns invalidation and clipping. A constant plane in an infinite projection is
@@ -170,6 +171,10 @@ counts are odd, so parent and child grids nest. Graphics maximum depth describes
 local domain; a power-of-two regional expansion adds its exact depth offset while
 preserving finest spacing in metres. Unsupported domain ratios or effective depth
 are diagnosed before admission. Collider settings do not select visual resolution.
+The overzoom visual reconstruction measures craterlet resolvability by bowl
+diameter and fades the contribution continuously. Its physical radius-based
+sampling contract is unchanged. Streamed visual geometry and derived maps use the same
+filter role; cache identities version the reconstruction.
 
 Each consumed view has its configured tile budget. Cover preparation and tile
 bakes share bounded asynchronous admission, upload budgets and cache byte limits.
@@ -181,12 +186,60 @@ does not discard visible coverage; pressure remains explicit in streaming status
 The consumed-output registry and output pixel admission bound the number and size
 of views. New demands withdraw obsolete queued work; already-running
 work retains exact scene/source/view leases at publication. Ready ancestors remain
-visible until replacements and materials are admitted. Camera retention is bounded
+visible until replacements and materials are admitted. A fallback that would
+replace already presented finer geometry with an unselected ancestor is not
+published; an intentional merge must select its replacement leaf. Perspective
+views reserve complete camera-centred detail disks before discretionary projected
+error refinement. Each disk receives one affordable minimum depth, including
+its restricted neighbour closure; the inner disk and outer disk share a bounded
+portion of the view budget, leaving capacity for the visible middle distance.
+Camera retention is bounded
 in three dimensions and scoped to its view and source. A requested minimum detail
 tree that cannot fit the selected resource budget is reported as unfulfilled quality.
 Physics never waits for visual preparation.
 
-`TerrainLodStatus.camera_cover` reports each view's local pose, clearance, selected
+### Progressive startup
+
+After the DEM and authored shader roles are admitted, root mesh preparation
+and camera cover planning run concurrently. Root publication does not wait for
+the detailed cover, derived normals/surface maps or visual horizon map. The
+camera collision admission still validates every candidate. Complete sibling
+groups refine from ready parents in camera-distance order; uploads use the
+current view's priority rather than worker arrival order. Hidden ancestors
+serve unfinished target branches and return to the reclaimable mesh cache
+when those branches publish. Every nonempty publication must cover the entire
+root exactly once with 2:1-restricted edges. Visible dirty neighbours switch
+height generations together; unchanged tiles retain their existing meshes.
+The selected tile budget and global byte admission bound work and residents.
+
+Full-domain height certification is an exact-source, background request
+after the initial camera-near partition is published. Both the worker and
+finalized camera-demand publisher use the same source/certificate selection
+signature. Certification wakes conservative selection without blocking initial
+coverage. Incomplete cover convergence advances independently of the simulation
+clock; cover operations are allocated by the terrain owner, across view
+replacement, and only an admitted operation can own a pending completion.
+
+On a native cold cache, a shared-admission derived-layer worker first checks
+the final content-addressed map, otherwise publishes a 256-or-smaller texel
+preview. Each cache load validates the requested raster dimensions. The final
+map is admitted in the background after the consumed near-camera cover is
+actually drawn. Source and requested bake identity fence every completion;
+cancelled scene or quality leases cannot publish stale material data.
+Material reconciliation upgrades resident meshes independently of geometry.
+The preview has lower-frequency shading, not final-map equivalence.
+
+Offline capture waits for the requested map identity and applicable horizon
+products, including the initial visibility cache wired into streamed
+materials when the configured sun requires one. Debounce uses an independent
+wall clock, so holding simulation time during capture cannot block either
+re-bake. A root publication count is a topology fact, not a guarantee of
+visible ground or a GPU pixel acknowledgement. Browser CPU baking remains
+cooperative on the existing page executor; native async timings do not
+certify web responsiveness.
+
+`TerrainLodStatus.camera_cover` reports each view's local position and forward direction, draw revision, initial
+near-cover readiness, pending cover preparation, clearance, selected
 depth, effective maximum depth, metric spacing, readiness, pin state, wanted,
 resident and drawn counts, and refused refinements. `contacts` reports physical
 support readiness and lattice parameters independently of rendered tiles.
