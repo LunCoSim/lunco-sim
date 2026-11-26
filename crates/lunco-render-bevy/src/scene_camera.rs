@@ -151,9 +151,11 @@ fn publish_directional_shadow_references(
 #[derive(Component)]
 struct SelectedOutputShadowOrigin;
 
-/// An explicit authored origin takes precedence. Otherwise the selected main
-/// output supplies the application's shared point/spot shadow sampling origin.
+/// An explicit authored origin takes precedence. Otherwise the unique actual
+/// output of the selected presentation source supplies the shared point/spot
+/// shadow sampling origin (windowed or capture). Observation views never claim it.
 fn publish_default_shadow_origin(
+    viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
     outputs: Query<(Entity, &SceneViewDemand), With<SceneViewLayers>>,
     origins: Query<(Entity, Has<SelectedOutputShadowOrigin>), With<bevy::camera::ShadowLodOrigin>>,
     mut commands: Commands,
@@ -161,10 +163,16 @@ fn publish_default_shadow_origin(
     let authored = origins.iter().any(|(_, owned)| !owned);
     let selected = (!authored)
         .then(|| {
-            outputs
-                .iter()
-                .find(|(_, demand)| demand.output == SceneViewOutput::MainViewport)
-                .map(|(entity, _)| entity)
+            let source = viewport.as_ref()?.active_camera?;
+            let mut presentation = outputs.iter().filter(|(_, demand)| {
+                demand.source == source
+                    && matches!(
+                        demand.output,
+                        SceneViewOutput::MainViewport | SceneViewOutput::Capture { .. }
+                    )
+            });
+            let (output, _) = presentation.next()?;
+            presentation.next().is_none().then_some(output)
         })
         .flatten();
     for (entity, owned) in &origins {
@@ -879,6 +887,53 @@ mod view_output_tests {
             app.world()
                 .get::<bevy::camera::ShadowLodOrigin>(camera)
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn selected_capture_output_owns_shared_shadow_origin_not_its_source_or_feed() {
+        let mut app = App::new();
+        app.init_resource::<lunco_viewport_core::SceneViewport>()
+            .add_systems(
+                Update,
+                (publish_scene_view_layers, publish_default_shadow_origin).chain(),
+            );
+        let source = app.world_mut().spawn_empty().id();
+        let feed = output(app.world_mut(), source, 1);
+        let capture = output(app.world_mut(), source, 2);
+        app.world_mut()
+            .get_mut::<SceneViewDemand>(capture)
+            .unwrap()
+            .output = SceneViewOutput::Capture { id: 0 };
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = Some(source);
+
+        app.update();
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(capture)
+                .is_some()
+        );
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(feed)
+                .is_none()
+        );
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(source)
+                .is_none()
+        );
+
+        app.world_mut()
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .active_camera = None;
+        app.update();
+        assert!(
+            app.world()
+                .get::<bevy::camera::ShadowLodOrigin>(capture)
+                .is_none()
         );
     }
 }

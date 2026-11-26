@@ -79,8 +79,11 @@ and checks them again before every image. Loading that returns during a take
 holds the logical image without numbering a frame or admitting extra time.
 This is a capture condition, not a hidden indicator or a post-production crop.
 Hosts without a captured UI do not require the workbench acknowledgement.
-`GetOfflineRecordingStatus` exposes `pending`, `ui_presentation_required` and
-`ui_presentation_ready` alongside the frame/cycle receipt.
+`GetOfflineRecordingStatus` exposes `pending`, `startup_blocker`,
+`ui_presentation_required` and `ui_presentation_ready` alongside the frame/cycle
+receipt. A second start while a take owns the target is rejected without
+changing its clock or output. Terminal readback, encoding and output failures
+retire that take and are reported in `failure`.
 
 ```sh
 # Windowed: record the live window once the scene's visuals are ready
@@ -107,15 +110,14 @@ competing window screenshots can cause Bevy to drop a capture and strand the
 completed-cycle latch. Inspect a screenshot before the take or extract a frame
 from the completed recording. Status and measurement queries remain available.
 
-After the authored camera contract and the complete USD visual projection are
-present, offscreen recording holds virtual time for a one-second cold-GPU render
-warm-up before numbering frame 0. A CLI request made at process startup keeps
+Before numbering frame 0, offscreen recording requires the selected camera's exact
+image target to acknowledge all occupied opaque, alpha-masked, transmissive and
+transparent color pipelines. A CLI request made at process startup keeps
 ordinary virtual time only until the authored scenario has selected its explicit
 presentation camera; otherwise the readiness gate would freeze the clock before
 that startup command could run. Once the camera is bound, scene completion includes
 queued projections and asynchronously generated meshes, so the recorder cannot
-begin with a valid camera and an incomplete render participant set. This fence lets
-pipelines finish compiling without emitting a clear-color first frame.
+begin with a valid camera and an incomplete render participant set.
 
 Scene test observers use the same separation: a Rhai test under
 `assets/scenarios/tests/` is headless unless it declares
@@ -137,10 +139,11 @@ The ordinary Summer Space School behavior scripts remain CPU/headless tests;
 invoke an offscreen run when the acceptance criterion includes shadows, sky, or
 lunar-surface appearance.
 
-Offscreen has no workbench, so no viewport camera exists: the scene must provide an
-explicit active presentation camera, an authored `LocalEmbodiment` presentation camera,
-or an authored camera track with a valid camera binding. The recorder consumes that
-authored presentation contract and renders it through a target-born offscreen camera.
+Offscreen has no workbench window, but it uses the shared viewport camera
+selection and authored presentation policy. The selected authored camera
+owns the actual planetary LOD and floating render origin; a target-born
+offscreen camera renders that exact pose through its separate capture output.
+Ordinary image cameras are not eligible as presentation pose owners.
 That camera mirrors the source camera's transform, projection, exposure, tonemapping,
 MSAA, and camera-owned environment views (`Skybox` and generated image-based-lighting
 intent); the authored camera remains the pose owner. Derived environment maps are
@@ -228,9 +231,9 @@ per captured frame**, and the count varies with machine speed. See §5.
 
 `output_dir` ending in `.mp4` / `.mkv` / `.mov` streams frames straight into a spawned
 `ffmpeg` (libx264, one file, ~2 MB per 10 s at 720p instead of ~1.2 GB of PNGs); anything
-else is a directory receiving a `frame_%06d.png` sequence. `ffmpeg` is probed at start —
-missing, the recorder **warns loudly and demotes to a PNG sequence** in `<name>.frames/`;
-it never crashes the take. The recorder writes each delivered frame synchronously to
+else is a directory receiving a `frame_%06d.png` sequence. `ffmpeg` is probed before
+arming a video take; if unavailable the request is rejected. Choose a PNG directory
+explicitly to record a frame sequence. The recorder writes each delivered frame synchronously to
 the selected sink, so ffmpeg pipe back-pressure holds the deterministic clock just
 like a slow PNG write; no writer thread or reorder buffer can change frame order.
 

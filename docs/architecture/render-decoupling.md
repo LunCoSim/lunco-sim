@@ -88,14 +88,15 @@ rendering quality settings or simulation cadence.
 
 ## Initial scene presentation
 
-The interactive application keeps the main scene camera inactive during scene
-replacement and initial simulation preparation. Its existing workbench
-progress notice stays visible. The viewport keeps its camera binding, and the
-camera reconciler resumes rendering when the mounted scene's preparation and
-readiness waits settle. Terminal failures remain visible through the status
-and diagnostic surfaces. Later runtime edits and individual participant waits
-leave the view available. Headless and offscreen hosts retain their own output
-contracts.
+The interactive application keeps the workbench progress backdrop visible
+during scene replacement and initial simulation preparation. The physically
+admitted selected camera can prepare terrain and GPU pipelines behind it;
+interaction and window capture use only the exposed viewport. Terminal failures
+remain visible through the status and diagnostic surfaces. Later runtime edits
+and individual participant waits leave the view available. Offscreen enables the
+same authored selection and origin contract without a workbench; its leased
+non-writing pose owner drives one image-target render consumer. The render-free
+headless host does not require a presentation camera.
 
 ## Live camera observations
 

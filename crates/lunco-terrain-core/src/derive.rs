@@ -120,11 +120,16 @@ pub fn ao_map<S: HeightSource>(
     let radius = radius_m.max(1e-3);
     let bounded = source_half_extent.is_finite();
     let source_half = source_half_extent.max(0.0);
-    // Precompute ray directions evenly around the circle.
-    let angles: Vec<(f64, f64)> = (0..dirs)
-        .map(|d| {
+    // Every texel marches exactly the same ordered relative ray lattice. Keep
+    // the original f64 operations and precompute their invariant offsets once.
+    let rays: Vec<(f64, f64, f64)> = (0..dirs)
+        .flat_map(|d| {
             let a = std::f64::consts::TAU * (d as f64) / (dirs as f64);
-            (a.cos(), a.sin())
+            let (dx, dz) = (a.cos(), a.sin());
+            (1..=steps).map(move |s| {
+                let dist = radius * (s as f64) / (steps as f64);
+                (dx * dist, dz * dist, dist)
+            })
         })
         .collect();
 
@@ -134,12 +139,11 @@ pub fn ao_map<S: HeightSource>(
             let (x, z) = texel_world(region, res, ix, iz);
             let h0 = src.height_at(x, z);
             let mut occ = 0.0f64;
-            for &(dx, dz) in &angles {
+            for ray in rays.chunks_exact(steps) {
                 let mut max_sin = 0.0f64;
-                for s in 1..=steps {
-                    let dist = radius * (s as f64) / (steps as f64);
-                    let sx = x + dx * dist;
-                    let sz = z + dz * dist;
+                for &(dx, dz, dist) in ray {
+                    let sx = x + dx;
+                    let sz = z + dz;
                     if bounded && (sx.abs() > source_half || sz.abs() > source_half) {
                         // The ray has left the finite authored terrain. Beyond
                         // that edge is open sky, not repeated edge elevation.
@@ -614,6 +618,42 @@ mod tests {
         // At the right edge, rays that leave the measured square see open sky;
         // extending the ramp beyond the DEM would incorrectly occlude them.
         assert!(bounded[3 * 8 + 7] > unbounded[3 * 8 + 7]);
+    }
+
+    #[test]
+    fn prepared_ao_rays_match_direct_horizon_integral_bit_for_bit() {
+        let source = Pit;
+        let region = region();
+        let (res, dirs, steps, radius) = (19, 16, 16, 83.7_f64);
+        for half in [100.0_f64, f64::INFINITY] {
+            let actual = ao_map(&source, &region, res, radius, dirs, steps, half);
+            for iz in 0..res {
+                for ix in 0..res {
+                    let (x, z) = texel_world(&region, res, ix, iz);
+                    let h0 = source.height_at(x, z);
+                    let mut occ = 0.0_f64;
+                    for d in 0..dirs {
+                        let a = std::f64::consts::TAU * (d as f64) / (dirs as f64);
+                        let (dx, dz) = (a.cos(), a.sin());
+                        let mut maximum = 0.0_f64;
+                        for s in 1..=steps {
+                            let dist = radius * (s as f64) / (steps as f64);
+                            let (sx, sz) = (x + dx * dist, z + dz * dist);
+                            if sx.abs() > half || sz.abs() > half {
+                                break;
+                            }
+                            let dh = source.height_at(sx, sz) - h0;
+                            if dh > 0.0 {
+                                maximum = maximum.max(dh / (dh * dh + dist * dist).sqrt());
+                            }
+                        }
+                        occ += maximum;
+                    }
+                    let expected = (1.0 - occ / dirs as f64).clamp(0.0, 1.0) as f32;
+                    assert_eq!(actual[iz * res + ix].to_bits(), expected.to_bits());
+                }
+            }
+        }
     }
 
     #[test]

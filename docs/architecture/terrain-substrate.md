@@ -230,9 +230,17 @@ the final content-addressed map, otherwise publishes a 256-or-smaller texel
 preview. Each cache load validates the requested raster dimensions. The final
 map is admitted in the background after the consumed near-camera draw
 partition is published. Source and requested bake identity fence every completion;
-cancelled scene or quality leases cannot publish stale material data.
+cancelled scene or quality leases cannot publish stale material data. Removing
+the DEM from a surviving entity also retires its queued request, result receipt
+and derived maps, leaving authored raster bindings intact.
 Material reconciliation upgrades resident meshes independently of geometry.
 The preview has lower-frequency shading, not final-map equivalence.
+
+Static-mesh and streamed horizon producers retain exact published image leases;
+one producer cannot retire the other's map. A shadow-cache task owns the map and
+quality that it sampled. Source retirement cancels that task at a row boundary
+and prevents stale visibility publication. Streamed horizon bakes prepare the
+oracle once for the exact map region rather than rediscovering modifiers per sample.
 
 Offline capture waits for the requested map identity and applicable horizon
 products, including the initial visibility cache wired into streamed
@@ -248,7 +256,9 @@ The final capture admission evaluates terminal failures before advancing or
 requesting an image. An outstanding numbered request has an exact entity
 identity; stopping a take retires it. Windowless capture acknowledges the
 actual target and all occupied color-phase pipelines from the render world,
-including alpha-masked and non-mesh bins, with no elapsed-time warm-up.
+including alpha-masked, transmissive and non-mesh bins, with no elapsed-time
+warm-up. The target-born capture output consumes the same canonical selected
+pose owner as globe LOD and the render-origin precision contract.
 
 `TerrainLodStatus.camera_cover` reports each view's local position and forward direction, draw revision, initial
 near-cover readiness, pending cover preparation, clearance, selected

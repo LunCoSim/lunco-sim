@@ -918,6 +918,34 @@ fn finish_derived_bakes(
     }
 }
 
+/// A surviving entity can lose its DEM during authored reconciliation. Its
+/// queued request, unconsumed result and published rasters are still owned by
+/// the removed source, not by the entity's remaining authored material.
+fn retire_derived_without_source(
+    mut commands: Commands,
+    entities: Query<
+        Entity,
+        (
+            Without<DemHeightField>,
+            Or<(
+                With<DerivedBakeTask>,
+                With<DerivedMapsFailed>,
+                With<DerivedMapsStale>,
+                With<TerrainDerivedMaps>,
+            )>,
+        ),
+    >,
+) {
+    for entity in &entities {
+        commands.entity(entity).try_remove::<(
+            DerivedBakeTask,
+            DerivedMapsFailed,
+            DerivedMapsStale,
+            TerrainDerivedMaps,
+        )>();
+    }
+}
+
 /// Cancel an optional visual bake before the outgoing scene is despawned. The
 /// task handle is scene-owned just like the DEM task; leaving it in the compute
 /// pool would let the previous Twin consume capacity while the replacement is
@@ -1145,6 +1173,7 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
         (
+            retire_derived_without_source,
             mark_derived_stale_on_quality_change
                 .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
             mark_derived_stale,
@@ -1446,6 +1475,87 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn source_removal_releases_queued_work_and_unconsumed_raster_permit() {
+        let mut app = App::new();
+        app.init_resource::<AsyncWorkAdmission>()
+            .add_systems(Update, retire_derived_without_source);
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(crate::HeightGrid::new_flat(
+            2, 1.0,
+        ))));
+        let (request, permit) = {
+            let admission = app.world().resource::<AsyncWorkAdmission>();
+            let key = |operation| {
+                AsyncWorkKey::new(AsyncWorkKind::VisualizationPreparation, 0, 1, 1, operation)
+            };
+            (
+                admission
+                    .submit_transport(AsyncWorkPriority::Background, key(1), |_| {})
+                    .unwrap(),
+                admission
+                    .admit_external(AsyncWorkPriority::Interactive, key(2))
+                    .unwrap(),
+            )
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(
+            sender
+                .send((
+                    DerivedMipped {
+                        res: 1,
+                        surface: (vec![0; 4], 1),
+                        normal: (vec![0; 4], 1)
+                    },
+                    permit
+                ))
+                .is_ok()
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                DemHeightField(oracle.clone()),
+                DerivedBakeTask {
+                    source: oracle.clone(),
+                    requested_key: 1,
+                    _request: request,
+                    result: std::sync::Mutex::new(receiver),
+                },
+                DerivedMapsFailed {
+                    source: oracle,
+                    requested_key: 1,
+                },
+                DerivedMapsStale {
+                    since: Instant::now(),
+                },
+                TerrainDerivedMaps {
+                    surface: Handle::default(),
+                    normal: Handle::default(),
+                    surface_key: 1,
+                    bake_key: 1,
+                    res: 1,
+                    texel_size_m: 1.0,
+                },
+                TerrainAuthoredMaps::default(),
+            ))
+            .id();
+        let snapshot = app.world().resource::<AsyncWorkAdmission>().snapshot();
+        assert_eq!(snapshot.queued.iter().sum::<usize>(), 1);
+        assert_eq!(snapshot.in_flight.iter().sum::<usize>(), 1);
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<DemHeightField>();
+        app.update();
+        let snapshot = app.world().resource::<AsyncWorkAdmission>().snapshot();
+        assert_eq!(snapshot.queued.iter().sum::<usize>(), 0);
+        assert_eq!(snapshot.in_flight.iter().sum::<usize>(), 0);
+        assert!(app.world().get::<DerivedBakeTask>(entity).is_none());
+        assert!(app.world().get::<DerivedMapsFailed>(entity).is_none());
+        assert!(app.world().get::<DerivedMapsStale>(entity).is_none());
+        assert!(app.world().get::<TerrainDerivedMaps>(entity).is_none());
+        assert!(app.world().get::<TerrainAuthoredMaps>(entity).is_some());
     }
 
     #[test]

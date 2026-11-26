@@ -220,8 +220,33 @@ impl HeightField {
         march_steps: usize,
         samples_per_axis: usize,
     ) -> Vec<u8> {
+        self.bake_visibility_cache_until(
+            sun_local,
+            tan_sun_r,
+            target_res,
+            march_steps,
+            samples_per_axis,
+            || false,
+        )
+        .expect("a non-cancellable bake cannot be cancelled")
+    }
+
+    /// The same deterministic cache bake, allowing a retired work lease to
+    /// release its worker and admission permit at a row boundary.
+    fn bake_visibility_cache_until(
+        &self,
+        sun_local: Vec3,
+        tan_sun_r: f32,
+        target_res: u32,
+        march_steps: usize,
+        samples_per_axis: usize,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<Vec<u8>> {
+        if cancelled() {
+            return None;
+        }
         if target_res < 2 || march_steps == 0 || samples_per_axis == 0 {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let res = target_res;
         let mut bytes = vec![0u8; (res as usize) * (res as usize)];
@@ -231,16 +256,19 @@ impl HeightField {
         // pays the explicitly requested cost on the main thread.
         let sample_count = samples_per_axis.saturating_mul(samples_per_axis);
         if sample_count == 0 {
-            return Vec::new();
+            return Some(Vec::new());
         }
         let max_g = (res - 1) as f32;
         let sun = HorizonSun::new(sun_local, tan_sun_r);
         let open = sun.visible_above(0.0);
         if open <= 0.0 {
-            return bytes;
+            return Some(bytes);
         }
         let march = horizon_march_parameters(march_steps);
         for y in 0..res {
+            if cancelled() {
+                return None;
+            }
             for x in 0..res {
                 let mut vis = 0.0;
                 for sy in 0..samples_per_axis {
@@ -256,7 +284,7 @@ impl HeightField {
                             .clamp(Vec2::ZERO, Vec2::splat(max_g));
                         let local_xz = self.min + g * inv * self.size;
                         let Some(visibility) = self.sun_visibility(local_xz, &sun, march) else {
-                            return Vec::new();
+                            return Some(Vec::new());
                         };
                         vis += visibility;
                     }
@@ -267,7 +295,7 @@ impl HeightField {
                         .clamp(0.0, 255.0) as u8;
             }
         }
-        bytes
+        Some(bytes)
     }
 }
 
@@ -341,10 +369,17 @@ pub struct HorizonBakeTask {
 }
 
 /// The exact mesh and authored resolution of the native static producer.
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct StaticHorizonSource {
     mesh: AssetId<Mesh>,
     resolution: u32,
+}
+
+/// A published static product owns only the heightfield image it installed.
+#[derive(Component)]
+struct StaticHorizonProduct {
+    source: StaticHorizonSource,
+    image: AssetId<Image>,
 }
 
 fn reconcile_static_horizon_source(
@@ -355,13 +390,14 @@ fn reconcile_static_horizon_source(
             Option<&HorizonShadowTerrain>,
             Option<&Mesh3d>,
             Has<RenderLayers>,
-            Option<&StaticHorizonSource>,
+            Option<&HorizonMap>,
+            Option<&StaticHorizonProduct>,
             Option<&HorizonBakeTask>,
         ),
-        Or<(With<StaticHorizonSource>, With<HorizonBakeTask>)>,
+        Or<(With<StaticHorizonProduct>, With<HorizonBakeTask>)>,
     >,
 ) {
-    for (entity, config, mesh, scoped, published, task) in &terrains {
+    for (entity, config, mesh, scoped, map, published, task) in &terrains {
         let current = config
             .zip(mesh)
             .filter(|(config, _)| !scoped && config.resolution >= 2)
@@ -369,16 +405,16 @@ fn reconcile_static_horizon_source(
                 mesh: mesh.0.id(),
                 resolution: config.resolution,
             });
-        if current.is_none()
-            || published.is_some_and(|source| Some(*source) != current)
-            || task.is_some_and(|task| Some(task.source) != current)
-        {
-            commands.entity(entity).try_remove::<(
-                HorizonMap,
-                HorizonShadowCache,
-                HorizonBakeTask,
-                StaticHorizonSource,
-            )>();
+        if let Some(product) = published {
+            if Some(product.source) != current
+                || map.is_none_or(|map| map.image.id() != product.image)
+            {
+                retire_horizon_map(&mut commands, entity, product.image);
+                commands.entity(entity).try_remove::<StaticHorizonProduct>();
+            }
+        }
+        if task.is_some_and(|task| Some(task.source) != current || map.is_some()) {
+            commands.entity(entity).try_remove::<HorizonBakeTask>();
         }
     }
 }
@@ -580,15 +616,25 @@ impl TerrainSunProjectionCache {
 
 /// In-flight async visibility-cache bake for a terrain entity (native only).
 #[derive(Component)]
-pub struct ShadowCacheBakeTask(Task<ShadowCacheResult>);
+pub struct ShadowCacheBakeTask {
+    task: Task<Option<ShadowCacheResult>>,
+    source_image: AssetId<Image>,
+    quality: ShadowCacheQuality,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for ShadowCacheBakeTask {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+}
 
 struct ShadowCacheResult {
     bytes: Vec<u8>,
     resolution: u32,
     sun_local: Vec3,
     requested_at: Instant,
-    source_image: Handle<Image>,
-    quality: ShadowCacheQuality,
     millis: u128,
     #[cfg(not(target_arch = "wasm32"))]
     _permit: lunco_core_runtime::async_work::ExternalWorkPermit,
@@ -893,11 +939,31 @@ fn install_horizon_map(
     commands
         .entity(entity)
         .try_remove::<bevy::light::NotShadowReceiver>()
-        .try_insert(StaticHorizonSource {
-            mesh: target.id(),
-            resolution: field.resolution,
-        });
-    install_horizon_map_from_field(commands, images, entity, field, millis);
+        .try_remove::<HorizonBakeTask>();
+    let source = StaticHorizonSource {
+        mesh: target.id(),
+        resolution: field.resolution,
+    };
+    let image = install_horizon_map_from_field(commands, images, entity, field, millis);
+    commands
+        .entity(entity)
+        .try_insert(StaticHorizonProduct { source, image });
+}
+
+/// Retire a published heightfield only if the retiring producer still owns
+/// the current image at the command commit boundary. Its derived cache and
+/// pending visibility work belong to that same image.
+pub fn retire_horizon_map(commands: &mut Commands, entity: Entity, image: AssetId<Image>) {
+    commands.queue(move |world: &mut World| {
+        if world
+            .get::<HorizonMap>(entity)
+            .is_some_and(|map| map.image.id() == image)
+        {
+            world
+                .entity_mut(entity)
+                .remove::<(HorizonMap, HorizonShadowCache, ShadowCacheBakeTask)>();
+        }
+    });
 }
 
 /// Mesh-less install: uploads the R32Float heightfield texture and inserts the
@@ -911,7 +977,7 @@ pub fn install_horizon_map_from_field(
     entity: Entity,
     field: HeightField,
     millis: u128,
-) {
+) -> AssetId<Image> {
     let bytes: Vec<u8> = field.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
     let image = images.add(Image::new(
         Extent3d {
@@ -930,10 +996,12 @@ pub fn install_horizon_map_from_field(
          ray-march shadows active (near field stays on CSM)",
         field.resolution, millis
     );
+    let id = image.id();
     commands
         .entity(entity)
-        .remove::<HorizonBakeTask>()
+        .try_remove::<(HorizonShadowCache, ShadowCacheBakeTask)>()
         .try_insert(HorizonMap { field, image });
+    id
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1088,28 +1156,34 @@ pub fn start_shadow_cache_bake(
             // Off-thread: clone the HeightField (cheap — `Arc<Vec<f32>>`)
             // and march every cache texel on a worker. The frame never blocks.
             let field = map.field.clone();
-            let source_image = map.image.clone();
+            let source_image = map.image.id();
+            let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancellation = cancelled.clone();
             let task = AsyncComputeTaskPool::get().spawn(async move {
                 let start = Instant::now();
-                let bytes = field.bake_visibility_cache(
+                let bytes = field.bake_visibility_cache_until(
                     sun_local,
                     tan_r,
                     target_res,
                     march_steps,
                     samples_per_axis,
-                );
-                ShadowCacheResult {
+                    || cancellation.load(std::sync::atomic::Ordering::Acquire),
+                )?;
+                Some(ShadowCacheResult {
                     bytes,
                     resolution: target_res,
                     sun_local,
                     requested_at,
-                    source_image,
-                    quality,
                     millis: start.elapsed().as_millis(),
                     _permit: permit,
-                }
+                })
             });
-            commands.entity(entity).insert(ShadowCacheBakeTask(task));
+            commands.entity(entity).try_insert(ShadowCacheBakeTask {
+                task,
+                source_image,
+                quality,
+                cancelled,
+            });
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -1159,25 +1233,35 @@ pub fn finish_shadow_cache_bake(
         &mut ShadowCacheBakeTask,
         Option<&HorizonShadowCache>,
         Option<&HorizonMap>,
+        Has<RenderLayers>,
     )>,
 ) {
     use bevy::tasks::futures_lite::future;
-    let quality = pick_sun(&sun).map(|(_, tan_radius, _)| ShadowCacheQuality {
-        tan_radius,
-        march_steps: cfg.march_steps,
-        samples_per_axis: cfg.samples_per_axis,
-    });
-    for (entity, mut task, cache, map) in &mut q {
-        let Some(result) = future::block_on(future::poll_once(&mut task.0)) else {
-            continue;
-        };
-        // A completed visual product belongs to the immutable source it read.
-        // Terrain replacement must never publish a result from the retired map.
-        if map.is_none_or(|map| map.image != result.source_image) || quality != Some(result.quality)
+    let quality = (cfg.enabled && cfg.quality_is_valid())
+        .then(|| pick_sun(&sun))
+        .flatten()
+        .map(|(_, tan_radius, _)| ShadowCacheQuality {
+            tan_radius,
+            march_steps: cfg.march_steps,
+            samples_per_axis: cfg.samples_per_axis,
+        });
+    for (entity, mut task, cache, map, scoped) in &mut q {
+        // Validate the immutable source lease before polling, so obsolete work
+        // releases admission and cannot block a replacement through its bake.
+        if scoped
+            || map.is_none_or(|map| map.image.id() != task.source_image)
+            || quality != Some(task.quality)
         {
-            commands.entity(entity).remove::<ShadowCacheBakeTask>();
+            commands.entity(entity).try_remove::<ShadowCacheBakeTask>();
             continue;
         }
+        let Some(result) = future::block_on(future::poll_once(&mut task.task)) else {
+            continue;
+        };
+        let Some(result) = result else {
+            commands.entity(entity).try_remove::<ShadowCacheBakeTask>();
+            continue;
+        };
         install_shadow_cache(
             &mut commands,
             &mut images,
@@ -1188,7 +1272,7 @@ pub fn finish_shadow_cache_bake(
             result.resolution,
             result.sun_local,
             result.requested_at,
-            result.quality,
+            task.quality,
             result.millis,
         );
     }
@@ -1447,15 +1531,19 @@ mod tests {
             mesh: mesh.id(),
             resolution: 2,
         };
+        let image = Handle::<Image>::default();
         let entity = app
             .world_mut()
             .spawn((
                 Mesh3d(mesh),
                 HorizonShadowTerrain { resolution: 2 },
-                source,
+                StaticHorizonProduct {
+                    source,
+                    image: image.id(),
+                },
                 HorizonMap {
                     field: make_field(2, Vec2::ZERO, Vec2::ONE, vec![0.0; 4]),
-                    image: Handle::default(),
+                    image: image.clone(),
                 },
             ))
             .id();
@@ -1470,11 +1558,14 @@ mod tests {
         app.world_mut().entity_mut(entity).insert((
             HorizonMap {
                 field: make_field(4, Vec2::ZERO, Vec2::ONE, vec![0.0; 16]),
-                image: Handle::default(),
+                image: image.clone(),
             },
-            StaticHorizonSource {
-                resolution: 4,
-                ..source
+            StaticHorizonProduct {
+                source: StaticHorizonSource {
+                    resolution: 4,
+                    ..source
+                },
+                image: image.id(),
             },
         ));
         app.world_mut()
@@ -1482,6 +1573,95 @@ mod tests {
             .insert(Mesh3d(replacement));
         app.update();
         assert!(app.world().get::<HorizonMap>(entity).is_none());
+    }
+
+    #[test]
+    fn static_horizon_retirement_preserves_a_replacement_producers_image() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .add_systems(Update, reconcile_static_horizon_source);
+        let mesh = app
+            .world_mut()
+            .resource_mut::<Assets<Mesh>>()
+            .reserve_handle();
+        let replacement = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .reserve_handle();
+        let retired = Handle::<Image>::default();
+        let entity = app
+            .world_mut()
+            .spawn((
+                StaticHorizonProduct {
+                    source: StaticHorizonSource {
+                        mesh: mesh.id(),
+                        resolution: 2,
+                    },
+                    image: retired.id(),
+                },
+                HorizonMap {
+                    field: make_field(2, Vec2::ZERO, Vec2::ONE, vec![0.0; 4]),
+                    image: replacement.clone(),
+                },
+            ))
+            .id();
+        app.update();
+        assert!(app.world().get::<StaticHorizonProduct>(entity).is_none());
+        assert_eq!(
+            app.world().get::<HorizonMap>(entity).unwrap().image,
+            replacement
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn invalid_shadow_work_is_retired_without_waiting_for_completion() {
+        let pool = bevy::tasks::TaskPool::new();
+        let mut app = App::new();
+        app.init_resource::<HorizonShadowCacheConfig>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<DataTextureUpdates>()
+            .add_systems(Update, finish_shadow_cache_bake);
+        app.world_mut()
+            .resource_mut::<HorizonShadowCacheConfig>()
+            .enabled = false;
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let entity = app
+            .world_mut()
+            .spawn(ShadowCacheBakeTask {
+                task: pool.spawn(std::future::pending()),
+                source_image: Handle::<Image>::default().id(),
+                quality: ShadowCacheQuality {
+                    tan_radius: 0.01,
+                    march_steps: 16,
+                    samples_per_axis: 1,
+                },
+                cancelled: cancelled.clone(),
+            })
+            .id();
+        app.update();
+        assert!(app.world().get::<ShadowCacheBakeTask>(entity).is_none());
+        assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
+    fn visibility_bake_can_retire_at_a_row_boundary() {
+        let field = make_field(4, Vec2::ZERO, Vec2::ONE, vec![0.0; 16]);
+        let checks = std::cell::Cell::new(0);
+        let result = field.bake_visibility_cache_until(
+            Vec3::new(1.0, 1.0, 0.0).normalize(),
+            0.01,
+            4,
+            8,
+            1,
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() == 3
+            },
+        );
+        assert!(result.is_none());
+        assert_eq!(checks.get(), 3);
     }
 
     #[test]

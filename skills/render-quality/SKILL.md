@@ -174,6 +174,12 @@ GPU acceptance still require the rendered fixture and a clean process log.
    Compare first, near and fully prepared screenshots and repeat against the
    same warmed cache. Do not substitute a world-readiness flag for visual
    publication or treat preview shading as final capture quality.
+   For the windowless path, run `scripts/api/test_offscreen_terrain_recording.py`
+   with the same scene and a warm cache; verify the canonical viewport pose
+   owner, nonempty `camera_cover`, complete derived preparation and the actual
+   numbered images. The capture mirror is a consumer, not a second camera
+   selector. Read `startup_blocker` and `camera_cover[].presentation_reason`
+   when recording remains armed.
    If a crater remains irregular with native shadows disabled, inspect albedo
    and geometric normals separately. Missing orthophoto coverage can coincide
    with stereo-DEM voids. Follow `skills/geo-assets/SKILL.md` to regenerate those

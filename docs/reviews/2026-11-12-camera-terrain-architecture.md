@@ -345,16 +345,56 @@ diagnostics reported zero errors and warnings in both windowed runs.
 On the offscreen `sun_material_precision.usda` fixture, the actual image
 target acknowledged ready pipelines and the recorder started 38 ms later,
 then produced two valid 640×360 images and exited. The workshop's offscreen
-run at 640×360 did not complete: the pipeline receipt arrived, but two
-planetary covers and one terrain selection/presentation remained pending
-despite 208/208 resident tiles. This is a separate unresolved preparation
-blocker; the owned session was closed through `Exit`. No offscreen workshop
-recording acceptance is claimed.
+run at 640×360 did not complete during that pass: the pipeline receipt arrived,
+but two planetary covers and one terrain selection/presentation remained
+pending despite 208/208 resident tiles. The next audit resolved the shared
+pose-owner defect and verified real workshop recordings, below.
 
 Evidence: `/tmp/luncosim-terrain-audit/deep-audit-warm/`,
 `/tmp/luncosim-terrain-audit/deep-audit-cold/`,
 `/tmp/luncosim-terrain-audit/deep-audit-offscreen-fixture/`, and
 `/tmp/luncosim-terrain-audit/deep-audit-offscreen/`.
+
+### Shared windowless presentation and bake lease audit
+
+Offscreen uses the same authored viewport and origin selection as a windowed
+host. The separate image-render camera is a leased output consumer; the
+selected authored pose owner drives planetary LOD and terrain precision. The
+recorder checks the target's occupied opaque, masked, transmissive and
+transparent render phases. Generic GPU readbacks are not capture requests.
+Duplicate starts reject without altering an existing take; output/readback
+failures preserve the terminal outcome through teardown and CLI exit.
+
+Static and streamed horizon maps retire only the image owned by their source
+lease. Invalid streamed heightfield and visibility jobs stop at a row boundary; DEM
+removal retires queued derived work and its published maps. Scoped heightfield
+sampling and invariant AO ray setup preserve the authored quality contract.
+The AO regression matched the direct integral bit for bit. The seven-package
+owner suite compiled and, after correcting the new readback test fixture's
+deferred-command flush, passed 440 distinct tests with one existing ignored
+test; the AO regression passed separately.
+
+The production build on `0e56812e1` plus the audit changes includes main's
+retained native camera/light visibility revision. On port 3743, the formerly
+blocked workshop at 640×360 admitted its canonical viewport source and a complete
+205/205 tile capture partition, with no selection, presentation or derived
+pending work. It recorded six inspected images and exited successfully. The
+competing start returned HTTP 409 without creating a second destination. An
+invalid CLI output directory independently exited with status 1 and zero frames.
+
+The 1600×1000 cold-terrain windowed run published the first root 0.329 s after
+visual demand and the complete draw partition 0.908 s after physical world
+readiness. Preview published at 32.51 s and final shading at 93.34 s from
+launch; all 567 tile identities were unchanged. The first exposed viewport,
+numbered frames, final viewport, and post-retirement/retune image passed the
+ground-pixel probe, with zero runtime diagnostic errors or warnings and three
+passing stationary-cover checks. Median settled FPS was 43.71 (22.88 ms;
+p95 150.31 ms) on the shared machine, not an isolated performance comparison.
+
+Evidence: `/tmp/luncosim-terrain-audit/review2-offscreen3/`,
+`/tmp/luncosim-terrain-audit/review2-invalid-output/`, and
+`/tmp/luncosim-terrain-audit/review2-cold/`. The separately tracked remaining
+issues are in [open-terrain-preparation-and-visibility.md](open-terrain-preparation-and-visibility.md).
 
 ## External architecture references
 
