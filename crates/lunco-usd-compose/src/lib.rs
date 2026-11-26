@@ -215,7 +215,10 @@ pub fn is_usd_layer(path: &Path) -> bool {
 /// This is USD interpretation only. Traversal and storage access remain in
 /// `lunco-assets-core`.
 pub fn layer_dependency_arcs(bytes: &[u8]) -> Result<Vec<String>> {
-    authored_dependencies("lunco://__dependency_source__.usd", bytes)
+    authored_dependencies(
+        "lunco://__dependency_source__.usd",
+        &recipe::StageLayerBytes::from(bytes.to_vec()),
+    )
 }
 
 /// Compose a native USDA file using the canonical LunCo asset traversal.
@@ -474,6 +477,10 @@ pub fn compose_file_to_stage_with_roots(
 /// recipe can reanchor relative and absolute arcs without changing their pairing.
 /// Fetch adapters consume the identifiers; they do not parse USD.
 pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
+    recipe::StageLayerBytes::from(raw.to_vec()).child_layer_ids(id)
+}
+
+fn child_layer_ids_for_layer(id: &str, raw: &recipe::StageLayerBytes) -> Result<Vec<String>> {
     let anchor = ResolvedPath::new(id);
     authored_dependencies(id, raw)?
         .into_iter()
@@ -491,12 +498,10 @@ pub fn child_layer_ids(id: &str, raw: &[u8]) -> Result<Vec<String>> {
 /// source opinions and expression spellings stay intact. This does not use
 /// UsdUtilsComputeAllDependencies, whose expansion contract currently refuses
 /// variable expressions and UDIM patterns accepted by the stage reader.
-fn authored_dependencies(id: &str, raw: &[u8]) -> Result<Vec<String>> {
+fn authored_dependencies(id: &str, raw: &recipe::StageLayerBytes) -> Result<Vec<String>> {
     canonicalize_at(id, None)?;
-    if raw.starts_with(openusd::usda::MAGIC) {
-        validate_usda_nesting(std::str::from_utf8(raw)?)?;
-    }
-    let mut layer = openusd::sdf::Layer::from_bytes(id, raw.to_vec())?;
+    raw.validate_nesting()?;
+    let mut layer = openusd::sdf::Layer::from_bytes(id, raw.asset_buffer())?;
     validate_layer_structure(id, layer.data())?;
     dependency_paths(&mut layer)
 }
