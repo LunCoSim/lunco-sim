@@ -1109,6 +1109,10 @@ start guesses.
 Ordinary authored initialization carries no coupled state admission. A coupled
 admission with a missing required free coordinate is an error, including an
 explicitly empty supplied inventory.
+The loading popup shows the number of participants in the shared solve. After
+input admission, it counts installed live sessions against that same total using
+the expected session ID for each participant.
+
 All members remain paused
 under `CoupledInitializationPending` until their own solvers are constructed at
 `t=0` and the actual connected observations agree with the composite within the

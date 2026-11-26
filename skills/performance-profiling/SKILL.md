@@ -334,7 +334,9 @@ cohort. Do not hide malformed authored catalogs, change
 Rhai limits or classify sources by guessed catalog filenames.
 
 For coupled startup, distinguish the one-shot solve from participant
-certification. Pending constructors supply no certifiable observation; the owner
+certification. The windowed startup driver's `--loading-progress` option records
+the popup's phase changes. Compare the coupled member count with the subsequent
+session-ready count and the scene-scoped construction receipt. Pending constructors supply no certifiable observation; the owner
 waits on their outcomes and revalidates current source, wiring and physical
 samples at final admission. Measure receipt delivery from the worker's result
 log to the shared completion schedule's admission log, using the scene-scoped
