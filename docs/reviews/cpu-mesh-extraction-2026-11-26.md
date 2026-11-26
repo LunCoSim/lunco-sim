@@ -44,10 +44,11 @@ disagreement. All comparisons preserve native visibility, shadows and materials;
 physics cadence and telemetry admission are unchanged.
 
 The actual production profiles were diagnostic Tracy builds running on the
-regular desktop. The previously completed reference and candidate binaries,
-captures, receipts and `relative.json` are retained under the ignored
-`.cache/cpu-extraction-evidence/` directory. The published Git pin resolves to
+regular desktop. The reference and candidate binaries, captures, receipts and
+`relative.json` were recorded under the ignored
+`.cache/cpu-extraction-evidence/` directory, which was subsequently cleared by
+workspace disk cleanup. The published Git pin resolves to
 the same candidate source after formatting; a fresh ordinary release build was
-not qualified because of the remaining disk-space constraint. The next measured
-candidate is avoiding repeated native uniform preparation and upload where
-instance input and allocation revisions remain unchanged.
+not qualified because of the remaining disk-space constraint. See the
+[retained instance-buffer review](cpu-mesh-retained-buffers-2026-11-26.md) for
+the change-driven uniform and upload owner.

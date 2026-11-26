@@ -320,19 +320,29 @@ index after a swap. A new owner admits the complete visible inventory; render
 recovery requests reextraction of retained rows. The material owner publishes
 association deltas after both sweeps; binding-table changes refresh retained
 slots. Previous-skin and previous-morph flags are frame-scoped and cleared only
-on rows that carried them. Preparation rebuilds the uniforms in the current
-dense order after material, morph and skin preparation. Per-mesh uniform offsets
+on rows that carried them. Prepared uniforms remain aligned with the dense
+instance rows. Only changed transform bits invalidate their prepared transform
+data; after material, morph and skin preparation, a compact dense input vector
+compares independent allocation, material binding, lightmap, skin and morph
+facts before rebuilding a uniform.
+Each rebuilt uniform has a distinct immutable data revision. Per-mesh uniform offsets
 and slab identities are published
 by `MeshAllocator` when its allocations settle and retired when a mesh is freed
 or re-extracted. Slab growth preserves the resident offsets. Shadow, opaque and
-sorted CPU batches borrow the same frame uniform through `GpuArrayElement` and
-encode it directly into `BufferVec`'s retained shader-layout bytes. Devices
+sorted CPU batches borrow the prepared uniform and revision through
+`GpuArrayElement`. The storage-buffer owner retains encoded bytes at the native
+batch indices across frames. Matching revisions skip encoding; changed slots
+are encoded directly into `BufferVec`. The upload covers the bounding extent
+of dirty slots, or the complete active array on GPU allocation growth. Draw
+indices, bin membership and ordering are still determined by the native phase
+owners on every frame. Devices
 without storage buffers retain their native owned dynamic-uniform array and
 offset contract. Phase order, batch admission, GPU preprocessing, native shader
 layout and render quality are unchanged. These hot-path ownership mechanisms
 require no scenario or Rhai policy hook.
-The [native CPU preparation review](../reviews/cpu-mesh-preparation-2026-11-26.md)
-and [incremental extraction review](../reviews/cpu-mesh-extraction-2026-11-26.md)
+The [native CPU preparation review](../reviews/cpu-mesh-preparation-2026-11-26.md),
+[incremental extraction review](../reviews/cpu-mesh-extraction-2026-11-26.md)
+and [retained instance-buffer review](../reviews/cpu-mesh-retained-buffers-2026-11-26.md)
 record the relative sampled work and production visual gates.
 
 
