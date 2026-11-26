@@ -1689,7 +1689,11 @@ lights retire their native `PointAndSpotLightViewEntities` through the renderer
 adapter; Bevy's cleanup observer removes the associated views. A deferred
 retirement must retain a light already re-extracted in that boundary. Verify
 one/many parked-preview counts and text-to-Visual reactivation separately from
-authored shadow intent or a camera's `is_active` flag.
+authored shadow intent or a camera's `is_active` flag. Native light extraction
+is a delta operation; validate unchanged shadow tables remain live across
+ordinary frames and disappear only when the current source becomes
+ineligible. Exercise off/on and zero/positive output transitions after
+membership change gating, including an unchanged active neighbor.
 
 The render adapter routes native point/spot roots selecting Core3d to
 SharedShadowView after native light preparation. Check the compact schedule's

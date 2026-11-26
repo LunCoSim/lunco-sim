@@ -598,7 +598,12 @@ When Bevy removes an invisible `ExtractedPointLight`, the adapter retires its
 commit. Removing that native tracker invokes Bevy's existing shadow-view cleanup;
 re-extraction supplies a fresh required tracker. Parked lights therefore cannot
 leave render-graph roots behind, and same-boundary re-extraction retains live
-views. Main-world light and document lifetimes are unchanged.
+views. Main-world light and document lifetimes are unchanged. Native shadow
+extraction updates only changed lights; table retirement separately checks
+the complete current shadow-enabled source inventory. An unchanged light
+keeps its extracted caster table, and a renewed render-entity mapping
+re-extracts it. Zero-output, invisible, or shadow-disabled sources retire
+their tables without disturbing unchanged neighbors.
 
 Native point and directional/spot depth arrays are GPU-owned allocations
 retained while their complete texture descriptors match, including their

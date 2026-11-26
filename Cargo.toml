@@ -717,7 +717,7 @@ bevy_picking = { git = "https://github.com/LunCoSim/bevy", rev = "b33d65990122c8
 bevy_camera = { git = "https://github.com/LunCoSim/bevy", rev = "87cb795e3f11da0d769d28e57df0ec42a7112aa8" }
 bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "07938db7ea23051bc18891023e7648c60e44395c" }
 # Native prepared uniforms and persistent shadow allocation/layer leases.
-bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "050ef9b46885c6c3a5600658ac66e960c420ba47" }
+bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "994611cd8cf2d286958a14daa1047622fafa436f" }
 bevy_sprite_render = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
 # Native forward composition and demand-driven raytracing acceleration structures.
 bevy_solari = { git = "https://github.com/LunCoSim/bevy", rev = "a919cc58cd0241baf8bf187ef7a73d92da519f56" }
