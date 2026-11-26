@@ -358,6 +358,22 @@ verify_linux_appimage() {
     bash "$SCRIPT_DIR/verify_linux_appimage.sh" "$appimage" "$PACKAGE_ICON"
 }
 
+# Derive the required payload using the asset owner's staging contract, then
+# compare it with what Velopack actually packed (including extraction proof).
+verify_windows_asset_bundle() (
+    local reference
+    reference="$(mktemp -d)"
+    trap 'rm -rf "$reference"' EXIT
+    cargo run -q -p lunco-assets -- stage \
+        --binary "${BINARY}-native" --cache "$OUT_DIR/assets" \
+        --destination "$reference"
+    local args=("$reference" "$VELOPACK_OUT")
+    if [ "$WITH_MSI" -eq 1 ]; then
+        args+=(--msi)
+    fi
+    python3 "$SCRIPT_DIR/verify_windows_asset_bundle.py" "${args[@]}"
+)
+
 # ── Write a README for the package ────────────────────────────────────────
 write_readme() {
     local dir="$1" binary="$2" platform="$3" arch="$4"
@@ -811,6 +827,9 @@ if [ "$VELOPACK" -eq 1 ]; then
     fi
     info "Creating Velopack release: version $RELEASE_VERSION, runtime $VPK_RUNTIME, channel $VPK_CHANNEL"
     vpk "${VPK_ARGS[@]}"
+    if [ "$PLATFORM" = "windows" ] && [ "$NO_CACHE" -eq 0 ]; then
+        verify_windows_asset_bundle
+    fi
     if [ "$PLATFORM" = "windows" ] && [ "$BINARY" = "luncosim" ]; then
         python3 "$SCRIPT_DIR/verify_windows_icons.py" "$OUT_DIR/$BIN_NAME" "$PACKAGE_ICON" \
             "$VELOPACK_OUT/${VPK_PACK_ID}-${VPK_RUNTIME}-Portable.zip"

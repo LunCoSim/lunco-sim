@@ -121,7 +121,9 @@ set, otherwise executable/package ancestry before current-directory ancestry.
 An invalid override or unresolved library stops admission with an error;
 callers propagate that error instead of inventing a root. The asset owner
 provides typed Bevy load addresses, preserving literal `#` and `%` filenames.
-Engine reads use `lunco_assets_core::engine_asset_read_roots()`.
+Engine reads and dataset installation probes use
+`lunco_assets_core::engine_asset_read_roots()`; a complete packaged artifact
+is installed even when the shared download cache is empty.
 Twin reads use the manifest routes admitted into `TwinRoots`; unlisted Twin
 paths resolve only in the authored Twin folder.
 `twin://<source-identity>/<rel>` is the canonical Twin source address used by

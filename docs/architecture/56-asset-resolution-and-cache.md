@@ -109,9 +109,12 @@ Packaged files are ordinary files under `assets/`, not a third cache root.
 Native and web packers stage manifest-declared artifacts into that asset tree.
 When a file comes from a checksum-pinned archive, the packager stages the
 integrity marker beside it so the native registry can admit it offline.
+Windows Velopack packaging verifies the manifest-selected payload and its
+integrity proofs byte-for-byte in the full update archive and the
+administratively extracted MSI, including the update repack after signing.
 Engine reads use `engine_asset_read_roots()` from `lunco-assets-core`; engine roots retain their packaged-asset and global-cache contract. Twin reads use the admitted authored Twin root unless its `Assets.toml` declares a route for that logical path. A declared route selects exactly one owner: Twin `.cache` by default, the shared cache when `shared = true`, or the authored Twin tree when a process explicitly sets `output_root = "twin"`. Missing or invalid content at that selected owner is terminal; another copy at a different owner is never considered.
 
-Native engine and Twin readers, directory lookup, synchronous byte reads and dataset installation scans share `resolve_native_asset` for containment and entry validation. Twin route selection happens before that contained lookup. Unlisted Twin addresses resolve only in the authored Twin tree; `.cache` and the shared cache are not ambient Twin search roots. For USD search paths, an `Assets.toml` route for the authored dataset path wins before any layer-relative copy is checked; unlisted references keep normal USD layer-relative resolution.
+Native engine and Twin readers, directory lookup, synchronous byte reads and dataset installation scans share `resolve_native_asset` for containment and entry validation. Engine dataset probes use the same ordered engine read roots as their consumers: a valid packaged artifact is installed even with an empty shared cache, and an invalid packaged artifact cannot select another copy. Twin route selection happens before that contained lookup. Unlisted Twin addresses resolve only in the authored Twin tree; `.cache` and the shared cache are not ambient Twin search roots. For USD search paths, an `Assets.toml` route for the authored dataset path wins before any layer-relative copy is checked; unlisted references keep normal USD layer-relative resolution.
 
 Registered native readers apply the shared relative-address grammar before
 lookup, including directory enumeration. Empty reader paths designate the source
