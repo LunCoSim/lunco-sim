@@ -396,6 +396,22 @@ Evidence: `/tmp/luncosim-terrain-audit/review2-offscreen3/`,
 `/tmp/luncosim-terrain-audit/review2-cold/`. The separately tracked remaining
 issues are in [open-terrain-preparation-and-visibility.md](open-terrain-preparation-and-visibility.md).
 
+The combined tree at `7a0687c9f` also passed the workshop offscreen gate. Its
+warm windowed run exposed a late-stop GPU lifetime defect: Bevy still owned an
+already-submitted `Screenshot` when the recorder retired it. The recorder now
+cancels its logical numbered lease without deleting a submitted window request;
+Bevy's completion and `Captured` cleanup retain physical ownership. The
+deterministic late-stop regression and all eight recording-readiness tests
+passed, and the exact windowed rerun completed recording, feed retirement and
+probe retuning. Detailed cover followed readiness by 0.333 s; all 567 tiles
+remained stable, the initial and numbered pixel probes passed, and diagnostics
+were empty. Warm median FPS was 63.37 (15.78 ms; p95 24.43 ms). The prior failed
+run's 12.84 FPS overlapped heavy compiler and swap activity; it is not a clean
+comparison. The final binary also repeated the offscreen gate: 205/205 complete
+tiles, six numbered images, competing-start rejection and successful own exit.
+Evidence: `/tmp/luncosim-terrain-audit/review2-late-stop-warm/` and
+`/tmp/luncosim-terrain-audit/review2-final-offscreen/`.
+
 ## External architecture references
 
 [Cesium Native view integration](https://cesium.com/learn/cesium-native/ref-doc/rendering-3d-tiles.html)

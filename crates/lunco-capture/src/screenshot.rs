@@ -51,7 +51,7 @@ use bevy::prelude::*;
 use bevy::render::gpu_readback::{Readback, ReadbackComplete};
 use bevy::render::render_resource::{Extent3d, TextureDimension};
 use bevy::render::renderer::RenderDevice;
-use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::render::view::screenshot::{Capturing, Screenshot, ScreenshotCaptured};
 use lunco_api::executor::{ApiResponseEvent, DeferredCommandAppExt, PendingApiRequest};
 use lunco_api_core::ApiResponse;
 use lunco_command_contracts::{Ack, OpId, Reject};
@@ -1564,7 +1564,7 @@ fn teardown_recording(
 ) {
     state.active = false;
     if let Some(entity) = state.pending_frame.take() {
-        commands.entity(entity).try_despawn();
+        retire_numbered_request(commands, entity);
     }
     state.frame_just_captured = false;
     commands.queue(|world: &mut World| {
@@ -1589,6 +1589,21 @@ fn teardown_recording(
         *execution_mode = prev;
     }
     restore_recording_clock(state, commands);
+}
+
+/// Cancel only a request that has not been submitted to Bevy's window screenshot
+/// pipeline. Once `Capturing` is present, Bevy retains the entity through its GPU
+/// completion and `Captured` cleanup. The retired recorder lease already rejects
+/// that late image, so destroying the submitted entity would violate its owner.
+fn retire_numbered_request(commands: &mut Commands, request: Entity) {
+    commands.queue(move |world: &mut World| {
+        if world.get::<Screenshot>(request).is_some() && world.get::<Capturing>(request).is_some() {
+            return;
+        }
+        if let Ok(entity) = world.get_entity_mut(request) {
+            entity.despawn();
+        }
+    });
 }
 
 fn restore_recording_clock(state: &mut OfflineRecordingState, commands: &mut Commands) {
@@ -1841,7 +1856,11 @@ fn start_recording_when_scene_ready(
     mut state: ResMut<OfflineRecordingState>,
     mut execution_mode: ResMut<lunco_core_runtime::SimulationExecutionMode>,
     mut pacing_demand: ResMut<lunco_core_runtime::FramePacingDemand>,
-    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    window_capture: (
+        Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+        Query<&Screenshot, Without<Capturing>>,
+        Query<Entity, With<bevy::window::PrimaryWindow>>,
+    ),
     meshes: Query<&bevy::mesh::Mesh3d>,
     asset_server: Res<AssetServer>,
     cameras: Query<(Entity, &Camera, &bevy::camera::RenderTarget)>,
@@ -1857,15 +1876,26 @@ fn start_recording_when_scene_ready(
     mut commands: Commands,
 ) {
     let Some(mut pending) = pending else { return };
-
-    let blocker = scene_visuals_ready(
-        &meshes,
-        &asset_server,
-        bus.as_deref(),
-        &cameras,
-        render_readiness.as_deref(),
-        capture_target.as_deref(),
-    );
+    let (mut windows, screenshots, primary) = window_capture;
+    let blocker = (capture_target.is_none()
+        && screenshots.iter().any(|request| match &request.0 {
+            bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Primary) => true,
+            bevy::camera::RenderTarget::Window(bevy::window::WindowRef::Entity(entity)) => {
+                primary.get(*entity).is_ok()
+            }
+            _ => false,
+        }))
+    .then(|| "another primary-window screenshot has not been submitted yet".into());
+    let blocker = blocker.or_else(|| {
+        scene_visuals_ready(
+            &meshes,
+            &asset_server,
+            bus.as_deref(),
+            &cameras,
+            render_readiness.as_deref(),
+            capture_target.as_deref(),
+        )
+    });
     let blocker = blocker
         .or_else(|| {
             renderer.as_ref().and_then(|renderer| {
@@ -2560,6 +2590,29 @@ mod recording_readiness_tests {
         world.flush();
         assert!(world.get_entity(request).is_ok());
         assert!(!world.contains_resource::<OfflineRecordingFailure>());
+    }
+
+    #[test]
+    fn stop_preserves_submitted_window_screenshot_until_its_owner_completes() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let submitted = world.spawn((Screenshot::primary_window(), Capturing)).id();
+        let unsubmitted = world.spawn(Screenshot::primary_window()).id();
+        let texture = world.spawn(Readback::texture(Handle::default())).id();
+        world
+            .run_system_once(move |mut commands: Commands| {
+                retire_numbered_request(&mut commands, submitted);
+                retire_numbered_request(&mut commands, unsubmitted);
+                retire_numbered_request(&mut commands, texture);
+            })
+            .unwrap();
+        assert!(world.get_entity(unsubmitted).is_err());
+        assert!(world.get_entity(texture).is_err());
+        // Bevy's completion uses a strict component insert before delivering
+        // the event. The submitted entity must remain valid at that boundary.
+        world
+            .entity_mut(submitted)
+            .insert(bevy::render::view::screenshot::Captured);
     }
 
     #[test]

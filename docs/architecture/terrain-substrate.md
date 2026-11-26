@@ -254,7 +254,9 @@ certify web responsiveness.
 
 The final capture admission evaluates terminal failures before advancing or
 requesting an image. An outstanding numbered request has an exact entity
-identity; stopping a take retires it. Windowless capture acknowledges the
+identity; stopping a take retires its logical lease immediately. A submitted
+window screenshot remains owned by Bevy until its GPU completion and cleanup.
+Windowless capture acknowledges the
 actual target and all occupied color-phase pipelines from the render world,
 including alpha-masked, transmissive and non-mesh bins, with no elapsed-time
 warm-up. The target-born capture output consumes the same canonical selected

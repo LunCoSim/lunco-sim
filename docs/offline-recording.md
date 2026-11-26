@@ -84,6 +84,9 @@ Hosts without a captured UI do not require the workbench acknowledgement.
 receipt. A second start while a take owns the target is rejected without
 changing its clock or output. Terminal readback, encoding and output failures
 retire that take and are reported in `failure`.
+Stopping a take releases its logical image request; an already-submitted
+window screenshot is retained by Bevy until its own completion/cleanup. A
+late image cannot advance or write into a later take.
 
 ```sh
 # Windowed: record the live window once the scene's visuals are ready
