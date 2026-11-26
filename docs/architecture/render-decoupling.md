@@ -287,6 +287,23 @@ exactly zero-output local lights from clustering and extraction without changing
 authored visibility. Native changed-light extraction restores their light and
 shadow state when output becomes nonzero, including the smallest positive value.
 
+Native CPU camera visibility and directional-shadow visibility retain exact
+per-view sorted membership. The view key is the frustum and render layers;
+directional views also compare the computed receiver hulls, and camera views
+include their CPU-culling marker. Changed candidates and component retirement
+reconcile the original eligibility predicates, including final-state
+remove/re-add, class multiplicity and visibility ranges. Range-controlled
+candidates are checked each frame against the current range owner. A changed
+view, replaced output, or broadly changed inventory uses the same native
+parallel full traversal. The sparse path merges sorted candidate decisions
+into retained class/cascade lists using reusable scratch storage. Both paths
+still publish the complete per-frame `ViewVisibility` union; directional
+marking borrows immutable retained membership through the deferred boundary.
+Inactive/retired views and disabled lights retire their cache. No shadow,
+frustum, layer, LOD or draw-admission policy is changed. See the
+[native visibility review](../reviews/native-visibility-2026-11-26.md) for
+relative attribution and the moving-Sun graphics qualification.
+
 The desktop host selects `PbrPlugin::use_gpu_instance_buffer_builder = false`
 for native CPU mesh-instance preparation. This bounds per-view preparation
 overhead in the interactive scene workloads. Native GPU drawing, material

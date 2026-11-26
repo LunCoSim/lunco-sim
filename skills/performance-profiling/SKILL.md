@@ -483,6 +483,20 @@ extent writes, full upload on allocation growth, reordered and retired slots,
 shader-layout bytes, dynamic-uniform offsets, mesh replacement/removal and the
 live material/skin/morph/lightmap preparation boundaries.
 
+For native camera and directional-shadow visibility, profile
+`check_visibility_cpu_culling` and `check_dir_light_mesh_visibility` together
+with visibility extraction/collection and unchanged point-light/reset controls.
+Retained per-view membership is valid only for equal computed frusta, layers,
+receiver hulls and camera culling mode. Source changes, component removals and
+range-controlled entities reconcile the exact predicates; broad changes use the
+native parallel traversal. Always reapply the complete per-frame visibility
+union, even when no membership changed. Verify inactive view, light disable,
+class and layer removal, caster retirement and cascade resizing. Qualify the
+moving-Sun native graphics test `scripts/api/test_shadow_lod_origin.py` and
+shared shadow allocation pixel gate; never trade receiver or frustum quality
+for faster visibility. Separate concurrent workload changes from attributed
+CPU work and compare the exact published Git pins.
+
 For GPU-only buffer layout, preserve deterministic scalar math and validate
 shader array stride at the native allocator. `UninitBufferVec` uses encase's
 `<[T; 1]>::SHADER_SIZE`: a shader element's minimum size alone does not include
