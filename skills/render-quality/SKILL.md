@@ -160,6 +160,9 @@ GPU acceptance still require the rendered fixture and a clean process log.
    allocation-owned offsets and slabs. Preserve admitted mesh identities,
    current/previous transforms and material/skin/morph/lightmap state; both
    shadow fixtures and the production scene image must agree after a change.
+   Incremental extraction must retire hidden and removed rows, reconcile
+   same-frame component replacement, and republish the full inventory after
+   owner recreation; stale material or motion data is a failed visual change.
    Enable `DepthPrepass`, `NormalPrepass`, and `MotionVectorPrepass` through the
    existing reflected `add` interface when checking optional camera passes.
    Declare the camera dependency in the scenario. The terrain appearance and

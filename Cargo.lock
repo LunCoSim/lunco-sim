@@ -2209,7 +2209,7 @@ checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 [[package]]
 name = "bevy_pbr"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=4cea221a4792adb3922abffd522b5c779b5b5c0f#4cea221a4792adb3922abffd522b5c779b5b5c0f"
+source = "git+https://github.com/LunCoSim/bevy?rev=e104a5d60f4aa6c8a724a73bf8e76981d8b456a6#e104a5d60f4aa6c8a724a73bf8e76981d8b456a6"
 dependencies = [
  "arrayvec",
  "bevy_app",
