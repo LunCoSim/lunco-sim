@@ -641,14 +641,32 @@ has a distinct lifetime and write path:
   `base ⊕ runtime ⊕ view` strength order. `Rc`-backed, therefore `!Send`:
   a main-thread `NonSend` resource (`CanonicalStages`). It is the projection engine —
   authoring onto it fires openusd's change sink, which reconciles the ECS.
-  `QueryUsdPrim` reads this stage whenever it is mounted, including generation
-  zero, so composed queries see current activity and transient `@view@` edits;
-  it uses the worker-prepared plan only before the canonical stage is mounted.
+  `QueryUsdPrim` and `QueryUsdPrims` return placement by default; pass
+  `position: false` for metadata-only reads. They omit `world_position` and
+  `position_frame` in that case, and skip authored transform evaluation and
+  live physics pose leases. The existing prepared projection plan supplies
+  metadata through the canonical stage's admitted snapshot binding: exact
+  plan identity plus its native composition and resolver epoch. A freshly
+  built stage and its matching prepared plan establish this lease at any
+  projection generation. The native pre-commit sink invalidates the read
+  lease before composed projection notices drain; a dependency-patch
+  projection binding alone does not prove native view parity. The mounted
+  stage supplies current activity and `@view@` opinions when the read lease
+  is not exact.
+  Native geometry/topology, placement and composed child lists (including
+  inactive children and composed child order) retain the native query contract.
+  Before mounting, the existing worker-prepared plan remains the read surface.
+  Unscoped live entity lookups use the existing `UsdPrimIndex`, without scanning
+  every projected entity. Pass `source_entity_id` to bind a live read to the
+  source entity's exact mounted hierarchy, including scenes without a document
+  association. It is mutually exclusive with `doc_id`; missing or retired
+  source identities reject the query. Explicit-document reads do not discover unrelated
+  live stages.
   A document-scoped query may read ahead of the durable ECS sync cursor only
   when that exact document generation is already applied to the same mounted
   stage. Pending document operations remain a visible projection-not-current
   error. ECS consumers continue to use the durable projection cursor.
-  Projection retains its separate generation-zero prepared-plan contract.
+  Projection and composed reads share the plan binding but check their own admitted generation or native read lease.
   Explicit-document `QueryUsdPrim` / `QueryUsdPrims` placement reads the
   canonical f64 USD matrix directly. Its `world_position` in `canonical_stage`
   coordinates must not pass through the rendering `Transform`; live physics

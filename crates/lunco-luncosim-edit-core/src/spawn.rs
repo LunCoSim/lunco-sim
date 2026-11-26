@@ -240,8 +240,8 @@ fn ensure_footprint(
             // recipe.
             let id = cached.handle.id();
             if canonical.get(id).is_none() {
-                if let Some(recipe) = stages.get(&cached.handle).and_then(|a| a.recipe.clone()) {
-                    canonical.get_or_build(id, &recipe);
+                if let Some(stage_asset) = stages.get(&cached.handle) {
+                    canonical.get_or_build(id, stage_asset);
                 }
             }
             if let Some(stage) = canonical.get(id) {

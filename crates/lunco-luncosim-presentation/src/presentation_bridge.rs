@@ -386,7 +386,7 @@ fn project_env_settings(
         }
 
         let (reader, _generation) =
-            if canonical.prepared_plan_is_current(stage_id, &stage_asset.projection_plan) {
+            if canonical.projection_plan_is_current(stage_id, &stage_asset.projection_plan) {
                 let _span = bevy::log::info_span!("usd_environment_prepared_plan_reuse").entered();
                 (
                     lunco_usd_bevy_stage::read::UsdReadSource::Prepared(

@@ -3345,12 +3345,13 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SetSceneParticipation`
 
  Apply one live scene transition. All destinations and their owners are
- validated before publishing any physics, radio or presentation changes.
+ validated before publishing any pose, physics, radio or presentation changes.
 
 - *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `poses` | `Vec < RuntimePose >` |  Complete live poses. Targets must not be ancestors of one another. |
 | `bodies` | `Vec < BodyParticipation >` |  Independent bodies and all their attached contact shapes. |
 | `colliders` | `Vec < ParticipationSwitch >` |  Individual admitted shapes outside the requested bodies. |
 | `occluders` | `Vec < ParticipationSwitch >` |  Admitted sight-line blockers, independent of contact shapes. |

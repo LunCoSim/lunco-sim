@@ -63,7 +63,7 @@ owner. These operations leave document generation unchanged.
 For moving interactive elements, use `TransformEntity` with
 live intent (the default) for discrete live poses, declared joint inputs for
 continuous physical motion, `SetColliderEnabled` for a prepared collider,
-`SetSceneParticipation` to switch admitted bodies, individual contact shapes, radio occluders and presentation writes in one validated transition,
+`SetSceneParticipation` to apply complete independent live poses, admitted bodies, contact shapes, radio occluders and presentation writes in one validated transition,
 and `SetSceneView` with `property: "visibility"` and a `Bool` value for
 already admitted presentation geometry. Target the namespace root for a
 subtree toggle; the runtime visibility owner preserves authored descendant and
@@ -193,7 +193,10 @@ truncated later loop. A malformed curve invalidates the complete trim domain.
 `QueryUsdPrim` serializes the native Sdf value directly with the shared typed
 API serializer. Its inspection adapter must preserve precision, integer kinds,
 and empty arrays; render-oriented readers such as `points3` do not belong at
-that boundary. Native serialization errors reject the query visibly.
+that boundary. Native serialization errors reject the query visibly. Use
+`position:false` for metadata-only single/batch requests. Prepared facts are
+eligible only under the canonical stage's exact plan and composition/resolver lease; child
+order, native geometry and live authored changes still use the native owner.
 
 Curve type, basis, wrap, orientation, and camera-path clock tokens come from
 native composed values, including registered schema opinions. The shared
@@ -491,7 +494,7 @@ spawn or refresh. Procedural scene backgrounds are also excluded from previews
 because the skybox renderer has one scene-wide owner. Unscoped `QueryUsdPrim`
 reads select the mounted scene by ignoring
 `UsdPreviewOnly` roots; preview roots do not make live queries ambiguous.
-Never choose an editor stage by entity count, insertion order, or the current
+A live query can pass `source_entity_id` to select the source entity's exact mounted root without a document id. Never choose an editor stage by entity count, insertion order, or the current
 simulation viewport, and never use an active-viewport fallback for an entity
 that lacks an explicit document binding.
 

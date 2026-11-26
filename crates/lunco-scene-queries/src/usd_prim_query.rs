@@ -6,9 +6,10 @@
 //! An explicit `doc_id` uses the synchronized document-to-stage mapping when a
 //! Twin owns the document, or the document's composed data for an isolated
 //! Editor fork. Twin-backed queries and unscoped live-scene queries use the
-//! mounted canonical stage whenever it exists, including its disposable
-//! `@view@` state; before the stage is mounted they use the worker-prepared
-//! composed plan. Without `doc_id`, exactly one mounted live scene root is
+//! canonical stage, including its disposable `@view@` state. Selective
+//! metadata queries may borrow the worker-prepared facts only when the exact
+//! original recipe and an unmodified canonical lease prove parity. Before
+//! mounting, the worker-prepared plan is the read surface. Without `doc_id`, exactly one mounted live scene root is
 //! required. Preview focus, duplicate prim paths, and detached cached stages
 //! never choose the query target.
 //! Referenced instances use the same native stage/document owner throughout
@@ -31,6 +32,7 @@
 //! stage coordinates through the shared USD transform reader, marked with
 //! `position_frame: "canonical_stage"`; they do not read a preview physics pose.
 //! The canonical placement uses the f64 USD matrix without render conversion.
+//! `position: false` omits both placement fields and their computation.
 //! Quaternion attributes are arrays in USD component order `[w, x, y, z]`,
 //! at authored precision promoted to f64, without a coordinate-basis change.
 //! A request with `collision_bounds: true` adds the aggregate composed
@@ -95,19 +97,20 @@ use lunco_usd_avian_reader::collider::{
 };
 use lunco_usd_bevy_scene::UsdSceneRoot;
 use lunco_usd_bevy_scene::collision::{ObjectAabb, collision_aabb, prim_geometry_aabb};
+use lunco_usd_bevy_scene::prim_index::{MountedUsdScope, UsdPrimIndex};
 use lunco_usd_bevy_scene::{UsdPrimPath, read_primitive_axis, usd_axis_to_dquat};
 use lunco_usd_bevy_stage::read::{UsdRead, UsdReadSource};
 use lunco_usd_bevy_stage::view::StageView;
 use lunco_usd_bevy_stage::{
     MaterialPurpose, UsdStageAsset,
-    canonical::{CanonicalStage, CanonicalStages},
+    canonical::{CanonicalStage, CanonicalStages, ComposedReadRequirement},
     is_descendant_or_self, stage_convention,
 };
 use lunco_usd_bevy_twin::{DocBackedTwinScenes, scene_document_for, stage_asset_for_document};
 use lunco_usd_document::document::UsdDocument;
 use openusd::sdf::Path as SdfPath;
 use openusd_schemas::physics::tokens as physics_tokens;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Read one native USD value and serialize it directly into the typed API ABI.
 /// Native serialization preserves precision, array emptiness, and value kinds.
@@ -700,6 +703,7 @@ struct UsdPrimQueryOptions {
     include_connections: bool,
     include_schemas: bool,
     include_children: bool,
+    include_position: bool,
     include_collision_bounds: bool,
     include_collision_geometry: bool,
     include_geometry_bounds: bool,
@@ -716,6 +720,16 @@ fn query_options(params: &ApiValue) -> Result<UsdPrimQueryOptions, ApiQueryError
         include_connections: optional_bool(params, "connections")?,
         include_schemas: optional_bool(params, "schemas")?,
         include_children: optional_bool(params, "children")?,
+        // Placement is part of the default inspection record; metadata-only
+        // consumers explicitly omit it without changing document identity.
+        include_position: if params
+            .get("position")
+            .is_none_or(|value| matches!(value, ApiValue::Unit))
+        {
+            true
+        } else {
+            optional_bool(params, "position")?
+        },
         include_collision_bounds: optional_bool(params, "collision_bounds")?,
         include_collision_geometry: optional_bool(params, "collision_geometry")?,
         include_geometry_bounds: optional_bool(params, "geometry_bounds")?,
@@ -914,40 +928,42 @@ mod query_generation_tests {
 
 fn spawned_entities_for_paths(
     world: &World,
-    paths: &HashSet<&str>,
+    paths: &[(String, SdfPath)],
     doc: Option<DocumentId>,
     live_stage: Option<bevy::asset::AssetId<UsdStageAsset>>,
+    source_root: Option<Entity>,
 ) -> Result<HashMap<String, Entity>, ApiQueryError> {
     if doc.is_some() {
         return Ok(HashMap::new());
     }
-    let Some(mut query) = QueryState::<(Entity, &UsdPrimPath)>::try_new(world) else {
-        return Err(ApiQueryError::new(
+    let index = world.get_resource::<UsdPrimIndex>().ok_or_else(|| {
+        ApiQueryError::new(
             ApiErrorCode::InternalError,
-            "QueryUsdPrim: USD entity query is unavailable",
-        ));
-    };
-    let mut candidates = query
-        .iter(world)
-        .filter(|(entity, prim)| {
-            Some(prim.stage_handle.id()) == live_stage
-                && paths.contains(prim.path.as_str())
-                && !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-        })
-        .map(|(entity, prim)| (prim.path.clone(), entity))
-        .collect::<Vec<_>>();
-    candidates.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.to_bits().cmp(&right.1.to_bits()))
-    });
+            "QueryUsdPrim: USD entity index is unavailable",
+        )
+    })?;
+    let stage = live_stage.ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::InternalError,
+            "QueryUsdPrim: live scene stage is unavailable",
+        )
+    })?;
     let mut spawned = HashMap::new();
-    for (path, entity) in candidates {
-        if spawned.insert(path.clone(), entity).is_some() {
-            return Err(ApiQueryError::new(
-                ApiErrorCode::InternalError,
-                format!("QueryUsdPrim: multiple live entities are bound to prim `{path}`"),
-            ));
+    let requested_paths = paths
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<BTreeSet<_>>();
+    for path in requested_paths {
+        if let Some(entity) = index
+            .unique_live_prim(world, stage, source_root, path)
+            .map_err(|error| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    format!("QueryUsdPrim: {error}"),
+                )
+            })?
+        {
+            spawned.insert(path.to_owned(), entity);
         }
     }
     Ok(spawned)
@@ -1069,7 +1085,7 @@ fn query_record_value(
         out.push(("topology".to_string(), topology));
     }
 
-    if let Some(entity) = spawned {
+    if let Some(entity) = spawned.filter(|_| options.include_position) {
         let Some(poses) = poses.as_mut() else {
             return Err(ApiQueryError::new(
                 ApiErrorCode::InternalError,
@@ -1097,46 +1113,92 @@ fn query_record_value(
     Ok(ApiValue::Map(out))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Resolve the exact mounted scene of an explicit live source entity.
+fn query_source_root(
+    world: &World,
+    params: &ApiValue,
+) -> Result<Option<MountedUsdScope>, ApiQueryError> {
+    if params.get("source_entity_id").is_none() {
+        return Ok(None);
+    }
+    if params.get("doc_id").is_some() {
+        return Err(ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "QueryUsdPrim: choose either doc_id or source_entity_id",
+        ));
+    }
+    let id = api_param_u64(params, "source_entity_id").ok_or_else(|| {
+        ApiQueryError::new(
+            ApiErrorCode::DeserializationError,
+            "QueryUsdPrim: source_entity_id must be a numeric live entity id",
+        )
+    })?;
+    let source = world
+        .get_resource::<lunco_api::registry::ApiEntityRegistry>()
+        .and_then(|registry| registry.resolve(&lunco_core::GlobalEntityId::from_raw(id)))
+        .ok_or_else(|| {
+            ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                "QueryUsdPrim: source entity is not live",
+            )
+        })?;
+    MountedUsdScope::from_source(world, source)
+        .map(Some)
+        .map_err(|error| {
+            ApiQueryError::new(
+                ApiErrorCode::EntityNotFound,
+                format!("QueryUsdPrim: {error}"),
+            )
+        })
+}
+
 /// Execute one or more prim reads against one validated stage/document
-/// context. The stage is borrowed once for the entire batch, so component
-/// verification can ask for hundreds of paths without reopening the composed
-/// stage or repeating projection/generation checks for every path.
+/// context. The stage is borrowed once for the entire batch.
 fn execute_query_paths(
     world: &World,
     params: &ApiValue,
     paths: &[(String, SdfPath)],
 ) -> Result<Vec<ApiValue>, ApiQueryError> {
     let options = query_options(params)?;
+    let needs_native_view = options.include_collision_bounds
+        || options.include_collision_geometry
+        || options.include_geometry_bounds
+        || options.include_topology;
+    // Native children include inactive prims in composed child order; the
+    // prepared projection index contains only admitted active children.
+    let allow_prepared_snapshot =
+        !options.include_position && !needs_native_view && !options.include_children;
+    let source = query_source_root(world, params)?;
     let (doc, generation) = query_document_id(world, params)?;
 
-    // Unscoped queries belong to the live simulation root. Preview stages and
-    // detached cached stages cannot satisfy a live-scene query.
-    let Some(mut live_roots) =
-        QueryState::<(Entity, &UsdPrimPath), With<UsdSceneRoot>>::try_new(world)
-    else {
-        return Err(ApiQueryError::new(
-            ApiErrorCode::InternalError,
-            "QueryUsdPrim: live scene ownership is unavailable",
-        ));
-    };
-    let mut live_stages = HashSet::new();
-    for (entity, path) in live_roots.iter(world) {
-        let stage = path.stage_handle.id();
-        if !lunco_usd_bevy_scene::is_preview_only_entity(world, entity) {
-            live_stages.insert(stage);
+    // Only unscoped reads need discovery of the mounted simulation stage.
+    // Explicit document queries already have their authoritative document id.
+    let live_stage = if let Some(scope) = source {
+        Some(scope.stage())
+    } else if doc.is_none() {
+        let Some(mut live_roots) =
+            QueryState::<(Entity, &UsdPrimPath), With<UsdSceneRoot>>::try_new(world)
+        else {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: live scene ownership is unavailable",
+            ));
+        };
+        let live_stages = live_roots
+            .iter(world)
+            .filter(|(entity, _)| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity))
+            .map(|(_, path)| path.stage_handle.id())
+            .collect::<HashSet<_>>();
+        if live_stages.len() != 1 {
+            return Err(ApiQueryError::new(
+                ApiErrorCode::InternalError,
+                "QueryUsdPrim: exactly one mounted live stage is required; pass source_entity_id for an exact mount or doc_id for an Editor document",
+            ));
         }
-    }
-    if doc.is_none() && live_stages.len() != 1 {
-        return Err(ApiQueryError::new(
-            ApiErrorCode::InternalError,
-            "QueryUsdPrim: exactly one mounted live stage is required; pass doc_id for an Editor document",
-        ));
-    }
-    let live_stage = doc
-        .is_none()
-        .then(|| live_stages.iter().next().copied())
-        .flatten();
+        live_stages.into_iter().next()
+    } else {
+        None
+    };
     let live_document = if doc.is_none() {
         live_stage.and_then(|stage| {
             let backed = world.get_resource::<DocBackedTwinScenes>()?;
@@ -1151,7 +1213,7 @@ fn execute_query_paths(
     let query_stage_is_mounted = query_stage.is_some_and(|stage| {
         let has_owner = match doc {
             Some(document) => is_mounted_document_stage(world, document, stage),
-            None => live_stages.contains(&stage),
+            None => live_stage == Some(stage),
         };
         has_owner
             && world
@@ -1163,23 +1225,39 @@ fn execute_query_paths(
             .get_resource::<Assets<UsdStageAsset>>()
             .and_then(|assets| assets.get(stage))
     });
-    // Read mounted stages so queries see current activity and transient view
-    // edits at every generation. Before the canonical owner mounts a stage,
-    // its worker-prepared plan keeps initial queries available without opening
-    // OpenUSD on the query path.
-    let selected_reader = stage_asset.map(|asset| {
+    // The canonical owner decides whether the worker-prepared facts are exact
+    // for this query. Native placement and geometry retain live composition;
+    // metadata-only reads reuse the existing snapshot when it is still current.
+    let selected_reader = if let Some(asset) = stage_asset {
         if query_stage_is_mounted {
-            query_stage
-                .and_then(|stage| {
-                    world
-                        .get_non_send::<CanonicalStages>()
-                        .map(|stages| stages.reader_for_composed_query(stage, asset))
-                })
-                .unwrap_or((UsdReadSource::Prepared(asset.projection_plan.as_ref()), 0))
+            let stage = query_stage.ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "QueryUsdPrim: missing mounted stage identity",
+                )
+            })?;
+            let stages = world.get_non_send::<CanonicalStages>().ok_or_else(|| {
+                ApiQueryError::new(
+                    ApiErrorCode::InternalError,
+                    "QueryUsdPrim: missing canonical stage owner",
+                )
+            })?;
+            let covers = allow_prepared_snapshot
+                && paths
+                    .iter()
+                    .all(|(_, path)| asset.projection_plan.has_prim(path));
+            let requirement = if covers {
+                ComposedReadRequirement::Metadata
+            } else {
+                ComposedReadRequirement::Native
+            };
+            Some(stages.reader_for_composed_query(stage, asset, requirement))
         } else {
-            (UsdReadSource::Prepared(asset.projection_plan.as_ref()), 0)
+            Some((UsdReadSource::Prepared(asset.projection_plan.as_ref()), 0))
         }
-    });
+    } else {
+        None
+    };
     let source_document_generation = source_document.and_then(|document| {
         world
             .get_resource::<DocumentRegistry<UsdDocument>>()
@@ -1196,12 +1274,14 @@ fn execute_query_paths(
                 .map(|stage| stage.generation())
         });
 
-    let requested_paths = paths
-        .iter()
-        .map(|(path, _)| path.as_str())
-        .collect::<HashSet<_>>();
-    let spawned = spawned_entities_for_paths(world, &requested_paths, doc, live_stage)?;
-    let mut poses = if spawned.is_empty() {
+    let spawned = spawned_entities_for_paths(
+        world,
+        paths,
+        doc,
+        live_stage,
+        source.map(MountedUsdScope::root),
+    )?;
+    let mut poses = if !options.include_position || spawned.is_empty() {
         None
     } else {
         Some(
@@ -1231,6 +1311,7 @@ fn execute_query_paths(
                     options.include_connections,
                     options.include_schemas,
                     options.include_children,
+                    options.include_position,
                     options.include_collision_bounds,
                     options.include_collision_geometry,
                     options.include_geometry_bounds,
@@ -1262,11 +1343,6 @@ fn execute_query_paths(
             })
             .collect()
     };
-
-    let needs_native_view = options.include_collision_bounds
-        || options.include_collision_geometry
-        || options.include_geometry_bounds
-        || options.include_topology;
 
     if let Some((reader, _)) = selected_reader.as_ref() {
         match reader {
@@ -1354,6 +1430,7 @@ fn read_prim_from_reader(
     include_connections: bool,
     include_schemas: bool,
     include_children: bool,
+    include_position: bool,
     include_collision_bounds: bool,
     include_collision_geometry: bool,
     include_geometry_bounds: bool,
@@ -1376,7 +1453,7 @@ fn read_prim_from_reader(
         live_view
     };
 
-    let authored_position = if doc.is_some() {
+    let authored_position = if include_position && doc.is_some() {
         Some(
             lunco_usd_bevy_stage::world_transform_matrix_d_at(view, prim, 0.0)
                 .map_err(|error| format!("QueryUsdPrim: invalid authored transform: {error}"))?
@@ -1531,7 +1608,7 @@ fn read_prim_from_reader(
     )))
 }
 
-/// `QueryUsdPrim { doc_id?, path, attrs?, rels?, children?, collision_bounds?, collision_geometry?, geometry_bounds?, topology? }`
+/// `QueryUsdPrim { doc_id?, source_entity_id?, path, attrs?, rels?, children?, position?, collision_bounds?, collision_geometry?, geometry_bounds?, topology? }`
 /// → composed attributes, active state, requested relationships, optional
 /// direct children, optional aggregate collision bounds, optional scoped
 /// topology facts, and world pose.
@@ -1543,7 +1620,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
     }
 
     fn simulation_read_scope(&self, params: &ApiValue) -> lunco_api::SimulationQueryReadScope {
-        if params.get("doc_id").is_none() {
+        if params.get("doc_id").is_none() && params.get("source_entity_id").is_none() {
             lunco_api::SimulationQueryReadScope::SceneGeneration
         } else {
             lunco_api::SimulationQueryReadScope::ScenarioDeclared
@@ -1577,7 +1654,7 @@ impl ApiQueryProvider for QueryUsdPrimProvider {
     }
 }
 
-/// `QueryUsdPrims { doc_id?, paths, attrs?, rels?, children?, collision_bounds?, collision_geometry?, geometry_bounds?, topology? }`
+/// `QueryUsdPrims { doc_id?, source_entity_id?, paths, attrs?, rels?, children?, position?, collision_bounds?, collision_geometry?, geometry_bounds?, topology? }`
 /// → the same records as `QueryUsdPrim`, read from one composed-stage snapshot.
 ///
 /// This is the preferred surface for authored verification and Editor
@@ -1592,7 +1669,7 @@ impl ApiQueryProvider for QueryUsdPrimsProvider {
     }
 
     fn simulation_read_scope(&self, params: &ApiValue) -> lunco_api::SimulationQueryReadScope {
-        if params.get("doc_id").is_none() {
+        if params.get("doc_id").is_none() && params.get("source_entity_id").is_none() {
             lunco_api::SimulationQueryReadScope::SceneGeneration
         } else {
             lunco_api::SimulationQueryReadScope::ScenarioDeclared

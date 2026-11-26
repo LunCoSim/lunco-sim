@@ -1183,11 +1183,11 @@ The companion `assembly_audit` library is the authored diagnostic surface for
 assembly contracts. Every stage-reading helper takes the document id first; `()` explicitly
 selects the mounted live scene. `QueryUsdPrim { doc_id, path, ... }` resolves the
 document through `DocBackedTwinScenes` and rejects closed, unmapped, or stale
-document projections. Queries without `doc_id` require one mounted live stage;
-preview copies and detached cached stages cannot satisfy them. Preview focus
-does not select a query's document. An explicit document query reads the live
+document projections. Live queries may pass `source_entity_id` to select an exact mounted hierarchy; queries with neither selector require one mounted live stage. Preview copies and detached cached stages cannot satisfy them. Preview focus
+does not select a query's document. An explicit document query uses the
 canonical stage owned by its Editor preview lease, even when that standalone
-preview has no simulation scene root. Material, transform and geometry-bound
+preview has no simulation scene root. Metadata-only requests (`position:false`)
+may use the exact current prepared snapshot under the shared stage-read contract. Material, transform and geometry-bound
 reads therefore follow the same projected document generation. A cached stage
 without a scene root or preview lease is not a live owner. It reads explicit
 composed paths and

@@ -27,6 +27,16 @@ to improve a timing.
 
 ## Required separation
 
+- For authored metadata queries, use `QueryUsdPrim`/`QueryUsdPrims` with
+  `position: false` unless the consumer needs placement. Scope scenario reads with `source_entity_id`, and obtain position/orientation together with `world_pose(id)`. Read single or batch
+  attributes from the same composed owner. The canonical reader may borrow
+  the existing worker-prepared plan only while its exact asset recipe and
+  unmodified stage/resolver lease prove currency; native pre-commit and
+  composition-change notifications invalidate
+  that proof before the projection cursor advances. Do not prewarm all scene
+  properties or create a Twin-specific cache. Measure cold and repeated
+  interaction callbacks separately from startup and native frame history.
+
 - For long USD animation tracks, compare `sample_usd_animation` on the actual
   scene through a settled native desktop capture. Retain the canonical stage's
   native `XformQuery` handles across frames; stage edits invalidate the cache,

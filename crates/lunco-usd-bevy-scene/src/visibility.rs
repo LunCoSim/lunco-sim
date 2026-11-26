@@ -82,7 +82,11 @@ pub fn validate_runtime_visibility(world: &World, target: Entity) -> Result<(), 
         .get_resource::<Assets<UsdStageAsset>>()
         .and_then(|assets| assets.get(&path.stage_handle))
         .ok_or("visibility target's stage asset is unavailable")?;
-    let (reader, _) = stages.reader_for_composed_query(path.stage_handle.id(), asset);
+    let (reader, _) = stages.reader_for_composed_query(
+        path.stage_handle.id(),
+        asset,
+        lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+    );
     let prim = Path::new(&path.path).map_err(|e| e.to_string())?;
     if !reader.has_prim(&prim) {
         return Err(format!(
@@ -258,7 +262,11 @@ pub fn reconcile_runtime_visibility(world: &mut World, roots: &[Entity]) {
                     .ok_or_else(|| format!("{}: stage asset is unavailable", prim.path))
                     .and_then(|asset| {
                         stages
-                            .reader_for_composed_query(prim.stage_handle.id(), asset)
+                            .reader_for_composed_query(
+                                prim.stage_handle.id(),
+                                asset,
+                                lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+                            )
                             .0
                             .invisible_with_overrides(&path, &overrides)
                     })

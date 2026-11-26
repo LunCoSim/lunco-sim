@@ -803,9 +803,9 @@ def Xform "World"
 
     fn stages() -> (CanonicalStages, AssetId<UsdStageAsset>) {
         let mut cs = CanonicalStages::default();
-        let recipe = StageRecipe::from_source("leg.usda", LEG);
+        let asset = UsdStageAsset::from_recipe(StageRecipe::from_source("leg.usda", LEG)).unwrap();
         let id: AssetId<UsdStageAsset> = AssetId::default();
-        cs.get_or_build(id, &recipe).expect("stage builds");
+        cs.get_or_build(id, &asset).expect("stage builds");
         cs.drain_all_changes();
         (cs, id)
     }

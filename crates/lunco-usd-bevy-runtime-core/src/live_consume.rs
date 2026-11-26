@@ -1924,9 +1924,15 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
+        let admitted_asset = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(id)
+            .unwrap()
+            .clone();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
-            .get_or_build(id, &recipe)
+            .get_or_build(id, &admitted_asset)
             .expect("stage builds");
 
         // A prim that is already on the stage AND already projected — the state a
@@ -2003,9 +2009,15 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
+        let admitted_asset = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(id)
+            .unwrap()
+            .clone();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
-            .get_or_build(id, &recipe)
+            .get_or_build(id, &admitted_asset)
             .expect("stage builds");
 
         {
@@ -2125,9 +2137,15 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
+        let admitted_asset = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(id)
+            .unwrap()
+            .clone();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
-            .get_or_build(id, &recipe)
+            .get_or_build(id, &admitted_asset)
             .expect("stage builds");
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -2189,9 +2207,15 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
+        let admitted_asset = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(id)
+            .unwrap()
+            .clone();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
-            .get_or_build(id, &recipe)
+            .get_or_build(id, &admitted_asset)
             .expect("stage builds");
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -2254,9 +2278,15 @@ mod tests {
 
         // Build the live stage on demand, then drain its initial change set so
         // the only deltas we observe are the ones we author below.
+        let admitted_asset = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(id)
+            .unwrap()
+            .clone();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
-            .get_or_build(id, &recipe)
+            .get_or_build(id, &admitted_asset)
             .expect("canonical stage builds from the recipe");
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
@@ -2333,9 +2363,15 @@ mod tests {
             .resource_mut::<Assets<UsdStageAsset>>()
             .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
         let id = handle.id();
+        let admitted_asset = app
+            .world()
+            .resource::<Assets<UsdStageAsset>>()
+            .get(id)
+            .unwrap()
+            .clone();
         app.world_mut()
             .non_send_mut::<CanonicalStages>()
-            .get_or_build(id, &recipe)
+            .get_or_build(id, &admitted_asset)
             .expect("stage builds");
 
         // Define the prim, then drain so only the ATTRIBUTE edit is observed.
