@@ -1375,7 +1375,7 @@ pub(crate) fn needs_full_backdrop(
 pub(crate) fn scene_camera_is_rendering(world: &World) -> bool {
     let Some(active_camera) = world
         .get_resource::<lunco_viewport_core::SceneViewport>()
-        .filter(|viewport| !viewport.loading)
+        .filter(|viewport| !viewport.is_loading())
         .and_then(|viewport| viewport.active_camera)
     else {
         return false;
@@ -1460,6 +1460,11 @@ pub(crate) fn render_status_bar_inner(
                 Some(lunco_core::SceneTransition::Clear)
             )
         });
+
+    let scene_loading_elapsed = world
+        .get_resource::<lunco_viewport_core::SceneViewport>()
+        .and_then(|viewport| viewport.loading_since)
+        .map(|started| started.elapsed());
 
     // Snapshot the compact status strip before painting. The event history is
     // collected only after the popup is known to be open below.
@@ -1966,6 +1971,7 @@ pub(crate) fn render_status_bar_inner(
                                     .unwrap_or(&progress.message),
                                 theme,
                                 scene_transition_is_clearing,
+                                scene_loading_elapsed,
                             );
                         });
                 });
@@ -1986,6 +1992,7 @@ fn render_status_progress_notice(
     display_message: &str,
     theme: &lunco_theme::Theme,
     scene_transition_is_clearing: bool,
+    scene_loading_elapsed: Option<std::time::Duration>,
 ) -> bool {
     ui.spacing_mut().item_spacing.y = theme.spacing.item_spacing;
     ui.horizontal(|ui| {
@@ -2000,6 +2007,19 @@ fn render_status_progress_notice(
             );
             ui.add(egui::Label::new(display_message).wrap())
                 .on_hover_text(display_message);
+            let (elapsed_label, elapsed) = match scene_loading_elapsed {
+                Some(elapsed) => ("Scene elapsed", elapsed),
+                None => ("Elapsed", event.at.elapsed()),
+            };
+            let seconds = elapsed.as_secs();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{elapsed_label}: {:02}:{:02}",
+                    seconds / 60,
+                    seconds % 60
+                ))
+                .color(theme.tokens.text_subdued),
+            );
         });
     });
     ui.link("Recent status details").clicked()

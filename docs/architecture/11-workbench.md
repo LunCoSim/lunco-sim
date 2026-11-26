@@ -238,7 +238,10 @@ private dock layout.
    wrapped full owner-provided message; scene progress is titled “Scene loading…” or
    “Scene unloading…” during a clear transition and uses that concise label in the
    status strip. The renderer does not infer a phase from free-form text. The popup
-   spinner marks ongoing work; determinate progress remains in the status strip without
+   spinner marks ongoing work. The elapsed read-out uses monotonic wall time: during initial
+   scene preparation it retains the viewport’s transition start across status-source changes;
+   other progress uses the active StatusBus entry’s start. The timer ends with initial
+   readiness or a fault. Determinate progress remains in the status strip without
    adding a redundant progress track to the card. “Recent status details” and the status
    strip open the recent-history popup, which replaces the notice while it is open. History renders discrete events only; it
    never inserts live progress rows. While history is open, the strip hides its entire

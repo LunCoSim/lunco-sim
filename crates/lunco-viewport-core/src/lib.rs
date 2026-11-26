@@ -5,6 +5,7 @@
 //! render-free scene and camera contracts can carry one without importing
 //! egui, a dock implementation, or a renderer.
 
+use bevy::platform::time::Instant;
 use bevy::prelude::{Camera, Entity, GlobalTransform, Ray3d, Resource, SystemSet, UVec2, Vec2};
 
 /// One panel's footprint inside the window, in physical pixels.
@@ -26,8 +27,8 @@ pub struct SceneViewport {
     pub active_camera: Option<Entity>,
     /// Whether the host layout requests the main scene view.
     pub visible: bool,
-    /// The interactive host is showing scene preparation status.
-    pub loading: bool,
+    /// Monotonic start of the current initial scene preparation, if active.
+    pub loading_since: Option<Instant>,
     /// Physical `(position, size)` sub-rect inside the window, or `None` for
     /// the full window.
     pub rect: Option<(UVec2, UVec2)>,
@@ -38,9 +39,15 @@ impl Default for SceneViewport {
         Self {
             active_camera: None,
             visible: true,
-            loading: false,
+            loading_since: None,
             rect: None,
         }
+    }
+}
+
+impl SceneViewport {
+    pub fn is_loading(&self) -> bool {
+        self.loading_since.is_some()
     }
 }
 
