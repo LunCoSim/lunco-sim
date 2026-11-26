@@ -16,7 +16,7 @@ Low-level primitives, document/journal systems, time, and cross-cutting concerns
 | **`lunco-exposure-core`** | Renderer-independent typed exposure registry (`EngineExposures`, `ExposureValue`, and refresh state). It has no application projection or UI policy; `lunco-luncosim-exposures` supplies the production projection. |
 | **`lunco-command-contracts`** | Pure mutation, session, acknowledgement, rejection, and synchronization-channel contracts shared by document, transport, networking, and runtime adapters without ECS. `Ack.data` uses the shared typed `HookValue` ABI; API JSON is created only at the external adapter. |
 | **`lunco-id`** | Platform-neutral 53-bit operation/entity ID generation shared by document and runtime identity boundaries. |
-| **`lunco-viewport-core`** | Renderer-independent viewport contract: explicit active-camera binding, scene visibility and layout state, viewport scheduling boundary, and the shared camera-ray construction used by scene-click owners. |
+| **`lunco-viewport-core`** | Renderer-independent viewport contract: explicit active-camera binding, scene visibility and layout state, monotonic initial-scene preparation start, viewport scheduling boundary, and the shared camera-ray construction used by scene-click owners. |
 | **`lunco-interaction-core`** | Renderer-independent cursor interaction contract: registered USD button policy, semantic pointer and tool-mode facts, editor tool gates, drag state, and the affected-entity marker consumed by scene, avatar, and camera runtimes. |
 | **`lunco-port-core`** | Shared co-simulation port substrate: `Port`, slot-backed `PortMap<T>`/`ScalarPortMap`, incremental topology identity, endpoint/control-surface components, `PortRegistry` with typed owner-supplied initial algebraic expressions, shared immutable backend snapshots and copy-on-write registration, resolution, shared topology invalidation, metadata with borrowed static or owned dynamic source/authority text, collision reporting, and process-local resolved handles fenced by registry/World/entity/contract leases, plus alias-aware atomic input admission. It is independent of the general engine core. |
 | **`lunco-spatial`** | BigSpace spatial substrate: f64 coordinate/frame helpers, the persistent `WorldRoot`/`WorldGrid` shell, atomic grid migration, hierarchy invariants, spatial markers, and the vehicle-neutral navigation law. It depends on `lunco-core` for the shared runtime-diagnostic resource, but core does not depend on spatial. |
@@ -923,9 +923,10 @@ Traversal budgets and errors are defined in the
 
 **`lunco-viewport-core`**
 Renderer-independent main-scene viewport contract. It owns the explicit active
-camera binding, visibility and layout for window or image outputs, and the
-physical-pixel `PanelRect` value passed across render, scene and editor packages
-without coupling them to egui or the Workbench shell.
+camera binding, visibility, monotonic initial-scene preparation start, and layout
+for window or image outputs. It owns the physical-pixel `PanelRect` value passed
+across render, scene and editor packages without coupling them to egui or the
+Workbench shell.
 
 **`lunco-usd-viewport-core`**
 Render-independent USD preview contracts. It owns preview/session/view

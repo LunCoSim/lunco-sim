@@ -632,7 +632,7 @@ pub(crate) fn resolve_scene_pointer(
     viewport: Res<SceneViewport>,
 ) {
     let mut state = EguiPointerState {
-        main_scene_blocked: viewport.loading || !viewport.visible,
+        main_scene_blocked: viewport.is_loading() || !viewport.visible,
         ..Default::default()
     };
     for mut ctx in q.iter_mut() {

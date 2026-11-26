@@ -1147,7 +1147,7 @@ pub(super) fn render_layout(
     // in View mode and close enough in Build.
     let scene_loading = world
         .get_resource::<lunco_viewport_core::SceneViewport>()
-        .is_some_and(|viewport| viewport.loading);
+        .is_some_and(|viewport| viewport.is_loading());
     let placeholder = world
         .get_resource::<ViewportPlaceholder>()
         .filter(|_| !scene_loading)

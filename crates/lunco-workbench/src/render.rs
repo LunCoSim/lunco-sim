@@ -1460,6 +1460,11 @@ pub(crate) fn render_status_bar_inner(
             )
         });
 
+    let scene_loading_elapsed = world
+        .get_resource::<lunco_viewport_core::SceneViewport>()
+        .and_then(|viewport| viewport.loading_since)
+        .map(|started| started.elapsed());
+
     // Snapshot the compact status strip before painting. The event history is
     // collected only after the popup is known to be open below.
     let (mut notification, primary_progress) = {
@@ -1965,6 +1970,7 @@ pub(crate) fn render_status_bar_inner(
                                     .unwrap_or(&progress.message),
                                 theme,
                                 scene_transition_is_clearing,
+                                scene_loading_elapsed,
                             );
                         });
                 });
@@ -1985,6 +1991,7 @@ fn render_status_progress_notice(
     display_message: &str,
     theme: &lunco_theme::Theme,
     scene_transition_is_clearing: bool,
+    scene_loading_elapsed: Option<std::time::Duration>,
 ) -> bool {
     ui.spacing_mut().item_spacing.y = theme.spacing.item_spacing;
     ui.horizontal(|ui| {
@@ -1999,6 +2006,19 @@ fn render_status_progress_notice(
             );
             ui.add(egui::Label::new(display_message).wrap())
                 .on_hover_text(display_message);
+            let (elapsed_label, elapsed) = match scene_loading_elapsed {
+                Some(elapsed) => ("Scene elapsed", elapsed),
+                None => ("Elapsed", event.at.elapsed()),
+            };
+            let seconds = elapsed.as_secs();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{elapsed_label}: {:02}:{:02}",
+                    seconds / 60,
+                    seconds % 60
+                ))
+                .color(theme.tokens.text_subdued),
+            );
         });
     });
     ui.link("Recent status details").clicked()
@@ -3541,7 +3561,7 @@ mod tests {
         assert!(scene_camera_is_exposed(&world));
         world
             .resource_mut::<lunco_viewport_core::SceneViewport>()
-            .loading = true;
+            .loading_since = Some(bevy::platform::time::Instant::now());
         assert!(!scene_camera_is_exposed(&world));
     }
 

@@ -6,6 +6,112 @@ control runs. With an empty Modelica cache, the control took **33.67 s** and the
 updated release took **16.80 s**. All measurements opened the exact surface
 operations scene.
 
+## Profile after the popup merge
+
+The production binary reported `8906e198` with the simulator-compatible Rumoca
+pin `dc3574345`. The exact Griffin surface-operations scene and model revision
+were the same as in the preceding comparison. Each production measurement
+started a fresh application, opened the scene from a ready bootstrap, and ended
+at the first physics-ready observation of the lander.
+
+The windowed regular release reached physics readiness in **34.89 s** with
+all 16 compiled artifacts already on disk. At 12.0 s the popup reported four
+sources still loading. At 12.3 s it switched to solving initial conditions for
+eight participants. That shared worker took 14.36 s. At 27.2 s the popup
+showed the eight live sessions starting. The longest took 7.06 s. These counts
+describe three distinct stages. The window used a private X display and the
+NVIDIA Vulkan renderer.
+
+The table compares fresh headless processes. The diagnostic skipped only
+zero-length byte comparisons in the simulator process. Each warm run reused
+all 16 compiled artifacts. Each cold run compiled all 16 with its own empty
+Modelica cache and shared terrain and library assets.
+
+| Cache and pair order | Regular ready | Diagnostic ready | Regular shared solve | Diagnostic shared solve |
+|---|---:|---:|---:|---:|
+| Warm, regular first | 18.67 s | 13.98 s | 7.16 s | 5.61 s |
+| Warm, diagnostic first | 14.91 s | 12.72 s | 6.98 s | 5.32 s |
+| Warm, regular first | 13.98 s | 15.53 s | 7.03 s | 5.95 s |
+| Cold, diagnostic first | 40.87 s | 25.94 s | 13.90 s | 7.61 s |
+| Cold, regular first | 43.49 s | 47.67 s | 14.44 s | 13.38 s |
+
+Across the three warm pairs, median readiness fell from 14.91 to 13.98 s
+and the median shared solve from 7.03 to 5.61 s. The shared solve improved
+in every warm pair. In the third pair the longest live session took 5.62 s
+with the diagnostic and 2.97 s with the regular executable, reversing the
+overall result. Competing Rust builds varied during the cold runs, so the
+pairs cannot establish the cold-start saving. All runs reached lander physics
+readiness with 15 active participants and zero diagnostics.
+
+The 1 kHz Tracy run reached readiness in 24.21 s. Its worker receipt recorded
+10.43 s for the eight-member coupled initializer. Eight members then started
+live sessions. The three longest constructors overlapped and took 7.20, 6.46
+and 6.07 s. Across all 15 live constructors, 4,553 of 10,491 sampled leaves
+were in Cranelift or register allocation (43.40%). Formatting accounted for
+4 of 9,234 coupled samples and 30 of 10,491 live samples. All 16 DAE lookups
+hit the disk cache and took 301 ms in aggregate. A frequently executed wiring
+membership zone took only 4.7 ms over 19,173 visits.
+
+### Reuse of the checked component
+
+LunCoSim caches the compiled DAE. On the next launch Rumoca lowers that DAE
+again, builds the checked FMI component and creates a new numerical instance.
+The experiment used the eight-member DAE from the exact scene's cache and its
+declared defaults. Both routes created a fresh interpreted RK45 host and read
+all initial observations. Scene-specific tunable overrides were outside this
+isolated experiment.
+
+| Isolated coupled initializer, two fresh processes per route | Lower or replay component | Initialize and observe the fresh instance | Total wall time | Process CPU time |
+|---|---:|---:|---:|---:|
+| Build from DAE | 15.03 s | 8.44 s | 23.47 s | 23.68 s |
+| Read and validate prepared component | 6.18 s | 8.55 s | 14.73 s | 14.94 s |
+
+The runs were interleaved during a release build. The checked-replay timing
+includes reading and decompressing the artifact and checking its contents
+through Rumoca's existing reader. The prepared JSON was 33,461,018 bytes and
+1,145,041 bytes with Zstandard. Re-encoding the reconstructed component produced
+identical bytes. All 7,855 finite initial observations, including 115 generated
+probes, matched bit for bit across both routes. Initial artifact creation is a
+miss cost. One observed encode, compress and write took 0.69 s.
+
+For repeat loads, extend the worker's bounded artifact cache with Rumoca's
+checked component representation. Include the source and library identity,
+compiler and wire versions, solver profile and exact input, parameter and start
+overrides that affect the component. Expose preparation and replay from
+Rumoca's native simulation facade so both routes initialize a fresh instance
+through the existing solver owner. Benchmark the integrated hit and miss paths
+with changed inputs and consecutive Twin loads.
+
+### Repeated scalar type checks
+
+Matching Ubuntu libc debug symbols identified `memcmp` in 2,083 of the
+9,234 coupled-zone samples (22.56%). A separate diagnostic sampled the
+verified short-comparison assembly path in the isolated initializer. In a
+second sample, 1,624 of 1,647 comparisons had zero length. Rust's slice
+equality called `bcmp` for empty dimension arrays. Most came from typed
+register writes and binary operations. The isolated caller and length samples
+have a different denominator from the production Tracy capture.
+
+A process-local diagnostic returned equality immediately for zero-length
+`bcmp` calls and forwarded nonempty comparisons to the installed libc. In
+the initializer-only experiment, this reduced median CPU time from 23.80 to
+20.90 s across two interleaved pairs. All 7,855 initial values still matched.
+The scene comparison above exercised the same diagnostic in the owned simulator
+process. This estimates the opportunity across callers on this Linux host.
+The shipped executable uses its ordinary comparison implementation.
+
+For a portable fix, specialize scalar equality in Rumoca's `SolveValueType`
+and the DAE dimension checks implicated by the caller samples. A scalar and a
+one-element tensor must remain distinct. Preserve exact rank and extents for
+tensors and the scalar numeric type. Evaluate the localized implementation on
+the scene before assigning it the diagnostic's observed time saving.
+
+The local evidence is in `target/perf/griffin-merged-profile/`. The `tracy/`
+directory contains the owned capture, process maps, per-zone samples and
+construction receipt. `prepared_load.rs`, `prepared-cpu-pairs.jsonl`,
+`comparison-callers.txt` and `length-addresses.txt` record the component and
+scalar-check experiments.
+
 ## Follow-up experiment
 
 The control executable identified itself as `a2adc563-dirty`, with Rumoca
@@ -30,10 +136,26 @@ separately.
 Rumoca now keys shared-value proofs by the binary operation structure and the
 issuing pure-call owner. The one-shot coupled session uses the interpreter for
 its initial observation. Live participants prepare their configured execution
-backend. In the baseline Tracy rerun, 55,645 leaf samples fell within the coupled
-observation and 49,967 within live construction. Among the top 80 leaf symbols,
-formatting accounted for at least 23.6% and 31.4% of the respective samples.
-Cranelift and register allocation accounted for at least 22.4% and 17.9%.
+backend.
+
+### Formatting cost after the fix
+
+Two 1 kHz Tracy captures measured CPU samples inside the same worker zones.
+The table counts the innermost sampled function across all symbols. Unresolved
+addresses stay in the denominator. Each capture covered one coupled observation
+and 15 live session constructions.
+
+| Worker zone | Formatting before | Formatting after |
+|---|---:|---:|
+| Shared initial observation | 13,591 / 55,645 (24.42%) | 4 / 16,577 (0.02%) |
+| Live session construction | 16,017 / 49,967 (32.06%) | 23 / 16,921 (0.14%) |
+
+The formatting count includes Rust formatting functions and numeric-to-text
+conversion. The captures measure CPU distribution. The alternating release
+runs above measure user-visible latency. In the updated trace, Cranelift and
+register allocation accounted for 7,914 of 16,921 live-construction samples
+(46.77%) and zero coupled-observation samples. Repeated native preparation
+in the persistent live sessions is the next candidate for measurement.
 
 The old popup counted unresolved source requests until the coupled result
 arrived, then switched to unfinished live participants. In the private-window
@@ -51,8 +173,10 @@ The inconsistent network reported the expected terminal
 
 The repeated runs are recorded under `target/perf/griffin-{control,candidate}-*`,
 with source hashes, worker receipts and process retirement in each `session.json`.
-The fresh baseline CPU capture and zone-filtered sample summaries are under
-`target/perf/griffin-repeat-tracy/`.
+CPU captures and zone-filtered sample summaries are under
+`target/perf/griffin-repeat-tracy/` and `target/perf/griffin-issuer-tracy/`.
+The rendered popup is recorded in `target/perf/griffin-popup-settled/initial-equations.png`
+and `target/perf/griffin-popup-settled/starting-sessions.png`.
 
 ## Workload and controls
 
@@ -67,7 +191,7 @@ Production `luncosim`, release, application `a2adc5636df87d03eb569fcdca3810bd995
 | Tracy with native maps, API 5500, profiler 5502 | 77.522 s | 41.044 s | 24.765 s |
 | Regular warm release, API 5503 (contended) | 88.935 s | 46.075 s | 31.612 s |
 
-The Tracy runs overlapped compilation workloads and incurred profiler overhead; use them only for attribution, not performance acceptance. The regular warm repeat used the exact original release binary, but the host had unrelated active Rust compilation and browser workloads; its receipt confirms the same critical path despite cache hits. The coupled observation and slowest member construction alone total 77.687 s (87.4% of that run). Do not interpret the warm time as a cache regression. A native desktop comparison failed before application launch because the private Weston compositor was absent; Xvfb is also absent. No physical-desktop timing, screenshot, or visual readiness claim is made.
+The Tracy runs overlapped compilation workloads and incurred profiler overhead; use them only for attribution, not performance acceptance. The regular warm repeat used the exact original release binary, but the host had unrelated active Rust compilation and browser workloads; its receipt confirms the same critical path despite cache hits. The coupled observation and slowest member construction alone total 77.687 s (87.4% of that run). Do not interpret the warm time as a cache regression. The follow-up private-window run used Xvfb. The table above contains headless runs only.
 
 ## Critical path in the regular release run
 

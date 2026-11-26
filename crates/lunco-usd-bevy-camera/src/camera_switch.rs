@@ -3218,7 +3218,7 @@ mod tests {
         {
             let mut vp = app.world_mut().resource_mut::<SceneViewport>();
             vp.visible = true;
-            vp.loading = true;
+            vp.loading_since = Some(bevy::platform::time::Instant::now());
         }
         app.update();
         assert!(app.world().get::<Camera>(b).unwrap().is_active);
@@ -3231,7 +3231,9 @@ mod tests {
             Some(b)
         );
 
-        app.world_mut().resource_mut::<SceneViewport>().loading = false;
+        app.world_mut()
+            .resource_mut::<SceneViewport>()
+            .loading_since = None;
         app.update();
         assert!(app.world().get::<Camera>(b).unwrap().is_active);
         assert_eq!(
