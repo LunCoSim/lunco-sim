@@ -1641,7 +1641,12 @@ provably irrelevant to all outputs. Bevy's main-world point/spot caster pass
 is admitted only while either native light component exists. Verify that its
 zones disappear in a world with no local lights and that dynamic point/spot
 addition still wakes the original native system. Shadow-LOD extraction remains
-active for its native consumers, including directional shadow views.
+active for its native consumers, including directional shadow views. Stable
+local views retain exact membership; changed light views and widely changed
+inventories share one full parallel traversal. Verify native point faces and
+spot lists, unchanged per-frame visibility publication, layer/frustum changes,
+disabled or removed casters and light reactivation. Test multiple moving
+lights even when their visible membership stays the same.
 
 Before adding shadow-content reuse, measure per-map native caster poses and
 light projections across consecutive frames; stable counts are insufficient.
@@ -1663,7 +1668,21 @@ entries in the main-world cascade inventory do not establish GPU shadow work.
 Reuse admission must also cover mesh/material/pipeline contents, skin/morph
 inputs, backing texture identity and atlas-layer assignment. Spot maps share
 the native directional atlas, so light or cascade changes can shift a layer
-without changing the light entity. A pose digest is diagnostic candidacy only.
+without changing the light entity. Native shadow arrays retain their
+descriptor-qualified texture and sampling view under GPU resource ownership;
+local views rebind on any allocation or layer mismatch. Validate texture
+replacement, light ordering, cascade reservation changes and recovery lifecycle.
+A pose digest is diagnostic candidacy only. Crater Cup's vehicle headlights
+must be measured during running simulation: exact changing light poses
+invalidate whole-map reuse even if a caster count is unchanged. For moving
+lights optimize candidate and draw preparation instead of reusing stale maps.
+
+In raster mode, Solari must not build BLAS for unreferenced assets or submit an
+empty acceleration-structure encoder. Qualify late raytracing-instance
+admission, compatible/incompatible mesh replacement, shared instances,
+retirement and switching back to the raster backend. Compare the existing
+native path-tracing scene and the raster GPU capture; zero BLAS zones alone
+does not prove a correct raytracing backend.
 
 Count shadow roots independently of active cameras. Invisible extracted local
 lights retire their native `PointAndSpotLightViewEntities` through the renderer
@@ -1978,7 +1997,14 @@ solver workspace reuse. XPBD corrections share body state: ECS table packing is
 not a valid execution order. The native owner sorts each joint type by live
 entity index in position and velocity passes. Preserve deterministic entity
 admission. Velocity relaxation borrows and orders query items once per call,
-then reuses them across its iterations without a persistent cache. Preserve
+then reuses them across its iterations without a persistent cache.
+The coupled-contact selection also borrows graph rows once per substep,
+including every manifold belonging to an admitted island. Complete colors
+use the original slices; partial colors preserve the native row order and
+disjoint-body guarantees, and empty selections avoid repeated traversal.
+Measure both the selection and complete relaxation cost; preserve the
+configured iteration count, substeps, contact ordering and native diagnostic
+accounting. Preserve
 the exact production replay reference; exercise unrelated
 archetype moves and joint disable/re-enable in the native regression. Include
 the unchanged serial/default-thread and jitter profiles in qualification, and
