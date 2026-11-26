@@ -24,6 +24,14 @@ use std::sync::Arc;
 
 use crate::source::{HeightEnclosure, HeightSource, bounds_add};
 
+/// Reconstruction purpose at the common modifier-filter seam. Region-scoped
+/// and unscoped sampling receive the same purpose and wavelength.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SamplingPurpose {
+    Physical,
+    Visual,
+}
+
 /// A layer that transforms the terrain height at a point. `apply` receives the height
 /// produced by the base plus every lower modifier and returns the modified height, so
 /// it can add to it (crater, brush) or pull it toward a target (flatten). Must be a
@@ -56,7 +64,11 @@ pub trait HeightModifier: Send + Sync {
     /// metres — features below that scale fade out instead of aliasing, and the
     /// synthesis cost drops with them. Default `None`: the modifier is
     /// resolution-independent (craters, brushes, flattens) and is used as-is.
-    fn with_min_wavelength(&self, _min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
+    fn with_min_wavelength(
+        &self,
+        _min_wavelength: f64,
+        _purpose: SamplingPurpose,
+    ) -> Option<Arc<dyn HeightModifier>> {
         None
     }
 
@@ -69,7 +81,7 @@ pub trait HeightModifier: Send + Sync {
     /// placements are near?" once beats answering it per sample — and lets a
     /// coarse bake discard the sub-sample population in one pass instead of
     /// rejecting it tens of thousands of times. The returned modifier MUST be
-    /// value-identical to `self` (under the same gate) everywhere inside
+    /// value-identical to the unscoped modifier (under the same gate and purpose) everywhere inside
     /// `[min, max]`; it is a bake-scoped view, and callers must not sample it
     /// outside that box.
     ///
@@ -81,6 +93,7 @@ pub trait HeightModifier: Send + Sync {
         _min: [f64; 2],
         _max: [f64; 2],
         _min_wavelength: f64,
+        _purpose: SamplingPurpose,
     ) -> Option<Arc<dyn HeightModifier>> {
         None
     }

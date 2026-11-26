@@ -25,17 +25,19 @@
 
 use crate::oracle::SurfaceOracle;
 use bevy::reflect::Reflect;
+use lunco_terrain_core::modifier::SamplingPurpose;
 
 /// A named, shared filter policy for a band-limited surface product.
 ///
 /// Construct via the named constructors ([`Self::physics`], [`Self::visual`],
-/// [`Self::visual_parent`]); the `min_wavelength` is the sole policy field.
+/// [`Self::visual_parent`]); the role selects the modifier reconstruction.
 /// Apply with [`Self::limited`] to get a gated [`SurfaceOracle`] view.
 #[derive(Debug, Clone, Copy, PartialEq, Reflect)]
 pub struct SurfaceBand {
     /// Minimum wavelength (m) the surface keeps. Features below this are
     /// Nyquist-gated out by [`SurfaceOracle::detail_limited`].
     pub min_wavelength: f64,
+    visual: bool,
 }
 
 impl SurfaceBand {
@@ -44,8 +46,14 @@ impl SurfaceBand {
     /// samples per shortest wavelength).
     #[inline]
     pub fn visual(step: f64) -> Self {
+        Self::visual_wavelength(2.0 * step)
+    }
+
+    /// Visual filter for a wider reconstruction stencil.
+    pub fn visual_wavelength(min_wavelength: f64) -> Self {
         Self {
-            min_wavelength: 2.0 * step,
+            min_wavelength,
+            visual: true,
         }
     }
 
@@ -55,6 +63,7 @@ impl SurfaceBand {
     pub fn physics(step: f64) -> Self {
         Self {
             min_wavelength: 2.0 * step,
+            visual: false,
         }
     }
 
@@ -63,8 +72,14 @@ impl SurfaceBand {
     /// `4·step` (one more 2× on top of [`Self::visual`]).
     #[inline]
     pub fn visual_parent(step: f64) -> Self {
-        Self {
-            min_wavelength: 4.0 * step,
+        Self::visual(2.0 * step)
+    }
+
+    fn purpose(&self) -> SamplingPurpose {
+        if self.visual {
+            SamplingPurpose::Visual
+        } else {
+            SamplingPurpose::Physical
         }
     }
 
@@ -73,7 +88,7 @@ impl SurfaceBand {
     /// `Arc`s); call per bake.
     #[inline]
     pub fn limited(&self, oracle: &SurfaceOracle) -> SurfaceOracle {
-        oracle.detail_limited(self.min_wavelength)
+        oracle.filtered(self.min_wavelength, None, self.purpose())
     }
 
     /// Apply this band to an oracle **scoped to one bake's footprint** — the
@@ -93,10 +108,13 @@ impl SurfaceBand {
         margin: f64,
     ) -> SurfaceOracle {
         let half = region.half + margin;
-        oracle.detail_limited_region(
+        oracle.filtered(
             self.min_wavelength,
-            [region.center[0] - half, region.center[1] - half],
-            [region.center[0] + half, region.center[1] + half],
+            Some((
+                [region.center[0] - half, region.center[1] - half],
+                [region.center[0] + half, region.center[1] + half],
+            )),
+            self.purpose(),
         )
     }
 }
@@ -119,7 +137,11 @@ mod tests {
 
     #[test]
     fn physics_band_is_independent_of_visual_band() {
-        assert_eq!(SurfaceBand::physics(0.305), SurfaceBand::visual(0.305));
+        assert_eq!(
+            SurfaceBand::physics(0.305).min_wavelength,
+            SurfaceBand::visual(0.305).min_wavelength
+        );
+        assert_ne!(SurfaceBand::physics(0.305), SurfaceBand::visual(0.305));
         assert_ne!(SurfaceBand::physics(0.305), SurfaceBand::visual(0.407));
     }
 }

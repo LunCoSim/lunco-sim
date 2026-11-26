@@ -344,7 +344,9 @@ cohort. Do not hide malformed authored catalogs, change
 Rhai limits or classify sources by guessed catalog filenames.
 
 For coupled startup, distinguish the one-shot solve from participant
-certification. Pending constructors supply no certifiable observation; the owner
+certification. The windowed startup driver's `--loading-progress` option records
+the popup's phase changes. Compare the coupled member count with the subsequent
+session-ready count and the scene-scoped construction receipt. Pending constructors supply no certifiable observation; the owner
 waits on their outcomes and revalidates current source, wiring and physical
 samples at final admission. Measure receipt delivery from the worker's result
 log to the shared completion schedule's admission log, using the scene-scoped
@@ -464,11 +466,20 @@ support initialization on every `RenderStartup`, including recovery. A faster
 cohort with missing geometry is a failed visual comparison, regardless of FPS
 or readiness diagnostics.
 
-Native CPU mesh preparation uses a dense frame snapshot in the extraction
-owner and allocation-owned mesh offsets/slabs. Profile `prepare_cpu_mesh_uniforms`
+Native CPU mesh preparation uses a change-driven dense visible-instance
+inventory and allocation-owned mesh offsets/slabs. Profile
+`extract_meshes_for_cpu_building` together with material extraction and both
+material sweeps; verify exact visibility transitions, component removal and
+re-addition, generation reuse, owner recovery and frame-scoped motion flags.
+Profile `prepare_cpu_mesh_uniforms`
 together with shadow, opaque and sorted phase preparation; include native
 memory-copy samples rather than declaring a win from a smaller batch zone alone.
-The storage-buffer writer borrows prepared values without cloning. Preserve
+The storage-buffer writer borrows prepared values and their immutable data
+revisions without cloning. Identical transform writes retain preparation across
+frames; compact input keys validate independent render-world facts, and
+unchanged revisions at the same batch index retain encoded bytes.
+Profile instance buffer uploads together with batch preparation. Verify dirty
+extent writes, full upload on allocation growth, reordered and retired slots,
 shader-layout bytes, dynamic-uniform offsets, mesh replacement/removal and the
 live material/skin/morph/lightmap preparation boundaries.
 

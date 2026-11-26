@@ -397,21 +397,21 @@ lunco-theme = { path = "crates/lunco-theme" }
 lunco-web = { path = "crates/lunco-web" }
 
 # The Modelica compiler, editor, and runtime share one upstream Rumoca revision.
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-tool-build-info = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
-rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "2a3716da596e18598e21a3683b1ff6d13ee650a0" }
+rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-tool-build-info = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
+rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "dc3574345594e56d986d451a7e2699fc0240f65f" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
@@ -709,12 +709,13 @@ openusd-schemas = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797e
 openusd-build = { git = "https://github.com/LunCoSim/openusd", rev = "38fd797eadfdb5e8759cb060b7733b7fc962747e" }
 # Native light adds receiver-frame cascade fitting to the receiver-culling renderer.
 bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f074587862e03bcd3e0b79ecc6" }
-# Native borrowed batch encoding, dense instances and allocation-owned facts require the coordinated render/PBR/sprite revision.
-bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
+# Native mesh allocation facts and revisioned CPU instance-buffer storage.
+bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "c7582e05fadde13b9ebd9247a883d4b0edab80d2" }
 # Exact picking hit reuse shares the validated native presentation branch.
 bevy_picking = { git = "https://github.com/LunCoSim/bevy", rev = "b33d65990122c80aa73f835cd0c77d5a22ab4dd0" }
 bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "daed5647147acc49df25d827aa7b1d4fb7e2e122" }
-bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
+# Change-driven CPU extraction and retained prepared uniforms share the render-buffer revision.
+bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "c7582e05fadde13b9ebd9247a883d4b0edab80d2" }
 bevy_sprite_render = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
 # Exposes the path-tracing schedule set used by native forward composition.
 bevy_solari = { git = "https://github.com/LunCoSim/bevy", rev = "89d20883269eee3bd1dac89b6e02536c74fbb4f8" }

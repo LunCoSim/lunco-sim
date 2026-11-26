@@ -622,8 +622,10 @@ fn report_terrain_stream_status(
     // render-material publication finishes. Keep the typed live state active
     // until both fulfilment dimensions settle; otherwise the readiness gate
     // sees a false idle transition and the overlay disappears too early.
-    let streaming = status.pending > 0 || (status.wanted > 0 && status.resident < status.wanted);
+    let streaming = status.failed == 0
+        && (status.pending > 0 || (status.wanted > 0 && status.resident < status.wanted));
     let completed = mirror.streaming
+        && status.failed == 0
         && status.wanted > 0
         && status.resident >= status.wanted
         && status.pending == 0;
@@ -1152,9 +1154,14 @@ fn report_dome_environment_status(
 fn report_modelica_status(
     pending_sources: Query<(), With<lunco_usd_sim_cosim::PendingModelicaSource>>,
     models: Query<
-        (Entity, &lunco_modelica_runtime::ModelicaModel),
+        (
+            Entity,
+            &lunco_modelica_runtime::ModelicaModel,
+            Option<&lunco_cosim_core::initialization::CoupledInitializationPending>,
+        ),
         With<lunco_cosim_core::UsdSourcedCosim>,
     >,
+    initialization: Option<Res<lunco_usd_sim_cosim::CoupledInitialization>>,
     bus: Option<ResMut<lunco_status_core::status_bus::StatusBus>>,
     mut mirror: ResMut<ModelicaStatusMirrorState>,
 ) {
@@ -1169,36 +1176,59 @@ fn report_modelica_status(
     // the first tick that would make the participant Running can never happen.
     // The authoritative source lifecycle is the Modelica model itself; the
     // solver's first-step hold remains owned by the readiness subsystem.
-    let mut participants = models.iter().map(|(entity, _)| entity).collect::<Vec<_>>();
+    let mut participants = models
+        .iter()
+        .map(|(entity, _, _)| entity)
+        .collect::<Vec<_>>();
     participants.sort_unstable();
-    let mut compiling = 0;
+    let mut preparing = 0;
+    let mut started = 0;
     let mut failed = 0;
-    for (_, model) in &models {
+    for (_, model, hold) in &models {
         let ready = model.is_compiled && !model.is_compiling && model.last_error.is_none();
+        if ready && hold.and_then(|hold| hold.expected_session) == Some(model.session_id) {
+            started += 1;
+        }
         if !ready && model.last_error.is_none() {
-            compiling += 1;
+            preparing += 1;
         } else if model.last_error.is_some() {
             failed += 1;
         }
     }
-    let active = pending > 0 || compiling > 0;
+    use lunco_usd_sim_cosim::CoupledInitializationPhase;
+    let phase = initialization.as_deref().and_then(|state| state.phase());
+    let active = pending > 0 || preparing > 0 || phase.is_some();
 
-    if pending > 0 {
-        bus.set_progress(
+    match phase {
+        Some(CoupledInitializationPhase::Solving(total)) => bus.set_progress(
+            SOURCE,
+            format!("solving shared initial conditions for {total} Modelica participants"),
+            0,
+            0,
+        ),
+        Some(CoupledInitializationPhase::StartingSessions(total)) => bus.set_progress(
+            SOURCE,
+            format!("starting Modelica sessions ({started} of {total} ready)"),
+            started as u64,
+            total as u64,
+        ),
+        None if pending > 0 => bus.set_progress(
             SOURCE,
             format!("loading {pending} Modelica source(s)"),
             0,
             0,
-        );
-    } else if compiling > 0 {
-        bus.set_progress(
-            SOURCE,
-            format!("compiling {compiling} Modelica participant(s)"),
-            0,
-            0,
-        );
-    } else {
-        bus.remove_progress(SOURCE);
+        ),
+        None if preparing > 0 => {
+            let total = participants.len();
+            let ready = total - preparing - failed;
+            bus.set_progress(
+                SOURCE,
+                format!("preparing Modelica participants ({ready} of {total} ready)"),
+                ready as u64,
+                total as u64,
+            );
+        }
+        None => bus.remove_progress(SOURCE),
     }
 
     if participants.is_empty() || failed > 0 {

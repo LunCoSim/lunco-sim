@@ -347,6 +347,10 @@ reported by the consumer requesting that representation.
 Scene Files dependency traversal passes bounded raw bytes to the native USD
 format owner, so USDC is decoded by OpenUSD rather than a UTF-8 gate. Native
 format diagnostics remain terminal at the traversal owner.
+For composed stage recipes, `StageLayerBytes` shares its buffer and one text
+nesting-validation result between dependency discovery and resolver opens.
+Replacement bytes must pass their own validation; the native dependency-analysis
+layer is private and is not a canonical stage layer.
 Referenced stage closures follow the same event boundary before a reference is
 authored onto the live stage. `ReferenceLayerInputs` retains the real source
 handle and admitted canonical recipe/plan for the scene lifetime. Its existing

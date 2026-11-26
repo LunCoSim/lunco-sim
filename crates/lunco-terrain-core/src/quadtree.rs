@@ -365,25 +365,22 @@ impl Quadtree {
         let mut cover: std::collections::HashMap<QuadCoord, Selected> =
             sel.drain(..).map(|s| (s.coord, s)).collect();
         for &target in required {
-            let finer = cover.keys().any(|coord| {
-                coord.depth > target.depth
-                    && (coord.x >> (coord.depth - target.depth)) == target.x
-                    && (coord.z >> (coord.depth - target.depth)) == target.z
-            });
-            if !finer {
-                self.force_refine(&mut cover, target, node_error);
-            }
+            // The ancestor walk in force_refine already detects a target
+            // covered by finer leaves. No scan of the entire cover is needed.
+            self.force_refine(&mut cover, target, node_error);
         }
         // Apply pins after all splits so every descendant of a required node
         // retains full geometry under the same view contract.
+        let required: std::collections::HashSet<_> = required.iter().copied().collect();
         for leaf in cover.values_mut() {
-            if required.iter().any(|target| {
-                leaf.coord.depth >= target.depth
-                    && (leaf.coord.x >> (leaf.coord.depth - target.depth)) == target.x
-                    && (leaf.coord.z >> (leaf.coord.depth - target.depth)) == target.z
-            }) {
-                leaf.morph_start = f64::INFINITY;
-                leaf.morph_end = f64::INFINITY;
+            let mut node = Some(leaf.coord);
+            while let Some(coord) = node {
+                if required.contains(&coord) {
+                    leaf.morph_start = f64::INFINITY;
+                    leaf.morph_end = f64::INFINITY;
+                    break;
+                }
+                node = coord.parent();
             }
         }
         sel.extend(cover.into_values());

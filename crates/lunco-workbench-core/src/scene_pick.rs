@@ -52,6 +52,9 @@ pub struct ScenePickGate {
 /// The egui-geometry half of the gate's per-frame inputs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EguiPointerState {
+    /// The host covers the main view during initial preparation. Secondary
+    /// editor panels and native UI retain their own input ownership.
+    pub main_scene_blocked: bool,
     /// Whether egui's occlusion-aware pointer test finds a reserved surface.
     pub over_egui: bool,
     /// An occluding egui window/menu above the background layer owns this point.
@@ -167,6 +170,11 @@ impl ScenePickGate {
     /// target, applying the press latch. Returns `true` for a newly recognized
     /// main-scene press.
     pub fn resolve(&mut self, egui_state: EguiPointerState) -> bool {
+        // Withdraw a latched main-scene gesture when the output becomes
+        // unavailable. A held button remains latched to chrome until release.
+        if egui_state.main_scene_blocked && self.over_main_scene() {
+            self.resolved = PointerOwner::Egui;
+        }
         if !self.rendered {
             return false;
         }
@@ -178,7 +186,7 @@ impl ScenePickGate {
                 .iter()
                 .any(|(_, rect)| rect.contains(pos))
         });
-        let candidate = if over_overlay {
+        let mut candidate = if over_overlay {
             PointerOwner::NativeUi
         } else if egui_state.over_egui_overlay {
             PointerOwner::Egui
@@ -194,6 +202,11 @@ impl ScenePickGate {
             )
             .map_or(PointerOwner::Egui, PointerOwner::Scene)
         };
+        if egui_state.main_scene_blocked
+            && candidate == PointerOwner::Scene(SceneTarget::MainViewport)
+        {
+            candidate = PointerOwner::Egui;
+        }
         let latch = PressLatch {
             held: self.latched,
             owner: self.resolved,
@@ -287,6 +300,37 @@ mod tests {
             hover_pos: Some(pos2(p.0, p.1)),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn loading_backdrop_retires_main_pointer_until_release() {
+        let mut gate = ScenePickGate::default();
+        gate.mark_rendered();
+        gate.record_scene_leaf(SceneTarget::MainViewport, true);
+        let mut pointer = hovering((40.0, 40.0));
+        pointer.any_down = true;
+        assert!(gate.resolve(pointer));
+        assert!(gate.over_main_scene());
+
+        pointer.main_scene_blocked = true;
+        assert!(!gate.resolve(pointer));
+        assert!(!gate.over_main_scene());
+        pointer.main_scene_blocked = false;
+        assert!(!gate.resolve(pointer));
+        assert!(!gate.over_main_scene());
+
+        pointer.any_down = false;
+        gate.resolve(pointer);
+        assert!(gate.over_main_scene());
+        pointer.main_scene_blocked = true;
+        assert!(!gate.resolve(pointer));
+        assert!(!gate.over_main_scene());
+
+        gate.begin_frame();
+        gate.mark_rendered();
+        gate.record_scene_leaf(SceneTarget::Offscreen(USD_PREVIEW), true);
+        gate.resolve(pointer);
+        assert_eq!(gate.resolved(), Some(SceneTarget::Offscreen(USD_PREVIEW)));
     }
 
     #[test]

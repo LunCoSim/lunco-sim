@@ -26,7 +26,8 @@ pub struct SceneViewport {
     pub active_camera: Option<Entity>,
     /// Whether the host layout requests the main scene view.
     pub visible: bool,
-    /// The interactive host is showing scene preparation status.
+    /// The interactive host covers the main view with scene preparation status.
+    /// The selected render camera may prepare behind that backdrop.
     pub loading: bool,
     /// Physical `(position, size)` sub-rect inside the window, or `None` for
     /// the full window.
@@ -40,6 +41,18 @@ impl Default for SceneViewport {
             visible: true,
             loading: false,
             rect: None,
+        }
+    }
+}
+
+impl SceneViewport {
+    /// Main-view interaction and screen-space overlays use the exposed view,
+    /// never the camera preparing behind the loading backdrop.
+    pub fn exposed_camera(&self) -> Option<Entity> {
+        if self.visible && !self.loading {
+            self.active_camera
+        } else {
+            None
         }
     }
 }

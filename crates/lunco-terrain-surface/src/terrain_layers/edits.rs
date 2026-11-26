@@ -324,7 +324,11 @@ impl HeightModifier for EditsLayer {
     /// Manual craters band-limit exactly like field craters: a copy tagged with
     /// the consumer's sampling wavelength so a coarse far tile fades/softens a
     /// small placed crater instead of aliasing its rim.
-    fn with_min_wavelength(&self, min_wavelength: f64) -> Option<Arc<dyn HeightModifier>> {
+    fn with_min_wavelength(
+        &self,
+        min_wavelength: f64,
+        _purpose: lunco_terrain_core::modifier::SamplingPurpose,
+    ) -> Option<Arc<dyn HeightModifier>> {
         if !self
             .edits
             .iter()

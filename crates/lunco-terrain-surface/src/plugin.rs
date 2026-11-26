@@ -258,7 +258,6 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
                 (
                     crate::stream_viz::cancel_removed_terrain_preparation,
                     crate::stream_viz::update_lod_tiles,
-                    crate::stream_viz::retire_terrain_tiles,
                 )
                     .chain(),
                 crate::stream_viz::bind_terrain_maps_to_materials,

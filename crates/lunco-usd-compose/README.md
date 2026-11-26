@@ -7,6 +7,10 @@ composes sublayers, references, payloads, and variants into an OpenUSD stage.
 It has no Modelica, Rhai, behavior-tree, physics, Bevy entity, or rendering
 responsibility.
 
+Immutable recipe buffers share text nesting validation across dependency
+discovery and resolver opens. Dependency decoding borrows the retained buffer;
+the private dependency-analysis layer is distinct from canonical stage layers.
+
 For file listings and scenario manifests, it exposes `is_usd_layer` and
 `layer_dependency_arcs` on bounded raw USDA/USDC bytes, with native format
 diagnostics. `layer_dependency_paths` inspects parsed authored layer

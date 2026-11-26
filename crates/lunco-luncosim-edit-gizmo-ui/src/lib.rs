@@ -1214,7 +1214,7 @@ fn sync_gizmo_camera(
         *options = saved_options;
     }
 
-    let live = viewport.active_camera.and_then(|requested| {
+    let live = viewport.exposed_camera().and_then(|requested| {
         q_cameras
             .get(requested)
             .ok()

@@ -176,10 +176,7 @@ pub fn viewport_position(gid: u64) -> Option<Vec2> {
             Res<lunco_viewport_core::SceneViewport>,
         )> = SystemState::new(world);
         let (q_transforms, q_cameras, scene_viewport) = state.get(world).ok()?;
-        if !scene_viewport.visible {
-            return None;
-        }
-        let camera_entity = scene_viewport.active_camera?;
+        let camera_entity = scene_viewport.exposed_camera()?;
         let (camera, camera_transform) = q_cameras.get(camera_entity).ok()?;
         if !camera.is_active {
             return None;

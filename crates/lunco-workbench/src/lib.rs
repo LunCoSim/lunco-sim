@@ -86,7 +86,7 @@ pub(crate) use render::{
     measured_titlebar_right_width, menu_item, needs_full_backdrop, new_document_menu_label,
     perspective_help_anchor, perspective_switcher_tabs, render_custom_menus, render_edit_menu,
     render_help_menu, render_network_menu, render_settings_menu, render_status_bar_inner,
-    render_time_menu, run_menu_callback, scene_camera_is_rendering, top_menu_mode,
+    render_time_menu, run_menu_callback, scene_camera_is_exposed, top_menu_mode,
     truncate_title_to_width,
 };
 use render::{

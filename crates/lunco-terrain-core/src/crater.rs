@@ -1103,6 +1103,7 @@ impl crate::modifier::HeightModifier for Craters {
     fn with_min_wavelength(
         &self,
         min_wavelength: f64,
+        _purpose: crate::modifier::SamplingPurpose,
     ) -> Option<Arc<dyn crate::modifier::HeightModifier>> {
         Some(Arc::new(self.band_limited(min_wavelength)))
     }
@@ -1115,6 +1116,7 @@ impl crate::modifier::HeightModifier for Craters {
         min: [f64; 2],
         max: [f64; 2],
         min_wavelength: f64,
+        _purpose: crate::modifier::SamplingPurpose,
     ) -> Option<Arc<dyn crate::modifier::HeightModifier>> {
         Some(Arc::new(self.for_region(min, max, min_wavelength)))
     }
@@ -1370,7 +1372,7 @@ mod tests {
         use crate::modifier::HeightModifier;
         let cs = Craters::new(vec![crater(0.0, 0.0, 10.0), crater(15.0, -8.0, 6.0)]);
         let gated = cs
-            .with_min_wavelength(0.0)
+            .with_min_wavelength(0.0, crate::modifier::SamplingPurpose::Physical)
             .expect("craters produce gated variants");
         for k in 0..40 {
             let (x, z) = (k as f64 * 0.7 - 14.0, k as f64 * 0.4 - 8.0);
