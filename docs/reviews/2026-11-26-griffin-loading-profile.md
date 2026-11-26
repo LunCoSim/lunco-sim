@@ -30,10 +30,26 @@ separately.
 Rumoca now keys shared-value proofs by the binary operation structure and the
 issuing pure-call owner. The one-shot coupled session uses the interpreter for
 its initial observation. Live participants prepare their configured execution
-backend. In the baseline Tracy rerun, 55,645 leaf samples fell within the coupled
-observation and 49,967 within live construction. Among the top 80 leaf symbols,
-formatting accounted for at least 23.6% and 31.4% of the respective samples.
-Cranelift and register allocation accounted for at least 22.4% and 17.9%.
+backend.
+
+### Formatting cost after the fix
+
+Two 1 kHz Tracy captures measured CPU samples inside the same worker zones.
+The table counts the innermost sampled function across all symbols. Unresolved
+addresses stay in the denominator. Each capture covered one coupled observation
+and 15 live session constructions.
+
+| Worker zone | Formatting before | Formatting after |
+|---|---:|---:|
+| Shared initial observation | 13,591 / 55,645 (24.42%) | 4 / 16,577 (0.02%) |
+| Live session construction | 16,017 / 49,967 (32.06%) | 23 / 16,921 (0.14%) |
+
+The formatting count includes Rust formatting functions and numeric-to-text
+conversion. The captures measure CPU distribution. The alternating release
+runs above measure user-visible latency. In the updated trace, Cranelift and
+register allocation accounted for 7,914 of 16,921 live-construction samples
+(46.77%) and zero coupled-observation samples. Repeated native preparation
+in the persistent live sessions is the next candidate for measurement.
 
 The old popup counted unresolved source requests until the coupled result
 arrived, then switched to unfinished live participants. In the private-window
@@ -51,8 +67,10 @@ The inconsistent network reported the expected terminal
 
 The repeated runs are recorded under `target/perf/griffin-{control,candidate}-*`,
 with source hashes, worker receipts and process retirement in each `session.json`.
-The fresh baseline CPU capture and zone-filtered sample summaries are under
-`target/perf/griffin-repeat-tracy/`.
+CPU captures and zone-filtered sample summaries are under
+`target/perf/griffin-repeat-tracy/` and `target/perf/griffin-issuer-tracy/`.
+The rendered popup is recorded in `target/perf/griffin-popup-settled/initial-equations.png`
+and `target/perf/griffin-popup-settled/starting-sessions.png`.
 
 ## Workload and controls
 
@@ -67,7 +85,7 @@ Production `luncosim`, release, application `a2adc5636df87d03eb569fcdca3810bd995
 | Tracy with native maps, API 5500, profiler 5502 | 77.522 s | 41.044 s | 24.765 s |
 | Regular warm release, API 5503 (contended) | 88.935 s | 46.075 s | 31.612 s |
 
-The Tracy runs overlapped compilation workloads and incurred profiler overhead; use them only for attribution, not performance acceptance. The regular warm repeat used the exact original release binary, but the host had unrelated active Rust compilation and browser workloads; its receipt confirms the same critical path despite cache hits. The coupled observation and slowest member construction alone total 77.687 s (87.4% of that run). Do not interpret the warm time as a cache regression. A native desktop comparison failed before application launch because the private Weston compositor was absent; Xvfb is also absent. No physical-desktop timing, screenshot, or visual readiness claim is made.
+The Tracy runs overlapped compilation workloads and incurred profiler overhead; use them only for attribution, not performance acceptance. The regular warm repeat used the exact original release binary, but the host had unrelated active Rust compilation and browser workloads; its receipt confirms the same critical path despite cache hits. The coupled observation and slowest member construction alone total 77.687 s (87.4% of that run). Do not interpret the warm time as a cache regression. The follow-up private-window run used Xvfb. The table above contains headless runs only.
 
 ## Critical path in the regular release run
 
