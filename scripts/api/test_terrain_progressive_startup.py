@@ -48,6 +48,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=300,
                         help="Deadline for final background shading, not startup latency.")
+    parser.add_argument("--performance-timeout", type=float, default=45,
+                        help="Deadline to collect a complete fresh frame history; not an FPS threshold.")
     parser.add_argument("--require-progressive", action="store_true",
                         help="Require root publication before visual preparation finishes (cold cache).")
     parser.add_argument("--verify-recording", action="store_true",
@@ -215,7 +217,7 @@ def main():
         # Clear the scenario-observer workload from the frame-time history
         # before measuring the settled native viewport.
         initial = execute("EnginePerformance")
-        deadline = time.monotonic() + 12.0
+        deadline = time.monotonic() + args.performance_timeout
         while time.monotonic() < deadline:
             time.sleep(.25)
             measured = execute("EnginePerformance")

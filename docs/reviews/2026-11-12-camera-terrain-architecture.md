@@ -290,6 +290,22 @@ compilation competed for system resources, so the observed 41.85/30.80 median
 FPS is not an isolated speed comparison. Neither quality nor simulation
 cadence was reduced.
 
+The combined production build at `a8e3d959d`, including main's newer retained
+native CPU buffer renderer (`c7582e05`), also passed both startup probes and
+stationary-cover gates on port 3743. The cold detailed cover published 0.376 s
+after world readiness; final current shading arrived at 49.199 s from launch,
+preserving all 567 tile identities and gating two numbered frames. The warm
+cover published 1.898 s after world readiness, with two numbered frames and
+successful feed retirement/probe retuning. Both runs had zero runtime
+diagnostic errors/warnings. Their median FPS observations were 59.57 cold and
+23.11 warm; the latter overlapped a release Rust link/codegen, video encode and
+other simulator sessions. The acceptance driver now allows a configurable
+deadline to collect all 240 fresh frames instead of implicitly enforcing a
+20 FPS sampling floor. The initial warm attempt passed pixels/stationary
+coverage but exceeded the original twelve-second sampling deadline.
+Evidence: `/tmp/luncosim-terrain-audit/startup-integrated-cold/` and
+`/tmp/luncosim-terrain-audit/startup-integrated-warm2/`.
+
 ## External architecture references
 
 [Cesium Native view integration](https://cesium.com/learn/cesium-native/ref-doc/rendering-3d-tiles.html)
