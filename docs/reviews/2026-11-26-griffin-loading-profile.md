@@ -1,5 +1,32 @@
 # Griffin loading profile — 2026-11-26
 
+## Desktop profile of the integrated release
+
+Local merge `5235460ca`, built from `usd`, reached lander physics readiness in
+**18.40 seconds on an empty Modelica cache and 11.99 seconds on the next open
+in a fresh process**. The first ready screenshots completed at 18.71 and
+12.27 seconds. This was the same surface-operations Twin and private desktop
+setup as the paired comparison below. The binary SHA-256 was
+`b132e0f846156423165f6e06250f3de1f0b7f1eeb6f1685e8a0340c`.
+
+| Merged desktop run | Shared initialization | Prepare or read shared component | Longest live constructor | DAE / component hits |
+|---|---:|---:|---:|---:|
+| Empty Modelica cache | 5.30 s | 3.55 s | 3.02 s | 0 / 0 |
+| Warm Modelica cache | 3.61 s | 1.81 s | 2.91 s | 16 / 16 |
+
+The warm run reused 12,444 native functions and compiled 29,576. All 199
+time-zero values matched the paired builds. Both runs reached physics readiness
+with 15 active participants, zero scene diagnostics and matching source snapshots.
+A separate desktop run observed `landing_handoff = 1.0`. It reached lander
+physics readiness at 17.13 seconds and passed the full handoff and terrain
+qualification at 64.48 seconds. The integrated executable also passed the 47
+authored initialization and replacement checks and the expected-fault fixture.
+The desktop displayed a separate download warning for the Earth and Moon color
+maps during these physics measurements.
+
+The merged build also includes intervening runtime and rendering changes.
+Use the paired runs below to estimate the effect of the Modelica changes alone.
+
 ## Production result with checked component and native function reuse
 
 The release from the `usd` checkout reached Griffin lander physics readiness
