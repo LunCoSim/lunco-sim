@@ -144,6 +144,12 @@ restricted draw cover, parent fallback, stitch topology and morph context. Mesh
 bakes are shared by source, node and resolution; view state is separate. All color,
 shadow and prepass passes use the same parent view context.
 
+Each private output channel retains its lease until no surviving terrain
+geometry mask refers to it. The renderer checks retired channels only when a
+new output needs admission, including hidden and disabled geometry in the
+inventory. Extraction consumes the final camera and mesh masks/removals before
+drawing; layer reuse is not paced by a fixed frame delay.
+
 Perspective error uses output pixels, vertical FOV and three-dimensional camera
 distance. Orthographic error uses pixels per metre from the finalized projection
 area and output dimensions. Translating an orthographic camera along its viewing
@@ -186,6 +192,19 @@ does not discard visible coverage; pressure remains explicit in streaming status
 A required tile larger than the entire byte ceiling is a terminal preparation
 failure for that source and ceiling, not a per-frame upload retry. A changed
 ceiling or surface makes a new admission eligible.
+For a refused upload, the streamer also checks measured necessary concurrent
+allocations: the final selected cover, unchanged generation refresh, immediate
+sibling refinement, and selected-ancestor coarsening. Shared uploaded mesh
+identities count once; missing estimates never become fabricated bytes. An
+exact lower bound larger than the ceiling produces `mesh-transition-impossible`
+and retains the outgoing drawable cover until a selection, source or ceiling
+change makes admission eligible. Ordinary progressive transitions are not
+treated as requiring the entire old and new frontiers simultaneously.
+
+The selected-cover status is retained at its exact residency/generation/draw
+mutation boundaries. The focus query uses the actual constrained selected
+quadtree coordinate index, including closed shared-edge ordering, rather than
+walking every selected leaf in each settled frame.
 The consumed-output registry and output pixel admission bound the number and size
 of views. New demands withdraw obsolete queued work; already-running
 work retains exact scene/source/view leases at publication. Ready ancestors remain
@@ -225,11 +244,18 @@ coverage. Incomplete cover convergence advances independently of the simulation
 clock; cover operations are allocated by the terrain owner, across view
 replacement, and only an admitted operation can own a pending completion.
 
-On a native cold cache, a shared-admission derived-layer worker first checks
-the final content-addressed map, otherwise publishes a 256-or-smaller texel
-preview. Each cache load validates the requested raster dimensions. The final
-map is admitted in the background after the consumed near-camera draw
-partition is published. Source and requested bake identity fence every completion;
+On a native cold cache, the derived-layer owner first checks the final
+content-addressed map, otherwise publishes a 256-or-smaller texel preview.
+Each cache load validates the requested raster dimensions. The final map is
+admitted in the background after the consumed near-camera draw partition is
+published. One immutable region-filtered sampling plan supplies independent
+contiguous row jobs through the shared bounded work admission. Each completed
+chunk releases its worker permit; the owner reserves the full staging and
+assembly byte layout separately against the validated raster size. Ordered
+assembly, cache writing and mip generation run off the UI thread. Cancellation
+at row boundaries releases obsolete computation, and an in-flight allocation
+retains its byte reservation until it is actually dropped. The web serial
+consumer uses the same row lattice and transfer. Source and requested bake identity fence every completion;
 cancelled scene or quality leases cannot publish stale material data. Removing
 the DEM from a surviving entity also retires its queued request, result receipt
 and derived maps, leaving authored raster bindings intact.

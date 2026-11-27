@@ -14,8 +14,8 @@ use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::render::view::Tonemapping;
 use lunco_render::camera::{
-    CameraRetiring, MsaaLevel, SceneCamera, SceneViewDemand, SceneViewDemandSet, SceneViewLayers,
-    SceneViewOutput, ToneMap,
+    CameraRetiring, MsaaLevel, SceneCamera, SceneViewDemand, SceneViewDemandSet, SceneViewGeometry,
+    SceneViewLayers, SceneViewOutput, ToneMap,
 };
 
 use crate::RenderProfile;
@@ -221,10 +221,32 @@ fn publish_main_view_demand(
 
 #[derive(Default)]
 struct SceneViewLayerAllocator {
-    frame: u64,
     leases: std::collections::BTreeMap<Entity, (SceneViewDemand, usize)>,
-    retired: Vec<(u64, usize)>,
+    retired: std::collections::BTreeSet<usize>,
     failed: std::collections::HashSet<Entity>,
+}
+
+impl SceneViewLayerAllocator {
+    /// A released channel can be reused only after the last geometry entity
+    /// relinquishes its exact mask. Hidden and disabled geometry still owns
+    /// that channel: it may become visible again before it is despawned.
+    /// This inventory is needed only when admitting a new output.
+    fn reclaim_unreferenced_retired_layers(&mut self, world: &mut World) {
+        use bevy::camera::visibility::RenderLayers;
+        use bevy::ecs::{entity_disabling::Disabled, query::Allow};
+
+        if self.retired.is_empty() {
+            return;
+        }
+        let mut geometry =
+            world.query_filtered::<&RenderLayers, (With<SceneViewGeometry>, Allow<Disabled>)>();
+        let referenced: std::collections::BTreeSet<_> = geometry
+            .iter(world)
+            .flat_map(RenderLayers::iter)
+            .filter(|layer| self.retired.contains(layer))
+            .collect();
+        self.retired.retain(|layer| referenced.contains(layer));
+    }
 }
 
 fn retire_removed_scene_view_demands(
@@ -244,13 +266,13 @@ fn retire_removed_scene_view_demands(
     }
 }
 
-/// Four publication boundaries allow retired geometry's two extraction grace
-/// frames to finish before another output can receive its channel.
+/// Publish private output channels after the terrain producer's Update and
+/// before the next demand snapshot and native visibility pass. The render
+/// extraction boundary consumes the same current camera masks and exact mesh
+/// removals/layer changes before drawing: no frame-count grace period is needed
+/// once the retired channel has no surviving geometry references.
 fn publish_scene_view_layers(world: &mut World, mut allocator: Local<SceneViewLayerAllocator>) {
     use bevy::camera::visibility::RenderLayers;
-    allocator.frame = allocator.frame.saturating_add(1);
-    let frame = allocator.frame;
-    allocator.retired.retain(|(ready, _)| *ready > frame);
     let mut query = world
         .query_filtered::<(Entity, &Camera, &SceneViewDemand, Has<CameraRetiring>), With<Camera3d>>(
         );
@@ -291,7 +313,7 @@ fn publish_scene_view_layers(world: &mut World, mut allocator: Local<SceneViewLa
         .collect::<Vec<_>>();
     for entity in retired {
         let (_, layer) = allocator.leases.remove(&entity).unwrap();
-        allocator.retired.push((frame.saturating_add(4), layer));
+        allocator.retired.insert(layer);
         allocator.failed.remove(&entity);
         if let Ok(mut camera) = world.get_entity_mut(entity) {
             let layers = camera
@@ -302,6 +324,12 @@ fn publish_scene_view_layers(world: &mut World, mut allocator: Local<SceneViewLa
             camera.insert(layers).remove::<SceneViewLayers>();
         }
     }
+    if active
+        .iter()
+        .any(|(entity, _)| !allocator.leases.contains_key(entity))
+    {
+        allocator.reclaim_unreferenced_retired_layers(world);
+    }
     for (entity, demand) in active {
         let layer = if let Some((_, layer)) = allocator.leases.get(&entity).copied() {
             layer
@@ -311,10 +339,7 @@ fn publish_scene_view_layers(world: &mut World, mut allocator: Local<SceneViewLa
                     .leases
                     .values()
                     .any(|(_, layer)| layer == candidate)
-                    && !allocator
-                        .retired
-                        .iter()
-                        .any(|(_, layer)| layer == candidate)
+                    && !allocator.retired.contains(candidate)
             });
             let Some(layer) = available else {
                 if allocator.failed.insert(entity) {
@@ -322,7 +347,7 @@ fn publish_scene_view_layers(world: &mut World, mut allocator: Local<SceneViewLa
                         &mut world.commands(),
                         "scene-view-layer-budget",
                         format!(
-                            "render camera {entity:?} exceeds the 256 active output layer leases"
+                            "render camera {entity:?} has no private channel among the 256 active or retained-geometry output layer leases"
                         ),
                     );
                 }
@@ -702,6 +727,15 @@ mod view_output_tests {
         app.update();
         let first_layer = app.world().get::<SceneViewLayers>(first).unwrap().layer;
         let second_layer = app.world().get::<SceneViewLayers>(second).unwrap().layer;
+        let retired_geometry = app
+            .world_mut()
+            .spawn((
+                SceneViewGeometry { camera: first },
+                RenderLayers::none().with(first_layer),
+                Visibility::Hidden,
+                bevy::ecs::entity_disabling::Disabled,
+            ))
+            .id();
         assert_ne!(first_layer, second_layer);
         assert!(
             !app.world()
@@ -734,7 +768,38 @@ mod view_output_tests {
         assert_ne!(
             app.world().get::<SceneViewLayers>(first).unwrap().layer,
             first_layer,
-            "retired geometry cannot enter a newly admitted output during its extraction grace frames"
+            "the disabled old geometry still owns its private channel"
+        );
+        let reopened_layer = app.world().get::<SceneViewLayers>(first).unwrap().layer;
+
+        // Settled outputs do not churn or reissue their leases. A surviving
+        // retired entity prevents reuse regardless of elapsed frames.
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<SceneViewLayers>(first).unwrap().layer,
+            reopened_layer
+        );
+        assert_eq!(
+            app.world().get::<SceneViewLayers>(second).unwrap().layer,
+            second_layer
+        );
+        let third = output(app.world_mut(), source, 3);
+        app.update();
+        assert_ne!(
+            app.world().get::<SceneViewLayers>(third).unwrap().layer,
+            first_layer
+        );
+
+        // The last exact mask retirement permits immediate reuse, with the
+        // camera/mesh changes extracted together before native drawing.
+        assert!(app.world_mut().despawn(retired_geometry));
+        let fourth = output(app.world_mut(), source, 4);
+        app.update();
+        assert_eq!(
+            app.world().get::<SceneViewLayers>(fourth).unwrap().layer,
+            first_layer
         );
     }
 
@@ -749,6 +814,10 @@ mod view_output_tests {
         let camera = output(app.world_mut(), source, 1);
         app.update();
         let first = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
+        app.world_mut().spawn((
+            SceneViewGeometry { camera },
+            RenderLayers::none().with(first),
+        ));
         app.world_mut()
             .get_mut::<SceneViewDemand>(camera)
             .unwrap()
@@ -756,6 +825,10 @@ mod view_output_tests {
         app.update();
         let second = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
         assert_ne!(first, second);
+        app.world_mut().spawn((
+            SceneViewGeometry { camera },
+            RenderLayers::none().with(second),
+        ));
         let demand = *app.world().get::<SceneViewDemand>(camera).unwrap();
         app.world_mut()
             .entity_mut(camera)
@@ -765,8 +838,12 @@ mod view_output_tests {
         let readded = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
         assert_ne!(
             second, readded,
-            "remove/readd invalidates an identical output lease"
+            "remove/readd invalidates an identical output lease while old geometry survives"
         );
+        app.world_mut().spawn((
+            SceneViewGeometry { camera },
+            RenderLayers::none().with(readded),
+        ));
         let replacement = app.world_mut().spawn_empty().id();
         app.world_mut()
             .get_mut::<SceneViewDemand>(camera)
@@ -792,6 +869,41 @@ mod view_output_tests {
             .insert(CameraRetiring);
         app.update();
         assert!(app.world().get::<SceneViewLayers>(camera).is_none());
+    }
+
+    #[test]
+    fn channel_reuse_observes_the_current_geometry_mask_without_a_frame_delay() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (retire_removed_scene_view_demands, publish_scene_view_layers).chain(),
+        );
+        let source = app.world_mut().spawn_empty().id();
+        let camera = output(app.world_mut(), source, 1);
+        app.update();
+        let layer = app.world().get::<SceneViewLayers>(camera).unwrap().layer;
+        let geometry = app
+            .world_mut()
+            .spawn((
+                SceneViewGeometry { camera },
+                RenderLayers::none().with(layer),
+            ))
+            .id();
+
+        // The exact demand changes but its former channel is no longer
+        // present on any surviving geometry in this extraction boundary.
+        app.world_mut()
+            .get_mut::<SceneViewDemand>(camera)
+            .unwrap()
+            .output = SceneViewOutput::Observation { id: 2 };
+        app.world_mut()
+            .entity_mut(geometry)
+            .insert(RenderLayers::none());
+        app.update();
+        assert_eq!(
+            app.world().get::<SceneViewLayers>(camera).unwrap().layer,
+            layer
+        );
     }
 
     #[test]

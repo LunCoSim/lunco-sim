@@ -1,6 +1,6 @@
 # Retained exact native camera and directional visibility
 
-The maintained Bevy revision `87cb795e3f11da0d769d28e57df0ec42a7112aa8`
+The maintained Bevy revision `6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2`
 owns both native CPU visibility passes. The camera owner retains sorted
 class-specific lists and an exact visibility union; directional lights retain
 sorted per-view cascade lists and a shared immutable union. Equal computed
@@ -11,6 +11,15 @@ are always read from their current owner. For broadly dirty inventories or a
 new/changed view, the existing parallel full culling predicates remain the
 authority; no approximate geometric test, reduced cadence or quality setting
 is introduced. Retained lists are re-applied to `ViewVisibility` every frame.
+
+Both retained owners include
+`Disabled` additions (with explicit disabled-entity query admission) and
+removals in the dirty inventory. Two stationary sparse-culling regressions
+failed against `87cb795e3f11da0d769d28e57df0ec42a7112aa8` on disabling a visible entity, then
+passed after the repair; all 19 fork light/camera owner tests passed. The
+published fork branch and locked simulator dependency identities resolve to
+that exact commit. The performance measurements below describe the earlier
+native visibility design, not an isolated timing measurement of this fix.
 
 The focused native integration tests prove that unchanged views do not rewrite
 their output while still re-marking visible entities. They cover layer and

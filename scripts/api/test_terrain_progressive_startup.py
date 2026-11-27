@@ -270,6 +270,49 @@ def main():
                         and all(v["ready"] and v["presented_ready"] and v["wanted"] == v["drawn"] == v["resident"] and v["wanted"] > 0 for v in views))
             feeds = execute("InspectCameraFeeds")["views"]
             assert feeds and len(before["camera_cover"]) > 1, "expected a live independent feed"
+            # Close and reopen one output before the retired geometry has an
+            # arbitrary frame-count grace period. Other cameras must keep their
+            # exact resident cover, and the reopened feed must render real pixels.
+            retiring = next(feed for feed in feeds if feed["active"] and feed["source"] is not None)
+            old_identity = drawn_identity()
+            old_cameras = {v["camera"] for v in before["camera_cover"]}
+            execute("RemoveCameraFeed", feed=retiring["feed"])
+            reopened = execute("CreateCameraFeed")["feed"]
+            execute("SetCameraFeed", feed=reopened, source=retiring["source"],
+                    label="Reopened terrain probe", width=retiring["width"], height=retiring["height"],
+                    minimum_scene_items=1)
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                reopened_status = execute("TerrainLodStatus")
+                reopened_views = reopened_status["camera_cover"]
+                cameras = {v["camera"] for v in reopened_views}
+                common = old_cameras & cameras
+                if (len(cameras) == len(old_cameras) and len(common) == len(old_cameras) - 1
+                        and main_camera in common and reopened_status["stream"]["pending"] == 0
+                        and all(v["ready"] and v["presented_ready"] and 0 < v["wanted"] == v["drawn"] == v["resident"]
+                                for v in reopened_views)
+                        and any(feed["feed"] == reopened and feed["ready"] for feed in execute("InspectCameraFeeds")["views"])):
+                    break
+                time.sleep(.2)
+            else:
+                raise RuntimeError(f"rapidly reopened feed failed to settle: {reopened_status}")
+            new_identity = drawn_identity()
+            assert [tile for tile in old_identity["tiles"] if tile[0] in common] == [tile for tile in new_identity["tiles"] if tile[0] in common], "reopening changed another camera's resident geometry"
+            feed_image = output / "reopened-feed.png"
+            capture_started = time.time_ns()
+            execute("CaptureCameraFeed", feed=reopened, path=str(feed_image), request="reopened-terrain-probe")
+            deadline = time.monotonic() + 30
+            while not (feed_image.exists() and feed_image.stat().st_mtime_ns >= capture_started):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("reopened feed image was not saved")
+                time.sleep(.1)
+            from PIL import Image, ImageStat
+            with Image.open(feed_image) as image:
+                assert ImageStat.Stat(image.convert("L")).stddev[0] >= 2.0, "reopened feed has no tonal structure"
+            evidence["rapid_reopen"] = {"retired": sorted(old_cameras - cameras), "reopened": sorted(cameras - old_cameras),
+                                        "unchanged": sorted(common), "cover": reopened_views}
+            print("rapid feed reopening PASS", flush=True)
+            feeds = execute("InspectCameraFeeds")["views"]
             for feed in feeds:
                 execute("RemoveCameraFeed", feed=feed["feed"])
             deadline = time.monotonic() + 30

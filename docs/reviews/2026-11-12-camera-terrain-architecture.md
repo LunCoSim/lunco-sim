@@ -47,8 +47,10 @@ existing authored Rhai rendering policy. Projection math, balanced-cover invaria
 collision math and resource admission remain Rust engine mechanisms. No new
 scenario-selection hook or duplicate material-selection policy is introduced.
 
-View removal cancels its exact queued cover work and retires its geometry. Render
-layers are quarantined through extraction retirement before reuse. Scene-derived
+View removal cancels its exact queued cover work and retires its geometry. Private
+render layers are reusable only after their last surviving geometry mask reference
+has retired; the current native extraction consumes this same final inventory.
+Scene-derived
 camera demands, stream status and preparation targets use `SceneResource` teardown;
 streamed tiles and exterior collar geometry carry `SceneOwned`. Camera preparation never gates physics admission.
 
@@ -393,8 +395,7 @@ p95 150.31 ms) on the shared machine, not an isolated performance comparison.
 
 Evidence: `/tmp/luncosim-terrain-audit/review2-offscreen3/`,
 `/tmp/luncosim-terrain-audit/review2-invalid-output/`, and
-`/tmp/luncosim-terrain-audit/review2-cold/`. The separately tracked remaining
-issues are in [open-terrain-preparation-and-visibility.md](open-terrain-preparation-and-visibility.md).
+`/tmp/luncosim-terrain-audit/review2-cold/`.
 
 The combined tree at `7a0687c9f` also passed the workshop offscreen gate. Its
 warm windowed run exposed a late-stop GPU lifetime defect: Bevy still owned an
@@ -411,6 +412,51 @@ comparison. The final binary also repeated the offscreen gate: 205/205 complete
 tiles, six numbered images, competing-start rejection and successful own exit.
 Evidence: `/tmp/luncosim-terrain-audit/review2-late-stop-warm/` and
 `/tmp/luncosim-terrain-audit/review2-final-offscreen/`.
+
+## Final preparation and visibility ownership
+
+The native Bevy camera and directional visibility owners now invalidate their
+retained membership on entity disable and re-enable. Both sparse-path regressions
+failed before the source fix; the published revision and regression evidence are
+recorded in [native-visibility-2026-11-26.md](native-visibility-2026-11-26.md).
+
+The terrain stream recognizes a measured impossible mesh transition separately
+from ordinary transient pressure. Its lower-bound proof counts unique allocations
+for the final cover, same-partition refresh or atomic topology group and never
+releases the outgoing draw cover on refusal. An exact changed selection,
+generation or raised ceiling makes the transition eligible again. The selected
+cover retains its measured residency and actual constrained coordinate index
+until mutation, avoiding repeated leaf-wide accounting at rest. Private output
+channels retire against surviving geometry masks rather than elapsed frames.
+
+Native final raster preparation uses bounded, cancellable row jobs, with a
+separate staging reservation held until worker memory is released. Assembly,
+cache writing and mip preparation remain off the main thread. A real cold-cache
+workshop run published preview shading at 13.00 s and final shading at 26.21 s
+from launch; the complete draw partition appeared 1.25 s after physical world
+readiness. Both packed textures at 256² and 2048² matched the previous serial
+baker's cache bytes exactly, and all 567 selected tile identities stayed stable.
+The authored stationary-cover checks, numbered captures, rapid feed reopening,
+feed retirement and probe retune passed, with no runtime diagnostic errors or
+warnings. Rapid reopening kept the other two cameras' drawn entities unchanged
+and produced a real saved feed image. Settled median frame time was 13.53 ms
+(73.89 FPS; p95 17.81 ms, 240 frames). Earlier cold final preparation took 93.34 s;
+different concurrent workloads prevent attributing the whole difference to the
+row-job change. Evidence: `/tmp/luncosim-terrain-audit/rest-cold/`.
+
+The warm run on a fresh private display settled the full draw partition 0.35 s
+after world readiness, with 567 unchanged tile identities and the same
+stationary, capture, retirement and retune verdicts. Median frame time was
+12.98 ms (77.02 FPS; p95 14.20 ms, 240 frames). The no-window recording passed
+with 205/205 complete tiles, 2048² current shading, all six numbered images,
+and explicit competing-start rejection. Evidence:
+`/tmp/luncosim-terrain-audit/rest-warm2/` and
+`/tmp/luncosim-terrain-audit/rest-offscreen/`.
+
+The focused owner suites passed 352 render and terrain-surface tests (one
+existing ignored test), plus two terrain-core row/cancellation regressions.
+The impossibility proof, shared-edge focus lookup, cache invalidation, exact
+layer reuse, staged memory lifetime and ordered pixel assembly are covered.
 
 ## External architecture references
 

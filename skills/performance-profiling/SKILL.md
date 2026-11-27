@@ -494,11 +494,18 @@ receiver hulls and camera culling mode. Source changes, component removals and
 range-controlled entities reconcile the exact predicates; broad changes use the
 native parallel traversal. Always reapply the complete per-frame visibility
 union, even when no membership changed. Verify inactive view, light disable,
-class and layer removal, caster retirement and cascade resizing. Qualify the
+entity disable/re-enable, class and layer removal, caster retirement and cascade resizing. Qualify the
 moving-Sun native graphics test `scripts/api/test_shadow_lod_origin.py` and
 shared shadow allocation pixel gate; never trade receiver or frustum quality
 for faster visibility. Separate concurrent workload changes from attributed
 CPU work and compare the exact published Git pins.
+
+For cold derived terrain shading, profile `terrain_derived_maps_bake_rows`
+and `terrain_derived_maps_assemble` with shared admission occupancy and the
+preview/final publication milestones. Compare an empty terrain cache at the
+same authored resolution and AO settings, inspect final bytes/pixels, and
+account for concurrent compiler and simulator load. Row cancellation should
+not consume the next scene's work or release a live memory reservation early.
 
 For GPU-only buffer layout, preserve deterministic scalar math and validate
 shader array stride at the native allocator. `UninitBufferVec` uses encase's

@@ -174,6 +174,13 @@ GPU acceptance still require the rendered fixture and a clean process log.
    Compare first, near and fully prepared screenshots and repeat against the
    same warmed cache. Do not substitute a world-readiness flag for visual
    publication or treat preview shading as final capture quality.
+   With `--verify-view-retirement`, the production driver rapidly closes and
+   reopens a feed, checks the unaffected output identities and the new feed's
+   rendered pixels, then retires feeds and retunes the remaining cover. The
+   native layer owner retains exact surviving geometry references, not a
+   frame-count quarantine. On an upload pressure fault, inspect
+   `stream.mesh_transition_required_bytes` and the configured byte ceiling;
+   the measured necessary floor is not a prediction of unbaked mesh sizes.
    For the windowless path, run `scripts/api/test_offscreen_terrain_recording.py`
    with the same scene and a warm cache; verify the canonical viewport pose
    owner, nonempty `camera_cover`, complete derived preparation and the actual

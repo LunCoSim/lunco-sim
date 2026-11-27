@@ -956,6 +956,7 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "mesh_upload_refused": status.mesh_upload_refused,
                 "failed": status.failed,
                 "mesh_upload_required_bytes": status.mesh_upload_required_bytes,
+                "mesh_transition_required_bytes": status.mesh_transition_required_bytes,
                 "draw_revision_exhausted": status.draw_revision_exhausted,
                 "preparation_refused": status.preparation_refused,
             },

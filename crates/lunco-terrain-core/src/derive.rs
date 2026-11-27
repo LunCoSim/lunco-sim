@@ -20,6 +20,7 @@
 
 use crate::quadtree::Square;
 use crate::source::{HeightSource, normal_at_bounded};
+use std::ops::Range;
 
 /// World XZ of texel `(ix, iz)` at the centre of its cell in a `res×res` raster
 /// over `region`.
@@ -67,10 +68,29 @@ pub fn normal_slope_maps<S: HeightSource>(
     res: usize,
 ) -> (Vec<[f32; 3]>, Vec<f32>) {
     let res = res.max(1);
+    normal_slope_map_rows(src, region, res, 0..res, || false)
+        .expect("complete normal/slope raster cannot be cancelled")
+}
+
+/// Evaluate a contiguous row range on the original full normal/slope raster.
+/// Row indices and texel size stay global, so concatenating in row order
+/// yields exactly the full raster. Cancellation discards the entire range.
+pub fn normal_slope_map_rows<S: HeightSource>(
+    src: &S,
+    region: &Square,
+    res: usize,
+    rows: Range<usize>,
+    cancelled: impl Fn() -> bool,
+) -> Option<(Vec<[f32; 3]>, Vec<f32>)> {
+    let res = res.max(1);
+    assert!(rows.start <= rows.end && rows.end <= res);
     let eps = texel_eps(region, res);
-    let mut normals = Vec::with_capacity(res * res);
-    let mut slopes = Vec::with_capacity(res * res);
-    for iz in 0..res {
+    let mut normals = Vec::with_capacity(rows.len() * res);
+    let mut slopes = Vec::with_capacity(rows.len() * res);
+    for iz in rows {
+        if cancelled() {
+            return None;
+        }
         for ix in 0..res {
             let (x, z) = texel_world(region, res, ix, iz);
             let n = src.normal_at(x, z, eps);
@@ -78,7 +98,7 @@ pub fn normal_slope_maps<S: HeightSource>(
             slopes.push(n[1].clamp(-1.0, 1.0).acos() as f32);
         }
     }
-    (normals, slopes)
+    Some((normals, slopes))
 }
 
 /// Slope angle from vertical (radians, `0` = flat) over `region`, row-major.
@@ -115,56 +135,87 @@ pub fn ao_map<S: HeightSource>(
     source_half_extent: f64,
 ) -> Vec<f32> {
     let res = res.max(1);
-    let dirs = dirs.max(1);
-    let steps = steps.max(1);
-    let radius = radius_m.max(1e-3);
-    let bounded = source_half_extent.is_finite();
-    let source_half = source_half_extent.max(0.0);
-    // Every texel marches exactly the same ordered relative ray lattice. Keep
-    // the original f64 operations and precompute their invariant offsets once.
-    let rays: Vec<(f64, f64, f64)> = (0..dirs)
-        .flat_map(|d| {
-            let a = std::f64::consts::TAU * (d as f64) / (dirs as f64);
-            let (dx, dz) = (a.cos(), a.sin());
-            (1..=steps).map(move |s| {
-                let dist = radius * (s as f64) / (steps as f64);
-                (dx * dist, dz * dist, dist)
-            })
-        })
-        .collect();
+    AoRayLattice::new(radius_m, dirs, steps)
+        .map_rows(src, region, res, source_half_extent, 0..res, || false)
+        .expect("complete AO raster cannot be cancelled")
+}
 
-    let mut out = Vec::with_capacity(res * res);
-    for iz in 0..res {
-        for ix in 0..res {
-            let (x, z) = texel_world(region, res, ix, iz);
-            let h0 = src.height_at(x, z);
-            let mut occ = 0.0f64;
-            for ray in rays.chunks_exact(steps) {
-                let mut max_sin = 0.0f64;
-                for &(dx, dz, dist) in ray {
-                    let sx = x + dx;
-                    let sz = z + dz;
-                    if bounded && (sx.abs() > source_half || sz.abs() > source_half) {
-                        // The ray has left the finite authored terrain. Beyond
-                        // that edge is open sky, not repeated edge elevation.
-                        break;
-                    }
-                    let dh = src.height_at(sx, sz) - h0;
-                    if dh > 0.0 {
-                        // sin of the elevation angle to this sample.
-                        let sin_e = dh / (dh * dh + dist * dist).sqrt();
-                        if sin_e > max_sin {
-                            max_sin = sin_e;
+/// Immutable ordered offsets for the horizon integral. All rows and chunks
+/// of a bake share this one lattice and its exact `f64` operations.
+pub struct AoRayLattice {
+    dirs: usize,
+    steps: usize,
+    rays: Vec<(f64, f64, f64)>,
+}
+
+impl AoRayLattice {
+    pub fn new(radius_m: f64, dirs: usize, steps: usize) -> Self {
+        let dirs = dirs.max(1);
+        let steps = steps.max(1);
+        let radius = radius_m.max(1e-3);
+        let rays = (0..dirs)
+            .flat_map(|d| {
+                let a = std::f64::consts::TAU * (d as f64) / (dirs as f64);
+                let (dx, dz) = (a.cos(), a.sin());
+                (1..=steps).map(move |s| {
+                    let dist = radius * (s as f64) / (steps as f64);
+                    (dx * dist, dz * dist, dist)
+                })
+            })
+            .collect();
+        Self { dirs, steps, rays }
+    }
+
+    /// Evaluate contiguous rows on the full AO raster, checking its work
+    /// lease before each row. No partial range is returned on cancellation.
+    pub fn map_rows<S: HeightSource>(
+        &self,
+        src: &S,
+        region: &Square,
+        res: usize,
+        source_half_extent: f64,
+        rows: Range<usize>,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<Vec<f32>> {
+        let res = res.max(1);
+        assert!(rows.start <= rows.end && rows.end <= res);
+        let bounded = source_half_extent.is_finite();
+        let source_half = source_half_extent.max(0.0);
+        let mut out = Vec::with_capacity(rows.len() * res);
+        for iz in rows {
+            if cancelled() {
+                return None;
+            }
+            for ix in 0..res {
+                let (x, z) = texel_world(region, res, ix, iz);
+                let h0 = src.height_at(x, z);
+                let mut occ = 0.0f64;
+                for ray in self.rays.chunks_exact(self.steps) {
+                    let mut max_sin = 0.0f64;
+                    for &(dx, dz, dist) in ray {
+                        let sx = x + dx;
+                        let sz = z + dz;
+                        if bounded && (sx.abs() > source_half || sz.abs() > source_half) {
+                            // The ray has left the finite authored terrain. Beyond
+                            // that edge is open sky, not repeated edge elevation.
+                            break;
+                        }
+                        let dh = src.height_at(sx, sz) - h0;
+                        if dh > 0.0 {
+                            let sin_e = dh / (dh * dh + dist * dist).sqrt();
+                            if sin_e > max_sin {
+                                max_sin = sin_e;
+                            }
                         }
                     }
+                    occ += max_sin;
                 }
-                occ += max_sin;
+                let ao = 1.0 - occ / self.dirs as f64;
+                out.push(ao.clamp(0.0, 1.0) as f32);
             }
-            let ao = 1.0 - occ / dirs as f64;
-            out.push(ao.clamp(0.0, 1.0) as f32);
         }
+        Some(out)
     }
-    out
 }
 
 /// Ray–terrain intersection over a [`HeightSource`] — the single-ray sibling of
@@ -319,10 +370,37 @@ pub fn albedo_map<S: HeightSource>(
     source_half_extent: f64,
 ) -> Vec<f32> {
     let res = res.max(1);
+    albedo_map_rows(
+        src,
+        region,
+        res,
+        stencil_texels,
+        source_half_extent,
+        0..res,
+        || false,
+    )
+    .expect("complete albedo raster cannot be cancelled")
+}
+
+/// Evaluate contiguous tone rows on the original complete raster lattice.
+pub fn albedo_map_rows<S: HeightSource>(
+    src: &S,
+    region: &Square,
+    res: usize,
+    stencil_texels: f64,
+    source_half_extent: f64,
+    rows: Range<usize>,
+    cancelled: impl Fn() -> bool,
+) -> Option<Vec<f32>> {
+    let res = res.max(1);
+    assert!(rows.start <= rows.end && rows.end <= res);
     let stencil = stencil_texels.max(1.0);
     let eps = texel_eps(region, res) * stencil;
-    let mut out = Vec::with_capacity(res * res);
-    for iz in 0..res {
+    let mut out = Vec::with_capacity(rows.len() * res);
+    for iz in rows {
+        if cancelled() {
+            return None;
+        }
         for ix in 0..res {
             let (x, z) = texel_world(region, res, ix, iz);
             let lap = second_difference_bounded(src, x, z, eps, source_half_extent, true)
@@ -339,7 +417,7 @@ pub fn albedo_map<S: HeightSource>(
             out.push(a.clamp(0.0, 1.0));
         }
     }
-    out
+    Some(out)
 }
 
 /// Second derivative over a finite square. Central differences are used where
@@ -654,6 +732,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn derived_row_partitions_preserve_the_full_raster_lattice() {
+        let source = Pit;
+        let region = region();
+        let res = 19;
+        let rays = AoRayLattice::new(83.7, 16, 16);
+        let (mut normals, mut slopes, mut ao, mut tone) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for rows in [0..1, 1..7, 7..res] {
+            let (n, s) =
+                normal_slope_map_rows(&source, &region, res, rows.clone(), || false).unwrap();
+            normals.extend(n);
+            slopes.extend(s);
+            ao.extend(
+                rays.map_rows(&source, &region, res, 100.0, rows.clone(), || false)
+                    .unwrap(),
+            );
+            tone.extend(
+                albedo_map_rows(&source, &region, res, 1.5, 100.0, rows, || false).unwrap(),
+            );
+        }
+        assert_eq!((normals, slopes), normal_slope_maps(&source, &region, res));
+        assert_eq!(ao, ao_map(&source, &region, res, 83.7, 16, 16, 100.0));
+        assert_eq!(tone, albedo_map(&source, &region, res, 1.5, 100.0));
+    }
+
+    #[test]
+    fn derived_kernels_stop_before_the_next_cancelled_row() {
+        use std::cell::Cell;
+        let source = Pit;
+        let region = region();
+        let checks = Cell::new(0);
+        let cancelled = || {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        };
+        assert!(normal_slope_map_rows(&source, &region, 8, 2..8, cancelled).is_none());
+        assert_eq!(checks.get(), 2);
+        checks.set(0);
+        let rays = AoRayLattice::new(50.0, 4, 4);
+        assert!(
+            rays.map_rows(&source, &region, 8, 100.0, 2..8, cancelled)
+                .is_none()
+        );
+        assert_eq!(checks.get(), 2);
+        checks.set(0);
+        assert!(albedo_map_rows(&source, &region, 8, 1.5, 100.0, 2..8, cancelled).is_none());
+        assert_eq!(checks.get(), 2);
     }
 
     #[test]

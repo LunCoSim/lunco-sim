@@ -1299,7 +1299,7 @@ dependencies = [
 [[package]]
 name = "bevy_camera"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=87cb795e3f11da0d769d28e57df0ec42a7112aa8#87cb795e3f11da0d769d28e57df0ec42a7112aa8"
+source = "git+https://github.com/LunCoSim/bevy?rev=6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2#6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
@@ -2062,7 +2062,7 @@ dependencies = [
 [[package]]
 name = "bevy_light"
 version = "0.20.0"
-source = "git+https://github.com/LunCoSim/bevy?rev=87cb795e3f11da0d769d28e57df0ec42a7112aa8#87cb795e3f11da0d769d28e57df0ec42a7112aa8"
+source = "git+https://github.com/LunCoSim/bevy?rev=6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2#6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2"
 dependencies = [
  "bevy_app",
  "bevy_asset",
