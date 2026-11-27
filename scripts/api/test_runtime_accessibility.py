@@ -119,8 +119,38 @@ def main():
             session.capture_screenshot(area / "accessible-camera.png")
             (area / "camera-tree.json").write_text(json.dumps(tree(), indent=2))
             print("PASS: AT-SPI Controls menu invokes the exact authored camera callback", flush=True)
-            for state in ("Pressed", "Released"):
-                execute(session, "InjectWindowInput", event={"Key": {"key": "Escape", "state": state, "text": None, "repeat": False}})
+            # The main image-controls window is independent of feed windows.
+            # In particular an empty feed inventory must not suppress it.
+            assert not execute(session, "InspectCameraFeeds")["views"]
+            press_named("Image controls…")
+            wait_for(session, lambda: any(name == "Camera image controls" for _, name in tree()),
+                     "main camera image controls with no feeds")
+            session.capture_screenshot(area / "main-camera-image-controls.png")
+            print("PASS: main camera image controls open without a camera feed", flush=True)
+
+            def close_menus():
+                for _ in range(2):
+                    for state in ("Pressed", "Released"):
+                        execute(session, "InjectWindowInput", event={"Key": {"key": "Escape", "state": state, "text": None, "repeat": False}})
+
+            def exposure_enabled(expected):
+                saved = json.loads((config / "settings.json").read_text())
+                section = saved.get("viewport_exposure")
+                return section is not None and (section.get("ev100") is not None) == expected
+
+            close_menus()
+            press_named("Settings")
+            press_named("General")
+            press_named("Fixed viewport exposure")
+            wait_for(session, lambda: exposure_enabled(True), "General sets the saved live viewport exposure")
+            close_menus()
+            press_named("Settings")
+            press_named("Graphics")
+            press_named("Camera look")
+            press_named("Fixed viewport exposure")
+            wait_for(session, lambda: exposure_enabled(False), "Graphics clears the same live exposure")
+            print("PASS: General and Graphics edit the same persisted viewport EV100 override", flush=True)
+            close_menus()
             execute(session, "ActivatePerspective", id="editor")
             wait_for(session, lambda: execute(session, "InspectWorkbench")["active_perspective"] == "editor", "Editor perspective")
             press_named("Controls")

@@ -3189,14 +3189,11 @@ actually call, with the fields the deserializer actually accepts. See the
    (requires `shader` set first, or a USD shader material). The shader's
    reflected schema resolves the type; colours are `r,g,b`.
  - `visible` → `true`/`false` through the same namespace visibility owner as `SetSceneView`.
- - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-   `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
-   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
-   `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
-   so this gives independent per-wheel control. Motor torque and no-load speed
-   are owned by the composed Modelica motor prim; edit its authored
-   `inputs:stall_torque` / `inputs:no_load_speed` attributes instead of
-   addressing a wheel-local drive parameter.
+ - Wheel targets accept `brake_torque`, `slip_stiffness`, `bearing_damping`,
+   `friction_mu`, `mass`, `moi` and `wheel_radius`.
+ - Suspension targets accept `rest_length`, `spring_k` and `damping_c`.
+ - The composed Modelica motor prim owns `inputs:stall_torque` and
+   `inputs:no_load_speed`.
 
 - *defined in:* `crates/lunco-scene-authoring/src/properties.rs`
 
@@ -3348,12 +3345,13 @@ actually call, with the fields the deserializer actually accepts. See the
 #### `SetSceneParticipation`
 
  Apply one live scene transition. All destinations and their owners are
- validated before publishing any physics, radio or presentation changes.
+ validated before publishing any pose, physics, radio or presentation changes.
 
 - *defined in:* `crates/lunco-scene-command-contracts/src/lib.rs`
 
 | Field | Type | Description |
 |---|---|---|
+| `poses` | `Vec < RuntimePose >` |  Complete live poses. Targets must not be ancestors of one another. |
 | `bodies` | `Vec < BodyParticipation >` |  Independent bodies and all their attached contact shapes. |
 | `colliders` | `Vec < ParticipationSwitch >` |  Individual admitted shapes outside the requested bodies. |
 | `occluders` | `Vec < ParticipationSwitch >` |  Admitted sight-line blockers, independent of contact shapes. |

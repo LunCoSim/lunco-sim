@@ -150,7 +150,13 @@ pub fn composed_reader<'w>(
         .get_resource::<Assets<UsdStageAsset>>()
         .and_then(|assets| assets.get(id))
         .ok_or_else(|| format!("stage unavailable for {}", prim.path))?;
-    Ok(stages.reader_for_composed_query(id, asset).0)
+    Ok(stages
+        .reader_for_composed_query(
+            id,
+            asset,
+            lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+        )
+        .0)
 }
 
 /// Resolve the document holding the entity's exact projected stage lease.
@@ -244,7 +250,11 @@ pub fn delete_target(
         return None;
     }
     let path = SdfPath::new(&prim.path).ok()?;
-    let (reader, _) = stages?.reader_for_composed_query(stage_id, assets?.get(stage_id)?);
+    let (reader, _) = stages?.reader_for_composed_query(
+        stage_id,
+        assets?.get(stage_id)?,
+        lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+    );
     if !reader.has_prim(&path) || !reader.is_active(&path).ok()? {
         return None;
     }

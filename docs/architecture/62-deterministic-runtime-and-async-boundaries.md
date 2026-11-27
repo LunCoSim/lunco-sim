@@ -373,8 +373,10 @@ positions or rotations beyond completed endpoints. Typed scene-tool and menu hoo
 requests or the current frame's fixed-step work. The UI and simulation still
 share the GUI thread: a long tick or catch-up burst delays the next native input
 poll and the next visible frame. Under sustained overload, retained simulation
-demand can grow faster than the owner drains it. Discarding that balance would
-drop authoritative ticks. `SimulationTimingProfile` is the shared,
+demand can grow faster than the owner drains it. Discarding that balance within
+the same live scene would drop authoritative ticks. Scene teardown instead
+retires unexecuted demand along with its causal world, so no replacement scene
+inherits the old rate or backlog. `SimulationTimingProfile` is the shared,
 bounded observation path until ownership is split: it reports the most recent
 240 completed `FixedMain` tick service times and rate-derived service budgets,
 plus per-app-update fixed-loop duration, completed-step count, remaining
@@ -621,9 +623,15 @@ The scenario owner currently supplies this context for fixed scenario passes,
 paused lifecycle/event passes, and one-shot REPL/tool evaluations. Fixed passes
 use the simulation tick and fixed-step clock; paused passes have no elapsed-time
 clock or consumer sequence and preserve the telemetry event's simulation
-producer route and tick. Event RNG uses that producer sequence even when its
-callback runs in a later cycle; discrete lifecycle hooks use a stable
-sequence-free seed.
+producer route and tick. Event RNG uses the producer tick and either the causal
+ordinal or the canonical simulation-event ordinal within that tick; discrete
+lifecycle hooks use a stable sequence-free seed. The telemetry owner distinguishes
+serial script, command, and UI facts from unordered simulation telemetry. The
+serial lane preserves admission order, while simulation telemetry retains its
+canonical comparison. Task compilation exposes event interests from validated
+leaves, and mission objectives expose their authored names. The native identity
+buffer excludes unrelated events, refuses overflow, and holds the affected actor
+instead of silently evicting previously accepted events.
 Nested Rhai functions inherit the current phase. Runtime owner scope
 (`Core`, `Application`, or `Twin`) is assigned by the Rust owner and remains
 independent of cycle and clock. The authored `@peer host|client|both` directive

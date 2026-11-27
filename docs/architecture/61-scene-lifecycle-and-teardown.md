@@ -99,6 +99,16 @@ teardown follows the ordinary terminal scene-load failure boundary.
 Failed loads leave the viewport in its normal empty-scene presentation. The
 typed transition failure and runtime diagnostics retain the cause; the failure
 text does not replace the empty-state headline.
+
+The workbench loading backdrop covers the main viewport through initial
+simulation preparation. Its selected camera may render behind that backdrop
+once its projection, physical target and clustered-light admission are valid.
+Camera-local terrain selection and asynchronous GPU pipeline preparation can
+therefore run concurrently with simulation readiness, rather than starting
+only when the loading backdrop is removed. Hidden workbench perspectives
+still deactivate the window camera. The main-view interaction contract and
+pointer owner reject picking, placement and gizmo input while the backdrop
+is visible, independently of the render camera's preparation state.
 The accepted failure also publishes `scene-load-failed` through `RuntimeFaults`
 and the runtime error event. `GetReadiness` therefore remains `ready: false`,
 with the requested asset in `fault.subject` and the loader cause in
@@ -150,8 +160,9 @@ edge. CPU mesh builds and other presentation streaming continue independently.
 projection.
 Visual-readiness consumers keep reading that source after scene admission, while
 the workbench treats terrain and scene-visual progress as a loading notice only
-for an admitted or active scene transition. `TimeTransport` keeps the user's
-play and rate intent while the gate pauses `Time<Virtual>`. Physics readiness
+for an admitted or active scene transition. The gate pauses `Time<Virtual>`;
+the outgoing scene's rate resets to 1× at teardown, and the replacement's
+play/pause intent is resolved by the scene-time owner. Physics readiness
 stays in its existing owner and continues to control physics admission; the
 scene progress gate covers lifecycle work that must not consume simulation
 ticks.
@@ -635,8 +646,10 @@ prior lesson's driver, while non-scene ids remain untouched.
 The same boundary clears rollback markers, prediction input logs, host jitter buffers, applied-input acknowledgements, render-leading drive
 values, simulated intents, and control-path registry. Physics clears its holds
 and restores a zero-delta physics clock; the time owner retires shared step
-demand. `SimTick`, `Time<Fixed>` and admitted fixed-time balance remain continuous;
-the time owner reanchors the replacement mission epoch at the current tick.
+demand, fixed overstep and the outgoing frame's virtual delta, and resets the
+transport rate to 1×. `SimTick`, completed fixed elapsed time and the fixed
+quantum remain continuous; the time owner reanchors the replacement mission
+epoch at the current tick.
 These are scene-owned control surfaces, not session identity; leaving any of them
 behind would allow a replacement entity or reused global id to receive an old
 command or remain silently held.

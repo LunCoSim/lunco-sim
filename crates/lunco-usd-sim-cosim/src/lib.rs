@@ -60,7 +60,10 @@ pub struct UsdSimCosimPlugin;
 mod initialization;
 mod interfaces;
 mod preparations;
-pub use initialization::{CoupledInitializationReceipt, last_coupled_initialization};
+pub use initialization::{
+    CoupledInitialization, CoupledInitializationPhase, CoupledInitializationReceipt,
+    last_coupled_initialization,
+};
 use interfaces::ResolvedUsdModelicaInterface;
 pub mod readiness;
 pub mod sync;

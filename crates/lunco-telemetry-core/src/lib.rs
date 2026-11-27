@@ -20,6 +20,7 @@ pub struct LunCoTelemetryCorePlugin;
 impl Plugin for LunCoTelemetryCorePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(stamp_telemetry_event)
+            .add_observer(stamp_ordered_event)
             .add_observer(project_simulation_lifecycle)
             .add_plugins(LunCoLogPlugin)
             .add_observer(project_command_occurrence)
@@ -36,7 +37,25 @@ impl Plugin for LunCoTelemetryCorePlugin {
 /// Subscriber event. Only the telemetry boundary can construct it, so no
 /// consumer can observe a producer's placeholder timestamps.
 #[derive(bevy::prelude::Event, Debug)]
-pub struct StampedTelemetryEvent(TelemetryEvent);
+pub struct StampedTelemetryEvent(TelemetryEvent, EventOrdering);
+
+/// The producer declares whether order is authoritative or canonically sorted
+/// at the simulation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EventOrdering {
+    Simulation,
+    Causal,
+}
+
+/// Ordered facts emitted by a serial interaction, command, or scripting owner.
+#[derive(bevy::prelude::Event, Debug)]
+pub struct OrderedTelemetryEvent(pub TelemetryEvent);
+
+impl StampedTelemetryEvent {
+    pub fn ordering(&self) -> EventOrdering {
+        self.1
+    }
+}
 
 impl std::ops::Deref for StampedTelemetryEvent {
     type Target = TelemetryEvent;
@@ -51,7 +70,37 @@ fn stamp_telemetry_event(
     clock: Option<bevy::prelude::Res<lunco_time::MissionClock>>,
     mut commands: Commands,
 ) {
-    let mut event = trigger.event().clone();
+    stamp_event(
+        trigger.event().clone(),
+        EventOrdering::Simulation,
+        tick.as_deref(),
+        clock.as_deref(),
+        &mut commands,
+    );
+}
+
+fn stamp_ordered_event(
+    trigger: On<OrderedTelemetryEvent>,
+    tick: Option<bevy::prelude::Res<lunco_core_runtime::SimTick>>,
+    clock: Option<bevy::prelude::Res<lunco_time::MissionClock>>,
+    mut commands: Commands,
+) {
+    stamp_event(
+        trigger.event().0.clone(),
+        EventOrdering::Causal,
+        tick.as_deref(),
+        clock.as_deref(),
+        &mut commands,
+    );
+}
+
+fn stamp_event(
+    mut event: TelemetryEvent,
+    ordering: EventOrdering,
+    tick: Option<&lunco_core_runtime::SimTick>,
+    clock: Option<&lunco_time::MissionClock>,
+    commands: &mut Commands,
+) {
     if let (Some(tick), Some(clock)) = (tick, clock) {
         let epoch = clock.epoch_jd(tick.0);
         let seconds = clock.sim_secs(tick.0);
@@ -63,13 +112,13 @@ fn stamp_telemetry_event(
         event.sim_secs = seconds;
         event.sim_tick = tick.0;
     }
-    commands.trigger(StampedTelemetryEvent(event));
+    commands.trigger(StampedTelemetryEvent(event, ordering));
 }
 
 fn project_command_occurrence(trigger: On<lunco_core::CommandOccurred>, mut commands: Commands) {
-    commands.trigger(telemetry::command_telemetry_event(
+    commands.trigger(OrderedTelemetryEvent(telemetry::command_telemetry_event(
         trigger.event().name.clone(),
-    ));
+    )));
 }
 
 fn project_runtime_error(trigger: On<lunco_core::RuntimeError>, mut commands: Commands) {

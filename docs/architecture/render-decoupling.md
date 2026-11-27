@@ -88,14 +88,15 @@ rendering quality settings or simulation cadence.
 
 ## Initial scene presentation
 
-The interactive application keeps the main scene camera inactive during scene
-replacement and initial simulation preparation. Its existing workbench
-progress notice stays visible. The viewport keeps its camera binding, and the
-camera reconciler resumes rendering when the mounted scene's preparation and
-readiness waits settle. Terminal failures remain visible through the status
-and diagnostic surfaces. Later runtime edits and individual participant waits
-leave the view available. Headless and offscreen hosts retain their own output
-contracts.
+The interactive application keeps the workbench progress backdrop visible
+during scene replacement and initial simulation preparation. The physically
+admitted selected camera can prepare terrain and GPU pipelines behind it;
+interaction and window capture use only the exposed viewport. Terminal failures
+remain visible through the status and diagnostic surfaces. Later runtime edits
+and individual participant waits leave the view available. Offscreen enables the
+same authored selection and origin contract without a workbench; its leased
+non-writing pose owner drives one image-target render consumer. The render-free
+headless host does not require a presentation camera.
 
 ## Live camera observations
 
@@ -159,10 +160,12 @@ independent consumer with its own settings.
 
 Optional `exposure_ev100` sets a fixed photographic exposure for that output.
 The renderer applies it during native camera extraction, before lighting and
-tonemapping. The main viewport inherits the saved General setting when its
+tonemapping. The main viewport inherits the saved **Fixed viewport exposure** setting
+(shared by Settings → General and Graphics → Camera look) when its
 camera's fixed EV100 is off. It uses scene exposure when both controls are off.
-Feeds with fixed EV100 off use their source exposure. These controls preserve
-the source's physical exposure and have no effect on the depth display.
+The Graphics profile EV is the calibration for newly constructed unauthored
+cameras, not a separate operator exposure control. Feeds with fixed EV100 off
+use their source exposure. These controls preserve the source's physical exposure and have no effect on the depth display.
 
 `lunco-render` owns this validated presentation intent. `lunco-render-bevy`
 converts it at the named GPU boundary and runs the standard-library

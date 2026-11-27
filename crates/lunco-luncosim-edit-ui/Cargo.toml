@@ -6,6 +6,7 @@ license.workspace = true
 description = "LunCoSim's egui panels for in-scene editing"
 
 [dependencies]
+lunco-avatar = { path = "../lunco-avatar" }
 lunco-usd-bevy-stage = { path = "../lunco-usd-bevy-stage" }
 lunco-usd-bevy-core = { path = "../lunco-usd-bevy-core" }
 lunco-usd-bevy-mesh = { path = "../lunco-usd-bevy-mesh" }

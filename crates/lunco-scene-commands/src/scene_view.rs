@@ -9,10 +9,7 @@ use lunco_scripting_bridge_core::ScriptInstanceRetired;
 use lunco_usd_bevy_scene::billboard::{BillboardViewText, UsdBillboard};
 use lunco_usd_bevy_scene::{
     RuntimeVisibilityOverride,
-    visibility::{
-        presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
-        write_runtime_visibility,
-    },
+    visibility::{prepare_runtime_visibility, presentation_actor, reconcile_runtime_visibility},
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -22,39 +19,43 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 #[derive(Resource, Default)]
 pub struct SceneViewProperties(HashMap<&'static str, SceneViewProperty>);
 
-/// Publish a validated presentation value with its optional script owner.
-/// Return whether the value changed and needs derived presentation reconciliation.
-pub type ApplySceneViewProperty =
+/// Component-only owners commit validated writes without further world reads
+/// that could reject the entire batch. Derived owners prepare their complete
+/// affected state before any component owner publishes.
+type ApplySceneViewProperty =
     fn(&mut World, Entity, SceneViewValue, Option<GlobalEntityId>) -> bool;
+type PreparedSceneViewProperty = Box<dyn FnOnce(&mut World)>;
+type PrepareSceneViewProperty = fn(
+    &World,
+    Vec<(Entity, SceneViewValue)>,
+    Option<GlobalEntityId>,
+) -> Result<PreparedSceneViewProperty, String>;
+
+#[derive(Clone, Copy)]
+enum PropertyOwner {
+    Component(ApplySceneViewProperty),
+    Derived(PrepareSceneViewProperty),
+}
 
 #[derive(Clone, Copy)]
 struct SceneViewProperty {
     validate: fn(&World, Entity, &SceneViewValue) -> Result<(), String>,
-    apply: ApplySceneViewProperty,
-    reconcile: Option<fn(&mut World, &[Entity])>,
+    owner: PropertyOwner,
 }
 
 impl SceneViewProperties {
-    /// Register a unique name and its validation and application functions.
-    pub fn register(
+    fn register(
         &mut self,
         name: &'static str,
         validate: fn(&World, Entity, &SceneViewValue) -> Result<(), String>,
-        apply: ApplySceneViewProperty,
-        reconcile: Option<fn(&mut World, &[Entity])>,
+        owner: PropertyOwner,
     ) {
-        match self.0.entry(name) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(SceneViewProperty {
-                    validate,
-                    apply,
-                    reconcile,
-                });
-            }
-            std::collections::hash_map::Entry::Occupied(_) => {
-                panic!("duplicate scene view property: {name}");
-            }
-        }
+        assert!(
+            self.0
+                .insert(name, SceneViewProperty { validate, owner })
+                .is_none(),
+            "duplicate scene view property: {name}"
+        );
     }
 }
 
@@ -79,36 +80,32 @@ pub(crate) fn install(app: &mut App) {
         .register(
             "billboard.text",
             validate_billboard_text,
-            apply_billboard_text,
-            None,
+            PropertyOwner::Component(apply_billboard_text),
         );
     app.world_mut()
         .resource_mut::<SceneViewProperties>()
         .register(
             "visibility",
             validate_visibility,
-            apply_visibility,
-            Some(reconcile_runtime_visibility),
+            PropertyOwner::Derived(prepare_visibility),
         );
     app.world_mut()
         .resource_mut::<SceneViewProperties>()
         .register(
             "material.base_color",
             validate_color,
-            |world, target, value, script| {
+            PropertyOwner::Component(|world, target, value, script| {
                 apply_color(world, target, value, script, |color| &mut color.base_color)
-            },
-            None,
+            }),
         );
     app.world_mut()
         .resource_mut::<SceneViewProperties>()
         .register(
             "material.emissive",
             validate_color,
-            |world, target, value, script| {
+            PropertyOwner::Component(|world, target, value, script| {
                 apply_color(world, target, value, script, |color| &mut color.emissive)
-            },
-            None,
+            }),
         );
 }
 
@@ -122,15 +119,6 @@ pub(crate) fn on_set_scene_view(
     let origin = active.origin();
     let batches = trigger.event().batches.clone();
     reply.queue(&mut commands, move |world| {
-        if batches.len() > 256
-            || batches
-                .iter()
-                .map(|batch| batch.writes.len())
-                .sum::<usize>()
-                > 256
-        {
-            return Err("SetSceneView accepts at most 256 writes".into());
-        }
         apply_writes(world, origin, batches)?;
         Ok(Ack::default())
     })
@@ -142,6 +130,15 @@ pub(crate) fn apply_writes(
     batches: Vec<SceneViewBatch>,
 ) -> Result<(), String> {
     let _span = bevy::log::info_span!("apply_scene_view", entities = batches.len()).entered();
+    if batches.len() > 256
+        || batches
+            .iter()
+            .map(|batch| batch.writes.len())
+            .sum::<usize>()
+            > 256
+    {
+        return Err("scene view accepts at most 256 writes".into());
+    }
     let script = presentation_actor(world, origin)?;
     let mounts = world
         .get_resource::<SceneMountState>()
@@ -169,25 +166,35 @@ pub(crate) fn apply_writes(
             let (&name, owner) = property;
             (owner.validate)(world, target, &write.value)?;
             last_write.insert((target, name), prepared.len());
-            prepared.push((target, name, owner.apply, owner.reconcile, write.value));
+            prepared.push((target, name, owner.owner, write.value));
         }
     }
-    let mut reconcile_by_owner = BTreeMap::new();
-    for (index, (target, name, apply, reconcile, value)) in prepared.into_iter().enumerate() {
-        if last_write[&(target, name)] == index {
-            if apply(world, target, value, script)
-                && let Some(reconcile) = reconcile
-            {
-                reconcile_by_owner
+    let mut derived = BTreeMap::new();
+    let mut components = Vec::new();
+    for (index, (target, name, owner, value)) in prepared.into_iter().enumerate() {
+        if last_write[&(target, name)] != index {
+            continue;
+        }
+        match owner {
+            PropertyOwner::Component(apply) => components.push((target, apply, value)),
+            PropertyOwner::Derived(prepare) => {
+                derived
                     .entry(name)
-                    .or_insert_with(|| (reconcile, Vec::new()))
+                    .or_insert_with(|| (prepare, Vec::new()))
                     .1
-                    .push(target);
+                    .push((target, value));
             }
         }
     }
-    for (_, (reconcile, targets)) in reconcile_by_owner {
-        reconcile(world, &targets);
+    let mut commits = Vec::new();
+    for (_, (prepare, writes)) in derived {
+        commits.push(prepare(world, writes, script)?);
+    }
+    for (target, apply, value) in components {
+        apply(world, target, value, script);
+    }
+    for commit in commits {
+        commit(world);
     }
     Ok(())
 }
@@ -268,31 +275,35 @@ fn clear_billboard_views(mut commands: Commands, targets: Query<Entity, With<Bil
 
 /// Validate a local presentation visibility write without admitting new geometry.
 fn validate_visibility(
-    world: &World,
-    target: Entity,
+    _world: &World,
+    _target: Entity,
     value: &SceneViewValue,
 ) -> Result<(), String> {
     if !matches!(value, SceneViewValue::Bool { .. } | SceneViewValue::Clear) {
         return Err("visibility requires Bool or Clear".into());
     }
-    validate_runtime_visibility(world, target)
+    Ok(())
 }
 
-/// Apply the runtime override; clearing it restores the current composed value.
-fn apply_visibility(
-    world: &mut World,
-    target: Entity,
-    value: SceneViewValue,
+fn prepare_visibility(
+    world: &World,
+    writes: Vec<(Entity, SceneViewValue)>,
     script: Option<GlobalEntityId>,
-) -> bool {
-    let value = match value {
-        SceneViewValue::Bool { value } => Some(value),
+) -> Result<PreparedSceneViewProperty, String> {
+    let writes: Vec<_> = writes
+        .into_iter()
+        .map(|(target, value)| (target, visibility_value(&value)))
+        .collect();
+    let prepared = prepare_runtime_visibility(world, &writes, script)?;
+    Ok(Box::new(move |world| prepared.apply(world)))
+}
+
+fn visibility_value(value: &SceneViewValue) -> Option<bool> {
+    match value {
+        SceneViewValue::Bool { value } => Some(*value),
         SceneViewValue::Clear => None,
-        SceneViewValue::Text { .. } | SceneViewValue::LinearRgb { .. } => {
-            unreachable!("validated visibility")
-        }
-    };
-    write_runtime_visibility(world, target, value, script)
+        _ => unreachable!("validated visibility"),
+    }
 }
 
 /// Restore authored visibility when the publishing scenario retires.

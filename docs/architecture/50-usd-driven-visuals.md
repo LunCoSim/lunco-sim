@@ -90,7 +90,7 @@ Use the current value's owner to choose the update path:
 | Generated live waypoint sensors and markers | `SetRuntimeMarker`, `QueryRuntimeMarkers` and the active route policy | Author waypoint definitions with an explicit Author action |
 | Generated route and drag presentation | `SetSceneViewObject`, `InspectSceneViewObject`, and `SetSceneViewObjectPosition` | Author route points and committed placement in USD |
 | Environment lighting | `SetEnvironmentLight` (live by default) | Explicit Persistent intent for supported USD lighting settings |
-| Solver and contact participation of independent bodies | `SetSceneParticipation` validates independent bodies, contact shapes, radio blockers and view writes before applying them together | Author the initial body definitions and masses when preparing the scene |
+| Solver and contact participation of independent bodies | `SetSceneParticipation` validates complete poses, independent bodies, contact shapes, radio blockers and view writes before applying them together | Author the initial body definitions and masses when preparing the scene |
 | Contact participation of an admitted collider | `SetColliderEnabled` on the native collider entity | Author `PhysicsCollisionAPI` and `physics:collisionEnabled` |
 | Object appearance during interactive tuning | `SetObjectProperty` (live by default) | Commit with `intent: "Persistent"` when the user accepts the setting |
 | Topology, composition or authoring metadata | Commit typed USD operations and reconcile the affected projection | The same document transaction |
@@ -153,9 +153,12 @@ hidden geometry remains prepared. Target the group root once: the scene
 visibility owner reconciles only its indexed composed namespace instance. A
 root reveal removes that root's blocking ordinary visibility opinion without
 revealing independently hidden descendants or purpose-suppressed guides.
-An invisible ancestor still dominates a descendant reveal. All writes in a
-batch are applied before derived visibility is reconciled; repeated unchanged
-opinions do not walk the subtree. `Clear` withdraws the root override, and
+An invisible ancestor still dominates a descendant reveal. The visibility
+owner prepares the affected subtree against the complete proposed batch before
+committing any runtime state; a derived read failure rejects the whole command.
+Repeated unchanged opinions do not walk the subtree. The view write limit applies
+at the shared owner, including compound participation commands. `Clear` withdraws
+the root override, and
 retiring the publishing script clears its overrides. Do not walk the USD tree
 or split a group toggle into per-descendant commands in Rhai. A prim with
 time-sampled visibility retains its animation owner and rejects a direct
@@ -171,6 +174,11 @@ Imageable schema accessors to substitute the live ordinary visibility opinion;
 no USD layer is mutated. `SetObjectProperty(visible, Interactive)` is the
 same visibility owner, not a direct Bevy component write; persistent visibility
 edits author the document and leave independent scene-view opinions intact.
+
+`MoveEntity`, `RotateEntity`, `TransformEntity`, and compound poses share one
+native pose preparation and commit owner. Partial poses preserve the omitted
+transform and velocity channel; only the scheduled joint propagation pulses
+are cleared after physics.
 
 Do not use `ApplyUsdOps`, `ApplyUsdTransientOps`, or authored time samples
 to record live door toggles, equipment status, or continuously changing cart
@@ -340,11 +348,22 @@ entity cannot stand in for a missing scene entity. Procedural backgrounds also
 remain scene-owned because the renderer exposes one background owner per scene.
 Unscoped `QueryUsdPrim` reads likewise select mounted scene roots by excluding
 `UsdPreviewOnly` hierarchies, so an Editor preview cannot make live scene queries
-ambiguous.
+ambiguous. A script can pass `source_entity_id` instead of `doc_id` to
+bind reads and projected entity lookup to its own exact live scene root.
+Invalid source ids reject rather than selecting another mount.
 
-`QueryUsdPrim` reads the worker-prepared composed plan before a canonical stage
-is mounted and reads the canonical stage as soon as it is mounted, including
-generation zero. A document-scoped query can observe the exact document
+Complete pose transitions use the same native validation and storage mechanism
+as interactive `TransformEntity`. A compound `SetSceneParticipation` can include
+independent pose targets, colliders, bodies, and views; duplicate or
+ancestor/descendant pose targets are rejected because their active-frame
+destinations would otherwise depend on application order. Validate all
+destinations before any owner changes. For authored policy, `world_pose(id)`
+returns position and rotation from one authoritative active-frame sample.
+
+`QueryUsdPrim`/`QueryUsdPrims` can omit placement with `position: false`.
+Their metadata-only read may reuse the existing worker-prepared plan under the
+[exact canonical composition lease](21-domain-usd.md); other mounted reads
+use the canonical stage, including generation zero. A document-scoped query can observe the exact document
 generation once it is applied to that stage, even while the durable ECS cursor
 catches up; operations still pending at the stage boundary remain a
 projection-not-current error. Derived geometry requests use the canonical stage

@@ -5,6 +5,7 @@ target/
 # Downloaded mission data
 .cache/
 extern/
+/assets/prebuilt/modelica/*/*.bin.zst
 
 # Downloaded and derived terrain products. Source URLs, hashes, and processing
 # policy belong in Assets.toml; the potentially large payloads never do.

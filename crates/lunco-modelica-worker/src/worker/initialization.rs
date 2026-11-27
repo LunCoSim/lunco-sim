@@ -42,7 +42,7 @@ pub(super) fn execute_wasm(
         &compiled.authored_bindings.parameter_overrides,
     );
     let inputs = merge_instance_values(&compiled.authored_bindings.initial_inputs, &initial_inputs);
-    let mut plan = live_build_plan(
+    let plan = live_build_plan(
         solver::RuntimeProfile {
             live: true,
             predicted: false,
@@ -54,7 +54,6 @@ pub(super) fn execute_wasm(
         Some(library_revision),
     )
     .map_err(|error| error.to_string())?;
-    plan.options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
     observe_initialization(
         &compiled.compiled.dae,
         plan,
@@ -77,11 +76,10 @@ fn observe_initialization(
         .chain(state_names)
         .cloned()
         .collect::<Vec<_>>();
-    let stepper = lunco_modelica_solver::simulation_session::live_for_solver(
-        dae,
-        &plan.spec,
-        plan.options.clone(),
-    )?;
+    // The coupled session is observed at its initial instant and then dropped.
+    let mut plan = plan;
+    plan.options.execution_policy = rumoca_sim::SimExecutionPolicy::Interpreter;
+    let stepper = plan.construct(dae)?;
     let selected = stepper.selected_values(&requested)?;
     if selected.len() != requested.len() {
         return Err(rumoca_sim::SimulationDiagnosticError::Solver(format!(
@@ -107,6 +105,11 @@ fn observe_initialization(
             Ok(value)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    bevy::log::debug!(
+        target: "lunco_modelica_worker::initial_values",
+        ?probes, ?state_names, ?values,
+        "observed coupled initialization values"
+    );
     let state_values = state_names
         .iter()
         .cloned()
@@ -186,6 +189,7 @@ impl Drop for PreparationRequests {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct PendingInitialization {
+    pub(super) doc_uri: String,
     pub(super) request_id: ModelicaPreparationId,
     pub(super) parameter_overrides: Vec<(String, f64)>,
     pub(super) initial_inputs: Vec<(String, f64)>,
@@ -227,6 +231,7 @@ impl PendingRequest {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct InitializationWork {
+    pub(super) doc_uri: String,
     pub(super) request_id: ModelicaPreparationId,
     pub(super) comp_res: CompiledModelArtifact,
     pub(super) plan: LiveBuildPlan,
@@ -261,6 +266,7 @@ pub(super) fn compiled_work(
     )
     .map_err(|error| error.to_string())?;
     Ok(InitializationWork {
+        doc_uri: pending.doc_uri,
         request_id: pending.request_id,
         comp_res,
         plan,
@@ -353,9 +359,9 @@ pub(super) fn dispatch(
     lane: thread_pool::Lane<()>,
     dae: std::sync::Arc<rumoca_ir_dae::Dae>,
     work: &InitializationWork,
+    plan: LiveBuildPlan,
     pool: &ModelicaWorkerPools,
 ) -> Result<(), String> {
-    let plan = work.plan.clone();
     let probes = work.probes.clone();
     let state_names = source_state_names(&work.comp_res);
     let tx = pool.tx.clone();

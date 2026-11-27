@@ -206,7 +206,8 @@ When a UI hook reads a collection of USD prims, request the member list once
 and use `QueryUsdPrims` for their needed attributes, schemas, or relationships;
 declare that provider in the caller's `query_reads`. Avoid per-member
 `QueryUsdPrim` loops in input policy because every read occupies the same
-application thread. Resolve a live USD entity with its owning document identity
+application thread. Bind scenario queries with `source_entity_id`; pass `position:false` to metadata-only requests and reuse
+leaf facts within the interaction, rather than preloading independent caches. Resolve a live USD entity with its owning document identity
 when several documents can mount the same authored path. Generic `MoveEntity`
 persistence resolves the write document from the moved entity's stage, not the
 active editor tab.
@@ -272,7 +273,9 @@ physical OS mouse input.
 Bevy emits one click observer per entity in its previous hover map, whose
 iteration order is unspecified. The runtime scene router resolves from that
 same event-source map by hit depth and the authored policy for the actual button
-before it dispatches one scene event. The runner waits for
+before recording one raw pointer observation. The scene-leased policy emits
+at most one semantic activation for an unclaimed gesture; route and possession
+claims are not Twin activation events. The runner waits for
 `/api/ready` and requires the API `Exit` command and port release after every
 verdict.
 

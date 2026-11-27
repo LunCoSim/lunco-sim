@@ -1309,6 +1309,7 @@ fn prepare_usd_curve_view_product(
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SceneToolWorld<'w, 's> {
     q_hook_bindings: Query<'w, 's, &'static ToolHookBinding>,
+    possession: lunco_avatar::PossessionTargetQuery<'w, 's>,
     q_selectable: Query<'w, 's, Entity, With<lunco_core::SelectableRoot>>,
     q_mobility: Query<'w, 's, Entity, With<lunco_core::MobilityRoot>>,
     q_ids: Query<'w, 's, &'static lunco_core::GlobalEntityId>,
@@ -1466,6 +1467,7 @@ fn scene_tool_context(
     let mut hit_view = None;
     let mut hit_prim = None;
     let mut hit_id = None;
+    let mut hit_identity = None;
     let mut inspector_part = None;
     let mut below_selection_root = true;
     let mut pointer_policy = None;
@@ -1484,6 +1486,9 @@ fn scene_tool_context(
         }
         if let Ok(path) = q_prim.get(entity) {
             hit_prim.get_or_insert(path);
+            if hit_identity.is_none() {
+                hit_identity = q_ids.get(entity).ok().map(|id| (id, path));
+            }
             prim_paths.push(TelemetryValue::String(path.path.clone()));
             if below_selection_root && inspector_part.is_none() {
                 inspector_part = Some(entity);
@@ -1583,7 +1588,7 @@ fn scene_tool_context(
             ]),
         ));
     }
-    if let Some(id) = hit_id {
+    if let Some(id) = hit_identity.map(|(id, _)| id).or(hit_id) {
         context.push((
             "hit_entity_id".to_string(),
             TelemetryValue::I64(id.get() as i64),
@@ -1601,7 +1606,7 @@ fn scene_tool_context(
             TelemetryValue::I64(id.get() as i64),
         ));
     }
-    if let Ok(path) = q_prim.get(click.entity) {
+    if let Some((_, path)) = hit_identity {
         context.push((
             "hit_path".to_string(),
             TelemetryValue::String(path.path.clone()),
@@ -1612,9 +1617,6 @@ fn scene_tool_context(
             "target_path".to_string(),
             TelemetryValue::String(path.path.clone()),
         ));
-        if let Some(doc) = lunco_usd_bevy_twin::scene_document_for(backed, path.stage_handle.id()) {
-            context.push(("doc_id".to_string(), TelemetryValue::U64(doc.raw())));
-        }
     }
     if let Some(entity) = selected_entity {
         if let Ok(id) = q_ids.get(entity) {
@@ -1686,15 +1688,9 @@ fn scene_tool_context(
             ));
         }
     }
-    if let Some(position) = canonical_pointer_render_position(
-        click,
-        q_prim,
-        q_parents,
-        q_lod_tiles,
-        q_scene_cameras,
-        viewport,
-        surface,
-    ) {
+    if let Some(position) =
+        surface_position.or_else(|| click.hit.position.map(|point| point.as_dvec3()))
+    {
         let render_position = RenderPos(position);
         context.push((
             "render_position".to_string(),
@@ -1816,46 +1812,6 @@ fn inherited_pointer_interaction(
     None
 }
 
-/// Return a hit in the renderer's floating-origin frame.
-///
-/// The mesh picker reports positions in the picked entity's local frame. That
-/// is valid for an ordinary prop, but a streamed terrain tile is nested under
-/// BigSpace and its local hit can be near zero even when the terrain is ~2 km
-/// below the body datum. The analytic surface query owns the canonical
-/// screen-ray → active-grid conversion, so use it only when the visible pick
-/// belongs to that terrain. Props, vehicles, and the sky keep their mesh hit
-/// or no-hit result; hidden analytic terrain is never an interaction target.
-fn canonical_pointer_render_position(
-    click: &PointerClick,
-    q_prim: &Query<&lunco_usd_bevy_scene::UsdPrimPath>,
-    q_parents: &Query<&ChildOf>,
-    q_lod_tiles: &Query<&lunco_terrain_surface::stream_viz::LodTileOf>,
-    q_scene_cameras: &Query<
-        (&Camera, &GlobalTransform),
-        (With<Camera3d>, With<lunco_render::SceneCamera>),
-    >,
-    viewport: &lunco_viewport_core::SceneViewport,
-    surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
-) -> Option<bevy::math::DVec3> {
-    let mesh_position = click.hit.position?.as_dvec3();
-    let Some(surface_position) = pointer_surface_render_position(
-        click,
-        q_prim,
-        q_parents,
-        q_lod_tiles,
-        q_scene_cameras,
-        viewport,
-        surface,
-    ) else {
-        return Some(mesh_position);
-    };
-    // The surface helper already established that the picked entity belongs to
-    // the visible terrain. Returning this analytic point fixes the tile-local
-    // picker coordinate while keeping ordinary prop and sky clicks on their
-    // original mesh/no-hit path.
-    Some(surface_position)
-}
-
 /// Resolve the analytic terrain point below a scene pointer in the renderer's
 /// floating-origin frame. This is a second, explicitly named coordinate fact:
 /// the ordinary mesh hit may be local to a streamed tile, while this value is
@@ -1872,10 +1828,23 @@ fn pointer_surface_render_position(
     viewport: &lunco_viewport_core::SceneViewport,
     surface: &lunco_terrain_surface::GridSurfaceQuery<'_, '_>,
 ) -> Option<bevy::math::DVec3> {
+    let camera_entity = viewport.exposed_camera()?;
     if let Some(terrain_hit) = click.hit.extra_as::<lunco_terrain_surface::SurfaceHit>() {
         return surface.to_render(terrain_hit.point).map(|point| point.0);
     }
-    let camera_entity = viewport.active_camera?;
+    let hit_has_authored_prim = std::iter::successors(Some(click.entity), |entity| {
+        q_parents.get(*entity).ok().map(|parent| parent.0)
+    })
+    .any(|entity| q_prim.get(entity).is_ok());
+    let hit_has_terrain_tile = std::iter::successors(Some(click.entity), |entity| {
+        q_parents.get(*entity).ok().map(|parent| parent.0)
+    })
+    .any(|entity| q_lod_tiles.get(entity).is_ok() || surface.is_native_terrain_collider(entity));
+    // An authored prop cannot supply a terrain hit. The analytic picker provides
+    // SurfaceHit for terrain roots; streamed mesh children carry LodTileOf.
+    if hit_has_authored_prim && !hit_has_terrain_tile {
+        return None;
+    }
     let (camera, camera_transform) = q_scene_cameras.get(camera_entity).ok()?;
     let ray = lunco_viewport_core::scene_click_ray(
         false,
@@ -1904,10 +1873,6 @@ fn pointer_surface_render_position(
                 .get(entity)
                 .is_ok_and(|tile| tile.0 == terrain_hit.terrain)
     });
-    let hit_has_authored_prim = std::iter::successors(Some(click.entity), |entity| {
-        q_parents.get(*entity).ok().map(|parent| parent.0)
-    })
-    .any(|entity| q_prim.get(entity).is_ok());
     if !hit_is_terrain && hit_has_authored_prim {
         return None;
     }
@@ -1960,6 +1925,9 @@ pub(crate) fn on_scene_pointer_event(
     armed: Res<lunco_interaction_core::ArmedScriptTool>,
     spawn_state: Res<lunco_luncosim_edit_core::SpawnState>,
     terrain_active: Res<lunco_interaction_core::TerrainToolActive>,
+    drag_active: Res<lunco_interaction_core::DragModeActive>,
+    workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
+    scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
     mut dispatch: ResMut<ScenePointerDispatch>,
     world: SceneToolWorld,
     mut commands: Commands,
@@ -1974,6 +1942,8 @@ pub(crate) fn on_scene_pointer_event(
             lunco_luncosim_edit_core::SpawnState::Idle
         )
         || terrain_active.0
+        || drag_active.active
+        || world.viewport.exposed_camera().is_none()
     {
         return;
     }
@@ -1996,6 +1966,7 @@ pub(crate) fn on_scene_pointer_event(
         click.propagate(false);
         return;
     }
+    click.propagate(false);
     let key = ScenePointerKey {
         pointer: click.pointer.id,
         button: click.button,
@@ -2034,6 +2005,22 @@ pub(crate) fn on_scene_pointer_event(
         world.annotation_images.as_deref(),
     );
     if let TelemetryValue::Map(fields) = &mut context {
+        if let Some(target) = world.possession.resolve(click.entity) {
+            match world.q_ids.get(target) {
+                Ok(id) => {
+                    fields.insert(
+                        "possession_target_id".into(),
+                        TelemetryValue::I64(id.get() as i64),
+                    );
+                }
+                Err(_) => {
+                    fields.insert(
+                        "possession_target_unavailable".into(),
+                        TelemetryValue::Bool(true),
+                    );
+                }
+            }
+        }
         if let Some(TelemetryValue::U64(doc)) = fields.get("doc_id") {
             if let Some(active) = dispatch.move_hooks.get(&DocumentId::new(*doc)) {
                 let Ok(binding) = world.q_hook_bindings.get(active.binding) else {
@@ -2072,27 +2059,60 @@ pub(crate) fn on_scene_pointer_event(
             }
         }
     }
-    let source = world
-        .q_ids
-        .get(click.entity)
-        .map(|id| id.get())
-        .unwrap_or_default();
+    let (source, owner_twin_id) = match &context {
+        TelemetryValue::Map(fields) => {
+            let source = match fields.get("hit_entity_id") {
+                Some(TelemetryValue::I64(id)) if *id > 0 => *id as u64,
+                _ => 0,
+            };
+            let owner = match fields.get("doc_id") {
+                Some(TelemetryValue::U64(doc)) => workspace.as_deref().and_then(|workspace| {
+                    workspace
+                        .0
+                        .document(DocumentId::new(*doc))
+                        .and_then(|entry| workspace.0.twin_for(entry))
+                        .map(|twin| twin.raw())
+                }),
+                _ => None,
+            };
+            (source, owner)
+        }
+        _ => (0, None),
+    };
+    // The queued hook owns this scene generation. It cannot act on a new Twin
+    // or mount if a scene transition retires the picked source before delivery.
+    let binding = match ToolHookBinding::for_scene(
+        "scene_interaction".to_owned(),
+        "on_pointer".to_owned(),
+        owner_twin_id,
+        ToolHookBindingRetention::Invocation,
+        scene.as_deref(),
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            warn!("[scene-pointer] interaction rejected: {error}");
+            return;
+        }
+    };
+    let binding = commands.spawn((binding, lunco_core::SceneOwned)).id();
     commands.trigger(lunco_scripting_rhai_runtime::commands::RunRhaiToolHook {
-        binding: None,
+        binding: Some(binding),
         tool: "scene_interaction".to_string(),
         hook: "on_pointer".to_string(),
         args: context.clone(),
-        owner_twin_id: None,
+        owner_twin_id,
     });
-    commands.trigger(TelemetryEvent {
-        name: "scene.pointer".to_string(),
-        source,
-        severity: lunco_telemetry_core::Severity::Info,
-        data: context,
-        timestamp: 0.0,
-        sim_secs: 0.0,
-        sim_tick: 0,
-    });
+    commands.trigger(lunco_telemetry_core::OrderedTelemetryEvent(
+        TelemetryEvent {
+            name: "scene.pointer".to_string(),
+            source,
+            severity: lunco_telemetry_core::Severity::Info,
+            data: context,
+            timestamp: 0.0,
+            sim_secs: 0.0,
+            sim_tick: 0,
+        },
+    ));
 }
 
 fn ordered_scene_pointer_target<'w, 's>(
@@ -2298,6 +2318,7 @@ fn scene_pointer_move_args(
     world: &SceneToolWorld,
     move_hooks: &HashMap<DocumentId, ScenePointerMoveHook>,
 ) -> Option<ScenePointerMoveContext> {
+    let camera_entity = world.viewport.exposed_camera()?;
     let ScenePointerMoveSample {
         entity,
         position,
@@ -2326,7 +2347,6 @@ fn scene_pointer_move_args(
             if !hit_is_terrain {
                 return None;
             }
-            let camera_entity = world.viewport.active_camera?;
             let (camera, camera_transform) = world.q_scene_cameras.get(camera_entity).ok()?;
             let ray =
                 lunco_viewport_core::scene_click_ray(false, camera, camera_transform, position)?;

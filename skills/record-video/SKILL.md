@@ -57,8 +57,9 @@ is documented in [Offline Recording](../../docs/offline-recording.md).
   loading indicator. Check the raw opening frames before accepting a take;
   cropping an indicator is not proof that capture waited correctly.
 - **Destination picks the format**: `.mp4`/`.mkv`/`.mov` streams into `ffmpeg`
-  (one small file); any other path is a directory of `frame_%06d.png`. No
-  `ffmpeg` installed ⇒ loud warn + PNG fallback in `<name>.frames/`.
+  (one small file); any other path is a directory of `frame_%06d.png`. A video
+  destination requires `ffmpeg`; otherwise the request is rejected. Choose a PNG
+  directory explicitly for frame sequences.
 - `--record-size WxH` sets the offscreen resolution (default 1280x720, the
   windowed default). `--scene PATH` picks the scene, as usual.
 - **Output goes under `~/.cache/...`**, never `/tmp` (root partition) and never
@@ -71,9 +72,9 @@ is documented in [Offline Recording](../../docs/offline-recording.md).
 - `--render-quality high` selects the highest shipped renderer budget for the
   process: shadows, sky cubemap, lunar terrain LOD, and tessellation. USD still
   owns the authored terrain/sky shader sources; this flag does not swap them.
-- No workbench exists, so the recorder activates the scene's first **authored**
-  `SceneCamera` (e.g. the luncosim `WideShot`). A scene with no authored camera
-  records black and logs a warning — author a camera, don't fight the picker.
+- There is no workbench window; the shared authored camera policy and viewport
+  selection still own the selected pose. A scene without a valid presentation
+  camera fails the camera contract rather than capturing black frames.
 - The target-born offscreen camera mirrors the selected authored camera's transform,
   projection, exposure, tonemapping, MSAA, and camera-owned environment views
   (`Skybox` plus generated image-based-lighting intent), so PNG/video output uses the
@@ -118,13 +119,14 @@ query("GetOfflineRecordingStatus")
 //    ui_presentation_required, ui_presentation_ready }
 ```
 
-- **Stalled?** Check `active`, `frame_index`, `is_waiting_for_frame` and the
-  readiness/encoder log. A pending readback holds the frame; a pending shared
+- **Stalled?** Check `active`, `frame_index`, `is_waiting_for_frame`,
+  `startup_blocker`, `visual_pending_reasons`, and the readiness/encoder log.
+  A pending readback holds the frame; a pending shared
   cycle or Modelica receipt holds capture until that cycle completes.
-- **Black video?** Almost always "no rendering camera": offscreen without an
-  authored `SceneCamera`, or every camera `is_active: false`. Check the log for
-  the offscreen camera warning. Alpha-0 frames (white in PNG viewers, black in
-  video) mean the camera never rendered at all.
+- **Black video?** Inspect the authored camera contract, exact image-target
+  receipt, and captured-frame pixels. The readiness gate requires an admitted
+  camera and all occupied color-phase pipelines. A terminal owner diagnostic
+  is recorded as `failure`, not converted into another camera.
 - **Take aborted?** A failed frame save aborts loudly and names the frame; the
   sequence up to it is intact. Disk-full is the usual cause.
 - A killed run may leave `.tmp` files next to frames — litter, not corruption;

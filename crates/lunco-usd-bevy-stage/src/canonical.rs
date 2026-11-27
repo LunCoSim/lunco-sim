@@ -27,7 +27,7 @@ static NEXT_CANONICAL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 use lunco_usd_compose::recipe::{StageLayerBytes, StageRecipe};
 use openusd::sdf::Path as SdfPath;
-use openusd::usd::{CommittedChange, Stage, StageSinkId};
+use openusd::usd::{CommittedChange, PendingChange, Stage, StageSink, StageSinkId};
 
 use crate::read::UsdReadSource;
 use crate::view::StageView;
@@ -64,6 +64,84 @@ impl RawStageChange {
     }
 }
 
+/// The canonical stage's native mutation observer. Read eligibility is retired
+/// at the layer's pre-commit seam; composed notices still own ECS reconciliation.
+/// A rolled-back edit may conservatively retire a prepared read, never expose stale data.
+struct CanonicalChangeSink {
+    revision: Rc<Cell<u64>>,
+    inbox: Arc<Mutex<Vec<RawStageChange>>>,
+    modified_layers: Arc<Mutex<HashSet<String>>>,
+}
+
+impl CanonicalChangeSink {
+    fn invalidate_reads(&self) {
+        self.revision.set(self.revision.get().wrapping_add(1));
+    }
+}
+
+impl StageSink for CanonicalChangeSink {
+    fn before_commit(&self, _stage: &Stage, _change: &PendingChange<'_>) {
+        self.invalidate_reads();
+    }
+
+    fn after_commit(&self, _stage: &Stage, change: &CommittedChange<'_>) {
+        self.invalidate_reads();
+        self.modified_layers
+            .lock()
+            .expect("canonical modified-layer lock poisoned")
+            .insert(change.layer_identifier.to_owned());
+        if let Ok(mut q) = self.inbox.lock() {
+            let paths_for_field = |name: &str| {
+                change
+                    .resynced
+                    .iter()
+                    .chain(change.changed_info_only.iter())
+                    .filter(|path| change.changed_fields(path).any(|field| field == name))
+                    .cloned()
+                    .collect()
+            };
+            q.push(RawStageChange {
+                resynced: change.resynced.to_vec(),
+                info_only: change.changed_info_only.to_vec(),
+                connection_paths: paths_for_field("connectionPaths"),
+                sample_paths: paths_for_field("timeSamples"),
+                layer: change.layer_identifier.to_string(),
+            });
+        }
+    }
+
+    fn layer_muting_changed(
+        &self,
+        _stage: &Stage,
+        _layer: &str,
+        _muted: bool,
+        _resynced: &[SdfPath],
+    ) {
+        self.invalidate_reads();
+    }
+
+    fn load_rules_changed(&self, _stage: &Stage, _resynced: &[SdfPath]) {
+        self.invalidate_reads();
+    }
+}
+
+/// Required read surface for a composed query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposedReadRequirement {
+    /// A current canonical native stage, when mounted.
+    Native,
+    /// Exact metadata that may be supplied by an admitted immutable plan.
+    Metadata,
+}
+
+/// One immutable plan binding. Projection consumers use the admitted
+/// generation; composed queries additionally require an exact native read lease.
+struct PreparedSnapshot {
+    plan: Arc<crate::UsdStageProjectionPlan>,
+    generation: u64,
+    composed_epoch: Option<(u64, u64)>,
+}
+
 /// The canonical live-composed stage for the active scene. `NonSend` (holds an
 /// `Rc`-backed `Stage`). Insert via `world.insert_non_send(..)`.
 pub struct CanonicalStage {
@@ -73,7 +151,8 @@ pub struct CanonicalStage {
         u64,
         HashMap<SdfPath, crate::transform::NativeTransformQuery>,
     )>,
-    committed_revision: Rc<Cell<u64>>,
+    /// Native mutation epoch, advanced before a layer edit becomes visible.
+    read_revision: Rc<Cell<u64>>,
     /// Original authored root identity; its extension selects the native codec.
     pub scene_layer: String,
     /// Sink inbox drained by the projection system each tick.
@@ -106,7 +185,7 @@ pub struct CanonicalStage {
     /// Prepared snapshot known to describe this live stage at the recorded
     /// generation. Any later live edit makes the snapshot stale by advancing
     /// `generation`.
-    prepared_plan: Option<(Arc<crate::UsdStageProjectionPlan>, u64)>,
+    prepared_plan: Option<PreparedSnapshot>,
     type_changes: ComposedTypeChanges,
     native_paths: Option<Arc<lunco_assets_core::asset_path::PreparedAssetPaths>>,
     native_paths_generation: u64,
@@ -171,40 +250,17 @@ impl CanonicalStage {
     /// root layer identifier the stage was opened from.
     pub fn from_stage(stage: Stage, scene_layer: impl Into<String>) -> Self {
         let inbox = Arc::new(Mutex::new(Vec::new()));
-        let sink_inbox = inbox.clone();
         let modified_layers = Arc::new(Mutex::new(HashSet::new()));
-        let sink_modified_layers = modified_layers.clone();
-        let committed_revision = Rc::new(Cell::new(0u64));
-        let sink_revision = committed_revision.clone();
-        let sink_id = stage.add_sink(move |_stage: &Stage, change: &CommittedChange<'_>| {
-            sink_revision.set(sink_revision.get().wrapping_add(1));
-            sink_modified_layers
-                .lock()
-                .expect("canonical modified-layer lock poisoned")
-                .insert(change.layer_identifier.to_owned());
-            if let Ok(mut q) = sink_inbox.lock() {
-                let paths_for_field = |name: &str| {
-                    change
-                        .resynced
-                        .iter()
-                        .chain(change.changed_info_only.iter())
-                        .filter(|path| change.changed_fields(path).any(|field| field == name))
-                        .cloned()
-                        .collect()
-                };
-                q.push(RawStageChange {
-                    resynced: change.resynced.to_vec(),
-                    info_only: change.changed_info_only.to_vec(),
-                    connection_paths: paths_for_field("connectionPaths"),
-                    sample_paths: paths_for_field("timeSamples"),
-                    layer: change.layer_identifier.to_string(),
-                });
-            }
+        let read_revision = Rc::new(Cell::new(0u64));
+        let sink_id = stage.add_sink(CanonicalChangeSink {
+            revision: read_revision.clone(),
+            inbox: inbox.clone(),
+            modified_layers: modified_layers.clone(),
         });
         Self {
             stage,
             animated_transforms: RefCell::new((0, HashMap::new())),
-            committed_revision,
+            read_revision,
             scene_layer: scene_layer.into(),
             inbox,
             modified_layers,
@@ -260,7 +316,7 @@ impl CanonicalStage {
         let convention = crate::stage_convention(&view).map_err(|_| crate::TransformReadError {
             prim: path.to_string(),
         })?;
-        let revision = self.committed_revision.get();
+        let revision = self.read_revision.get();
         let mut cache = self.animated_transforms.borrow_mut();
         if cache.0 != revision {
             cache.0 = revision;
@@ -302,6 +358,34 @@ impl CanonicalStage {
     /// A committed replacement still awaits its root projection notice.
     pub fn root_projection_pending(&self) -> bool {
         self.replacement_notice_pending
+    }
+
+    fn composed_read_epoch(&self) -> (u64, u64) {
+        (self.read_revision.get(), self.resolver_revision.get())
+    }
+
+    fn bind_prepared_snapshot(
+        &mut self,
+        plan: Arc<crate::UsdStageProjectionPlan>,
+        exact_composition: bool,
+    ) {
+        let composed_epoch = if exact_composition {
+            Some(self.composed_read_epoch())
+        } else {
+            self.prepared_plan
+                .as_ref()
+                .filter(|snapshot| Arc::ptr_eq(&snapshot.plan, &plan))
+                .and_then(|snapshot| snapshot.composed_epoch)
+        };
+        if let Some(paths) = plan.native_asset_paths_snapshot() {
+            self.set_native_asset_paths(paths);
+        }
+        self.type_changes = Default::default();
+        self.prepared_plan = Some(PreparedSnapshot {
+            plan,
+            generation: self.generation,
+            composed_epoch,
+        });
     }
 
     pub fn set_native_asset_paths(
@@ -1335,10 +1419,9 @@ impl CanonicalStages {
         self.by_asset.remove(&asset);
     }
 
-    /// Bind a prepared snapshot to the live stage only when the caller has
-    /// built that stage from the same recipe. The binding remains current until
-    /// a live edit advances the stage generation.
-    pub fn mark_prepared_plan_snapshot(
+    /// Admit a worker projection plan after a validated live dependency patch.
+    /// A projection binding alone does not prove equality of native view opinions.
+    pub fn admit_projection_snapshot(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
         plan: Arc<crate::UsdStageProjectionPlan>,
@@ -1346,28 +1429,20 @@ impl CanonicalStages {
         let Some(stage) = self.get_mut(asset) else {
             return false;
         };
-        if let Some(paths) = plan.native_asset_paths_snapshot() {
-            stage.set_native_asset_paths(paths);
-        }
-        stage.type_changes = Default::default();
-        stage.prepared_plan = Some((plan, stage.generation));
+        stage.bind_prepared_snapshot(plan, false);
         true
     }
 
-    /// Whether `plan` is the exact prepared snapshot from which the current
-    /// live-stage generation was built.
-    pub fn prepared_plan_is_current(
+    /// Whether the worker plan is admitted for the current projection generation.
+    pub fn projection_plan_is_current(
         &self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
         plan: &Arc<crate::UsdStageProjectionPlan>,
     ) -> bool {
         self.get(asset).is_some_and(|stage| {
-            stage
-                .prepared_plan
-                .as_ref()
-                .is_some_and(|(prepared, generation)| {
-                    *generation == stage.generation && Arc::ptr_eq(prepared, plan)
-                })
+            stage.prepared_plan.as_ref().is_some_and(|snapshot| {
+                snapshot.generation == stage.generation && Arc::ptr_eq(&snapshot.plan, plan)
+            })
         })
     }
 
@@ -1402,7 +1477,7 @@ impl CanonicalStages {
         }
         let delta = live.map(|stage| &stage.type_changes);
         let plan = live
-            .and_then(|s| s.prepared_plan.as_ref().map(|(plan, _)| plan))
+            .and_then(|s| s.prepared_plan.as_ref().map(|snapshot| &snapshot.plan))
             .unwrap_or(&asset.projection_plan);
         let mut paths = BTreeSet::new();
         for prim in plan.prims_of_type(kind) {
@@ -1465,18 +1540,30 @@ impl CanonicalStages {
         )
     }
 
-    /// Select the current read surface for an explicit composed-stage query.
-    ///
-    /// Queries expose mounted `@view@` state as well as authored edits, so any
-    /// open canonical stage is current even at generation zero. Before a live
-    /// stage is mounted, the worker-prepared plan remains the only read source.
-    /// This does not change the projection reader's generation-zero contract.
+    /// Select the composed read surface for an explicit query. A metadata-only
+    /// request may reuse an exact immutable snapshot; the native mutation epoch
+    /// invalidates it even before composed projection notices drain. Consumers requiring native
+    /// stage handles request the live view.
     pub fn reader_for_composed_query<'a>(
         &'a self,
         asset: bevy::asset::AssetId<UsdStageAsset>,
         stage_asset: &'a UsdStageAsset,
+        requirement: ComposedReadRequirement,
     ) -> (UsdReadSource<'a>, u64) {
         if let Some(stage) = self.get(asset) {
+            // Only the exact bound plan and native composition lease can
+            // answer a live query without reading the canonical stage.
+            if requirement == ComposedReadRequirement::Metadata
+                && stage.prepared_plan.as_ref().is_some_and(|snapshot| {
+                    Arc::ptr_eq(&snapshot.plan, &stage_asset.projection_plan)
+                        && snapshot.composed_epoch == Some(stage.composed_read_epoch())
+                })
+            {
+                return (
+                    UsdReadSource::Prepared(stage_asset.projection_plan.as_ref()),
+                    stage.generation(),
+                );
+            }
             return (UsdReadSource::Live(stage.view()), stage.generation());
         }
         (
@@ -1553,7 +1640,7 @@ impl CanonicalStages {
     ) -> bool {
         match CanonicalStage::from_recipe(recipe) {
             Ok(stage) => {
-                self.replace_rebuilt(asset, stage);
+                self.replace_rebuilt(asset, stage, None);
                 true
             }
             Err(e) => {
@@ -1570,10 +1657,14 @@ impl CanonicalStages {
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
         mut replacement: CanonicalStage,
+        exact_plan: Option<Arc<crate::UsdStageProjectionPlan>>,
     ) {
         replacement.generation = self.get(asset).map_or(1, |stage| stage.generation + 1);
         replacement.native_paths_pending = true;
         replacement.replacement_notice_pending = true;
+        if let Some(plan) = exact_plan {
+            replacement.bind_prepared_snapshot(plan, true);
+        }
         replacement
             .inbox
             .lock()
@@ -1595,15 +1686,14 @@ impl CanonicalStages {
     pub fn get_or_build(
         &mut self,
         asset: bevy::asset::AssetId<crate::UsdStageAsset>,
-        recipe: &lunco_usd_compose::recipe::StageRecipe,
+        stage_asset: &UsdStageAsset,
     ) -> Option<&CanonicalStage> {
         if let std::collections::hash_map::Entry::Vacant(entry) = self.by_asset.entry(asset) {
+            let recipe = stage_asset.recipe.as_ref()?;
             match CanonicalStage::from_recipe(recipe) {
-                Ok(cs) => {
-                    bevy::log::debug!(
-                        "[canonical] opened live CanonicalStage for {asset:?} ({} prims)",
-                        cs.view().prim_paths().len()
-                    );
+                Ok(mut cs) => {
+                    cs.bind_prepared_snapshot(stage_asset.projection_plan.clone(), true);
+                    bevy::log::debug!("[canonical] opened live CanonicalStage for {asset:?}");
                     entry.insert(cs);
                 }
                 Err(e) => {
@@ -1636,7 +1726,7 @@ pub fn sync_canonical_stages(
                     continue;
                 };
                 let prepared_plan_current =
-                    stages.prepared_plan_is_current(*id, &asset.projection_plan);
+                    stages.projection_plan_is_current(*id, &asset.projection_plan);
                 let generation = stages.get(*id).map_or(0, CanonicalStage::generation);
                 let _sync_span = bevy::log::info_span!(
                     "usd_canonical_stage_asset_sync",
@@ -1649,15 +1739,8 @@ pub fn sync_canonical_stages(
                 }
                 match CanonicalStage::from_recipe(recipe) {
                     Ok(mut cs) => {
-                        if let Some(paths) = asset.projection_plan.native_asset_paths_snapshot() {
-                            cs.set_native_asset_paths(paths);
-                        }
-                        cs.prepared_plan = Some((asset.projection_plan.clone(), cs.generation));
-                        bevy::log::info!(
-                            "[canonical] reopened live CanonicalStage for {:?} ({} prims)",
-                            id,
-                            cs.view().prim_paths().len()
-                        );
+                        cs.bind_prepared_snapshot(asset.projection_plan.clone(), true);
+                        bevy::log::info!("[canonical] reopened live CanonicalStage for {id:?}");
                         stages.by_asset.insert(*id, cs);
                     }
                     Err(e) => {
@@ -1699,6 +1782,81 @@ mod recipe_tests {
             view.value::<f64>(&SdfPath::new("/Root/Box").unwrap(), "size"),
             Some(3.0)
         );
+    }
+
+    #[test]
+    fn selective_composed_queries_reuse_only_the_exact_composition_lease() {
+        let asset =
+            UsdStageAsset::from_recipe(StageRecipe::from_source("scene.usda", FIXTURE)).unwrap();
+        let id = bevy::asset::AssetId::default();
+        let mut stages = CanonicalStages::default();
+        let recipe = asset.recipe.as_ref().unwrap();
+        stages.get_or_build(id, &asset).unwrap();
+        let path = SdfPath::new("/Root/Box").unwrap();
+        let root = SdfPath::new("/Root").unwrap();
+        let (prepared, _) =
+            stages.reader_for_composed_query(id, &asset, ComposedReadRequirement::Metadata);
+        let (live, _) =
+            stages.reader_for_composed_query(id, &asset, ComposedReadRequirement::Native);
+        assert!(matches!(prepared, UsdReadSource::Prepared(_)));
+        assert!(matches!(live, UsdReadSource::Live(_)));
+        assert_eq!(
+            prepared.attr_value(&path, "size"),
+            live.attr_value(&path, "size")
+        );
+        assert_eq!(prepared.children(&root), live.children(&root));
+        assert_eq!(
+            prepared.attr_value(&path, "visibility"),
+            live.attr_value(&path, "visibility")
+        );
+        let distinct =
+            UsdStageAsset::from_recipe(StageRecipe::from_source("scene.usda", FIXTURE)).unwrap();
+        assert!(matches!(
+            stages
+                .reader_for_composed_query(id, &distinct, ComposedReadRequirement::Metadata)
+                .0,
+            UsdReadSource::Live(_)
+        ));
+        // A committed edit must retire snapshot eligibility immediately, even
+        // while the ECS projection generation has not advanced yet.
+        let canonical = stages.get(id).unwrap();
+        canonical
+            .stage()
+            .layer_mut(&recipe.root_id)
+            .unwrap()
+            .edit(|edit| {
+                edit.data_mut().set_field(
+                    &SdfPath::new("/Root/Box.size").unwrap(),
+                    openusd::sdf::FieldKey::Default.as_str(),
+                    openusd::sdf::Value::Double(11.0),
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(canonical.generation(), 0);
+        let (current, _) =
+            stages.reader_for_composed_query(id, &asset, ComposedReadRequirement::Metadata);
+        assert!(matches!(current, UsdReadSource::Live(_)));
+        assert_eq!(
+            current.attr_value(&path, "size"),
+            Some(openusd::sdf::Value::Double(11.0))
+        );
+        let rebuilt = CanonicalStage::from_recipe(distinct.recipe.as_ref().unwrap()).unwrap();
+        stages.replace_rebuilt(id, rebuilt, Some(distinct.projection_plan.clone()));
+        assert!(stages.generation_for(id) > 0);
+        assert!(matches!(
+            stages
+                .reader_for_composed_query(id, &distinct, ComposedReadRequirement::Metadata)
+                .0,
+            UsdReadSource::Prepared(_)
+        ));
+        stages.retire(id);
+        assert!(matches!(
+            stages
+                .reader_for_composed_query(id, &asset, ComposedReadRequirement::Metadata)
+                .0,
+            UsdReadSource::Prepared(_)
+        ));
     }
 
     #[test]

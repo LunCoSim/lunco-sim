@@ -7,7 +7,7 @@
 use bevy::prelude::{Entity, World};
 use lunco_api::registry::ApiEntityRegistry;
 use lunco_scripting_bridge_core::{resolve_entity, with_world};
-use lunco_usd_bevy_scene::prim_index::UsdPrimIndex;
+use lunco_usd_bevy_scene::prim_index::{MountedUsdScope, UsdPrimIndex};
 
 /// Compare two USD attribute types using native Sdf semantic-role agreement.
 pub fn usd_types_agree(source: &str, sink: &str) -> bool {
@@ -71,65 +71,63 @@ pub fn mounted_host_location(world: &World, gid: u64) -> Result<(String, String)
     Ok((scene, prim.path.clone()))
 }
 
-/// Multiple mounts can project the same path. The API identity determines
-/// the selected entity regardless of Bevy entity slots or stage iteration order.
-fn lowest_registered_id(
+/// Runtime identity must be unique, regardless of registry insertion order.
+fn unique_registered_id(
     registry: &ApiEntityRegistry,
     candidates: impl Iterator<Item = Entity>,
 ) -> Option<i64> {
-    candidates
-        .filter_map(|entity| registry.api_id_for(entity))
-        .map(|id| id.get())
-        .min()
-        .map(|id| id as i64)
+    let mut candidates = candidates;
+    let target = candidates.next()?;
+    if candidates.next().is_some() {
+        bevy::log::warn!(
+            "[script USD path] ambiguous live prim path; use an exact mounted-scene source"
+        );
+        return None;
+    }
+    registry.api_id_for(target).map(|id| id.get() as i64)
 }
 
-/// `find_path(path)` — first entity gid with the exact composed USD prim path,
+/// `find_path(path)` — unique live entity gid with the exact composed USD prim path,
 /// or `-1`. Paths are the authored identity; this is intentionally separate
 /// from `find`, whose name lookup is only a display convenience.
 pub fn find_path(path: &str) -> i64 {
     with_world(|world| {
         let registry = world.get_resource::<ApiEntityRegistry>()?;
         let index = world.get_resource::<UsdPrimIndex>()?;
-        lowest_registered_id(registry, index.at_path(path))
+        unique_registered_id(
+            registry,
+            index
+                .at_path(path)
+                .filter(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)),
+        )
     })
     .flatten()
     .unwrap_or(-1)
 }
 
-/// `find_path_in_stage(source_gid, path)` — first live entity gid for `path` in
-/// the exact mounted scene containing `source_gid`, or `-1`. Multiple mounts
-/// can share one stage asset, so matching stays within the source's scene root.
-/// Preview projections are excluded. This identity boundary is available
-/// before the live stage has a document association.
+/// `find_path_in_stage(source_gid, path)` — unique live entity gid in the
+/// source entity's exact mounted scene, or `-1` if unavailable or ambiguous.
+/// Preview projections are excluded; no document association is required.
 pub fn find_path_in_stage(source_gid: u64, path: &str) -> i64 {
     with_world(|world| {
         let source = resolve_entity(world, source_gid)?;
-        let stage = world
-            .get::<lunco_usd_bevy_scene::UsdPrimPath>(source)?
-            .stage_handle
-            .id();
-        let source_root = lunco_usd_bevy_scene::scene_root_in_world(world, source).ok()??;
+        let scope = MountedUsdScope::from_source(world, source).ok()?;
         let api_entities = world.get_resource::<ApiEntityRegistry>()?;
         let index = world.get_resource::<UsdPrimIndex>()?;
-        let candidates = index
-            .in_stage(stage, path)
-            .iter()
-            .copied()
-            .filter(|entity| {
-                !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity)
-                    && lunco_usd_bevy_scene::scene_root_in_world(world, *entity)
-                        .ok()
-                        .flatten()
-                        == Some(source_root)
-            });
-        lowest_registered_id(api_entities, candidates)
+        let entity = match index.unique_live_prim(world, scope.stage(), Some(scope.root()), path) {
+            Ok(entity) => entity?,
+            Err(error) => {
+                bevy::log::warn!("[script USD path] {error}");
+                return None;
+            }
+        };
+        api_entities.api_id_for(entity).map(|id| id.get() as i64)
     })
     .flatten()
     .unwrap_or(-1)
 }
 
-/// `find_path_in_document(doc_id, path)` — first entity gid for `path` in the
+/// `find_path_in_document(doc_id, path)` — unique live entity gid for `path` in the
 /// live stage owned by `doc_id`, or `-1` when that prim has no live projection.
 /// USD paths are only unique inside their composed stage, so editing a
 /// document-backed prim must include its document identity.
@@ -140,12 +138,14 @@ pub fn find_path_in_document(doc_id: u64, path: &str) -> i64 {
         let stage = lunco_usd_bevy_twin::stage_asset_for_document(backed, doc)?;
         let entities = world.get_resource::<ApiEntityRegistry>()?;
         let index = world.get_resource::<UsdPrimIndex>()?;
-        let candidates = index
-            .in_stage(stage, path)
-            .iter()
-            .copied()
-            .filter(|entity| !lunco_usd_bevy_scene::is_preview_only_entity(world, *entity));
-        lowest_registered_id(entities, candidates)
+        let entity = match index.unique_live_prim(world, stage, None, path) {
+            Ok(entity) => entity?,
+            Err(error) => {
+                bevy::log::warn!("[script USD path] {error}");
+                return None;
+            }
+        };
+        entities.api_id_for(entity).map(|id| id.get() as i64)
     })
     .flatten()
     .unwrap_or(-1)

@@ -6,6 +6,42 @@ use lunco_usd_bevy_stage::UsdStageAsset;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+/// Exact live USD mount selected by a source entity, independent of whether
+/// the mount has acquired an editable document association.
+#[derive(Clone, Copy, Debug)]
+pub struct MountedUsdScope {
+    root: Entity,
+    stage: AssetId<UsdStageAsset>,
+}
+
+impl MountedUsdScope {
+    pub fn from_source(world: &World, source: Entity) -> Result<Self, String> {
+        let root = crate::scene_root_in_world(world, source)
+            .map_err(|error| format!("cannot resolve source scene: {error:?}"))?
+            .ok_or("source entity has no scene root")?;
+        if crate::is_preview_only_entity(world, source)
+            || !world
+                .get_resource::<lunco_core::SceneMountState>()
+                .is_some_and(|mounts| mounts.contains_root(root))
+        {
+            return Err("source entity does not belong to a mounted live scene".into());
+        }
+        let stage = world
+            .get::<UsdPrimPath>(root)
+            .ok_or("source scene has no USD stage")?
+            .stage_handle
+            .id();
+        Ok(Self { root, stage })
+    }
+
+    pub fn root(self) -> Entity {
+        self.root
+    }
+    pub fn stage(self) -> AssetId<UsdStageAsset> {
+        self.stage
+    }
+}
+
 /// Lifecycle-maintained lookup for every ECS projection of a USD path.
 /// Live simulation reads exclude preview ancestry; visual and structural edits
 /// reconcile every explicit preview lease through the same indexed candidates.
@@ -23,6 +59,34 @@ impl UsdPrimIndex {
             .and_then(|paths| paths.get(path))
             .map(Vec::as_slice)
             .unwrap_or_default()
+    }
+
+    /// Resolve a unique live projection, excluding previews and optionally
+    /// restricting the candidate to the exact source mount.
+    pub fn unique_live_prim(
+        &self,
+        world: &World,
+        stage: AssetId<UsdStageAsset>,
+        root: Option<Entity>,
+        path: &str,
+    ) -> Result<Option<Entity>, String> {
+        let mut found = None;
+        for &entity in self.in_stage(stage, path) {
+            if crate::is_preview_only_entity(world, entity) {
+                continue;
+            }
+            if let Some(root) = root {
+                let owner = crate::scene_root_in_world(world, entity)
+                    .map_err(|error| format!("cannot resolve scene for {entity:?}: {error:?}"))?;
+                if owner != Some(root) {
+                    continue;
+                }
+            }
+            if found.replace(entity).is_some() {
+                return Err(format!("multiple live entities are bound to prim {path}"));
+            }
+        }
+        Ok(found)
     }
 
     /// Indexed candidates beneath one exact composed namespace, including its root.

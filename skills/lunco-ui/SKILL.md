@@ -145,7 +145,8 @@ controls on one toolbar line, with the graph HUD frame and `+`/`×` buttons.
 Its image controls affect only that feed. Fixed color exposure (EV100), depth
 range, noise, seed, animation, quantization and shader asset are live typed settings.
 The main camera's fixed EV100 takes precedence over **Settings → General →
-Fixed viewport exposure**.
+Fixed viewport exposure** (also in Graphics → Camera look). The main image
+controls must open even when no independent feed exists.
 See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)
 for owners, shader bindings, physical scope and completion events. Verify both
 actual rendered depth/noise and negative `SetCameraImageEffects` admissions;
@@ -562,7 +563,10 @@ compact notice anchored above the strip as a non-exclusive `UI_ORDER` overlay,
 never an egui popup, so it cannot close a menu the user opens while loading. Scene progress is titled “Scene loading…” or “Scene unloading…” for a
 clear transition; other progress keeps its source label. The complete
 owner-written message wraps inside the card, and the status strip uses the same
-concise scene label. Do not infer phase from free-form text. Terrain tile
+concise scene label. Show elapsed monotonic wall time in the notice. The initial
+scene viewport start survives phase/status-source changes and restarts only on a
+new transition; other progress uses its StatusBus entry start. Do not infer phase
+from free-form text. Terrain tile
 streaming, optional terrain
 refinement, and post-projection scene geometry stay published for readiness
 consumers but drive the workbench loading notice only during an admitted or

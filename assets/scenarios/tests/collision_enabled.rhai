@@ -57,6 +57,20 @@ fn on_tick(me,ctx) {
     let bad_radio=cmd("SetSceneParticipation",transition);
     let no_view_change=!get(target,"Visibility").to_string().contains("Hidden");
     transition.occluders=[];
+    let first_pose=world_pose(target);
+    let other_pose=world_pose(missing);
+    let pose_before=vec3_array(first_pose.pos);
+    let destination=vec3_array(first_pose.pos+vec3(0.1,0.0,0.0));
+    transition.poses=[#{target:target,translation:destination,rotation:quat_array(first_pose.rot)},
+        #{target:missing,translation:vec3_array(other_pose.pos),rotation:[0.0,0.0,0.0,0.0]}];
+    let bad_pose=cmd("SetSceneParticipation",transition);
+    let too_many_writes=[];
+    for i in 0..257 {too_many_writes.push(#{property:"visibility",value:#{Bool:#{value:false}}});}
+    let too_many=cmd("SetSceneParticipation",#{colliders:[#{target:target,enabled:false}],views:[#{target:target,writes:too_many_writes}]});
+    let bounded=!too_many.ok && !state("Enabled").collider_disabled && !get(target,"Visibility").to_string().contains("Hidden");
+    let pose_rejected=world_pos(target)==pose_before && !state("Enabled").collider_disabled
+        && !state("ProbeEnabled").rigid_body_disabled && !get(target,"Visibility").to_string().contains("Hidden");
+    transition.poses=[];
     let suspended=cmd("SetSceneParticipation",transition);
     let inactive=state("ProbeEnabled");
     let contacts_off=state("Enabled").collider_disabled && inactive.collider_disabled;
@@ -66,6 +80,9 @@ fn on_tick(me,ctx) {
     let active=state("ProbeEnabled");
     let after=query("QueryUsdPrim",#{path:"/World/Enabled",attrs:["physics:collisionEnabled"]});
     this.checks=[
+        t_true(bounded,"compound participation uses the shared presentation write admission limit"),
+        t_true(!bad_pose.ok && pose_rejected,
+            "a rejected later pose leaves every earlier pose, body, collider and view unchanged"),
         t_true(!bad_duplicate.ok && !bad_view.ok && no_physics_change && !bad_radio.ok && no_view_change,
             "duplicate collider or invalid view or radio targets reject the transition before physics and visibility change"),
         t_true(suspended.ok && inactive.rigid_body_disabled && contacts_off && view_off,

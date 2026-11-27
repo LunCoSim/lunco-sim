@@ -871,225 +871,29 @@ fn shortest_angular_delta(previous: DQuat, target: DQuat) -> DVec3 {
 #[on_command(MoveEntity)]
 pub(crate) fn on_move_entity_command(
     trigger: On<MoveEntity>,
-    time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    mut commands: Commands,
-    mut spatial: ParamSet<(
-        Query<(Option<&CellCoord>, &Transform)>,
-        Query<(&mut Transform, Option<&mut LinearVelocity>)>,
-    )>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_rb: Query<&RigidBody>,
-    q_marker: Query<&JustMovedKinematic>,
-    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
-    bounds: Option<Res<lunco_physics::WorldBounds>>,
+    preparation: RuntimePosePreparation,
     persistence: TransformPersistence,
+    mut commands: Commands,
     reply: CommandReply,
 ) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
-    if cmd.translation.iter().any(|value| !value.is_finite()) {
-        warn!(
-            "MOVE_ENTITY: rejecting non-finite active-frame target for api_id={}",
-            cmd.entity_id
-        );
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable move target".into(),
-        ));
-    }
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = registry.resolve(&global_id) else {
-        warn!("MOVE_ENTITY: no api_id={} in registry", cmd.entity_id);
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable move target".into(),
-        ));
-    };
-    if runtime_marker_parts.contains(target) {
-        return Err(Reject::InvalidOp(
-            "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool".into(),
-        ));
-    }
-
-    let target_abs = DVec3::from_array(cmd.translation);
-    if q_grids.get(active_frame.0).is_err() {
-        warn!(
-            active_frame = ?active_frame.0,
-            "MOVE_ENTITY: active physics frame is not a BigSpace Grid"
-        );
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable move target".into(),
-        ));
-    }
-    // Read and invert the complete hierarchy before taking mutable component
-    // access. The command always speaks the active frame; storage may be a
-    // plain parent-local Transform or a BigSpace `(CellCoord, Transform)` pair.
-    // One canonical conversion owns both cases.
-    let (prev_abs, old_cell, local_position, new_cell, new_local) = {
-        let q_spatial = spatial.p0();
-        let Ok((old_cell, _)) = q_spatial.get(target) else {
-            warn!(
-                "MOVE_ENTITY: entity {:?} (api_id={}) has no Transform",
-                target, cmd.entity_id
-            );
-            return Err(Reject::InvalidOp(
-                "invalid or unavailable move target".into(),
-            ));
-        };
-        let Some((prev_abs, _)) = lunco_spatial::coords::pose_in_grid(
+    let target = registry
+        .resolve(&lunco_core::GlobalEntityId::from_raw(cmd.entity_id))
+        .ok_or_else(|| Reject::InvalidOp("unknown scene entity".into()))?;
+    dispatch_pose(
+        RuntimePoseInput {
             target,
-            active_frame.0,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            warn!(
-                ?target,
-                active_frame = ?active_frame.0,
-                "MOVE_ENTITY: entity is not connected to the active physics frame"
-            );
-            return Err(Reject::InvalidOp(
-                "invalid or unavailable move target".into(),
-            ));
-        };
-        let parent = q_parents
-            .get(target)
-            .map_err(|_| Reject::InvalidOp("entity has no parent frame".into()))?
-            .parent();
-        let Some((local_position, _)) = lunco_spatial::coords::pose_in_parent_local(
-            target_abs,
-            DQuat::IDENTITY,
-            parent,
-            active_frame.0,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            return Err(Reject::InvalidOp(
-                "translation cannot be expressed in the parent frame".into(),
-            ));
-        };
-        let (new_cell, new_local) = checked_pose_storage(q_grids.get(parent).ok(), local_position)?;
-        (
-            prev_abs,
-            old_cell.copied(),
-            local_position,
-            new_cell,
-            new_local,
-        )
-    };
-    let delta = target_abs - prev_abs;
-    if q_rb.contains(target)
-        && !lunco_physics::avian_backend_vector_is_valid(
-            delta / f64::from(time.delta_secs().max(1.0 / 240.0)),
-        )
-    {
-        warn!(
-            ?target,
-            "entity move rejected: velocity exceeds the native solver range"
-        );
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable move target".into(),
-        ));
-    }
-    let physics_body = q_rb
-        .get(target)
-        .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
-    if physics_body {
-        if delta.length_squared() > MAX_MOVE_ENTITY_DISPLACEMENT.powi(2) {
-            warn!(
-                "MOVE_ENTITY: rejecting {:.1} m physics-body jump for api_id={} (limit {:.1} m)",
-                delta.length(),
-                cmd.entity_id,
-                MAX_MOVE_ENTITY_DISPLACEMENT,
-            );
-            return Err(Reject::InvalidOp(
-                "invalid or unavailable move target".into(),
-            ));
-        }
-        if bounds
-            .as_deref()
-            .is_some_and(|world| world.escaped(target_abs))
-        {
-            warn!(
-                "MOVE_ENTITY: rejecting physics-body target outside world bounds for api_id={} at {:?}",
-                cmd.entity_id, target_abs,
-            );
-            return Err(Reject::InvalidOp(
-                "invalid or unavailable move target".into(),
-            ));
-        }
-    }
-    if let Some(edit) = persistence.plan(
-        target,
+            translation: Some(cmd.translation),
+            rotation: None,
+        },
         cmd.intent,
-        Some(local_position),
-        None,
         "Move entity",
-    )? {
-        return Ok(reply.forward(&mut commands, edit));
-    }
-    let mut writable = spatial.p1();
-    let Ok((mut tf, lin_vel_opt)) = writable.get_mut(target) else {
-        warn!(
-            "MOVE_ENTITY: entity {:?} (api_id={}) disappeared during move",
-            target, cmd.entity_id
-        );
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable move target".into(),
-        ));
-    };
-    tf.translation = new_local;
-    if let Some(new_cell) = new_cell {
-        commands.entity(target).try_insert(new_cell);
-    } else if old_cell.is_some() {
-        commands.entity(target).try_remove::<CellCoord>();
-    }
-
-    // Force the body to Kinematic for the duration of the move so Avian treats
-    // the new pose as authoritative. The original kind is stashed on the
-    // marker and restored after the one-tick propagation pulse. A repeated
-    // move keeps the first captured kind rather than capturing the temporary
-    // Kinematic state.
-    let restore = match q_marker.get(target) {
-        Ok(marker) => marker.restore,
-        Err(_) => q_rb
-            .get(target)
-            .ok()
-            .copied()
-            .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
-    };
-    if q_rb.get(target).is_ok() {
-        commands.entity(target).try_insert(RigidBody::Kinematic);
-    }
-
-    // **Joint-propagation pulse**: set `LinearVelocity` to a one-tick
-    // velocity equal to (delta / dt). Avian's joint constraint solver
-    // operates on velocities — without this, kinematic teleports
-    // don't drag joint-coupled dynamic bodies along. Position is
-    // still set above so the body lands exactly where requested;
-    // the velocity is purely a signal to the solver.
-    //
-    // The `JustMovedKinematic` marker (below) tells
-    // `clear_kinematic_pulse_velocity` to zero the velocity after
-    // exactly one physics tick. Without that follow-up, the body
-    // would keep drifting at this velocity each tick.
-    let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-    // Active-frame delta: this remains precise and independent of the internal
-    // cell split and of any translating/rotating celestial ancestors.
-    if let Some(mut lin_vel) = lin_vel_opt {
-        lin_vel.0 = (delta / dt).as_vec3();
-    }
-    commands.entity(target).try_insert(JustMovedKinematic {
-        restore,
-        angular_pulse: false,
-    });
-
-    debug!(
-        "MOVE_ENTITY: {:?} → ({:.3}, {:.3}, {:.3})",
-        cmd.entity_id, cmd.translation[0], cmd.translation[1], cmd.translation[2]
-    );
-    Ok(reply.complete(&mut commands, Ack::default()))
+        &preparation,
+        &persistence,
+        &mut commands,
+        &reply,
+    )
 }
 
 /// Set an entity's world ORIENTATION — the rotational twin of [`MoveEntity`].
@@ -1138,137 +942,29 @@ pub struct RotateEntity {
 #[on_command(RotateEntity)]
 pub(crate) fn on_rotate_entity_command(
     trigger: On<RotateEntity>,
-    time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    mut commands: Commands,
-    mut spatial: ParamSet<(
-        Query<(Option<&CellCoord>, &Transform)>,
-        Query<(&mut Transform, Option<&mut AngularVelocity>)>,
-    )>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_rb: Query<&RigidBody>,
-    q_marker: Query<&JustMovedKinematic>,
-    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
+    preparation: RuntimePosePreparation,
     persistence: TransformPersistence,
+    mut commands: Commands,
     reply: CommandReply,
 ) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = registry.resolve(&global_id) else {
-        warn!("ROTATE_ENTITY: no api_id={} in registry", cmd.entity_id);
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable rotation target".into(),
-        ));
-    };
-    if runtime_marker_parts.contains(target) {
-        return Err(Reject::InvalidOp(
-            "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool".into(),
-        ));
-    }
-
-    let q_in = DQuat::from_array(cmd.rotation);
-    if !q_in.is_finite() || !q_in.length_squared().is_finite() || q_in.length_squared() < 1e-12 {
-        warn!(
-            "ROTATE_ENTITY: {:?} (api_id={}) given a degenerate quaternion {:?} — \
-             refusing rather than substituting identity",
-            target, cmd.entity_id, cmd.rotation
-        );
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable rotation target".into(),
-        ));
-    }
-    let q_in = q_in.normalize();
-    let (previous_rotation, local_rotation) = {
-        let q_spatial = spatial.p0();
-        let Some((_, previous_rotation)) = lunco_spatial::coords::pose_in_grid(
+    let target = registry
+        .resolve(&lunco_core::GlobalEntityId::from_raw(cmd.entity_id))
+        .ok_or_else(|| Reject::InvalidOp("unknown scene entity".into()))?;
+    dispatch_pose(
+        RuntimePoseInput {
             target,
-            active_frame.0,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            warn!(
-                ?target,
-                active_frame = ?active_frame.0,
-                "ROTATE_ENTITY: entity is not connected to the active physics frame"
-            );
-            return Err(Reject::InvalidOp(
-                "invalid or unavailable rotation target".into(),
-            ));
-        };
-        let Some(local_rotation) = lunco_spatial::coords::rotation_in_grid_to_parent_local(
-            target,
-            q_in,
-            active_frame.0,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            warn!(
-                ?target,
-                active_frame = ?active_frame.0,
-                "ROTATE_ENTITY: entity is not connected to the active physics frame"
-            );
-            return Err(Reject::InvalidOp(
-                "invalid or unavailable rotation target".into(),
-            ));
-        };
-        (previous_rotation, local_rotation)
-    };
-    if let Some(edit) = persistence.plan(
-        target,
+            translation: None,
+            rotation: Some(cmd.rotation),
+        },
         cmd.intent,
-        None,
-        Some(local_rotation),
         "Rotate entity",
-    )? {
-        return Ok(reply.forward(&mut commands, edit));
-    }
-    let mut writable = spatial.p1();
-    let Ok((mut tf, angular_velocity)) = writable.get_mut(target) else {
-        warn!(
-            "ROTATE_ENTITY: entity {:?} (api_id={}) has no Transform",
-            target, cmd.entity_id
-        );
-        return Err(Reject::InvalidOp(
-            "invalid or unavailable rotation target".into(),
-        ));
-    };
-    tf.rotation = local_rotation.as_quat();
-    if let Some(mut angular_velocity) = angular_velocity {
-        let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-        angular_velocity.0 = (shortest_angular_delta(previous_rotation, q_in) / dt)
-            .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED)
-            .as_vec3();
-    }
-
-    // Same Kinematic pin as `MoveEntity`: an authored pose on a Dynamic body is
-    // otherwise just an initial condition the solver immediately argues with.
-    // `restore` remembers what to put back, and prefers an existing marker's
-    // value so two writes in one frame don't latch Kinematic permanently.
-    let restore = match q_marker.get(target) {
-        Ok(marker) => marker.restore,
-        Err(_) => q_rb
-            .get(target)
-            .ok()
-            .copied()
-            .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
-    };
-    if q_rb.get(target).is_ok() {
-        commands.entity(target).try_insert(RigidBody::Kinematic);
-        commands.entity(target).try_insert(JustMovedKinematic {
-            restore,
-            angular_pulse: true,
-        });
-    }
-
-    debug!(
-        "ROTATE_ENTITY: {:?} → [{:.3}, {:.3}, {:.3}, {:.3}]",
-        cmd.entity_id, cmd.rotation[0], cmd.rotation[1], cmd.rotation[2], cmd.rotation[3]
-    );
-    Ok(reply.complete(&mut commands, Ack::default()))
+        &preparation,
+        &persistence,
+        &mut commands,
+        &reply,
+    )
 }
 
 /// Authored destination for the complete pose command. The live handler owns
@@ -1318,7 +1014,11 @@ impl TransformPersistence<'_, '_> {
             .as_deref()
             .and_then(|assets| assets.get(stage_id))
             .ok_or_else(|| Reject::InvalidOp("USD stage asset is unavailable".into()))?;
-        let (reader, _) = stages.reader_for_composed_query(stage_id, asset);
+        let (reader, _) = stages.reader_for_composed_query(
+            stage_id,
+            asset,
+            lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+        );
         let time_code = self
             .animation
             .get(entity)
@@ -1388,245 +1088,311 @@ pub(super) fn checked_pose_storage(
     Ok((new_cell, new_translation))
 }
 
+#[derive(Clone, Copy)]
+struct RuntimePoseInput {
+    target: Entity,
+    translation: Option<[f64; 3]>,
+    rotation: Option<[f64; 4]>,
+}
+
+/// A validated live pose in native storage coordinates, shared by single and
+/// compound runtime commands. Preparation never changes world state.
+pub(crate) struct PreparedRuntimePose {
+    target: Entity,
+    local_position: Option<DVec3>,
+    local_rotation: Option<DQuat>,
+    translation: Option<Vec3>,
+    old_cell: Option<CellCoord>,
+    cell: Option<CellCoord>,
+    linear_velocity: Option<Vec3>,
+    angular_velocity: Option<Vec3>,
+    kinematic: Option<JustMovedKinematic>,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct RuntimePosePreparation<'w, 's> {
+    time: Res<'w, Time>,
+    active_frame: Res<'w, lunco_spatial::ActivePhysicsFrame>,
+    spatial: Query<'w, 's, (Option<&'static CellCoord>, &'static Transform)>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    grids: Query<'w, 's, &'static Grid>,
+    bodies: Query<'w, 's, &'static RigidBody>,
+    marker: Query<'w, 's, &'static JustMovedKinematic>,
+    linear_receivers: Query<'w, 's, (), With<LinearVelocity>>,
+    angular_receivers: Query<'w, 's, (), With<AngularVelocity>>,
+    runtime_marker_parts: Query<'w, 's, (), With<crate::runtime_markers::RuntimeMarkerPart>>,
+    bounds: Option<Res<'w, lunco_physics::WorldBounds>>,
+}
+
+impl RuntimePosePreparation<'_, '_> {
+    fn prepare(&self, input: RuntimePoseInput) -> Result<PreparedRuntimePose, Reject> {
+        let invalid = |message: &str| Reject::InvalidOp(message.into());
+        let target = input.target;
+        let requested_position = input.translation.map(DVec3::from_array);
+        if requested_position.is_some_and(|position| !position.is_finite()) {
+            return Err(invalid("translation must be finite"));
+        }
+        let requested_rotation = input
+            .rotation
+            .map(DQuat::from_array)
+            .map(|rotation| {
+                let norm = rotation.length_squared();
+                if !rotation.is_finite() || !norm.is_finite() || norm < 1.0e-12 {
+                    return Err(invalid("rotation must be finite and nondegenerate"));
+                }
+                Ok(rotation.normalize())
+            })
+            .transpose()?;
+        if self.runtime_marker_parts.contains(target) {
+            return Err(invalid(
+                "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool",
+            ));
+        }
+        let active = self.active_frame.0;
+        if self.grids.get(active).is_err() {
+            return Err(invalid("active physics frame is unavailable"));
+        }
+        let (old_cell, _) = self
+            .spatial
+            .get(target)
+            .map_err(|_| invalid("entity has no transform"))?;
+        let (previous_position, previous_rotation) = lunco_spatial::coords::pose_in_grid(
+            target,
+            active,
+            &self.parents,
+            &self.grids,
+            &self.spatial,
+        )
+        .ok_or_else(|| invalid("entity is disconnected from active physics frame"))?;
+        if !previous_position.is_finite() || !previous_rotation.is_finite() {
+            return Err(invalid("current native pose is non-finite"));
+        }
+        let parent = self
+            .parents
+            .get(target)
+            .map_err(|_| invalid("entity has no parent frame"))?
+            .parent();
+        let target_position = requested_position.unwrap_or(previous_position);
+        let rotation = requested_rotation.unwrap_or(previous_rotation);
+        let (local_position, new_rotation) = lunco_spatial::coords::pose_in_parent_local(
+            target_position,
+            rotation,
+            parent,
+            active,
+            &self.parents,
+            &self.grids,
+            &self.spatial,
+        )
+        .ok_or_else(|| invalid("pose cannot be expressed in the parent frame"))?;
+        if !local_position.is_finite() || !new_rotation.is_finite() {
+            return Err(invalid("parent-local pose must be finite"));
+        }
+        let (cell, new_translation) = if requested_position.is_some() {
+            let (cell, translation) =
+                checked_pose_storage(self.grids.get(parent).ok(), local_position)?;
+            (cell, Some(translation))
+        } else {
+            (None, None)
+        };
+
+        let delta = target_position - previous_position;
+        let dt = f64::from(self.time.delta_secs().max(1.0 / 240.0));
+        let body = self.bodies.get(target).ok().copied();
+        let mut linear_velocity = None;
+        let mut angular_velocity = None;
+        if requested_position.is_some()
+            && (body.is_some() || self.linear_receivers.contains(target))
+        {
+            let velocity = delta / dt;
+            if !lunco_physics::avian_backend_vector_is_valid(velocity) {
+                return Err(invalid("velocity exceeds the native solver range"));
+            }
+            if self.linear_receivers.contains(target) {
+                linear_velocity = Some(velocity.as_vec3());
+            }
+        }
+        if requested_rotation.is_some() && self.angular_receivers.contains(target) {
+            let velocity = (shortest_angular_delta(previous_rotation, rotation) / dt)
+                .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED);
+            if !lunco_physics::avian_backend_vector_is_valid(velocity) {
+                return Err(invalid("angular velocity exceeds the native solver range"));
+            }
+            angular_velocity = Some(velocity.as_vec3());
+        }
+        if requested_position.is_some() && body.is_some_and(|rb| rb != RigidBody::Static) {
+            if delta.length_squared() > MAX_MOVE_ENTITY_DISPLACEMENT.powi(2) {
+                return Err(invalid(
+                    "physics-body displacement exceeds the interactive move limit",
+                ));
+            }
+            if self
+                .bounds
+                .as_deref()
+                .is_some_and(|world| world.escaped(target_position))
+            {
+                return Err(invalid("physics-body target is outside world bounds"));
+            }
+        }
+        let previous_marker = self.marker.get(target).ok();
+        let kinematic = (body.is_some() || linear_velocity.is_some() || angular_velocity.is_some())
+            .then(|| JustMovedKinematic {
+                restore: previous_marker.map_or_else(
+                    || body.filter(|body| *body != RigidBody::Kinematic),
+                    |marker| marker.restore,
+                ),
+                linear_pulse: linear_velocity.is_some()
+                    || previous_marker.is_some_and(|marker| marker.linear_pulse),
+                angular_pulse: angular_velocity.is_some()
+                    || previous_marker.is_some_and(|marker| marker.angular_pulse),
+            });
+        Ok(PreparedRuntimePose {
+            target,
+            local_position: requested_position.map(|_| local_position),
+            local_rotation: requested_rotation.map(|_| new_rotation),
+            translation: new_translation,
+            old_cell: old_cell.copied(),
+            cell,
+            linear_velocity,
+            angular_velocity,
+            kinematic,
+        })
+    }
+}
+
+impl PreparedRuntimePose {
+    /// Consume immediately in the exclusive command that validated this pose.
+    pub(crate) fn apply(self, world: &mut World) {
+        let mut entity = world.entity_mut(self.target);
+        {
+            let mut transform = entity
+                .get_mut::<Transform>()
+                .expect("validated pose target");
+            if let Some(translation) = self.translation {
+                transform.translation = translation;
+            }
+            if let Some(rotation) = self.local_rotation {
+                transform.rotation = rotation.as_quat();
+            }
+        }
+        if let Some(pulse) = self.linear_velocity {
+            entity
+                .get_mut::<LinearVelocity>()
+                .expect("validated linear velocity receiver")
+                .0 = pulse;
+        }
+        if let Some(pulse) = self.angular_velocity {
+            entity
+                .get_mut::<AngularVelocity>()
+                .expect("validated angular velocity receiver")
+                .0 = pulse;
+        }
+        if self.translation.is_some() {
+            match (self.cell, self.old_cell) {
+                (Some(cell), _) => {
+                    entity.insert(cell);
+                }
+                (None, Some(_)) => {
+                    entity.remove::<CellCoord>();
+                }
+                (None, None) => {}
+            }
+        }
+        if let Some(marker) = self.kinematic {
+            if entity.contains::<RigidBody>() {
+                entity.insert(RigidBody::Kinematic);
+            }
+            entity.insert(marker);
+        }
+    }
+}
+
 /// Validate and apply a complete live pose, optionally journaling the same pose.
 #[on_command(TransformEntity)]
 pub(crate) fn on_transform_entity_command(
     trigger: On<TransformEntity>,
-    time: Res<Time>,
     registry: Res<lunco_api::registry::ApiEntityRegistry>,
-    active_frame: Res<lunco_spatial::ActivePhysicsFrame>,
-    mut commands: Commands,
-    mut spatial: ParamSet<(
-        Query<(Option<&CellCoord>, &Transform)>,
-        Query<(
-            &mut Transform,
-            Option<&mut LinearVelocity>,
-            Option<&mut AngularVelocity>,
-        )>,
-    )>,
-    q_parents: Query<&ChildOf>,
-    q_grids: Query<&Grid>,
-    q_rb: Query<&RigidBody>,
-    q_marker: Query<&JustMovedKinematic>,
-    runtime_marker_parts: Query<(), With<crate::runtime_markers::RuntimeMarkerPart>>,
-    bounds: Option<Res<lunco_physics::WorldBounds>>,
+    preparation: RuntimePosePreparation,
     persistence: TransformPersistence,
+    mut commands: Commands,
     reply: CommandReply,
 ) -> Result<CommandOutcome, Reject> {
     let cmd = trigger.event();
-    if cmd.translation.iter().any(|value| !value.is_finite()) {
-        warn!(
-            "TRANSFORM_ENTITY: rejecting non-finite translation for api_id={}",
-            cmd.entity_id
-        );
-        return Err(Reject::InvalidOp("translation must be finite".into()));
-    }
-    let rotation = DQuat::from_array(cmd.rotation);
-    if !rotation.is_finite()
-        || !rotation.length_squared().is_finite()
-        || rotation.length_squared() < 1.0e-12
-    {
-        warn!(
-            "TRANSFORM_ENTITY: rejecting degenerate rotation for api_id={}",
-            cmd.entity_id
-        );
-        return Err(Reject::InvalidOp(
-            "rotation must be finite and nondegenerate".into(),
-        ));
-    }
-    let global_id = lunco_core::GlobalEntityId::from_raw(cmd.entity_id);
-    let Some(target) = registry.resolve(&global_id) else {
-        warn!("TRANSFORM_ENTITY: no api_id={}", cmd.entity_id);
-        return Err(Reject::InvalidOp("unknown scene entity".into()));
-    };
-    if runtime_marker_parts.contains(target) {
-        return Err(Reject::InvalidOp(
-            "Runtime marker pose belongs to SetRuntimeMarker; use its owning tool".into(),
-        ));
-    }
-
-    let rotation = rotation.normalize();
-    let target_position = DVec3::from_array(cmd.translation);
-    if q_grids.get(active_frame.0).is_err() {
-        warn!(
-            active_frame = ?active_frame.0,
-            "TRANSFORM_ENTITY: active physics frame is not a BigSpace Grid"
-        );
-        return Err(Reject::InvalidOp(
-            "active physics frame is unavailable".into(),
-        ));
-    }
-
-    let (
-        previous_position,
-        previous_rotation,
-        old_cell,
-        local_position,
-        new_cell,
-        new_translation,
-        new_rotation,
-    ) = {
-        let q_spatial = spatial.p0();
-        let Ok((old_cell, _)) = q_spatial.get(target) else {
-            warn!("TRANSFORM_ENTITY: entity {:?} has no Transform", target);
-            return Err(Reject::InvalidOp("entity has no transform".into()));
-        };
-        let Some((previous_position, previous_rotation)) = lunco_spatial::coords::pose_in_grid(
+    let target = registry
+        .resolve(&lunco_core::GlobalEntityId::from_raw(cmd.entity_id))
+        .ok_or_else(|| Reject::InvalidOp("unknown scene entity".into()))?;
+    dispatch_pose(
+        RuntimePoseInput {
             target,
-            active_frame.0,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            warn!(
-                ?target,
-                active_frame = ?active_frame.0,
-                "TRANSFORM_ENTITY: entity is not connected to the active physics frame"
-            );
-            return Err(Reject::InvalidOp(
-                "entity is disconnected from active physics frame".into(),
-            ));
-        };
-        let parent = q_parents
-            .get(target)
-            .map_err(|_| Reject::InvalidOp("entity has no parent frame".into()))?
-            .parent();
-        let Some((local_position, new_rotation)) = lunco_spatial::coords::pose_in_parent_local(
-            target_position,
-            rotation,
-            parent,
-            active_frame.0,
-            &q_parents,
-            &q_grids,
-            &q_spatial,
-        ) else {
-            return Err(Reject::InvalidOp(
-                "pose cannot be expressed in the parent frame".into(),
-            ));
-        };
-        if !local_position.is_finite() || !new_rotation.is_finite() {
-            return Err(Reject::InvalidOp("parent-local pose must be finite".into()));
-        }
-        let (new_cell, new_translation) =
-            checked_pose_storage(q_grids.get(parent).ok(), local_position)?;
-        (
-            previous_position,
-            previous_rotation,
-            old_cell.copied(),
-            local_position,
-            new_cell,
-            new_translation,
-            new_rotation,
-        )
-    };
-
-    let delta = target_position - previous_position;
-    if q_rb.contains(target)
-        && !lunco_physics::avian_backend_vector_is_valid(
-            delta / f64::from(time.delta_secs().max(1.0 / 240.0)),
-        )
-    {
-        warn!(
-            ?target,
-            "entity move rejected: velocity exceeds the native solver range"
-        );
-        return Err(Reject::InvalidOp(
-            "velocity exceeds the native solver range".into(),
-        ));
-    }
-    let physics_body = q_rb
-        .get(target)
-        .is_ok_and(|rb| !matches!(rb, RigidBody::Static));
-    if physics_body {
-        if delta.length_squared() > MAX_MOVE_ENTITY_DISPLACEMENT.powi(2) {
-            warn!(
-                "TRANSFORM_ENTITY: rejecting {:.1} m physics-body jump for api_id={} (limit {:.1} m)",
-                delta.length(),
-                cmd.entity_id,
-                MAX_MOVE_ENTITY_DISPLACEMENT,
-            );
-            return Err(Reject::InvalidOp(
-                "physics-body displacement exceeds the interactive move limit".into(),
-            ));
-        }
-        if bounds
-            .as_deref()
-            .is_some_and(|world| world.escaped(target_position))
-        {
-            warn!(
-                "TRANSFORM_ENTITY: rejecting physics-body target outside world bounds for api_id={} at {:?}",
-                cmd.entity_id, target_position,
-            );
-            return Err(Reject::InvalidOp(
-                "physics-body target is outside world bounds".into(),
-            ));
-        }
-    }
-
-    if let Some(edit) = persistence.plan(
-        target,
+            translation: Some(cmd.translation),
+            rotation: Some(cmd.rotation),
+        },
         cmd.intent,
-        Some(local_position),
-        Some(new_rotation),
         "Transform entity",
-    )? {
-        return Ok(reply.forward(&mut commands, edit));
-    }
-    {
-        let mut writable = spatial.p1();
-        let Ok((mut tf, lin_vel_opt, angular_vel_opt)) = writable.get_mut(target) else {
-            warn!(
-                "TRANSFORM_ENTITY: entity {:?} disappeared during move",
-                target
-            );
-            return Err(Reject::InvalidOp(
-                "entity disappeared during transform".into(),
-            ));
-        };
-        tf.translation = new_translation;
-        tf.rotation = new_rotation.as_quat();
-        if let Some(mut lin_vel) = lin_vel_opt {
-            let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-            lin_vel.0 = (delta / dt).as_vec3();
-        }
-        if let Some(mut angular_vel) = angular_vel_opt {
-            let dt = time.delta_secs().max(1.0 / 240.0) as f64;
-            angular_vel.0 = (shortest_angular_delta(previous_rotation, rotation) / dt)
-                .clamp_length_max(lunco_physics::MAX_KINEMATIC_DRIVE_SPEED)
-                .as_vec3();
-        }
-    }
-    match (new_cell, old_cell) {
-        (Some(cell), _) => {
-            commands.entity(target).try_insert(cell);
-        }
-        (None, Some(_)) => {
-            commands.entity(target).try_remove::<CellCoord>();
-        }
-        (None, None) => {}
-    }
+        &preparation,
+        &persistence,
+        &mut commands,
+        &reply,
+    )
+}
 
-    let restore = match q_marker.get(target) {
-        Ok(marker) => marker.restore,
-        Err(_) => q_rb
-            .get(target)
-            .ok()
-            .copied()
-            .filter(|rb| !matches!(rb, RigidBody::Kinematic)),
-    };
-    if q_rb.get(target).is_ok() {
-        commands.entity(target).try_insert(RigidBody::Kinematic);
-        commands.entity(target).try_insert(JustMovedKinematic {
-            restore,
-            angular_pulse: true,
-        });
+fn dispatch_pose(
+    input: RuntimePoseInput,
+    intent: lunco_core::EditIntent,
+    label: &str,
+    preparation: &RuntimePosePreparation,
+    persistence: &TransformPersistence,
+    commands: &mut Commands,
+    reply: &CommandReply,
+) -> Result<CommandOutcome, Reject> {
+    if intent.is_persistent() {
+        let pose = preparation.prepare(input)?;
+        let edit = persistence
+            .plan(
+                input.target,
+                intent,
+                pose.local_position,
+                pose.local_rotation,
+                label,
+            )?
+            .ok_or_else(|| {
+                Reject::InvalidOp("persistent pose requires an authored operation".into())
+            })?;
+        return Ok(reply.forward(commands, edit));
     }
+    Ok(reply.queue(commands, move |world| {
+        let pose = world
+            .run_system_cached_with(prepare_runtime_pose, input)
+            .map_err(|error| error.to_string())??;
+        pose.apply(world);
+        Ok(Ack::default())
+    }))
+}
 
-    debug!(
-        "TRANSFORM_ENTITY: {:?} → position={:?}, rotation={:?}",
-        cmd.entity_id, target_position, rotation
-    );
-    Ok(reply.complete(&mut commands, Ack::default()))
+fn prepare_runtime_pose(
+    In(input): In<RuntimePoseInput>,
+    preparation: RuntimePosePreparation,
+) -> Result<PreparedRuntimePose, String> {
+    preparation
+        .prepare(input)
+        .map_err(|error| format!("{:?}: {error}", input.target))
+}
+
+pub(crate) fn prepare_runtime_poses(
+    In(poses): In<Vec<lunco_scene_command_contracts::RuntimePose>>,
+    preparation: RuntimePosePreparation,
+) -> Result<Vec<PreparedRuntimePose>, String> {
+    poses
+        .into_iter()
+        .map(|pose| {
+            preparation
+                .prepare(RuntimePoseInput {
+                    target: pose.target,
+                    translation: Some(pose.translation),
+                    rotation: Some(pose.rotation),
+                })
+                .map_err(|error| format!("{:?}: {error}", pose.target))
+        })
+        .collect()
 }
 
 /// Publish a contact enablement command through the native physics owner.
@@ -1724,7 +1490,11 @@ impl PrimRemoval<'_, '_> {
             .as_deref()
             .and_then(|assets| assets.get(stage_id))
             .ok_or_else(|| Reject::InvalidOp("USD stage is unavailable".into()))?;
-        let (reader, _) = stages.reader_for_composed_query(stage_id, asset);
+        let (reader, _) = stages.reader_for_composed_query(
+            stage_id,
+            asset,
+            lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+        );
         let path =
             openusd::sdf::Path::new(&prim.path).map_err(|e| Reject::InvalidOp(e.to_string()))?;
         if !reader.has_prim(&path) {
@@ -1840,8 +1610,7 @@ pub(crate) fn on_delete_entity(
 
 /// Marker inserted on a kinematic body that just received a
 /// `MoveEntity` (or analogous teleport) with a one-tick velocity pulse.
-/// Complete pose/rotation edits also set `angular_pulse`, so the cleanup clears
-/// the matching angular velocity after the solver consumes it.
+/// The marker records precisely which velocity channels the edit published.
 /// [`clear_kinematic_pulse_velocity`] performs that cleanup the frame after the
 /// pulse so the body doesn't drift.
 #[derive(Component)]
@@ -1851,11 +1620,13 @@ pub struct JustMovedKinematic {
     /// the move". `None` = the body was already Kinematic (or has no
     /// RigidBody): restore nothing.
     pub restore: Option<RigidBody>,
-    /// Whether the command also published a one-tick angular velocity pulse.
+    /// Whether a pending command published a one-tick linear velocity pulse.
+    pub linear_pulse: bool,
+    /// Whether a pending command published a one-tick angular velocity pulse.
     pub angular_pulse: bool,
 }
 
-/// Zeros the `LinearVelocity` and, when requested, `AngularVelocity` of bodies
+/// Zeros only the published `LinearVelocity` and `AngularVelocity` channels of bodies
 /// marked with [`JustMovedKinematic`], **after one physics tick has consumed the
 /// velocity** for joint propagation.
 ///
@@ -1885,7 +1656,9 @@ pub fn clear_kinematic_pulse_velocity(
     )>,
 ) {
     for (e, linear, angular, marker) in q.iter_mut() {
-        if let Some(mut linear) = linear {
+        if marker.linear_pulse
+            && let Some(mut linear) = linear
+        {
             linear.0 = Vec3::ZERO;
         }
         if marker.angular_pulse {
@@ -2449,6 +2222,7 @@ mod tests {
                 AngularVelocity(Vec3::new(1.0, 2.0, 3.0)),
                 JustMovedKinematic {
                     restore: Some(RigidBody::Dynamic),
+                    linear_pulse: false,
                     angular_pulse: true,
                 },
             ))

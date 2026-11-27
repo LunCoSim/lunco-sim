@@ -25,7 +25,27 @@ that key without rehashing the declaration inventory. Never remove those
 checks or weaken duplicate-alias, non-finite, stale-session or atomic-write gates
 to improve a timing.
 
+For native Modelica startup comparisons, use the same production executable
+and scene to measure an empty local cache with and without a prebuilt directory.
+Generate it with `scripts/prebuild_modelica.py` and select it with
+`LUNCOSIM_MODELICA_PREBUILT`. Count both strict DAE and checked component hits
+and compare initialized observations and the active participant count.
+Set `RUMOCA_PROFILE_NATIVE_ENTRIES=1` for a separate diagnostic run. The
+`rumoca_native_entry first_call` events count dispatched native entries by
+family, once per handle. Emitted symbols and repeated calls are different
+measurements.
+
 ## Required separation
+
+- For authored metadata queries, use `QueryUsdPrim`/`QueryUsdPrims` with
+  `position: false` unless the consumer needs placement. Scope scenario reads with `source_entity_id`, and obtain position/orientation together with `world_pose(id)`. Read single or batch
+  attributes from the same composed owner. The canonical reader may borrow
+  the existing worker-prepared plan only while its exact asset recipe and
+  unmodified stage/resolver lease prove currency; native pre-commit and
+  composition-change notifications invalidate
+  that proof before the projection cursor advances. Do not prewarm all scene
+  properties or create a Twin-specific cache. Measure cold and repeated
+  interaction callbacks separately from startup and native frame history.
 
 - For long USD animation tracks, compare `sample_usd_animation` on the actual
   scene through a settled native desktop capture. Retain the canonical stage's
@@ -334,7 +354,9 @@ cohort. Do not hide malformed authored catalogs, change
 Rhai limits or classify sources by guessed catalog filenames.
 
 For coupled startup, distinguish the one-shot solve from participant
-certification. Pending constructors supply no certifiable observation; the owner
+certification. The windowed startup driver's `--loading-progress` option records
+the popup's phase changes. Compare the coupled member count with the subsequent
+session-ready count and the scene-scoped construction receipt. Pending constructors supply no certifiable observation; the owner
 waits on their outcomes and revalidates current source, wiring and physical
 samples at final admission. Measure receipt delivery from the worker's result
 log to the shared completion schedule's admission log, using the scene-scoped
@@ -355,7 +377,10 @@ Use `scripts/perf/twin_startup.py` for a windowed loading budget. Its
 in one read-only evaluation. Compare matching probe versions; removing
 inter-query delays improves measurement accuracy, not application performance.
 Inspect first-ready and final screenshots as well as the mission verdict.
-Record compiled-DAE cache hits alongside startup time; other workloads can evict
+Record compiled-DAE hits and checked FMI component hits separately. A cold
+Modelica run starts with both versioned directories empty. Read shared
+initialization and live construction times from the co-simulation receipt.
+Each live constructor logs fresh and reused native functions. Other workloads can evict
 bounded artifacts. An immediate repeat with unchanged inputs distinguishes cold
 compilation from recurring session-construction cost without changing retention
 limits.
@@ -479,11 +504,18 @@ receiver hulls and camera culling mode. Source changes, component removals and
 range-controlled entities reconcile the exact predicates; broad changes use the
 native parallel traversal. Always reapply the complete per-frame visibility
 union, even when no membership changed. Verify inactive view, light disable,
-class and layer removal, caster retirement and cascade resizing. Qualify the
+entity disable/re-enable, class and layer removal, caster retirement and cascade resizing. Qualify the
 moving-Sun native graphics test `scripts/api/test_shadow_lod_origin.py` and
 shared shadow allocation pixel gate; never trade receiver or frustum quality
 for faster visibility. Separate concurrent workload changes from attributed
 CPU work and compare the exact published Git pins.
+
+For cold derived terrain shading, profile `terrain_derived_maps_bake_rows`
+and `terrain_derived_maps_assemble` with shared admission occupancy and the
+preview/final publication milestones. Compare an empty terrain cache at the
+same authored resolution and AO settings, inspect final bytes/pixels, and
+account for concurrent compiler and simulator load. Row cancellation should
+not consume the next scene's work or release a live memory reservation early.
 
 For GPU-only buffer layout, preserve deterministic scalar math and validate
 shader array stride at the native allocator. `UninitBufferVec` uses encase's

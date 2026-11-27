@@ -432,9 +432,10 @@ The pieces that make "manipulate everything from rhai" work, and where each live
 | Persistent script state across ticks | `this` map persisted on scenario entity across ticks |
 | Temporal sequencing (wait/over-time) | Task-tree constructors in `prelude/tasks.rhai` (pure data), ticked NATIVELY on the `lunco-behavior` kernel (`lunco-scripting-rhai-core/src/task_tree.rs`) |
 | Navigation: waypoints/goals/arrival/path-follow | `nav_to`, `drive`, task trees in `prelude/nav.rhai` and `prelude/tasks.rhai` |
-| Entity identity | `find(name)` is a display-name lookup; `find_path(path)` returns the first exact live USD-path match; use `find_path_in_stage(source_gid, path)` to resolve inside the source entity's exact scene mount, excluding preview projections, before document association, or `find_path_in_document(doc_id, path)` for a document-owned live stage; `usd_path(id)` reads stable projected identity metadata |
+| Entity identity | `find(name)` is a display-name lookup; `find_path(path)` requires a unique exact live USD-path match; use `find_path_in_stage(source_gid, path)` to resolve a unique entity inside the source entity's exact scene mount, excluding preview projections, before document association, or `find_path_in_document(doc_id, path)` for a unique projection in a document-owned live stage; `usd_path(id)` reads stable projected identity metadata |
 | Timer "after N seconds" | `wait(secs)` / `wait_until(cond)` in the native task tree |
 | Telemetry subscribe (events to script) | `on_event` hook and task `wait_for` delivery |
+| Scene pointer | `scene.pointer` is raw observational picking context; `scene.activate` is emitted by the scene-leased interaction policy for an unclaimed plain simulation gesture after route and possession handling. Scenario interaction actions consume only `scene.activate`. |
 
 ---
 
@@ -950,13 +951,14 @@ subscription, and the same `TelemetryEvent`/`SampledParameter` stream feeds Rhai
 scenarios (`on_event`), external API/MCP subscribers, the ROS2 topic bridge, and
 the UI. No second event model.
 
-**rhai verbs are just produce/consume of TelemetryEvent:**
-- `emit(name, severity, value)` → fires a `TelemetryEvent` (e.g.
-  `commands.trigger`/writer).
-- `on_event(e)` ← scenario VM delivers filtered `TelemetryEvent`s (reuses the
-  subscribe filter). `subscribe(pattern, handler)` is rhai-stdlib sugar over it.
+**Rhai event verbs use the shared stamped telemetry bus:**
+- `emit(name, value)` publishes a causal event in serial script order.
+- `on_event(me, evt, ctx)` receives the subscribed names, prefixes or exact
+  source identities. Native task waits and mission objectives admit their own
+  declared interests. UI and scene gestures are routed by their scene-bound
+  tool policies before an unclaimed action is published to the Twin.
 
-**Producers fire `TelemetryEvent` (reuse, no new bus):** Avian sensor/collision
+**Producers use the same telemetry bus (no parallel event model):** Avian sensor/collision
 bridge → `"TRIGGER_ENTER"` (the checkpoint mechanism — volume, not polling);
 lifecycle → `"SCENE_LOADED"` etc.; timers → `"TIMER_FIRED"`. **Threshold events
 reuse `Parameter` + the lunco-telemetry sampling engine** (compare

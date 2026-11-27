@@ -464,23 +464,11 @@ impl SurfaceOracle {
     /// no gated form (brushes, flattens) pass through untouched. Cheap (clones a
     /// Vec of `Arc`s); call it per bake with that bake's sample spacing.
     pub fn detail_limited(&self, min_wavelength: f64) -> SurfaceOracle {
-        let modifiers = self
-            .modifiers
-            .iter()
-            .map(|m| {
-                m.with_min_wavelength(min_wavelength)
-                    .unwrap_or_else(|| m.clone())
-            })
-            .collect();
-        SurfaceOracle {
-            base: self.base.clone(),
-            regional: self.regional.clone(),
-            modifiers,
-            content_key: self.content_key,
-            base_key: self.base_key,
-            local_base_key: self.local_base_key,
-            global_bounds: Arc::new(OnceLock::new()),
-        }
+        self.filtered(
+            min_wavelength,
+            None,
+            lunco_terrain_core::modifier::SamplingPurpose::Physical,
+        )
     }
 
     /// A variant that is BOTH Nyquist-gated for `min_wavelength` and scoped to
@@ -501,12 +489,26 @@ impl SurfaceOracle {
         min: [f64; 2],
         max: [f64; 2],
     ) -> SurfaceOracle {
+        self.filtered(
+            min_wavelength,
+            Some((min, max)),
+            lunco_terrain_core::modifier::SamplingPurpose::Physical,
+        )
+    }
+
+    pub(crate) fn filtered(
+        &self,
+        min_wavelength: f64,
+        region: Option<([f64; 2], [f64; 2])>,
+        purpose: lunco_terrain_core::modifier::SamplingPurpose,
+    ) -> SurfaceOracle {
         let modifiers = self
             .modifiers
             .iter()
             .map(|m| {
-                m.for_region(min, max, min_wavelength)
-                    .or_else(|| m.with_min_wavelength(min_wavelength))
+                region
+                    .and_then(|(min, max)| m.for_region(min, max, min_wavelength, purpose))
+                    .or_else(|| m.with_min_wavelength(min_wavelength, purpose))
                     .unwrap_or_else(|| m.clone())
             })
             .collect();
@@ -988,7 +990,11 @@ mod tests {
                 self.calls.fetch_add(1, Ordering::Relaxed);
                 Some(input.map(|height| height + self.height))
             }
-            fn with_min_wavelength(&self, _: f64) -> Option<Arc<dyn HeightModifier>> {
+            fn with_min_wavelength(
+                &self,
+                _: f64,
+                _: lunco_terrain_core::modifier::SamplingPurpose,
+            ) -> Option<Arc<dyn HeightModifier>> {
                 Some(Arc::new(Self {
                     height: 2.0,
                     calls: self.calls.clone(),
@@ -999,8 +1005,9 @@ mod tests {
                 _: [f64; 2],
                 _: [f64; 2],
                 wavelength: f64,
+                purpose: lunco_terrain_core::modifier::SamplingPurpose,
             ) -> Option<Arc<dyn HeightModifier>> {
-                self.with_min_wavelength(wavelength)
+                self.with_min_wavelength(wavelength, purpose)
             }
         }
         let calls = Arc::new(AtomicUsize::new(0));

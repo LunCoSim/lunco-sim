@@ -1506,6 +1506,18 @@ fn build_world_engine_base(
     // `world_pos`'s array contract stable for existing authored scenarios; new
     // code opts in explicitly and lowers with `vec3_array` only at a report or
     // command boundary.
+    engine.register_fn("world_pose", |id: i64| -> Dynamic {
+        let Some((position, rotation)) = spatial_bridge::world_pose(id as u64) else {
+            return Dynamic::UNIT;
+        };
+        let mut pose = rhai::Map::new();
+        pose.insert(
+            "pos".into(),
+            lunco_scripting_rhai_core::rhai_math::to_native(position),
+        );
+        pose.insert("rot".into(), Dynamic::from(rotation));
+        Dynamic::from_map(pose)
+    });
     engine.register_fn("world_pos3", |id: i64| -> Dynamic {
         spatial_bridge::world_pos(id as u64)
             .map(lunco_scripting_rhai_core::rhai_math::to_native)
@@ -3080,7 +3092,7 @@ const COMPILED_CACHE_CAP: usize = 512;
 /// Task and mission consumers only need existence/name/source, so this is a
 /// bounded transient queue rather than persistent script state. User event
 /// hooks still receive every event and its complete typed payload.
-const SCRIPT_EVENT_BUFFER_CAPACITY: usize = 256;
+const SCRIPT_EVENT_BUFFER_CAPACITY: usize = lunco_scripting::scenario::SCRIPT_EVENT_INBOX_CAPACITY;
 
 /// Which events a scenario wants delivered to its `on_event` — **per-entity
 /// state** (set at runtime in `on_start` via `subscribe`, `subscribe_prefix`,
@@ -3194,6 +3206,45 @@ struct RhaiScenarioState {
     /// mission driver consume this same bounded projection; full telemetry
     /// payloads stay on the user `on_event` path only.
     pending_events: Vec<(ImmutableString, i64)>,
+    event_buffer_faulted: bool,
+}
+
+impl RhaiScenarioState {
+    fn native_event_interest(&self, event: &TelemetryEvent) -> bool {
+        let Some(state) = self.this.read_lock::<Map>() else {
+            return false;
+        };
+        // Mission objectives retain their authored event names even before
+        // prerequisites unlock; admission must preserve a same-batch unlock.
+        if state
+            .get("mission")
+            .and_then(|value| value.read_lock::<rhai::Array>())
+            .is_some_and(|mission| {
+                mission.iter().any(|objective| {
+                    objective.read_lock::<Map>().is_some_and(|objective| {
+                        objective
+                            .get("requires_event")
+                            .and_then(|name| name.clone().into_immutable_string().ok())
+                            .is_some_and(|name| name.as_str() == event.name)
+                    })
+                })
+            })
+        {
+            return true;
+        }
+        let Some(spec) = state.get("task").filter(|value| !value.is_unit()) else {
+            return false;
+        };
+        let marked = spec
+            .read_lock::<Map>()
+            .and_then(|map| map.get("__bt").and_then(|id| id.as_int().ok()));
+        match (marked, self.task.as_ref()) {
+            (Some(id), Some(task)) if task.id == id => {
+                task.accepts_event(&event.name, event.source as i64)
+            }
+            _ => true, // A newly assigned task must be compiled before its event interests are known.
+        }
+    }
 }
 
 /// The rhai [`ScenarioRuntime`](lunco_scripting::scenario::ScenarioRuntime): one
@@ -4014,6 +4065,7 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 filter: EventFilter::default(),
                 task: None,
                 pending_events: Vec::new(),
+                event_buffer_faulted: false,
             },
         );
         CompileOutcome::Ready
@@ -4094,6 +4146,9 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
     ) -> Option<Diagnostic> {
         use lunco_scripting::scenario::ScenarioHook;
         let st = self.states.get_mut(&entity)?;
+        if matches!(hook, ScenarioHook::Tick) && st.event_buffer_faulted {
+            return None;
+        }
         let (name, salt) = match hook {
             ScenarioHook::Start => ("on_start", 1),
             ScenarioHook::Tick => ("on_tick", 2),
@@ -4203,6 +4258,9 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
                 )
             });
             driver_err = driver_err.or(e);
+        }
+        if matches!(hook, ScenarioHook::Start | ScenarioHook::Tick) {
+            driver_err = driver_err.or_else(|| refresh_native_task(st));
         }
         // Harvest subscriptions declared during `on_start` into the entity's
         // event filter (no calls → stays `EventFilter::All`). Always take() to
@@ -4474,24 +4532,38 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         })
     }
 
+    fn accepts_event(&self, entity: Entity, event: &TelemetryEvent) -> bool {
+        self.states.get(&entity).is_some_and(|st| {
+            !st.event_buffer_faulted
+                && ((st.program.mask.event && st.filter.matches(&event.name, event.source))
+                    || st.native_event_interest(event))
+        })
+    }
+
     fn deliver_event(
         &mut self,
         entity: Entity,
         self_gid: i64,
         event: &TelemetryEvent,
+        event_ordinal: u64,
     ) -> Option<Diagnostic> {
-        // Seed the deterministic RNG: (entity, tick, event-name) — distinct events
-        // in the same tick draw distinct streams.
-        bridge_core::rng_begin(
-            self_gid as u64,
-            time_bridge::logical_sequence(),
-            bridge_core::hash_str(&event.name),
-        );
         let st = self.states.get_mut(&entity)?;
-        // Buffer the bounded identity projection shared by the native task and
-        // mission drivers. The full event is constructed only for a user hook;
-        // built-in progression never receives arbitrary telemetry payloads.
-        queue_event_identity(&mut st.pending_events, event);
+        if let Some((message, position)) = refresh_native_task(st) {
+            return Some(rhai_diagnostic(message, position));
+        }
+        // The native drivers consume event identities only when they exist.
+        let native_consumer = st.native_event_interest(event);
+        if st.event_buffer_faulted {
+            return None;
+        }
+        if native_consumer && !queue_event_identity(&mut st.pending_events, event) {
+            st.event_buffer_faulted = true;
+            return Some(Diagnostic::error(
+                "scenario event identity inbox overflow; task and mission progression held until scenario restart",
+                None,
+                None,
+            ));
+        }
         // Per-EVENT hot path: only enter the VM for the user hook if the program
         // defines `on_event` (cached mask bit — no AST scan) AND this event passes
         // the entity's subscription filter (default: all). Either fails → skip the
@@ -4499,6 +4571,13 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         // bounded identity projection on the next fixed pass.
         let (hook_ast, eval_ast) = st.program.hook_target();
         let user = if st.program.mask.event && st.filter.matches(&event.name, event.source) {
+            // Canonical batch ordinal distinguishes same-name events in one tick.
+            bridge_core::rng_begin(
+                self_gid as u64,
+                time_bridge::logical_sequence(),
+                bridge_core::hash_str(&event.name)
+                    ^ event_ordinal.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            );
             let evt = bridge_core::build_event(&RhaiBuilder, event);
             let span = bevy::log::info_span!(
                 "rhai_user_event_hook",
@@ -4521,6 +4600,21 @@ impl lunco_scripting::scenario::ScenarioRuntime for RhaiScenarioRuntime {
         } else {
             None
         };
+        if let Some((message, position)) = refresh_native_task(st) {
+            return Some(rhai_diagnostic(message, position));
+        }
+        // A user event hook can install a task or mission that consumes this event.
+        if !native_consumer
+            && st.native_event_interest(event)
+            && !queue_event_identity(&mut st.pending_events, event)
+        {
+            st.event_buffer_faulted = true;
+            return Some(Diagnostic::error(
+                "scenario event identity inbox overflow; task and mission progression held until scenario restart",
+                None,
+                None,
+            ));
+        }
         user.map(|(msg, pos)| rhai_diagnostic(msg, pos))
     }
 
@@ -4777,12 +4871,12 @@ fn build_event_identities(events: &[(ImmutableString, i64)]) -> Dynamic {
 /// Record one event for task/mission progression without retaining its payload.
 /// This queue is deliberately shared: two independent buffers would let one
 /// consumer grow or observe a different event stream than the other.
-fn queue_event_identity(pending: &mut Vec<(ImmutableString, i64)>, event: &TelemetryEvent) {
-    pending.push((event.name.as_str().into(), event.source as i64));
-    if pending.len() > SCRIPT_EVENT_BUFFER_CAPACITY {
-        let excess = pending.len() - SCRIPT_EVENT_BUFFER_CAPACITY;
-        pending.drain(..excess);
+fn queue_event_identity(pending: &mut Vec<(ImmutableString, i64)>, event: &TelemetryEvent) -> bool {
+    if pending.len() == SCRIPT_EVENT_BUFFER_CAPACITY {
+        return false;
     }
+    pending.push((event.name.as_str().into(), event.source as i64));
+    true
 }
 
 /// Call a built-in PRELUDE driver function `name` (a global-module fn, NOT in the
@@ -4865,7 +4959,7 @@ impl lunco_scripting_rhai_core::task_tree::TaskCtx for RhaiTaskCtx {
         &self.events
     }
     fn resolve(&mut self, path: &str) -> i64 {
-        usd_bridge::find_path(path)
+        usd_bridge::find_path_in_stage(self.me as u64, path)
     }
     fn call_action(
         &mut self,
@@ -4919,19 +5013,9 @@ enum TaskPlan {
     Compile(Dynamic, i64),
 }
 
-/// Advance `this.task` one tick on the [`lunco_behavior`] kernel. The map in
-/// `this.task` is the pristine spec (constructors build pure data); runtime
-/// state lives in the compiled tree on [`RhaiScenarioState`]. A fresh
-/// assignment is detected by the `__bt` identity marker this function stamps
-/// into the map after compiling (a Rhai re-assignment always produces an
-/// unmarked map). Emits `TASK_COMPLETE` once on root success and `TASK_FAILED`
-/// on root failure.
-fn tick_native_task(
-    engine: &std::sync::Arc<Engine>,
-    st: &mut RhaiScenarioState,
-    self_gid: i64,
-    events: &[(ImmutableString, i64)],
-) -> Option<(String, rhai::Position)> {
+/// Compile a newly assigned task at its lifecycle boundary, exposing its event
+/// interests before the next event batch is admitted.
+fn refresh_native_task(st: &mut RhaiScenarioState) -> Option<(String, rhai::Position)> {
     static NEXT_TASK_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
 
     // Inspect the spec (and stamp a new marker) inside one `this` borrow.
@@ -4983,6 +5067,25 @@ fn tick_native_task(
         }
     }
 
+    None
+}
+
+/// Advance `this.task` one tick on the [`lunco_behavior`] kernel. The map in
+/// `this.task` is the pristine spec (constructors build pure data); runtime
+/// state lives in the compiled tree on [`RhaiScenarioState`]. A fresh
+/// assignment is detected by the `__bt` identity marker this function stamps
+/// into the map after compiling (a Rhai re-assignment always produces an
+/// unmarked map). Emits `TASK_COMPLETE` once on root success and `TASK_FAILED`
+/// on root failure.
+fn tick_native_task(
+    engine: &std::sync::Arc<Engine>,
+    st: &mut RhaiScenarioState,
+    self_gid: i64,
+    events: &[(ImmutableString, i64)],
+) -> Option<(String, rhai::Position)> {
+    if let Some(error) = refresh_native_task(st) {
+        return Some(error);
+    }
     let program = st.program.clone();
     let ct = st.task.as_mut()?;
     if ct.done {
@@ -7798,7 +7901,7 @@ mod tests {
     fn scenario_event_identity_buffer_has_an_explicit_bound() {
         let mut pending = Vec::new();
         for source in 0..(super::SCRIPT_EVENT_BUFFER_CAPACITY + 3) {
-            super::queue_event_identity(
+            let admitted = super::queue_event_identity(
                 &mut pending,
                 &TelemetryEvent {
                     name: format!("event-{source}"),
@@ -7810,10 +7913,14 @@ mod tests {
                     sim_tick: 0,
                 },
             );
+            assert_eq!(admitted, source < super::SCRIPT_EVENT_BUFFER_CAPACITY);
         }
         assert_eq!(pending.len(), super::SCRIPT_EVENT_BUFFER_CAPACITY);
-        assert_eq!(pending.first().map(|(_, source)| *source), Some(3));
-        assert_eq!(pending.last().map(|(_, source)| *source), Some(258));
+        assert_eq!(pending.first().map(|(_, source)| *source), Some(0));
+        assert_eq!(
+            pending.last().map(|(_, source)| *source),
+            Some((super::SCRIPT_EVENT_BUFFER_CAPACITY - 1) as i64)
+        );
     }
 
     /// A top-level `const` must be readable from inside a `fn` body.

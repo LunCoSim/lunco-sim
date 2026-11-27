@@ -117,10 +117,24 @@ pub struct ParticipationSwitch {
     pub enabled: bool,
 }
 
+/// An exact entity and its complete interactive pose in the active physics frame.
+#[derive(Clone, Debug, Reflect, serde::Serialize, serde::Deserialize)]
+#[serde(crate = "lunco_core::serde")]
+pub struct RuntimePose {
+    #[reflect(@lunco_core::AuthzTarget)]
+    pub target: Entity,
+    pub translation: [f64; 3],
+    pub rotation: [f64; 4],
+}
+
 /// Apply one live scene transition. All destinations and their owners are
-/// validated before publishing any physics, radio or presentation changes.
+/// validated before publishing any pose, physics, radio or presentation changes.
 #[Command(default)]
 pub struct SetSceneParticipation {
+    /// Complete live poses. Targets must not be ancestors of one another.
+    #[serde(default)]
+    #[reflect(default)]
+    pub poses: Vec<RuntimePose>,
     /// Independent bodies and all their attached contact shapes.
     #[serde(default)]
     #[reflect(default)]

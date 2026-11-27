@@ -3,7 +3,8 @@
 //!
 //! The pure math is [`lunco_terrain_core::derive`]; this is its Bevy half. For
 //! each terrain that carries a retained height field ([`DemHeightField`]) we
-//! bake — **off the main thread** — two mipped RGBA8 textures:
+//! bake two mipped RGBA8 textures (on native workers; cooperative CPU/OPFS
+//! work on the browser page executor):
 //!
 //! - `surface_map` (binding 6/7): R=roughness G=AO B=rockDensity A=unused, and
 //! - `normal_map`  (binding 8/9): the DEM-local ENU meso normal, with the
@@ -13,8 +14,8 @@
 //!
 //! - the **streamed-tile path** (`stream_viz`) selects them as the `Surface`/`Normal`
 //!   texture layers of an LOD tile only when the corresponding USD role is absent.
-//!   The initial Lit tile set waits for this product, so publishing it cannot
-//!   rewrite a visible terrain's materials in one frame;
+//!   Geometry is published independently; the current raster is bound through
+//!   the material owner when it arrives;
 //! - the **static-mesh path** consumes them through the terrain owner's existing
 //!   [`ShaderLook`](lunco_materials::ShaderLook) intent, using the same source
 //!   reconciler as streamed tiles. No concrete material is created or mutated here;
@@ -34,12 +35,21 @@
 //! [`TerrainDerivedMaps`]). The two consumers above then bind from the published
 //! component.
 
-use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::{ops::Range, sync::Arc};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures_lite::future};
+use lunco_core_runtime::async_work::ExternalWorkPermit;
+use lunco_core_runtime::{AsyncWorkAdmission, AsyncWorkKey, AsyncWorkKind, AsyncWorkPriority};
 use lunco_materials::{ParamValue, Rgba8MipMode, ShaderLook, TextureLayer, rgba8_mip_chain};
 // `wgpu-types`, not `bevy::render` — these are plain POD texture descriptors
 // (`bevy_image` itself takes them from here) and carry no pipeline, no wgpu device,
@@ -47,32 +57,33 @@ use lunco_materials::{ParamValue, Rgba8MipMode, ShaderLook, TextureLayer, rgba8_
 // would drag the whole GPU stack in. See docs/architecture/render-decoupling.md.
 use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
+use lunco_terrain_core::derive::{AoRayLattice, albedo_map_rows, normal_slope_map_rows};
 use lunco_terrain_core::{
-    BoundedHeightSource, Square, albedo_map, ao_map, normal_slope_maps, pack_normal_rgba8,
-    pack_surface_rgba8, roughness_from_slope,
+    BoundedHeightSource, Square, pack_normal_rgba8, pack_surface_rgba8, roughness_from_slope,
 };
 
 use crate::band::SurfaceBand;
 use crate::oracle::DemHeightField;
 use crate::oracle::SurfaceOracle;
-use crate::stream_viz::TerrainLodViz;
+use crate::stream_viz::{LodTiles, TerrainDetailDemands, TerrainLodViz, TileShadowCache};
 use crate::surface_change::TerrainSurfaceChange;
 use crate::terrain::DemVisualTargetRes;
 
-/// Visual products derived from a ready DEM. The terrain surface and physics
-/// become usable before this work finishes. Streamed Lit presentation waits for
-/// its initial product so the first visible tile set has a stable material;
-/// static meshes and headless hosts may consume this lifecycle independently.
+/// Visual products derived from a ready DEM. Interactive geometry and physics
+/// become usable before this work finishes. Numbered recording requires the
+/// requested final shading products.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TerrainDerivedStatus {
-    /// At least one terrain is waiting for or running a derived-map bake.
+    /// At least one terrain has unfinished shading preparation.
     pub active: bool,
-    /// Terrains with a current derived-map product and no replacement pending.
+    /// Terrains with current derived shading products and no replacement pending.
     pub ready: usize,
     /// Terrains that can publish a derived-map product in the current render host.
     pub total: usize,
-    /// Bakes that are queued or running.
+    /// Terrains waiting for final derived shading, including deferred upgrades.
     pub pending: usize,
+    /// Terminal failures for current source/quality requests.
+    pub failed: usize,
 }
 
 /// Physical spacing of texel-centred cells over a `[-half_extent, +half_extent]`
@@ -98,6 +109,8 @@ pub struct TerrainDerivedMaps {
     pub normal: Handle<Image>,
     /// Oracle content the published maps were baked from.
     pub surface_key: u64,
+    /// Content identity of the actual published raster and its bake quality.
+    pub bake_key: u64,
     /// Texels per side, retained for diagnostics and static-material reporting.
     pub res: usize,
     /// Physical spacing between adjacent level-zero texel centres in terrain
@@ -220,26 +233,424 @@ impl TerrainAuthoredMaps {
     pub fn has_active_normal(&self) -> bool {
         self.normal.is_some() && self.weight_normal > 0.0
     }
-
-    /// Whether a streamed Lit terrain still needs the engine-derived product
-    /// for at least one material role.
-    pub fn needs_derived_maps(&self) -> bool {
-        !self.has_active_surface() || !self.has_active_normal()
-    }
 }
 
 /// The in-flight off-thread bake for a terrain's derived layers, plus the
-/// identity (Arc pointer) of the oracle it was started against — a re-compose
-/// mid-bake makes the result stale, and [`finish_derived_bakes`] discards it.
-/// The task is owned by this terrain entity and is cancelled with the scene.
+/// exact oracle lease and requested quality identity. Recomposition or quality
+/// changes retire the request; running results cannot publish after retirement.
 #[derive(Component)]
-struct DerivedBakeTask(Task<DerivedMipped>, usize);
+struct DerivedBakeTask {
+    source: Arc<SurfaceOracle>,
+    requested_key: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    native: NativeDerivedTask,
+    #[cfg(target_arch = "wasm32")]
+    task: Task<(DerivedMipped, ExternalWorkPermit)>,
+}
+
+/// Byte reservation for incomplete row staging, distinct from worker permits.
+/// A request releases each row's worker permit on receipt; otherwise a raster
+/// larger than the worker width could not finish. Total staging is bounded by
+/// the layout of one raster at the currently validated maximum quality.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource, Default)]
+struct DerivedRasterAssemblyBudget(Arc<AtomicUsize>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl lunco_core::SceneResource for DerivedRasterAssemblyBudget {
+    fn clear_scene(&mut self) {
+        // Scene teardown drops all owner components. Cancelled workers retain
+        // only their allocation reservations until their row exits and memory
+        // is dropped; preserve that accounting across the scene boundary.
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct DerivedRasterReservation {
+    used: Arc<AtomicUsize>,
+    bytes: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for DerivedRasterReservation {
+    fn drop(&mut self) {
+        self.used.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn raster_staging_bytes(res: usize) -> usize {
+    let texels = res * res;
+    let reduced = reduced_raster_res(res);
+    let f32_bytes = std::mem::size_of::<f32>();
+    let packed_texel = 2 * 4; // two RGBA8 maps
+    let row_bytes = texels * (std::mem::size_of::<[f32; 3]>() + f32_bytes)
+        + reduced * reduced * (2 * f32_bytes);
+    let mut mip_dim = res;
+    let mut mip_bytes = 0;
+    loop {
+        mip_bytes += mip_dim * mip_dim * packed_texel;
+        if mip_dim == 1 {
+            break;
+        }
+        mip_dim = (mip_dim / 2).max(1);
+    }
+    // Conservative sum: staged rows plus ordered concatenation, transient
+    // slope and expanded AO/tone arrays, packed base levels, and full mip
+    // chains. Some allocations do not overlap, but none is left unaccounted.
+    2 * row_bytes + texels * (3 * f32_bytes + packed_texel) + mip_bytes
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DerivedRasterAssemblyBudget {
+    fn reserve(&self, res: usize, max_res: usize) -> Option<Arc<DerivedRasterReservation>> {
+        let bytes = raster_staging_bytes(res);
+        let limit = raster_staging_bytes(max_res);
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes).filter(|next| *next <= limit)
+            })
+            .ok()?;
+        Some(Arc::new(DerivedRasterReservation {
+            used: self.0.clone(),
+            bytes,
+        }))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct DerivedTransport<T> {
+    _request: lunco_core_runtime::async_work::QueuedWorkRequest,
+    result: Mutex<
+        std::sync::mpsc::Receiver<(
+            Option<T>,
+            ExternalWorkPermit,
+            Option<Arc<DerivedRasterReservation>>,
+        )>,
+    >,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send + 'static> DerivedTransport<T> {
+    fn submit(
+        admission: &AsyncWorkAdmission,
+        priority: AsyncWorkPriority,
+        key: AsyncWorkKey,
+        allocation: Option<Arc<DerivedRasterReservation>>,
+        job: impl FnOnce() -> Option<T> + Send + 'static,
+    ) -> Option<Self> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let request = admission
+            .submit_transport(priority, key, move |permit| {
+                let _ = sender.send((job(), permit, allocation));
+            })
+            .ok()?;
+        Some(Self {
+            _request: request,
+            result: Mutex::new(receiver),
+        })
+    }
+
+    fn poll(&mut self) -> Result<Option<T>, ()> {
+        match self
+            .result
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .try_recv()
+        {
+            Ok((Some(result), _permit, _allocation)) => Ok(Some(result)),
+            Ok((None, _, _)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(()),
+            Err(std::sync::mpsc::TryRecvError::Empty) => Ok(None),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum DerivedCacheProbe {
+    Hit(DerivedMipped),
+    Miss {
+        profile: lunco_render::RenderQualityProfile,
+        directory: std::path::PathBuf,
+    },
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeDerivedRows {
+    plan: Arc<DerivedRasterPlan>,
+    directory: std::path::PathBuf,
+    next: usize,
+    pending: Vec<(usize, DerivedTransport<DerivedRasterRows>)>,
+    completed: Vec<Option<DerivedRasterRows>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct DerivedFinalizePayload {
+    res: usize,
+    directory: std::path::PathBuf,
+    rows: Vec<DerivedRasterRows>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum NativeDerivedStage {
+    Probe(DerivedTransport<DerivedCacheProbe>),
+    Reserve {
+        profile: lunco_render::RenderQualityProfile,
+        directory: std::path::PathBuf,
+    },
+    Prepare {
+        directory: std::path::PathBuf,
+        job: DerivedTransport<DerivedRasterPlan>,
+    },
+    Rows(NativeDerivedRows),
+    // Admission may refuse a submission while workers are busy. The payload
+    // remains owned here until an accepted worker takes it exactly once.
+    Assemble(Arc<Mutex<Option<DerivedFinalizePayload>>>),
+    Finish(DerivedTransport<DerivedMipped>),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeDerivedTask {
+    priority: AsyncWorkPriority,
+    cancelled: Arc<AtomicBool>,
+    stage: NativeDerivedStage,
+    // Dropped after the stage's payloads and requests; running workers own a
+    // clone until their actual allocations have gone away.
+    assembly: Option<Arc<DerivedRasterReservation>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for NativeDerivedTask {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const DERIVED_PROBE_OPERATION: u64 = u64::MAX - 1;
+#[cfg(not(target_arch = "wasm32"))]
+const DERIVED_PREPARE_OPERATION: u64 = u64::MAX - 4;
+#[cfg(not(target_arch = "wasm32"))]
+const DERIVED_FINALIZE_OPERATION: u64 = u64::MAX - 5;
+#[cfg(not(target_arch = "wasm32"))]
+const DERIVED_ROW_OPERATION_BASE: u64 = u64::MAX - 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const REDUCED_ROWS_PER_JOB: usize = 64;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn derived_work_key(entity: Entity, requested_key: u64, operation: u64) -> AsyncWorkKey {
+    AsyncWorkKey::new(
+        AsyncWorkKind::VisualizationPreparation,
+        0,
+        entity.to_bits() as u128,
+        requested_key,
+        operation,
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeDerivedTask {
+    fn start(
+        admission: &AsyncWorkAdmission,
+        priority: AsyncWorkPriority,
+        entity: Entity,
+        requested_key: u64,
+        source: Arc<SurfaceOracle>,
+        profile: lunco_render::RenderQualityProfile,
+        preview: bool,
+    ) -> Option<Self> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancellation = cancelled.clone();
+        let probe = DerivedTransport::submit(
+            admission,
+            priority,
+            derived_work_key(entity, requested_key, DERIVED_PROBE_OPERATION),
+            None,
+            move || probe_native_cache(&source, profile, preview, &cancellation),
+        )?;
+        Some(Self {
+            priority,
+            cancelled,
+            stage: NativeDerivedStage::Probe(probe),
+            assembly: None,
+        })
+    }
+
+    /// Advance only owner bookkeeping on Update. Cache I/O, scope construction,
+    /// every row range, ordered assembly, and mipping run as admitted workers.
+    fn advance(
+        &mut self,
+        admission: &AsyncWorkAdmission,
+        budget: &DerivedRasterAssemblyBudget,
+        entity: Entity,
+        requested_key: u64,
+        source: &Arc<SurfaceOracle>,
+        max_res: usize,
+    ) -> Result<Option<DerivedMipped>, ()> {
+        match &mut self.stage {
+            NativeDerivedStage::Probe(job) => match job.poll()? {
+                Some(DerivedCacheProbe::Hit(maps)) => return Ok(Some(maps)),
+                Some(DerivedCacheProbe::Miss { profile, directory }) => {
+                    self.stage = NativeDerivedStage::Reserve { profile, directory };
+                }
+                None => {}
+            },
+            NativeDerivedStage::Reserve { profile, directory } => {
+                let Some(reservation) =
+                    budget.reserve(profile.terrain_derived_map_resolution, max_res)
+                else {
+                    return Ok(None);
+                };
+                let allocation = reservation.clone();
+                let source = source.clone();
+                let profile = *profile;
+                let cancellation = self.cancelled.clone();
+                let Some(job) = DerivedTransport::submit(
+                    admission,
+                    self.priority,
+                    derived_work_key(entity, requested_key, DERIVED_PREPARE_OPERATION),
+                    Some(allocation),
+                    move || {
+                        if cancellation.load(Ordering::Acquire) {
+                            return None;
+                        }
+                        Some(DerivedRasterPlan::new(&source, profile))
+                    },
+                ) else {
+                    return Ok(None);
+                };
+                self.assembly = Some(reservation);
+                self.stage = NativeDerivedStage::Prepare {
+                    directory: directory.clone(),
+                    job,
+                };
+            }
+            NativeDerivedStage::Prepare { directory, job } => {
+                if let Some(plan) = job.poll()? {
+                    let chunk_count =
+                        reduced_raster_res(plan.profile.terrain_derived_map_resolution)
+                            .div_ceil(REDUCED_ROWS_PER_JOB);
+                    let completed = std::iter::repeat_with(|| None).take(chunk_count).collect();
+                    self.stage = NativeDerivedStage::Rows(NativeDerivedRows {
+                        plan: Arc::new(plan),
+                        directory: directory.clone(),
+                        next: 0,
+                        pending: Vec::new(),
+                        completed,
+                    });
+                }
+            }
+            NativeDerivedStage::Rows(rows) => {
+                // Completed worker slots are released as ranges move into
+                // the bounded assembly reservation. Arrival order never
+                // decides image row order.
+                let mut i = 0;
+                while i < rows.pending.len() {
+                    if let Some(data) = rows.pending[i].1.poll()? {
+                        let (index, _) = rows.pending.swap_remove(i);
+                        rows.completed[index] = Some(data);
+                    } else {
+                        i += 1;
+                    }
+                }
+                if rows.next == rows.completed.len() && rows.pending.is_empty() {
+                    let payload = DerivedFinalizePayload {
+                        res: rows.plan.profile.terrain_derived_map_resolution,
+                        directory: rows.directory.clone(),
+                        rows: rows
+                            .completed
+                            .iter_mut()
+                            .map(Option::take)
+                            .collect::<Option<Vec<_>>>()
+                            .ok_or(())?,
+                    };
+                    self.stage = NativeDerivedStage::Assemble(Arc::new(Mutex::new(Some(payload))));
+                    return Ok(None);
+                }
+                while rows.next < rows.completed.len() {
+                    let index = rows.next;
+                    let start = index * REDUCED_ROWS_PER_JOB;
+                    let end = (start + REDUCED_ROWS_PER_JOB).min(reduced_raster_res(
+                        rows.plan.profile.terrain_derived_map_resolution,
+                    ));
+                    let plan = rows.plan.clone();
+                    let cancellation = self.cancelled.clone();
+                    let allocation = self.assembly.as_ref().ok_or(())?.clone();
+                    let operation = DERIVED_ROW_OPERATION_BASE + index as u64;
+                    let Some(job) = DerivedTransport::submit(
+                        admission,
+                        self.priority,
+                        derived_work_key(entity, requested_key, operation),
+                        Some(allocation),
+                        move || {
+                            let _span =
+                                bevy::log::info_span!("terrain_derived_maps_bake_rows").entered();
+                            plan.sample_rows(start..end, || cancellation.load(Ordering::Acquire))
+                        },
+                    ) else {
+                        break;
+                    };
+                    rows.pending.push((index, job));
+                    rows.next += 1;
+                }
+            }
+            NativeDerivedStage::Assemble(payload) => {
+                let payload = payload.clone();
+                let allocation = self.assembly.as_ref().ok_or(())?.clone();
+                let cancellation = self.cancelled.clone();
+                let Some(job) = DerivedTransport::submit(
+                    admission,
+                    self.priority,
+                    derived_work_key(entity, requested_key, DERIVED_FINALIZE_OPERATION),
+                    Some(allocation),
+                    move || {
+                        use lunco_precompute::Bake;
+                        let payload = payload
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take()?;
+                        if cancellation.load(Ordering::Acquire) {
+                            return None;
+                        }
+                        let _span =
+                            bevy::log::info_span!("terrain_derived_maps_assemble").entered();
+                        let maps = assemble_derived_rows(payload.res, payload.rows, || {
+                            cancellation.load(Ordering::Acquire)
+                        })?;
+                        if cancellation.load(Ordering::Acquire) {
+                            return None;
+                        }
+                        // The same content-addressed format; failure to persist
+                        // is only a cache miss on a later load.
+                        let _ = DerivedBake::store(&payload.directory, &maps);
+                        if cancellation.load(Ordering::Acquire) {
+                            return None;
+                        }
+                        let maps = mip_maps(maps);
+                        (!cancellation.load(Ordering::Acquire)).then_some(maps)
+                    },
+                ) else {
+                    return Ok(None);
+                };
+                self.stage = NativeDerivedStage::Finish(job);
+            }
+            NativeDerivedStage::Finish(job) => return job.poll(),
+        }
+        Ok(None)
+    }
+}
+
+/// A terminal failure for one exact requested source/quality lease.
+#[derive(Component)]
+struct DerivedMapsFailed {
+    source: Arc<SurfaceOracle>,
+    requested_key: u64,
+}
 
 /// Debounce marker: the surface changed at `since`; wait for a short quiescent
 /// window before re-baking so a burst of brush strokes coalesces into one bake.
 #[derive(Component)]
 struct DerivedMapsStale {
-    since: f64,
+    since: Instant,
 }
 
 /// The subset of Graphics settings that changes the derived-map bake. Keeping
@@ -268,10 +679,9 @@ fn derived_quality_signature(
 /// while the changed signature makes the cache key and bake output authoritative.
 fn mark_derived_stale_on_quality_change(
     mut commands: Commands,
-    time: Res<Time>,
     quality: Res<lunco_render::RenderingQualitySettings>,
     mut signature: ResMut<DerivedQualitySignature>,
-    terrains: Query<Entity, With<DemHeightField>>,
+    terrains: Query<Entity, (With<DemHeightField>, With<TerrainDerivedMaps>)>,
 ) {
     let Ok(profile) = quality.validated_profile() else {
         return;
@@ -283,7 +693,7 @@ fn mark_derived_stale_on_quality_change(
     signature.0 = Some(next);
     for entity in &terrains {
         commands.entity(entity).try_insert(DerivedMapsStale {
-            since: time.elapsed_secs_f64(),
+            since: Instant::now(),
         });
     }
 }
@@ -337,7 +747,6 @@ fn mip_maps(maps: DerivedMaps) -> DerivedMipped {
 /// change drops them because globally stale maps are worse than the fallback.
 fn mark_derived_stale(
     mut commands: Commands,
-    time: Res<Time>,
     changed: Query<
         (
             Entity,
@@ -360,7 +769,7 @@ fn mark_derived_stale(
             e.try_remove::<TerrainDerivedMaps>();
         }
         e.try_insert(DerivedMapsStale {
-            since: time.elapsed_secs_f64(),
+            since: Instant::now(),
         });
     }
 }
@@ -372,16 +781,19 @@ fn mark_derived_stale(
 fn start_derived_bakes(
     mut commands: Commands,
     images: Option<Res<Assets<Image>>>,
-    time: Res<Time>,
     quality: Res<lunco_render::RenderingQualitySettings>,
+    admission: Res<AsyncWorkAdmission>,
+    demands: Res<TerrainDetailDemands>,
     q: Query<
         (
             Entity,
             &DemHeightField,
             Option<&DerivedMapsStale>,
-            Has<TerrainDerivedMaps>,
+            Option<&TerrainDerivedMaps>,
             Option<&DemVisualTargetRes>,
             Has<TerrainLodViz>,
+            Option<&LodTiles>,
+            Option<&DerivedMapsFailed>,
         ),
         Without<DerivedBakeTask>,
     >,
@@ -398,13 +810,10 @@ fn start_derived_bakes(
             return;
         }
     };
-    let now = time.elapsed_secs_f64();
-    for (entity, hf, stale, has_maps, target_res, streamed) in &q {
-        if has_maps && stale.is_none() {
-            continue; // published and current — nothing to do.
-        }
+    let now = Instant::now();
+    for (entity, hf, stale, maps, target_res, streamed, tiles, failed) in &q {
         if let Some(stale) = stale {
-            if now - stale.since < REBAKE_DEBOUNCE_SECS {
+            if now.duration_since(stale.since).as_secs_f64() < REBAKE_DEBOUNCE_SECS {
                 continue; // edits still landing — wait for quiescence.
             }
         }
@@ -415,25 +824,86 @@ fn start_derived_bakes(
             target_res.map(|target| target.0),
             streamed,
         );
-        let oracle_ptr = Arc::as_ptr(&hf.0) as usize;
-        let task = AsyncComputeTaskPool::get().spawn(async move {
-            // Off-thread body → own Tracy zone (per-system spans don't reach here).
-            let _span = bevy::log::info_span!("terrain_derived_maps_bake").entered();
-            #[cfg(not(target_arch = "wasm32"))]
-            let maps = bake_or_load(&oracle, bake_profile);
-            #[cfg(target_arch = "wasm32")]
-            let maps = bake_or_load_web(&oracle, bake_profile).await;
-            // Mip HERE, still off-thread — the chain build is real work and
-            // must not run on the main thread at publish.
-            mip_maps(maps)
-        });
-        // Despawn-safe: a load-time / edit re-instantiation can despawn this
-        // terrain between queue time and apply — `try_insert` no-ops on a stale
-        // entity instead of panicking the command buffer.
+        if let Some(maps) = maps.filter(|maps| maps.bake_key == derived_key(&oracle, bake_profile))
+        {
+            if maps.surface_key != oracle.surface_key() {
+                let mut current = maps.clone();
+                current.surface_key = oracle.surface_key();
+                commands.entity(entity).try_insert(current);
+            }
+            if stale.is_some() {
+                commands.entity(entity).try_remove::<DerivedMapsStale>();
+            }
+            continue;
+        }
+        // Keep the initial shading product cheap. Full-quality refinement
+        // competes only after the currently consumed near-camera covers land.
+        if streamed
+            && maps.is_some()
+            && stale.is_none()
+            && !demands.near_covers_ready(entity, tiles)
+        {
+            continue;
+        }
+        let requested_key = derived_key(&oracle, bake_profile);
+        if failed.is_some_and(|failure| {
+            Arc::ptr_eq(&failure.source, &oracle) && failure.requested_key == requested_key
+        }) {
+            continue;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let key = AsyncWorkKey::new(
+            AsyncWorkKind::VisualizationPreparation,
+            0,
+            entity.to_bits() as u128,
+            requested_key,
+            u64::MAX - 1,
+        );
+        let priority = if maps.is_none() {
+            AsyncWorkPriority::Interactive
+        } else {
+            AsyncWorkPriority::Background
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let task = {
+            let preview = streamed && maps.is_none();
+            let Some(native) = NativeDerivedTask::start(
+                &admission,
+                priority,
+                entity,
+                requested_key,
+                oracle.clone(),
+                bake_profile,
+                preview,
+            ) else {
+                continue;
+            };
+            DerivedBakeTask {
+                source: oracle,
+                requested_key,
+                native,
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let task = {
+            let Ok(permit) = admission.admit_external(priority, key) else {
+                continue;
+            };
+            let source = oracle.clone();
+            let task = AsyncComputeTaskPool::get().spawn(async move {
+                let maps = bake_or_load_web(&source, bake_profile).await;
+                (mip_maps(maps), permit)
+            });
+            DerivedBakeTask {
+                source: oracle,
+                requested_key,
+                task,
+            }
+        };
         commands
             .entity(entity)
-            .try_remove::<DerivedMapsStale>()
-            .try_insert(DerivedBakeTask(task, oracle_ptr));
+            .try_remove::<(DerivedMapsStale, DerivedMapsFailed)>()
+            .try_insert(task);
     }
 }
 
@@ -442,7 +912,7 @@ fn start_derived_bakes(
 /// authored visual target and source grid supply the available visual detail.
 /// Streamed terrain keeps the quality resolution because its geometry refines
 /// independently of the static `targetRes` product.
-fn profile_for_terrain(
+pub(crate) fn profile_for_terrain(
     mut profile: lunco_render::RenderQualityProfile,
     source_res: usize,
     visual_target_res: Option<usize>,
@@ -462,30 +932,12 @@ fn profile_for_terrain(
     profile
 }
 
-/// Bump when the bake math or packed layout changes, so stale cache entries are
-/// simply never matched (content-addressed → no explicit invalidation).
-/// v2: maps sample the composed `SurfaceOracle` (analytic craters/edits included)
-/// and the key folds the oracle's modifier `content_key`.
-/// v3: crater profile band-limited + continuous at reach (same crater
-/// `content_key`, different sampled surface).
-/// v4: albedo scalar packed into normal-map alpha; the map resolution became a
-/// Graphics setting after this version.
-/// v5: tone (albedo) derived with a 3-texel stencil on a 6-texel-limited source
-/// (1-texel stencil at the 2-texel band edge returned per-texel checker → the
-/// mid-field texel mosaic); AO marched at half res and bilinear-expanded.
-/// v6: surface-map alpha is no longer a baked slope hazard (nothing sampled it;
-/// hazard is evaluated by the separate terrain diagnostic material). The frozen
-/// safe/cliff angles left the key with it.
-/// v7: tone (albedo) marched at half res and bilinear-expanded — its source is
-/// band-limited to 6 texels, so full-res sampling was resolving detail the
-/// source cannot contain, at ~10 oracle evaluations per texel.
-/// v8: derived-map resolution and AO sample counts became Graphics settings.
-/// v9: AO radius and roughness transfer parameters became Graphics settings.
-const CACHE_FORMAT_VERSION: u64 = 9;
+/// The content key versions the current sampling math and packed raster layout.
+const CACHE_FORMAT_VERSION: u64 = 10;
 
-/// The derived-layer bake as a [`lunco_precompute::Bake`] — the content-addressed
-/// disk cache (Substrate B) owns the load/store/rebake orchestration; this only
-/// declares *what* is baked, *how it keys*, and *how it serializes*.
+/// The derived-layer cache identity and serialization contract. Native miss
+/// handling admits row jobs explicitly; the serial web consumer uses the same
+/// bake kernels and cache identity.
 struct DerivedBake<'a> {
     oracle: &'a SurfaceOracle,
     profile: lunco_render::RenderQualityProfile,
@@ -505,16 +957,14 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
         h.write_u64(self.oracle.local_surface_key());
         h.write_u64(grid.res as u64);
         h.write_u64(grid.half_extent.to_bits() as u64);
-        h.write_u64(self.profile.terrain_derived_map_resolution as u64);
-        h.write_u64(self.profile.terrain_derived_ao_directions as u64);
-        h.write_u64(self.profile.terrain_derived_ao_steps as u64);
-        h.write_u64(self.profile.terrain_derived_ao_radius_fraction.to_bits());
-        h.write_u64(self.profile.terrain_derived_roughness_base.to_bits() as u64);
-        h.write_u64(
-            self.profile
-                .terrain_derived_roughness_saturation_radians
-                .to_bits() as u64,
-        );
+        let (res, directions, steps, radius, roughness, saturation) =
+            derived_quality_signature(self.profile);
+        h.write_u64(res as u64);
+        h.write_u64(directions as u64);
+        h.write_u64(steps as u64);
+        h.write_u64(radius);
+        h.write_u64(roughness as u64);
+        h.write_u64(saturation as u64);
         h.finish()
     }
 
@@ -529,39 +979,88 @@ impl lunco_precompute::Bake for DerivedBake<'_> {
 
     /// Load both layer buffers, validating that they are square and the same
     /// size. `None` on any miss/mismatch → the orchestrator rebakes.
-    fn load(dir: &std::path::Path) -> Option<DerivedMaps> {
+    fn load(&self, dir: &std::path::Path) -> Option<DerivedMaps> {
         let surface_rgba = lunco_precompute::load_blob(dir, "surface.bin")?;
         let normal_rgba = lunco_precompute::load_blob(dir, "normal.bin")?;
-        let texels = surface_rgba.len() / 4;
-        let res = (texels as f64).sqrt() as usize;
-        if res * res * 4 != surface_rgba.len() || normal_rgba.len() != surface_rgba.len() {
-            return None; // corrupt / partial → rebake
-        }
-        Some(DerivedMaps {
-            res,
+        derived_maps_from_buffers(
+            self.profile.terrain_derived_map_resolution,
             surface_rgba,
             normal_rgba,
-        })
+        )
     }
 }
 
-/// P4: content-addressed cache. Load the derived maps from disk if a bake with
-/// the same surface + parameters was already persisted; otherwise bake and write
-/// them through. Pure-function bake → byte-identical key across runs and peers, so
-/// a second load (or a second peer) skips the expensive AO march. The machine-global
-/// cache directory is shared with the rest of the asset stack.
-#[cfg(not(target_arch = "wasm32"))]
-fn bake_or_load(
-    oracle: &SurfaceOracle,
-    profile: lunco_render::RenderQualityProfile,
-) -> DerivedMaps {
-    lunco_precompute::bake_or_load(
-        &DerivedBake { oracle, profile },
-        &lunco_assets_core::cache_dir(),
-    )
+fn derived_maps_from_buffers(
+    res: usize,
+    surface_rgba: Vec<u8>,
+    normal_rgba: Vec<u8>,
+) -> Option<DerivedMaps> {
+    let len = res.checked_mul(res)?.checked_mul(4)?;
+    if res == 0 || surface_rgba.len() != len || normal_rgba.len() != len {
+        return None;
+    }
+    Some(DerivedMaps {
+        res,
+        surface_rgba,
+        normal_rgba,
+    })
 }
 
-/// Wasm counterpart of [`bake_or_load`]: `lunco_precompute`'s sync fs tier is
+pub(crate) fn derived_key(
+    oracle: &SurfaceOracle,
+    profile: lunco_render::RenderQualityProfile,
+) -> u64 {
+    use lunco_precompute::Bake;
+    DerivedBake { oracle, profile }.key()
+}
+
+/// Cache probe on an admitted worker, retaining the same key/layout and the
+/// warm-final-first startup selection. A miss becomes immutable row work; the
+/// shared Bake implementation owns both load and store, rather than duplicating
+/// the cache format in the scheduler.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_native_cache(
+    oracle: &SurfaceOracle,
+    mut profile: lunco_render::RenderQualityProfile,
+    preview: bool,
+    cancelled: &AtomicBool,
+) -> Option<DerivedCacheProbe> {
+    use lunco_precompute::Bake;
+    if cancelled.load(Ordering::Acquire) {
+        return None;
+    }
+    const PREVIEW_RESOLUTION: usize = 256;
+    let root = lunco_assets_core::cache_dir();
+    let entry = |profile| {
+        let bake = DerivedBake { oracle, profile };
+        let directory = lunco_precompute::entry_dir(&root, DerivedBake::NAMESPACE, bake.key());
+        (directory, bake)
+    };
+    let cached = |maps| {
+        if cancelled.load(Ordering::Acquire) {
+            return None;
+        }
+        let maps = mip_maps(maps);
+        (!cancelled.load(Ordering::Acquire)).then_some(DerivedCacheProbe::Hit(maps))
+    };
+    if preview && profile.terrain_derived_map_resolution > PREVIEW_RESOLUTION {
+        let (directory, bake) = entry(profile);
+        if let Some(maps) = bake.load(&directory) {
+            return cached(maps);
+        }
+        profile.terrain_derived_map_resolution = PREVIEW_RESOLUTION;
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return None;
+    }
+    let (directory, bake) = entry(profile);
+    if let Some(maps) = bake.load(&directory) {
+        return cached(maps);
+    }
+    (!cancelled.load(Ordering::Acquire)).then_some(DerivedCacheProbe::Miss { profile, directory })
+}
+
+/// Web cache consumer: `lunco_precompute`'s sync fs tier is
 /// native-only (no-op on wasm), so the derived-maps cache reads/writes the async
 /// OPFS blob store at this — already-async — bake seam instead. Same namespace
 /// and key as native; the two maps pack into ONE blob ([`encode_derived_blob`]).
@@ -574,7 +1073,9 @@ async fn bake_or_load_web(
     let bake = DerivedBake { oracle, profile };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(DerivedBake::NAMESPACE, &key_hex).await {
-        if let Some(maps) = decode_derived_blob(&blob) {
+        if let Some(maps) = decode_derived_blob(&blob)
+            .filter(|maps| maps.res == profile.terrain_derived_map_resolution)
+        {
             return maps;
         }
     }
@@ -619,104 +1120,197 @@ fn decode_derived_blob(bytes: &[u8]) -> Option<DerivedMaps> {
     })
 }
 
-/// Pure bake (runs on the task pool): sample the derived layers off the composed
-/// surface (analytic craters included → their slopes/AO land in the maps) and
-/// pack them.
+/// Immutable preparation shared by every independently admitted row range.
+/// Each source is filtered once over the full original sampling footprint so
+/// partitioning cannot change crater placement or stencil values at chunk edges.
+struct DerivedRasterPlan {
+    profile: lunco_render::RenderQualityProfile,
+    region: Square,
+    normal_source: SurfaceOracle,
+    ao_source: SurfaceOracle,
+    tone_source: SurfaceOracle,
+    rays: AoRayLattice,
+}
+
+const TONE_STENCIL_TEXELS: f64 = 3.0;
+
+struct DerivedRasterRows {
+    normals: Vec<[f32; 3]>,
+    roughness: Vec<f32>,
+    ao: Vec<f32>,
+    tone: Vec<f32>,
+}
+
+impl DerivedRasterPlan {
+    fn new(oracle: &SurfaceOracle, profile: lunco_render::RenderQualityProfile) -> Self {
+        let half = oracle.half_extent() as f64;
+        let region = Square {
+            center: [0.0, 0.0],
+            half,
+        };
+        let res = profile.terrain_derived_map_resolution;
+        let texel = raster_texel_size_m(half, res);
+        let reduced_texel = raster_texel_size_m(half, reduced_raster_res(res));
+        let ao_radius = half * profile.terrain_derived_ao_radius_fraction;
+        // Match the existing normal, half-resolution AO, and wider tone bands.
+        let normal_source = SurfaceBand::visual(texel).limited_region(oracle, region, 2.0 * texel);
+        let ao_source = SurfaceBand::visual(reduced_texel).limited_region(
+            oracle,
+            region,
+            ao_radius + 2.0 * reduced_texel,
+        );
+        let tone_source = SurfaceBand::visual_wavelength(2.0 * TONE_STENCIL_TEXELS * texel)
+            .limited_region(oracle, region, 2.0 * TONE_STENCIL_TEXELS * texel);
+        let rays = AoRayLattice::new(
+            ao_radius,
+            profile.terrain_derived_ao_directions,
+            profile.terrain_derived_ao_steps,
+        );
+        Self {
+            profile,
+            region,
+            normal_source,
+            ao_source,
+            tone_source,
+            rays,
+        }
+    }
+
+    /// Reduced-resolution row indices choose the corresponding full-resolution
+    /// interval, including odd static-map resolutions, with no overlap or gaps.
+    fn sample_rows(
+        &self,
+        reduced_rows: Range<usize>,
+        cancelled: impl Fn() -> bool,
+    ) -> Option<DerivedRasterRows> {
+        let res = self.profile.terrain_derived_map_resolution;
+        let reduced = reduced_raster_res(res);
+        let half = self.region.half;
+        let full_rows = (reduced_rows.start * res / reduced)..(reduced_rows.end * res / reduced);
+        let bounded = BoundedHeightSource::new(&self.normal_source, half);
+        let (normals, slopes) =
+            normal_slope_map_rows(&bounded, &self.region, res, full_rows, &cancelled)?;
+        let roughness = slopes
+            .into_iter()
+            .map(|s| {
+                roughness_from_slope(
+                    s,
+                    self.profile.terrain_derived_roughness_base,
+                    self.profile.terrain_derived_roughness_saturation_radians,
+                )
+            })
+            .collect();
+        let ao_bounded = BoundedHeightSource::new(&self.ao_source, half);
+        let ao = self.rays.map_rows(
+            &ao_bounded,
+            &self.region,
+            reduced,
+            half,
+            reduced_rows.clone(),
+            &cancelled,
+        )?;
+        let tone_bounded = BoundedHeightSource::new(&self.tone_source, half);
+        let tone = albedo_map_rows(
+            &tone_bounded,
+            &self.region,
+            reduced,
+            TONE_STENCIL_TEXELS * 0.5,
+            half,
+            reduced_rows,
+            &cancelled,
+        )?;
+        Some(DerivedRasterRows {
+            normals,
+            roughness,
+            ao,
+            tone,
+        })
+    }
+}
+
+fn reduced_raster_res(res: usize) -> usize {
+    (res / 2).max(1)
+}
+
+/// Concatenate complete ranges in ascending row order before applying the
+/// full-raster transfer and mip contract. This runs on a worker, never Update.
+fn assemble_derived_rows(
+    res: usize,
+    rows: Vec<DerivedRasterRows>,
+    cancelled: impl Fn() -> bool,
+) -> Option<DerivedMaps> {
+    if cancelled() {
+        return None;
+    }
+    let reduced = reduced_raster_res(res);
+    let mut rows = rows.into_iter();
+    let DerivedRasterRows {
+        mut normals,
+        mut roughness,
+        ao: mut ao_small,
+        tone: mut tone_small,
+    } = rows.next()?;
+    // The serial web path already owns one complete range and requires no
+    // second full-size allocation merely to concatenate it.
+    normals.reserve_exact(res * res - normals.len());
+    roughness.reserve_exact(res * res - roughness.len());
+    ao_small.reserve_exact(reduced * reduced - ao_small.len());
+    tone_small.reserve_exact(reduced * reduced - tone_small.len());
+    for mut row in rows {
+        if cancelled() {
+            return None;
+        }
+        normals.append(&mut row.normals);
+        roughness.append(&mut row.roughness);
+        ao_small.append(&mut row.ao);
+        tone_small.append(&mut row.tone);
+    }
+    assert_eq!(
+        normals.len(),
+        res * res,
+        "normal row coverage must be complete"
+    );
+    assert_eq!(
+        roughness.len(),
+        res * res,
+        "roughness row coverage must be complete"
+    );
+    if cancelled() {
+        return None;
+    }
+    let ao = lunco_terrain_core::upsample_bilinear(&ao_small, reduced, res);
+    drop(ao_small);
+    if cancelled() {
+        return None;
+    }
+    let albedo = lunco_terrain_core::upsample_bilinear(&tone_small, reduced, res);
+    drop(tone_small);
+    if cancelled() {
+        return None;
+    }
+    let surface_rgba = pack_surface_rgba8(&roughness, &ao, &[]);
+    if cancelled() {
+        return None;
+    }
+    let normal_rgba = pack_normal_rgba8(&normals, &albedo);
+    (!cancelled()).then_some(DerivedMaps {
+        res,
+        surface_rgba,
+        normal_rgba,
+    })
+}
+
+/// The serial cache consumer (web) uses the same row kernels and assembly.
 fn bake_derived(
     oracle: &SurfaceOracle,
     profile: lunco_render::RenderQualityProfile,
 ) -> DerivedMaps {
-    let half = oracle.half_extent() as f64;
-    let region = Square {
-        center: [0.0, 0.0],
-        half,
-    };
+    let plan = DerivedRasterPlan::new(oracle, profile);
     let res = profile.terrain_derived_map_resolution;
-    let texel = raster_texel_size_m(half, res);
-    // Gate over-zoom synthesis at the map's texel size via the shared filter
-    // policy (the map is far coarser than the synthetic detail — skip it, don't
-    // alias it).
-    // Region-scoped (the whole DEM square, plus a texel of stencil slack): the
-    // map is one bake over a known box, so crater fields gather their placements
-    // once here — and at this texel size the gate drops everything below ~2
-    // texels outright instead of rejecting it 1024² times.
-    let limited = SurfaceBand::visual(texel).limited_region(oracle, region, 2.0 * texel);
-
-    // One derive pass: slope is `acos(n.y)` of the very normal just computed,
-    // so the fused kernel halves the oracle samples per texel.
-    let bounded = BoundedHeightSource::new(&limited, half);
-    let (normals, slope) = normal_slope_maps(&bounded, &region, res);
-    // AO is smooth by construction (a horizon integral over the configured
-    // terrain-derived AO radius fraction of
-    // the extent) — bake the hemisphere march at HALF res (¼ the cost; this was
-    // the whole cold-bake wait) and bilinear-expand to pack resolution.
-    let ao_res = (res / 2).max(1);
-    let ao_texel = raster_texel_size_m(half, ao_res);
-    // The AO march walks horizon rays out to the configured fraction of `half` from each
-    // texel, so the scope must grow by that reach — a ray leaving the box would
-    // otherwise sample a view the region prune never promised.
-    let ao_limited = SurfaceBand::visual(ao_texel).limited_region(
-        oracle,
-        region,
-        half * profile.terrain_derived_ao_radius_fraction + 2.0 * ao_texel,
-    );
-    let ao_bounded = BoundedHeightSource::new(&ao_limited, half);
-    let ao_small = ao_map(
-        &ao_bounded,
-        &region,
-        ao_res,
-        half * profile.terrain_derived_ao_radius_fraction,
-        profile.terrain_derived_ao_directions,
-        profile.terrain_derived_ao_steps,
-        half,
-    );
-    let ao = lunco_terrain_core::upsample_bilinear(&ao_small, ao_res, res);
-    // Tone: 3-texel curvature stencil on a source limited at 2× the stencil.
-    // The old 1-texel stencil on the 2-texel-limited source sat exactly AT
-    // Nyquist → per-texel checker noise → the hard texel mosaic at mid range.
-    const TONE_STENCIL_TEXELS: f64 = 3.0;
-    // A stencil wider than the texel — a custom Nyquist multiple, not the plain
-    // `visual(texel)` band. Named inline rather than given a constructor, since
-    // the stencil width is a property of this one bake.
-    let tone_limited = SurfaceBand {
-        min_wavelength: 2.0 * TONE_STENCIL_TEXELS * texel,
-    }
-    .limited_region(oracle, region, 2.0 * TONE_STENCIL_TEXELS * texel);
-    // Marched at HALF res and bilinear-expanded, like AO — and for a stronger
-    // reason: the tone source is band-limited to `2·3·texel`, i.e. it carries
-    // nothing finer than 6 texels, so a 2-texel sampling pitch is still three
-    // times finer than its Nyquist. Sampling it at 1024² was resolving detail
-    // the source provably does not contain, at ~10 oracle evaluations per texel
-    // (a 5-tap Laplacian plus the slope probe) — the most expensive pass in the
-    // whole bake. The stencil is halved IN TEXELS so its width IN METRES is
-    // unchanged: same tone, a quarter of the samples.
-    let tone_res = (res / 2).max(1);
-    let tone_bounded = BoundedHeightSource::new(&tone_limited, half);
-    let albedo_small = albedo_map(
-        &tone_bounded,
-        &region,
-        tone_res,
-        TONE_STENCIL_TEXELS * 0.5,
-        half,
-    );
-    let albedo = lunco_terrain_core::upsample_bilinear(&albedo_small, tone_res, res);
-
-    let roughness: Vec<f32> = slope
-        .iter()
-        .map(|&s| {
-            roughness_from_slope(
-                s,
-                profile.terrain_derived_roughness_base,
-                profile.terrain_derived_roughness_saturation_radians,
-            )
-        })
-        .collect();
-
-    DerivedMaps {
-        res,
-        surface_rgba: pack_surface_rgba8(&roughness, &ao, &[]),
-        normal_rgba: pack_normal_rgba8(&normals, &albedo),
-    }
+    let rows = plan
+        .sample_rows(0..reduced_raster_res(res), || false)
+        .expect("non-cancellable derived raster cannot be cancelled");
+    assemble_derived_rows(res, vec![rows], || false).expect("complete serial raster must assemble")
 }
 
 /// Upload finished bakes as linear RGBA8 textures and publish the handles as
@@ -725,32 +1319,76 @@ fn bake_derived(
 /// stale marker chain re-kicks a fresh bake against the current surface.
 fn finish_derived_bakes(
     mut commands: Commands,
-    time: Res<Time>,
     quality: Res<lunco_render::RenderingQualitySettings>,
-    mut tasks: Query<(Entity, &mut DerivedBakeTask, &DemHeightField)>,
+    #[cfg(not(target_arch = "wasm32"))] admission: Res<AsyncWorkAdmission>,
+    #[cfg(not(target_arch = "wasm32"))] budget: Res<DerivedRasterAssemblyBudget>,
+    mut tasks: Query<(
+        Entity,
+        &mut DerivedBakeTask,
+        &DemHeightField,
+        Option<&DemVisualTargetRes>,
+        Has<TerrainLodViz>,
+    )>,
     images: Option<ResMut<Assets<Image>>>,
 ) {
     let Some(mut images) = images else { return };
     let Ok(profile) = quality.validated_profile() else {
+        // Invalid requested quality cannot admit or retain a previous worker
+        // lease. Cancel now rather than stranding its completed result permit.
+        for (entity, _, _, _, _) in &mut tasks {
+            commands.entity(entity).try_remove::<DerivedBakeTask>();
+        }
         return;
     };
-    for (entity, mut task, hf) in &mut tasks {
-        let Some(maps) = future::block_on(future::poll_once(&mut task.0)) else {
-            continue;
-        };
-        if task.1 != Arc::as_ptr(&hf.0) as usize {
-            // Baked against a surface that no longer exists → drop, and RE-ARM
-            // the stale marker (already past debounce): with the old maps kept
-            // live through a bounded edit, `TerrainDerivedMaps` is still present,
-            // so its absence can no longer be the re-kick signal.
+    for (entity, mut task, hf, target, streamed) in &mut tasks {
+        let requested_profile =
+            profile_for_terrain(profile, hf.0.grid().res, target.map(|t| t.0), streamed);
+        if !Arc::ptr_eq(&task.source, &hf.0)
+            || task.requested_key != derived_key(&hf.0, requested_profile)
+        {
+            // Retire queued work and fence running results when either immutable input changes.
             commands
                 .entity(entity)
                 .try_remove::<DerivedBakeTask>()
                 .try_insert(DerivedMapsStale {
-                    since: time.elapsed_secs_f64() - REBAKE_DEBOUNCE_SECS,
+                    since: Instant::now(),
                 });
             continue;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let maps = {
+            let source = task.source.clone();
+            let requested_key = task.requested_key;
+            match task.native.advance(
+                &admission,
+                &budget,
+                entity,
+                requested_key,
+                &source,
+                profile.terrain_derived_map_resolution,
+            ) {
+                Ok(Some(maps)) => maps,
+                Ok(None) => continue,
+                Err(()) => {
+                    error!(?entity, "terrain derived-map worker did not complete");
+                    commands
+                        .entity(entity)
+                        .try_remove::<DerivedBakeTask>()
+                        .try_insert(DerivedMapsFailed {
+                            source: task.source.clone(),
+                            requested_key: task.requested_key,
+                        });
+                    continue;
+                }
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let Some((maps, _permit)) = future::block_on(future::poll_once(&mut task.task)) else {
+            continue;
+        };
+        let mut actual_profile = requested_profile;
+        actual_profile.terrain_derived_map_resolution = maps.res;
+        let bake_key = derived_key(&hf.0, actual_profile);
         let res = maps.res;
         // Derived rasters are texel-centred cells over the full terrain square:
         // adjacent centres are exactly `width / res` apart (derive::texel_world).
@@ -777,9 +1415,38 @@ fn finish_derived_bakes(
                 surface,
                 normal,
                 surface_key: hf.0.surface_key(),
+                bake_key,
                 res,
                 texel_size_m,
             });
+    }
+}
+
+/// A surviving entity can lose its DEM during authored reconciliation. Its
+/// queued request, unconsumed result and published rasters are still owned by
+/// the removed source, not by the entity's remaining authored material.
+fn retire_derived_without_source(
+    mut commands: Commands,
+    entities: Query<
+        Entity,
+        (
+            Without<DemHeightField>,
+            Or<(
+                With<DerivedBakeTask>,
+                With<DerivedMapsFailed>,
+                With<DerivedMapsStale>,
+                With<TerrainDerivedMaps>,
+            )>,
+        ),
+    >,
+) {
+    for entity in &entities {
+        commands.entity(entity).try_remove::<(
+            DerivedBakeTask,
+            DerivedMapsFailed,
+            DerivedMapsStale,
+            TerrainDerivedMaps,
+        )>();
     }
 }
 
@@ -793,6 +1460,7 @@ fn cancel_derived_bakes_on_scene_teardown(
         Entity,
         Or<(
             With<DerivedBakeTask>,
+            With<DerivedMapsFailed>,
             With<DerivedMapsStale>,
             With<TerrainDerivedMaps>,
             With<TerrainAuthoredMaps>,
@@ -803,6 +1471,7 @@ fn cancel_derived_bakes_on_scene_teardown(
     for entity in &entities {
         commands.entity(entity).try_remove::<(
             DerivedBakeTask,
+            DerivedMapsFailed,
             DerivedMapsStale,
             TerrainDerivedMaps,
             TerrainAuthoredMaps,
@@ -816,47 +1485,149 @@ fn cancel_derived_bakes_on_scene_teardown(
 /// status bus.
 fn update_derived_status(
     images: Option<Res<Assets<Image>>>,
+    horizon_config: Option<Res<lunco_environment::HorizonShadowCacheConfig>>,
+    render_sun: Option<Res<lunco_environment::SunRenderState>>,
+    sun: lunco_environment::SunQuery,
+    quality: Res<lunco_render::RenderingQualitySettings>,
     terrains: Query<
         (
-            Has<TerrainDerivedMaps>,
+            Entity,
+            &DemHeightField,
+            Option<&TerrainDerivedMaps>,
             Option<&DerivedBakeTask>,
+            Option<&DerivedMapsFailed>,
             Has<DerivedMapsStale>,
+            Option<&DemVisualTargetRes>,
+            Has<TerrainLodViz>,
+            Option<&lunco_core::HorizonShadowTerrain>,
+            Has<bevy::camera::visibility::RenderLayers>,
+            Option<&lunco_environment::HorizonMap>,
+            Option<&GlobalTransform>,
+            Option<&lunco_environment::HorizonShadowCache>,
+            Option<&TileShadowCache>,
         ),
         With<DemHeightField>,
     >,
     mut status: ResMut<TerrainDerivedStatus>,
+    mut diagnostics: Option<ResMut<lunco_core::RuntimeDiagnostics>>,
 ) {
     if images.is_none() {
-        *status = TerrainDerivedStatus::default();
+        status.set_if_neq(TerrainDerivedStatus::default());
         return;
     }
 
     let mut ready = 0;
     let mut total = 0;
     let mut pending = 0;
-    for (has_maps, task, stale) in &terrains {
+    let mut failed = 0;
+    let mut findings = Vec::new();
+    let Ok(profile) = quality.validated_profile() else {
+        return;
+    };
+    let sun_sample = lunco_environment::pick_sun(&sun).and_then(|(_, radius, _)| {
+        render_sun
+            .as_ref()?
+            .direction_to_sun_world
+            .map(|direction| (direction, radius))
+    });
+    for (
+        entity,
+        field,
+        maps,
+        task,
+        failure,
+        stale,
+        target,
+        streamed,
+        horizon,
+        render_layers,
+        horizon_ready,
+        transform,
+        shadow,
+        wired_shadow,
+    ) in &terrains
+    {
+        let horizon_enabled = horizon.is_some_and(|cfg| cfg.resolution >= 2)
+            && !render_layers
+            && !(streamed && cfg!(target_arch = "wasm32"));
+        let local_sun = sun_sample
+            .zip(transform)
+            .map(|((direction, radius), transform)| {
+                (
+                    transform
+                        .affine()
+                        .inverse()
+                        .transform_vector3(direction)
+                        .normalize_or_zero(),
+                    radius,
+                )
+            });
+        let cache_required = horizon_enabled
+            && horizon_config.as_ref().zip(local_sun).is_some_and(
+                |(config, (direction, radius))| config.requires_sample(direction, radius),
+            );
+        let shadow_ready = !cache_required
+            || shadow.is_some_and(|cache| {
+                horizon_config.as_ref().zip(local_sun).is_some_and(
+                    |(config, (direction, radius))| {
+                        cache.matches_quality(config, radius)
+                            && cache.is_valid_for_sun(direction, config.sun_threshold_deg)
+                    },
+                ) && (!streamed
+                    || wired_shadow
+                        .is_some_and(|wired| wired.on > 0.0 && wired.image == cache.image))
+            });
+        let height_ready = !horizon_enabled
+            || (streamed && !cache_required)
+            || horizon
+                .zip(horizon_ready)
+                .is_some_and(|(cfg, map)| map.field.resolution() == cfg.resolution);
         let has_task = task.is_some();
         total += 1;
-        ready += usize::from(has_maps && !has_task && !stale);
-        pending += usize::from(has_task || stale);
+        let desired =
+            profile_for_terrain(profile, field.0.grid().res, target.map(|t| t.0), streamed);
+        let requested_key = derived_key(&field.0, desired);
+        if failure.is_some_and(|failure| {
+            Arc::ptr_eq(&failure.source, &field.0) && failure.requested_key == requested_key
+        }) {
+            failed += 1;
+            findings.push(lunco_core::RuntimeDiagnostic {
+                producer: "terrain-visual-preparation".into(),
+                code: "derived-bake-failed".into(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                subject: format!("{entity:?}"),
+                message:
+                    "terrain derived raster preparation failed for the current source and quality"
+                        .into(),
+            });
+            continue;
+        }
+        let complete = maps.is_some_and(|maps| maps.bake_key == requested_key)
+            && !has_task
+            && !stale
+            && height_ready
+            && shadow_ready;
+        ready += usize::from(complete);
+        pending += usize::from(!complete);
     }
 
-    if pending == 0 {
-        *status = TerrainDerivedStatus {
-            active: false,
-            ready,
-            total,
-            pending,
-        };
-        return;
-    }
-
-    *status = TerrainDerivedStatus {
+    status.set_if_neq(TerrainDerivedStatus {
         active: pending > 0,
         ready,
         total,
         pending,
-    };
+        failed,
+    });
+    if let Some(diagnostics) = diagnostics.as_deref_mut() {
+        if diagnostics
+            .findings
+            .iter()
+            .filter(|finding| finding.producer == "terrain-visual-preparation")
+            .ne(findings.iter())
+        {
+            diagnostics.replace_producer("terrain-visual-preparation", findings);
+        }
+    }
 }
 
 /// A linear (non-sRGB) RGBA8 data texture with a full mip chain and
@@ -897,6 +1668,8 @@ fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32), anisotropy_clamp
 /// Register the derived-layer bake/bind systems. Called from
 /// [`crate::plugin::TerrainSurfaceVisualizationPlugin`].
 pub(crate) fn register(app: &mut App) {
+    #[cfg(not(target_arch = "wasm32"))]
+    lunco_core::AppSceneExt::init_scene_resource::<DerivedRasterAssemblyBudget>(app);
     app.init_resource::<DerivedQualitySignature>()
         .init_resource::<TerrainDerivedStatus>()
         .add_systems(
@@ -906,6 +1679,7 @@ pub(crate) fn register(app: &mut App) {
     app.add_systems(
         Update,
         (
+            retire_derived_without_source,
             mark_derived_stale_on_quality_change
                 .run_if(resource_changed::<lunco_render::RenderingQualitySettings>),
             mark_derived_stale,
@@ -929,9 +1703,83 @@ mod tests {
 
     fn terrain_profile() -> lunco_render::RenderQualityProfile {
         lunco_render::RenderQualityProfile {
+            directional_shadow_map_size: 1024,
+            point_shadow_map_size: 512,
+            directional_cascades: 2,
+            shadow_budget_bytes: 1024 * 1024 * 1024,
+            horizon_shadow_cache_sun_threshold_deg: 0.2,
+            horizon_march_steps: 24,
+            horizon_cache_samples_per_axis: 1,
+            shadow_first_cascade_far_bound: 20.0,
+            shadow_maximum_distance: 600.0,
+            render_failure_quiet_period_secs: 0.5,
+            render_failure_give_up_after_secs: 5.0,
+            editor_preview_illuminance: 128_000.0,
+            local_light_default_range: 20.0,
+            dome_cubemap_face_size: 512,
+            primitive_sphere_longitudes: 24,
+            primitive_sphere_latitudes: 16,
+            primitive_radial_segments: 32,
+            primitive_capsule_longitudes: 16,
+            primitive_capsule_latitudes: 8,
+            terrain_mesh_cache_bytes: 256 * 1024 * 1024,
             terrain_derived_map_resolution: 1024,
+            terrain_derived_ao_directions: 4,
+            terrain_derived_ao_steps: 4,
+            terrain_derived_ao_radius_fraction: 0.1,
+            terrain_derived_roughness_base: 0.6,
+            terrain_derived_roughness_saturation_radians: 0.6,
+            terrain_derived_texture_anisotropy: 1,
+            terrain_rock_max_instances: 2_000,
+            terrain_rock_mesh_buckets: 3,
+            terrain_rock_mesh_cube_count: 2,
+            terrain_rock_lod_fade_distance: 300.0,
+            terrain_lod_tile_resolution: 33,
+            terrain_lod_cinematic_resolution: 1025,
+            terrain_lod_pixel_error: 4.0,
+            terrain_lod_max_depth: 6,
+            terrain_lod_probe_resolution: 5,
+            terrain_lod_bakes_per_frame: 8,
+            terrain_lod_max_inflight_bakes: 16,
+            terrain_lod_tile_budget: 256,
+            terrain_lod_cover_edits_per_frame: 16,
+            terrain_lod_hysteresis_ratio: 1.2,
+            nurbs_surface_samples_per_control_span: 3,
+            nurbs_surface_minimum_subdivisions: 6,
+            nurbs_surface_maximum_subdivisions: 64,
+            nurbs_trim_curve_samples: 12,
+            nurbs_trim_minimum_subdivisions: 8,
+            nurbs_trim_maximum_subdivisions: 48,
+            curve_samples_per_segment: 4,
+            curve_radial_segments: 6,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn native_cache_rejects_wrong_requested_resolution_and_empty_maps() {
+        assert!(derived_maps_from_buffers(0, vec![], vec![]).is_none());
+        assert!(derived_maps_from_buffers(4, vec![0; 16], vec![0; 16]).is_none());
+        assert!(derived_maps_from_buffers(2, vec![0; 16], vec![0; 15]).is_none());
+        assert_eq!(
+            derived_maps_from_buffers(2, vec![0; 16], vec![0; 16])
+                .unwrap()
+                .res,
+            2
+        );
+    }
+
+    #[test]
+    fn desired_bake_identity_includes_quality_at_the_same_resolution() {
+        let oracle = SurfaceOracle::bare(Arc::new(
+            lunco_obstacle_field::field::HeightGrid::new_flat(2, 1.0),
+        ));
+        let profile = terrain_profile();
+        let changed = lunco_render::RenderQualityProfile {
+            terrain_derived_ao_steps: profile.terrain_derived_ao_steps + 1,
+            ..profile
+        };
+        assert_ne!(derived_key(&oracle, profile), derived_key(&oracle, changed));
     }
 
     #[test]
@@ -1095,6 +1943,189 @@ mod tests {
     }
 
     #[test]
+    fn terminal_current_raster_failure_is_not_indefinite_pending() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>()
+            .init_resource::<lunco_render::RenderingQualitySettings>()
+            .init_resource::<TerrainDerivedStatus>()
+            .init_resource::<lunco_core::RuntimeDiagnostics>()
+            .add_systems(Update, update_derived_status);
+        app.world_mut()
+            .resource_mut::<lunco_render::RenderingQualitySettings>()
+            .apply_profile(terrain_profile());
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(crate::HeightGrid::new_flat(
+            2, 1.0,
+        ))));
+        let profile = app
+            .world()
+            .resource::<lunco_render::RenderingQualitySettings>()
+            .validated_profile()
+            .unwrap();
+        let desired = profile_for_terrain(profile, 2, None, false);
+        app.world_mut().spawn((
+            DemHeightField(oracle.clone()),
+            DerivedMapsFailed {
+                requested_key: derived_key(&oracle, desired),
+                source: oracle,
+            },
+        ));
+        app.update();
+        let status = app.world().resource::<TerrainDerivedStatus>();
+        assert_eq!(status.failed, 1);
+        assert_eq!(status.pending, 0);
+        assert!(!status.active);
+        assert_eq!(
+            app.world()
+                .resource::<lunco_core::RuntimeDiagnostics>()
+                .findings
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn source_removal_releases_queued_work_and_unconsumed_raster_permit() {
+        let mut app = App::new();
+        app.init_resource::<AsyncWorkAdmission>()
+            .init_resource::<DerivedRasterAssemblyBudget>()
+            .add_systems(Update, retire_derived_without_source);
+        let oracle = Arc::new(SurfaceOracle::bare(Arc::new(crate::HeightGrid::new_flat(
+            2, 1.0,
+        ))));
+        let (request, permit) = {
+            let admission = app.world().resource::<AsyncWorkAdmission>();
+            let key = |operation| {
+                AsyncWorkKey::new(AsyncWorkKind::VisualizationPreparation, 0, 1, 1, operation)
+            };
+            (
+                admission
+                    .submit_transport(AsyncWorkPriority::Background, key(1), |_| {})
+                    .unwrap(),
+                admission
+                    .admit_external(AsyncWorkPriority::Interactive, key(2))
+                    .unwrap(),
+            )
+        };
+        let reservation = app
+            .world()
+            .resource::<DerivedRasterAssemblyBudget>()
+            .reserve(1, 1)
+            .unwrap();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(
+            sender
+                .send((
+                    Some(DerivedMipped {
+                        res: 1,
+                        surface: (vec![0; 4], 1),
+                        normal: (vec![0; 4], 1)
+                    }),
+                    permit,
+                    Some(reservation.clone()),
+                ))
+                .is_ok()
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                DemHeightField(oracle.clone()),
+                DerivedBakeTask {
+                    source: oracle.clone(),
+                    requested_key: 1,
+                    native: NativeDerivedTask {
+                        priority: AsyncWorkPriority::Background,
+                        cancelled: cancellation.clone(),
+                        stage: NativeDerivedStage::Finish(DerivedTransport {
+                            _request: request,
+                            result: Mutex::new(receiver),
+                        }),
+                        assembly: Some(reservation),
+                    },
+                },
+                DerivedMapsFailed {
+                    source: oracle,
+                    requested_key: 1,
+                },
+                DerivedMapsStale {
+                    since: Instant::now(),
+                },
+                TerrainDerivedMaps {
+                    surface: Handle::default(),
+                    normal: Handle::default(),
+                    surface_key: 1,
+                    bake_key: 1,
+                    res: 1,
+                    texel_size_m: 1.0,
+                },
+                TerrainAuthoredMaps::default(),
+            ))
+            .id();
+        let snapshot = app.world().resource::<AsyncWorkAdmission>().snapshot();
+        assert_eq!(snapshot.queued.iter().sum::<usize>(), 1);
+        assert_eq!(snapshot.in_flight.iter().sum::<usize>(), 1);
+        app.world_mut()
+            .entity_mut(entity)
+            .remove::<DemHeightField>();
+        app.update();
+        let snapshot = app.world().resource::<AsyncWorkAdmission>().snapshot();
+        assert_eq!(snapshot.queued.iter().sum::<usize>(), 0);
+        assert_eq!(snapshot.in_flight.iter().sum::<usize>(), 0);
+        assert!(cancellation.load(Ordering::Acquire));
+        assert_eq!(
+            app.world()
+                .resource::<DerivedRasterAssemblyBudget>()
+                .0
+                .load(Ordering::Acquire),
+            0
+        );
+        assert!(app.world().get::<DerivedBakeTask>(entity).is_none());
+        assert!(app.world().get::<DerivedMapsFailed>(entity).is_none());
+        assert!(app.world().get::<DerivedMapsStale>(entity).is_none());
+        assert!(app.world().get::<TerrainDerivedMaps>(entity).is_none());
+        assert!(app.world().get::<TerrainAuthoredMaps>(entity).is_some());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retired_raster_keeps_staging_reserved_until_worker_releases_it() {
+        use lunco_core::SceneResource;
+        let mut budget = DerivedRasterAssemblyBudget::default();
+        let owner = budget.reserve(64, 64).unwrap();
+        let worker = owner.clone();
+        assert!(budget.reserve(1, 64).is_none());
+        drop(owner);
+        budget.clear_scene();
+        assert!(budget.reserve(64, 64).is_none());
+        drop(worker);
+        assert!(budget.reserve(64, 64).is_some());
+    }
+
+    #[test]
+    fn partitioned_derived_raster_matches_serial_packed_pixels() {
+        let mut grid = crate::HeightGrid::new_flat(9, 20.0);
+        for (index, height) in grid.heights.iter_mut().enumerate() {
+            *height = ((index as f64 * 0.37).sin() * 3.0) + 0.1 * index as f64;
+        }
+        let oracle = SurfaceOracle::bare(Arc::new(grid));
+        for res in [1, 7, 16, 31] {
+            let mut profile = terrain_profile();
+            profile.terrain_derived_map_resolution = res;
+            let serial = bake_derived(&oracle, profile);
+            let plan = DerivedRasterPlan::new(&oracle, profile);
+            let reduced = reduced_raster_res(res);
+            let rows = (0..reduced)
+                .map(|row| plan.sample_rows(row..row + 1, || false).unwrap())
+                .collect();
+            let partitioned = assemble_derived_rows(res, rows, || false).unwrap();
+            assert_eq!(partitioned.res, serial.res);
+            assert_eq!(partitioned.surface_rgba, serial.surface_rgba);
+            assert_eq!(partitioned.normal_rgba, serial.normal_rgba);
+        }
+    }
+
+    #[test]
     fn scene_teardown_removes_derived_state_and_resets_status() {
         let mut app = App::new();
         app.init_resource::<TerrainDerivedStatus>().add_systems(
@@ -1107,6 +2138,7 @@ mod tests {
             ready: 0,
             total: 1,
             pending: 1,
+            failed: 0,
         };
 
         lunco_core::run_scene_teardown(app.world_mut());

@@ -396,38 +396,26 @@ impl DatasetEntry {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn resolve_artifact_path(&self) -> Result<Option<PathBuf>, String> {
-        let (root, relative) = match &self.spec.process {
-            Some(process) => {
-                let root = match process.output_root.as_str() {
-                    "assets" => {
-                        lunco_assets_core::assets_dir_abs().map_err(|error| error.to_string())?
-                    }
-                    "twin" => match &self.scope {
-                        DatasetScope::Twin { root, .. } => root.clone(),
-                        DatasetScope::Engine => {
-                            return Err(format!(
-                                "dataset '{}' selects a Twin output without a Twin scope",
-                                self.key
-                            ));
-                        }
-                    },
-                    "cache" => self.scope.cache_root(self.spec.shared),
-                    other => {
+        let relative = lunco_assets_path::relative_path(&self.artifact_rel)
+            .ok_or_else(|| format!("unsafe artifact path `{}`", self.artifact_rel))?;
+        let roots = match &self.scope {
+            DatasetScope::Engine => lunco_assets_core::engine_asset_read_roots(
+                &lunco_assets_core::assets_dir_abs().map_err(|error| error.to_string())?,
+            ),
+            DatasetScope::Twin { root, .. } => {
+                match self.spec.process.as_ref().map(|p| p.output_root.as_str()) {
+                    Some("twin") => vec![root.clone()],
+                    Some("cache") | None => vec![self.scope.cache_root(self.spec.shared)],
+                    Some(other) => {
                         return Err(format!(
-                            "dataset '{}' has invalid artifact owner '{other}'",
+                            "dataset '{}' has invalid Twin artifact owner '{other}'",
                             self.key
                         ));
                     }
-                };
-                (root, PathBuf::from(&process.output))
+                }
             }
-            None => (
-                self.scope.cache_root(self.spec.shared),
-                crate::manifest::entry_relative_path(&self.spec)
-                    .map_err(|error| error.to_string())?,
-            ),
         };
-        lunco_assets_core::resolve_native_asset(&[root], &relative, None)
+        lunco_assets_core::resolve_native_asset(&roots, &relative, None)
             .map(|resolved| resolved.map(|(_, path)| path))
             .map_err(|error| error.to_string())
     }
@@ -1458,6 +1446,84 @@ name = "Demo vectors"
 url = "https://example.invalid/vectors.csv"
 dest = "data/demo.csv"
 "#;
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bundled_engine_artifact_is_admitted_without_a_warm_cache() {
+        const CHILD: &str = "LUNCO_BUNDLED_ENGINE_ARTIFACT_CHILD";
+        const BUNDLE: &str = r#"
+[fixture]
+name = "Extracted package asset"
+url = "https://example.invalid/fixture.tar.gz"
+extract = "asset.bin"
+dest = "data/asset.bin"
+sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+bundle = ["desktop"]
+"#;
+        if std::env::var_os(CHILD).is_some() {
+            let asset_root = lunco_assets_core::assets_dir_abs().unwrap();
+            let packaged = asset_root.join("data/asset.bin");
+            let cached = lunco_assets_core::cache_dir().join("data/asset.bin");
+            let spec = BUNDLE
+                .parse::<AssetManifest>()
+                .unwrap()
+                .assets
+                .remove("fixture")
+                .unwrap();
+            let write_artifact = |path: &Path| {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"fixture artifact").unwrap();
+                std::fs::write(
+                    crate::extracted_file_integrity_marker(&spec, path).unwrap(),
+                    spec.sha256.as_ref().unwrap(),
+                )
+                .unwrap();
+            };
+            write_artifact(&packaged);
+            let inspect = || {
+                let mut registry = DatasetRegistry::default();
+                assert_eq!(registry.register(BUNDLE, "bundle"), 1);
+                let entry = &registry.entries()[0];
+                (entry.state.clone(), entry.installed_artifact().unwrap())
+            };
+            assert!(!cached.exists());
+            let resolved = lunco_assets_core::engine_asset_local_path("data/asset.bin").unwrap();
+            assert_eq!(inspect(), (DatasetState::Installed, resolved));
+
+            // A valid shared copy must not mask an invalid packaged artifact.
+            write_artifact(&cached);
+            std::fs::remove_file(crate::extracted_file_integrity_marker(&spec, &packaged).unwrap())
+                .unwrap();
+            assert_eq!(inspect(), (DatasetState::Missing, None));
+
+            // Only absence of the packaged payload admits the shared copy.
+            std::fs::remove_file(&packaged).unwrap();
+            let resolved = lunco_assets_core::engine_asset_local_path("data/asset.bin").unwrap();
+            assert_eq!(inspect(), (DatasetState::Installed, resolved));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let assets = root.path().join("assets");
+        let cache = root.path().join("cache");
+        std::fs::create_dir(&assets).unwrap();
+        std::fs::create_dir(&cache).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "registry::tests::bundled_engine_artifact_is_admitted_without_a_warm_cache",
+            ])
+            .env(CHILD, "1")
+            .env(lunco_assets_core::ASSET_ROOT_ENV, assets)
+            .env("LUNCOSIM_CACHE", cache)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]

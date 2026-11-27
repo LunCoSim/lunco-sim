@@ -105,11 +105,18 @@ struct InputBindingsStatus {
 
 /// The chrome backend consumes window coordinates. Only world views supply
 /// rays to spatial picking backends, including offscreen preview views.
-fn exclude_egui_host_rays(
+fn admit_world_view_rays(
     mut rays: ResMut<RayMap>,
     hosts: Query<(), Or<(With<WorkbenchEguiHost>, With<WorkbenchOverlayCamera>)>>,
+    viewport: Option<Res<SceneViewport>>,
 ) {
-    rays.map.retain(|id, _| !hosts.contains(id.camera));
+    rays.map.retain(|id, _| {
+        !hosts.contains(id.camera)
+            && viewport.as_deref().is_none_or(|viewport| {
+                viewport.active_camera != Some(id.camera)
+                    || viewport.exposed_camera() == Some(id.camera)
+            })
+    });
 }
 
 /// Measurement emitted by the transparent viewport panel after it has read
@@ -629,8 +636,15 @@ pub(crate) fn reset_scene_pick_gate(mut gate: ResMut<ScenePickGate>) {
 pub(crate) fn resolve_scene_pointer(
     mut gate: ResMut<ScenePickGate>,
     mut q: Query<&mut bevy_egui::EguiContext, With<PrimaryEguiContext>>,
+    viewport: Option<Res<SceneViewport>>,
 ) {
-    let mut state = EguiPointerState::default();
+    let mut state = EguiPointerState {
+        main_scene_blocked: viewport
+            .as_deref()
+            .and_then(SceneViewport::exposed_camera)
+            .is_none(),
+        ..Default::default()
+    };
     for mut ctx in q.iter_mut() {
         let c = ctx.get_mut();
         state.over_egui |= c.is_pointer_over_egui();
@@ -852,7 +866,7 @@ impl Plugin for WorkbenchViewportPlugin {
             .add_systems(Startup, ensure_egui_host)
             .add_systems(
                 PreUpdate,
-                exclude_egui_host_rays
+                admit_world_view_rays
                     .after(RayMap::repopulate)
                     .in_set(PickingSystems::ProcessInput)
                     .run_if(resource_exists::<RayMap>),
@@ -890,6 +904,7 @@ impl Plugin for WorkbenchViewportPlugin {
                 PostUpdate,
                 resolve_scene_pointer
                     .after(bevy_egui::EguiPostUpdateSet::ProcessOutput)
+                    .after(lunco_viewport_core::SceneViewportSet::Reconcile)
                     .before(egui_viewport_aware_picking)
                     .before(track_egui_focus),
             )
@@ -917,6 +932,15 @@ impl Plugin for WorkbenchViewportPlugin {
 mod tests {
     use super::*;
     use bevy::camera::CameraOutputMode;
+
+    #[test]
+    fn standalone_pointer_resolution_does_not_require_scene_viewport() {
+        let mut app = App::new();
+        app.init_resource::<ScenePickGate>()
+            .add_systems(Update, resolve_scene_pointer);
+        app.update();
+        assert!(!app.world().resource::<ScenePickGate>().over_main_scene());
+    }
 
     #[test]
     fn context_action_keys_do_not_move_ui_focus_while_driving() {
@@ -1141,8 +1165,23 @@ mod tests {
 
     #[test]
     fn design_layout_never_paints_scene() {
+        struct DesignPanel;
+        impl Panel for DesignPanel {
+            fn id(&self) -> PanelId {
+                PanelId("design-fixture")
+            }
+            fn title(&self) -> String {
+                "Design fixture".into()
+            }
+            fn default_slot(&self) -> PanelSlot {
+                PanelSlot::Center
+            }
+            fn render(&mut self, _ui: &mut egui::Ui, _ctx: &mut PanelCtx) {}
+        }
         let mut layout = crate::WorkbenchLayout::default();
-        layout.center.push(PanelId("lunica::diagram"));
+        // Register the real panel and materialize its dock, rather than only
+        // declaring an unavailable slot with no central content.
+        layout.register(DesignPanel);
 
         let (visible, rect) = resolve_scene_viewport_layout(Some(&layout));
 

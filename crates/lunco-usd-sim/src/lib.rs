@@ -272,7 +272,7 @@ impl PreparedJointTopologySource {
         }
         match self {
             Self::AssetPlan { plan, generation } => {
-                *generation == 0 || canonical.prepared_plan_is_current(stage, plan)
+                *generation == 0 || canonical.projection_plan_is_current(stage, plan)
             }
             Self::CanonicalSnapshot { .. } => true,
         }
@@ -1542,7 +1542,7 @@ fn process_usd_sim_prims(
                 lunco_core_runtime::AsyncWorkPriority::Interactive
             };
             if generation > 0
-                && !canonical.prepared_plan_is_current(id, &stage_asset.projection_plan)
+                && !canonical.projection_plan_is_current(id, &stage_asset.projection_plan)
             {
                 let source = PreparedJointTopologySource::CanonicalSnapshot {
                     asset_plan: stage_asset.projection_plan.clone(),

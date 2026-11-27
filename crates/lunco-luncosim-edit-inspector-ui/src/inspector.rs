@@ -1036,7 +1036,11 @@ fn usd_preview_transform_section(
         ui.label("Preparing USD transform");
         return;
     };
-    let (reader, _) = stages.reader_for_composed_query(prim.stage_handle.id(), asset);
+    let (reader, _) = stages.reader_for_composed_query(
+        prim.stage_handle.id(),
+        asset,
+        lunco_usd_bevy_stage::canonical::ComposedReadRequirement::Native,
+    );
     let time_code = ctx
         .get::<lunco_usd_bevy_scene::UsdAnimated>(entity)
         .map_or(0.0, |animation| animation.pose_time_code);

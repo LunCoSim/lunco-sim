@@ -188,14 +188,11 @@ fn set_vehicle_property(
 ///   (requires `shader` set first, or a USD shader material). The shader's
 ///   reflected schema resolves the type; colours are `r,g,b`.
 /// - `visible` → `true`/`false` through the same namespace visibility owner as `SetSceneView`.
-/// - Per-wheel tire-spin dynamics (target a single wheel entity by its `api_id`):
-///   `brake_torque`, `slip_stiffness`, `bearing_damping`, `friction_mu`, `mass`,
-///   `moi`, `wheel_radius`, `rest_length`, `spring_k`, `damping_c` → set that
-///   `f64` field on the wheel's `WheelRaycast` live. Each wheel is its own entity,
-///   so this gives independent per-wheel control. Motor torque and no-load speed
-///   are owned by the composed Modelica motor prim; edit its authored
-///   `inputs:stall_torque` / `inputs:no_load_speed` attributes instead of
-///   addressing a wheel-local drive parameter.
+/// - Wheel targets accept `brake_torque`, `slip_stiffness`, `bearing_damping`,
+///   `friction_mu`, `mass`, `moi` and `wheel_radius`.
+/// - Suspension targets accept `rest_length`, `spring_k` and `damping_c`.
+/// - The composed Modelica motor prim owns `inputs:stall_torque` and
+///   `inputs:no_load_speed`.
 #[Command(default)]
 pub struct SetObjectProperty {
     /// API-stable global entity ID from `ListEntities`, resolved to the live
@@ -562,8 +559,7 @@ fn apply_object_property(
     origin: Option<lunco_core::CommandOrigin>,
 ) -> Result<Option<ApplyUsdOps>, String> {
     use lunco_usd_bevy_scene::visibility::{
-        presentation_actor, reconcile_runtime_visibility, validate_runtime_visibility,
-        write_runtime_visibility,
+        prepare_runtime_visibility, presentation_actor, validate_runtime_visibility,
     };
     let target = world
         .resource::<lunco_api::registry::ApiEntityRegistry>()
@@ -602,9 +598,7 @@ fn apply_object_property(
                 });
             } else {
                 let actor = presentation_actor(world, origin)?;
-                if write_runtime_visibility(world, target, Some(visible), actor) {
-                    reconcile_runtime_visibility(world, &[target]);
-                }
+                prepare_runtime_visibility(world, &[(target, Some(visible))], actor)?.apply(world);
             }
         }
         "shader" => {

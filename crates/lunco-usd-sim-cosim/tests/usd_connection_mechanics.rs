@@ -33,9 +33,15 @@ fn setup() -> (App, AssetId<UsdStageAsset>, Handle<UsdStageAsset>) {
         .add(UsdStageAsset::from_recipe(recipe.clone()).expect("prepare stage asset"));
     let id = handle.id();
 
+    let admitted_asset = app
+        .world()
+        .resource::<Assets<UsdStageAsset>>()
+        .get(id)
+        .unwrap()
+        .clone();
     app.world_mut()
         .non_send_mut::<CanonicalStages>()
-        .get_or_build(id, &recipe)
+        .get_or_build(id, &admitted_asset)
         .expect("canonical stage builds from the recipe");
     {
         let stage = app

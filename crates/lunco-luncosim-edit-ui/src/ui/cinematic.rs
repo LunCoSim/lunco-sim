@@ -282,8 +282,8 @@ fn on_add_camera_here(
     // The viewport is the sole presentation owner. Resolve its entity and
     // validate the realized camera instead of selecting an arbitrary active
     // camera from the ECS query.
-    let Some(cam_entity) = viewport.active_camera else {
-        report_capture_failure(&mut commands, "No active window camera to capture");
+    let Some(cam_entity) = viewport.exposed_camera() else {
+        report_capture_failure(&mut commands, "No exposed window camera to capture");
         return;
     };
     let Some((_, _, _)) = q_cam

@@ -21,7 +21,7 @@ use std::io::{self, Cursor};
 use std::rc::Rc;
 use std::time::SystemTime;
 
-use crate::{recipe::StageLayerBytes, validate_usda_nesting};
+use crate::recipe::StageLayerBytes;
 use openusd::ar::{self, Asset, ResolvedPath};
 
 use lunco_assets_path::{canonicalize, canonicalize_root};
@@ -246,11 +246,9 @@ impl ar::Resolver for LuncoUsdResolver {
             .get(key)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, key.to_string()))?;
-        if let Ok(text) = std::str::from_utf8(&bytes) {
-            validate_usda_nesting(text).map_err(|error| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("{key}: {error}"))
-            })?;
-        }
+        bytes.validate_nesting().map_err(|error| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("{key}: {error}"))
+        })?;
         Ok(Box::new(Cursor::new(bytes.asset_buffer())))
     }
 

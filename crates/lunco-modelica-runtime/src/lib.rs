@@ -66,10 +66,13 @@ pub const MAX_MACRO_STEP_DT: f64 = lunco_core_runtime::SECS_PER_TICK / 3.0 * 32.
 /// Omitted communication periods exchange on every master physics tick.
 pub const DEFAULT_COMMUNICATION_PERIOD_SECS: f64 = lunco_core_runtime::SECS_PER_TICK;
 
-/// Shared graph-cache entry limits captured before each worker starts.
-/// Insert before `ModelicaExecutionPlugin` to configure these counts.
+/// Worker cache budgets. Insert before `ModelicaExecutionPlugin` to configure them.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelicaCacheLimits {
+    /// Maximum bytes of relocatable native compiler stencils held in memory.
+    #[serde(default = "default_native_compilation_bytes")]
+    pub native_compilation_bytes: std::num::NonZeroUsize,
+    /// Maximum number of compiled DAE artifacts retained in memory.
     pub compiled_artifact_entries: usize,
 }
 
@@ -79,10 +82,15 @@ pub struct ModelicaCacheCapacities {
     pub compiled_artifacts: std::num::NonZeroUsize,
 }
 
+fn default_native_compilation_bytes() -> std::num::NonZeroUsize {
+    std::num::NonZeroUsize::new(64 * 1024 * 1024).unwrap()
+}
+
 impl Default for ModelicaCacheLimits {
     fn default() -> Self {
         Self {
             compiled_artifact_entries: 64,
+            native_compilation_bytes: default_native_compilation_bytes(),
         }
     }
 }

@@ -322,7 +322,7 @@ The fields are:
 | `template`, `stylesheet` | Asset paths under the normal Bevy asset root. |
 | `namespace` | Exact key in `EngineExposures`; use a capability name, not a widget name. |
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values. `css: true` explicitly projects a binding into a CSS custom property; prose stays in template text. |
-| `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host; other identifiers become the typed `runtime.ui.action` event for Rhai policy. |
+| `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host or shared Rhai action policy; unclaimed identifiers become the typed `runtime.ui.action` event for the Twin. |
 | `title` | Optional nonblank human-readable HUD menu label. The stable identity is still `id`. |
 | `visible_in_perspective` | Optional workbench perspective id or array of 1–32 distinct nonempty ids. The same filter gates interactive rendering and capture readiness; omission means unrestricted. |
 | `gate` | Optional named host gate. Unknown gates are closed. |
@@ -411,8 +411,8 @@ projection (`active_label`) through the generic `camera-status` exposure. Rhai
 adds a typed option array and authored dimensions to that snapshot. The
 manifest declares only the option field names and the trigger action; the
 authored HUI button is the stable trigger, and the shared egui renderer reads
-the generic records. It forwards the selected authored action as a typed
-`runtime.ui.action` event. Rhai handles that event through the normal typed
+the generic records. It forwards the selected action to the leased shared Rhai router. Unclaimed
+actions are published as `runtime.ui.action` to the Twin. Rhai uses the normal typed
 command bridge, so the runtime UI crate does not know camera names, camera
 commands, or camera selection rules. HUI 0.7 has no native select/accessibility
 tree; the generic egui primitive is therefore the low-level dropdown option,
@@ -595,8 +595,9 @@ is applied again. Leaf controls below the root are recreated with the subtree.
 HUI supports more template features, but features outside this contract need a
 real surface test before they become a shared interface convention. A surface
 callback receives only the pressed entity. The manifest turns it into a
-`RuntimeUiAction`; built-ins remain in the host, while a Twin-authored action
-is forwarded as a typed `runtime.ui.action` event. Rhai owns program/path
+`RuntimeUiAction`; admitted actions enter the same ordered hook queue as
+scene-pointer actions. Built-ins are consumed by their owner, while unclaimed
+actions are forwarded as `runtime.ui.action` to the Twin. Rhai owns program/path
 selection, editor focus, source switching, and USD transactions; the template
 never writes simulation state.
 

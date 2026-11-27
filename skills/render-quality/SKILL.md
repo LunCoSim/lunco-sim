@@ -12,7 +12,7 @@ authored USD Material/Shader network and its assets own visual intent; the
 runtime binder projects that intent to Bevy.
 
 Before comparing lighting, check **Fixed viewport exposure** in Settings →
-General and **Fixed color exposure** in the camera's **Image controls…**.
+General (also in Graphics → Camera look) and **Fixed color exposure** in the camera's **Image controls…**.
 Disable both to inspect the scene's exposure calibration. A feed has its own
 **Fixed color exposure** in **Style**.
 
@@ -147,6 +147,46 @@ GPU acceptance still require the rendered fixture and a clean process log.
    pure `morphed_child_matches_every_parent_triangle` test in
    `lunco-terrain-surface`; changes to bake math also require a tile-cache
    version bump and a settled production camera traversal.
+   For patchy crater density, inspect the drawn camera cover, not just the
+   selected depth under its eye. Perspective views reserve whole camera-centred
+   minimum-detail disks before discretionary refinement. Missing replacement
+   meshes cannot publish an unselected ancestor over previously drawn finer
+   detail. Check stationary and moving views independently, with the same
+   authored overzoom, tile and cache budgets.
+   The visual overzoom filter retains resolvable crater diameters in medium
+   LODs while physical filtering retains its independent radius-based contract.
+   Compare geometry and material relief at each visual band; do not inflate
+   crater sizes or modify the authored collider lattice.
+   Run `terrain_stationary_cover.rhai` as a presentation scenario after
+   pausing transport and settling the camera outputs; its verdict compares
+   draw revision on every presentation tick, exact opening/closing tile identities,
+   camera position and direction, and full-cover readiness over the requested duration.
+   For cold-cache startup, run `scripts/api/test_terrain_progressive_startup.py`
+   with a task-owned cache and `--require-progressive`. The first root
+   publication must precede final shading and cover readiness; this is not
+   a pixel-level visibility milestone. The selected tree
+   admits ready ancestor/child groups near-camera first with exact restricted
+   partitions, retiring hidden ancestors when no longer needed;
+   the native derived-map preview is upgraded after the opening near cover.
+   Verify `selection_current`, `initial_near_cover_ready`, and
+   `cover_preparation_pending` independently; a complete drawn partition alone
+   does not prove the finalized demand matches the worker's selected cover.
+   Compare first, near and fully prepared screenshots and repeat against the
+   same warmed cache. Do not substitute a world-readiness flag for visual
+   publication or treat preview shading as final capture quality.
+   With `--verify-view-retirement`, the production driver rapidly closes and
+   reopens a feed, checks the unaffected output identities and the new feed's
+   rendered pixels, then retires feeds and retunes the remaining cover. The
+   native layer owner retains exact surviving geometry references, not a
+   frame-count quarantine. On an upload pressure fault, inspect
+   `stream.mesh_transition_required_bytes` and the configured byte ceiling;
+   the measured necessary floor is not a prediction of unbaked mesh sizes.
+   For the windowless path, run `scripts/api/test_offscreen_terrain_recording.py`
+   with the same scene and a warm cache; verify the canonical viewport pose
+   owner, nonempty `camera_cover`, complete derived preparation and the actual
+   numbered images. The capture mirror is a consumer, not a second camera
+   selector. Read `startup_blocker` and `camera_cover[].presentation_reason`
+   when recording remains armed.
    If a crater remains irregular with native shadows disabled, inspect albedo
    and geometric normals separately. Missing orthophoto coverage can coincide
    with stereo-DEM voids. Follow `skills/geo-assets/SKILL.md` to regenerate those
@@ -413,6 +453,14 @@ For a fully prepared DEM screenshot or performance window, read
 `pending == 0`, and `ready == total`, as well as a resident selected cover with
 no pending stream work. Derived-map preparation is separate from simulation
 readiness; a usable viewport alone does not prove that preparation has finished.
+The loading backdrop does not deactivate a physically admitted main camera:
+terrain cover and GPU pipeline preparation run concurrently with initial
+simulation preparation. Validate the first visible main-view screenshot as
+well as settled coverage, since main-world draw publication is not GPU receipt.
+Use `TerrainLodStatus.exposed_viewport_camera` for the exposed-camera milestone,
+not a nonzero tile count. The progressive-startup driver checks the first
+polled exposure independently of tile residency, and checks actual numbered
+and view-retirement pixels when `--viewport-probe` is supplied.
 
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the

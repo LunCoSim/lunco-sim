@@ -267,8 +267,8 @@ pub fn produce_usd_prim_tree(
 
         // Ensure the canonical stage is built so we can read the type per prim.
         if canonical.get(stage_id).is_none() {
-            if let Some(recipe) = stages.get(handle).and_then(|a| a.recipe.clone()) {
-                canonical.get_or_build(stage_id, &recipe);
+            if let Some(stage_asset) = stages.get(handle) {
+                canonical.get_or_build(stage_id, stage_asset);
             }
         }
         let stage_view = canonical.get(stage_id).map(|cs| cs.view());

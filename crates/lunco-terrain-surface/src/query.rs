@@ -786,17 +786,20 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                     for (terrain, field, tiles) in query.iter(world) {
                         for (raw, _, _, _, _) in demands.visual_focus_snapshot() {
                             let camera = Entity::from_bits(raw);
-                            let Some((local, _)) = demands.terrain_pose_snapshot(camera, terrain) else { continue; };
+                            let Some((local, forward)) = demands.terrain_pose_snapshot(camera, terrain) else { continue; };
                             let leaf = tiles.focus_tile(camera, [local.x, local.z]);
                             let Some(view) = tiles.view_status(camera) else { continue; };
                             let height = field.0.height_at(local.x, local.z);
                             let envelope = world.get::<lunco_camera_core::CameraCollisionEnvelope>(camera);
                             rows.push(api_value!({
                                 "source": terrain.to_bits(), "camera": raw,
-                                "position_local_m": local.to_array(), "clearance_m": local.y-height,
+                                "position_local_m": local.to_array(), "forward_local": forward.to_array(), "clearance_m": local.y-height,
+                                "draw_revision": tiles.draw_revision(camera),
                                 "depth": leaf.map(|leaf| leaf.0),
                                 "ready": view.ready,
                                 "selection_current": view.selection_current,
+                                "initial_near_cover_ready": view.initial_near_cover_ready,
+                                "cover_preparation_pending": view.cover_preparation_pending,
                                 "presented_ready": view.presented_ready,
                                 "presentation_pending": view.presentation_pending,
                                 "presentation_reason": view.presentation_reason,
@@ -895,6 +898,31 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
             })
         }).collect();
         continuations.sort_by_key(|row| row.get("entity").and_then(ApiValue::as_u64));
+        let raster_rows = QueryState::<(
+            Entity,
+            &DemHeightField,
+            Option<&crate::TerrainDerivedMaps>,
+            Option<&crate::terrain::DemVisualTargetRes>,
+            Has<crate::stream_viz::TerrainLodViz>,
+        )>::try_new(world)
+        .map(|mut query| {
+            query
+                .iter(world)
+                .map(|(entity, field, maps, target, streamed)| {
+                    let desired = crate::derived_layers::profile_for_terrain(
+                        profile,
+                        field.0.grid().res,
+                        target.map(|t| t.0),
+                        streamed,
+                    );
+                    let requested_key = crate::derived_layers::derived_key(&field.0, desired);
+                    api_value!({"source": entity.to_bits(),
+                    "published_resolution": maps.map(|maps| maps.res),
+                    "requested_resolution": desired.terrain_derived_map_resolution,
+                    "current": maps.is_some_and(|maps| maps.bake_key == requested_key)})
+                })
+                .collect::<Vec<_>>()
+        });
         Ok(Some(api_value!({
             "config": {
                 "pixel_error": profile.terrain_lod_pixel_error,
@@ -926,7 +954,9 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "mesh_retired_bytes": status.mesh_retired_bytes,
                 "mesh_byte_limit": status.mesh_byte_limit,
                 "mesh_upload_refused": status.mesh_upload_refused,
+                "failed": status.failed,
                 "mesh_upload_required_bytes": status.mesh_upload_required_bytes,
+                "mesh_transition_required_bytes": status.mesh_transition_required_bytes,
                 "draw_revision_exhausted": status.draw_revision_exhausted,
                 "preparation_refused": status.preparation_refused,
             },
@@ -935,10 +965,17 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                 "ready": derived.ready,
                 "total": derived.total,
                 "pending": derived.pending,
+                "failed": derived.failed,
+                "rasters": raster_rows,
             },
             "viewport_camera": world
                 .get_resource::<lunco_viewport_core::SceneViewport>()
                 .and_then(|viewport| viewport.active_camera)
+                .map(|entity| entity.to_bits()),
+            "exposed_viewport_camera": world
+                .get_resource::<lunco_viewport_core::SceneViewport>()
+                .and_then(|viewport| viewport.exposed_camera())
+                .filter(|entity| world.get::<bevy::camera::Camera>(*entity).is_some_and(|camera| camera.is_active))
                 .map(|entity| entity.to_bits()),
             "visual_foci": visual_foci,
             "contacts": contacts,

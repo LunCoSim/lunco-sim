@@ -1,5 +1,8 @@
 //! In-memory and persistent compiled-DAE cache.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) mod prepared;
+
 use linked_hash_map::LinkedHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use lunco_assets_core::modelica_dir;
@@ -125,12 +128,9 @@ impl CompiledArtifactCache {
     }
 
     fn disk_path(key: &CompiledArtifactDiskKey) -> std::path::PathBuf {
-        let bytes = key.input.to_bytes();
-        let first = lunco_hash::fnv1a64(&bytes);
-        let second = lunco_hash::fnv1a64(key.input.to_string().as_bytes());
         modelica_dir()
             .join(format!("compiled-dae-v{}", Self::DISK_VERSION))
-            .join(format!("{first:016x}-{second:016x}.bin.zst"))
+            .join(artifact_filename(&key.input))
     }
 
     pub(super) fn load_disk(
@@ -142,14 +142,10 @@ impl CompiledArtifactCache {
         let Some(limits) = self.disk_limits else {
             return Ok(None);
         };
-        self.load_disk_at(
-            &FileStorage::new(),
-            &StorageHandle::File(Self::disk_path(key)),
-            key,
-            numeric,
-            binding_schema,
-            limits,
-        )
+        let storage = FileStorage::new();
+        read_with_prebuilt(&Self::disk_path(key), |handle| {
+            self.load_disk_at(&storage, handle, key, numeric, binding_schema, limits)
+        })
     }
 
     fn load_disk_at(
@@ -199,9 +195,6 @@ impl CompiledArtifactCache {
             .source_content
             .parse::<lunco_hash::content::Cid>()
             .map_err(|_| ModelicaCacheReadError::Identity)?;
-        if let Err(error) = storage.mark_cache_file_used(handle) {
-            log::warn!("[modelica-runtime] compiled-artifact cache use was not recorded: {error}");
-        }
         Ok(Some(super::CompiledModelArtifact {
             compiled: record.compiled,
             prepared_source_key: super::prepared_source_key(source_content),
@@ -240,16 +233,7 @@ impl CompiledArtifactCache {
         }
         let compressed = Self::encode_disk(key, artifact, limits)?;
         let path = Self::disk_path(key);
-        let root = path.parent().ok_or(ModelicaCacheWriteError::InvalidPath)?;
-        let storage = FileStorage::new();
-        let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
-        let incoming = transaction.directory().join(
-            path.file_name()
-                .ok_or(ModelicaCacheWriteError::InvalidPath)?,
-        );
-        retain_disk_artifacts(&storage, &transaction, &incoming, compressed.len(), limits)?;
-        storage.write_sync(&StorageHandle::File(incoming), &compressed)?;
-        Ok(())
+        publish_record(&path, &compressed, limits)
     }
 
     fn encode_disk(
@@ -275,6 +259,72 @@ impl CompiledArtifactCache {
         };
         encode_record(&record, limits)
     }
+}
+
+/// Prebuilt records are read-only. Both sources go through the same bounded decoder and identity checks.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_with_prebuilt<T>(
+    local: &std::path::Path,
+    mut read: impl FnMut(&StorageHandle) -> Result<Option<T>, ModelicaCacheReadError>,
+) -> Result<Option<T>, ModelicaCacheReadError> {
+    let handle = StorageHandle::File(local.to_owned());
+    let local_result = read(&handle);
+    if let Ok(Some(value)) = local_result {
+        if let Err(error) = FileStorage::new().mark_cache_file_used(&handle) {
+            log::warn!("Modelica artifact use was not recorded: {error}");
+        }
+        return Ok(Some(value));
+    }
+    static ROOT: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    let Some(root) = ROOT.get_or_init(|| match std::env::var_os("LUNCOSIM_MODELICA_PREBUILT") {
+        Some(path) => (!path.is_empty()).then(|| std::path::PathBuf::from(path)),
+        None => lunco_assets_core::assets_dir_abs()
+            .ok()
+            .map(|assets| assets.join("prebuilt/modelica"))
+            .filter(|path| path.is_dir()),
+    }) else {
+        return local_result;
+    };
+    if let Err(error) = &local_result {
+        log::warn!(
+            "local Modelica artifact {} rejected: {error}",
+            local.display()
+        );
+    }
+    let relative = local
+        .strip_prefix(modelica_dir())
+        .map_err(|_| ModelicaCacheReadError::Identity)?;
+    let path = root.join(relative);
+    let value = read(&StorageHandle::File(path.clone()))?;
+    if value.is_some() {
+        log::info!("read prebuilt Modelica artifact {}", path.display());
+    }
+    Ok(value)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn artifact_filename(key: &lunco_hash::content::Cid) -> String {
+    let first = lunco_hash::fnv1a64(&key.to_bytes());
+    let second = lunco_hash::fnv1a64(key.to_string().as_bytes());
+    format!("{first:016x}-{second:016x}.bin.zst")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn publish_record(
+    path: &std::path::Path,
+    compressed: &[u8],
+    limits: ModelicaArtifactDiskLimits,
+) -> Result<(), ModelicaCacheWriteError> {
+    let root = path.parent().ok_or(ModelicaCacheWriteError::InvalidPath)?;
+    let storage = FileStorage::new();
+    let transaction = storage.lock_cache_directory(&StorageHandle::File(root.to_path_buf()))?;
+    let incoming = transaction.directory().join(
+        path.file_name()
+            .ok_or(ModelicaCacheWriteError::InvalidPath)?,
+    );
+    retain_disk_artifacts(&storage, &transaction, &incoming, compressed.len(), limits)?;
+    storage.write_sync(&StorageHandle::File(incoming), compressed)?;
+    Ok(())
 }
 
 /// Count-bounded least-recently-used retention. Successful reads and

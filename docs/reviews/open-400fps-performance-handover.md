@@ -491,6 +491,14 @@ After integrating the newer local `main`, the combined tree passed
 `cargo test --locked -p lunco-modelica-solver --test simulation_session -j 4`
 (3 passed) and `cargo build --locked -p lunco-luncosim --bin luncosim -j 4`.
 
+### Griffin exact-scene loading attribution — 2026-11-26
+
+See [the Griffin loading profile](2026-11-26-griffin-loading-profile.md) for the
+paired release measurements and Tracy CPU profiles. Median warm physics readiness
+improved from 40.20 s to 15.67 s. With an empty Modelica cache the measured pair
+went from 33.67 s to 16.80 s. Native code generation and register allocation
+accounted for 46.77% of the updated live-session construction samples.
+
 ## Griffin surface-present attribution — 2026-11-21
 
 A matching Tracy 0.14.1 profile used the instrumented production binary

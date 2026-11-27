@@ -1365,18 +1365,17 @@ pub(crate) fn needs_full_backdrop(
         || no_active_scene_camera
 }
 
-/// Return whether the camera bound by the viewport is currently rendering.
+/// Return whether the camera bound by the viewport is exposed to the user.
 ///
 /// `SceneViewport::active_camera` is the selection binding, while
 /// `Camera::is_active` is the renderer's actual state. A perspective switch
 /// can publish a new visible layout before the camera reconciler has activated
-/// the bound camera; treating the binding alone as rendered would expose an
-/// incomplete presentation during that transition.
-pub(crate) fn scene_camera_is_rendering(world: &World) -> bool {
+/// the bound camera. An active camera can also prepare behind the loading
+/// backdrop without exposing that incomplete presentation.
+pub(crate) fn scene_camera_is_exposed(world: &World) -> bool {
     let Some(active_camera) = world
         .get_resource::<lunco_viewport_core::SceneViewport>()
-        .filter(|viewport| !viewport.loading)
-        .and_then(|viewport| viewport.active_camera)
+        .and_then(lunco_viewport_core::SceneViewport::exposed_camera)
     else {
         return false;
     };
@@ -1460,6 +1459,11 @@ pub(crate) fn render_status_bar_inner(
                 Some(lunco_core::SceneTransition::Clear)
             )
         });
+
+    let scene_loading_elapsed = world
+        .get_resource::<lunco_viewport_core::SceneViewport>()
+        .and_then(|viewport| viewport.loading_since)
+        .map(|started| started.elapsed());
 
     // Snapshot the compact status strip before painting. The event history is
     // collected only after the popup is known to be open below.
@@ -1966,6 +1970,7 @@ pub(crate) fn render_status_bar_inner(
                                     .unwrap_or(&progress.message),
                                 theme,
                                 scene_transition_is_clearing,
+                                scene_loading_elapsed,
                             );
                         });
                 });
@@ -1986,6 +1991,7 @@ fn render_status_progress_notice(
     display_message: &str,
     theme: &lunco_theme::Theme,
     scene_transition_is_clearing: bool,
+    scene_loading_elapsed: Option<std::time::Duration>,
 ) -> bool {
     ui.spacing_mut().item_spacing.y = theme.spacing.item_spacing;
     ui.horizontal(|ui| {
@@ -2000,6 +2006,19 @@ fn render_status_progress_notice(
             );
             ui.add(egui::Label::new(display_message).wrap())
                 .on_hover_text(display_message);
+            let (elapsed_label, elapsed) = match scene_loading_elapsed {
+                Some(elapsed) => ("Scene elapsed", elapsed),
+                None => ("Elapsed", event.at.elapsed()),
+            };
+            let seconds = elapsed.as_secs();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{elapsed_label}: {:02}:{:02}",
+                    seconds / 60,
+                    seconds % 60
+                ))
+                .color(theme.tokens.text_subdued),
+            );
         });
     });
     ui.link("Recent status details").clicked()
@@ -2688,7 +2707,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                 .text_style(lunco_theme::TypographyRole::Label.text_style())
                 .weak(),
         );
-        if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
+        if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>().copied() {
             let Some(profiles) = ctx.resource::<lunco_render::RenderingQualityProfiles>() else {
                 ui.label("Rendering profiles are unavailable until the authored policy loads.");
                 return;
@@ -2704,7 +2723,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                 ui.label("Rendering profiles are unavailable: the authored default is missing.");
                 return;
             };
-            let mut settings = *current;
+            let mut settings = current;
             let current_preset = settings.preset(&profiles);
             let mut selected_preset = current_preset.unwrap_or(default_quality);
             let preset_label = current_preset.map_or("Custom", |preset| preset.label());
@@ -3077,11 +3096,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     .into_iter()
                     .map(|(msaa, label)| (msaa, label.to_owned())),
                 );
-                ui.add(
-                    egui::DragValue::new(&mut settings.camera_exposure_ev100)
-                        .speed(0.1)
-                        .prefix("Unauthored camera exposure (EV100): "),
-                );
+                crate::twin_settings::render_viewport_exposure(ui, ctx);
                 ui.add(
                     egui::DragValue::new(&mut settings.camera_bloom_intensity)
                         .speed(0.01)
@@ -3335,7 +3350,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
             // over multiple UI interactions. Runtime consumers validate at their
             // own boundaries and preserve the last applied quality; the settings
             // persister likewise refuses to replace the last valid disk value.
-            if settings != *current {
+            if settings != current {
                 ctx.set_resource(settings);
             }
         }
@@ -3404,13 +3419,16 @@ mod tests {
         assert!(!settings.egui_debug_overlays);
         let ctx = egui::Context::default();
         let draw = |id: u64| {
-            ctx.run_ui(Default::default(), |ui| {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
                 ui.interact(
                     egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(40.0, 40.0)),
                     ui.id().with(id),
                     egui::Sense::hover(),
                 );
-            })
+            });
+            // This headless fixture examines shapes, not the texture atlas.
+            output.textures_delta.clear();
+            output
         };
         let red_outlines =
             |output: &egui::FullOutput| {
@@ -3529,14 +3547,18 @@ mod tests {
             ..default()
         });
 
-        assert!(!scene_camera_is_rendering(&world));
+        assert!(!scene_camera_is_exposed(&world));
 
         world
             .entity_mut(camera)
             .get_mut::<Camera>()
             .unwrap()
             .is_active = true;
-        assert!(scene_camera_is_rendering(&world));
+        assert!(scene_camera_is_exposed(&world));
+        world
+            .resource_mut::<lunco_viewport_core::SceneViewport>()
+            .loading_since = Some(bevy::platform::time::Instant::now());
+        assert!(!scene_camera_is_exposed(&world));
     }
 
     struct SceneBackedTestPerspective;

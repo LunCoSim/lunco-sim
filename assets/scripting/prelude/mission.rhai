@@ -45,8 +45,8 @@ fn objective(id, spec) {
 
 /// True if any buffered event this tick has name `want` and, when supplied, was
 /// emitted by the entity at `source_path`.
-fn __obj_saw_event(evs, want, source_path) {
-    let source = if source_path != () { find(source_path) } else { () };
+fn __obj_saw_event(me, evs, want, source_path) {
+    let source = if source_path != () { find_path_in_stage(me, source_path) } else { () };
     for e in evs {
         if e.name == want && (source_path == () || e.source == source) { return true; }
     }
@@ -97,7 +97,7 @@ fn __tick_objective(me, o, m, now, evs, progress) {
     // Events only belong to an objective after its prerequisites unlock. An
     // early global event must not be latched and replayed as a later success.
     if o.state == "active" {
-        if o.requires_event != () && __obj_saw_event(evs, o.requires_event, o.requires_event_source) { o.__evfired = true; }
+        if o.requires_event != () && __obj_saw_event(me, evs, o.requires_event, o.requires_event_source) { o.__evfired = true; }
         o = __advance_objective(me, o, now, progress);
     }
     o

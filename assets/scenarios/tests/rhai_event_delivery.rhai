@@ -1,8 +1,8 @@
 //! Positive production regression for the native mission event projection.
 //!
-//! The first fixed pass emits a burst larger than the native identity queue.
-//! The mission must still complete from the retained name/source identities;
-//! arbitrary event payloads must never be copied into mission state.
+//! The first fixed pass emits an admitted mission event before a large burst
+//! of unrelated traffic. The mission receives the required identity, while
+//! serial script emissions retain their causal order and distinct RNG streams.
 
 const STORM_COUNT = 1024;
 
@@ -20,14 +20,19 @@ fn on_start(me, ctx) {
     this.done = false;
     this.event_order = [];
     this.event_order_checked = false;
+    this.repeats = [];
+    this.rng_samples = [];
     subscribe("MISSION_COMPLETE");
     subscribe("ORDER_A");
     subscribe("ORDER_Z");
+    subscribe("ORDER_REPEAT");
 
-    // Deliberately enqueue the reverse of the canonical same-tick order.
-    // Event delivery must use event identity, not observer arrival order.
+    // These serial script emissions are ordered input facts, not unordered
+    // telemetry. The lexical name or payload must not reorder them.
     emit("ORDER_Z", 0);
     emit("ORDER_A", 0);
+    emit("ORDER_REPEAT", 2);
+    emit("ORDER_REPEAT", 1);
 }
 
 fn mission(me, ctx) {
@@ -42,18 +47,22 @@ fn on_event(me, evt, ctx) {
         this.event_order.push(evt.name);
         if this.event_order.len() == 2 {
             this.event_order_checked = true;
-            if this.event_order[0] != "ORDER_A" || this.event_order[1] != "ORDER_Z" {
+            if this.event_order[0] != "ORDER_Z" || this.event_order[1] != "ORDER_A" {
                 this.done = true;
-                verdict(false, "same-tick scenario events were delivered in arrival order");
+                verdict(false, "same-tick causal scenario events were reordered");
             }
         }
     }
+    if evt.name == "ORDER_REPEAT" {
+        this.repeats.push(evt.value);
+        this.rng_samples.push(rand());
+    }
     if evt.name == "MISSION_COMPLETE" && !this.done {
         this.done = true;
-        if this.event_order_checked {
+        if this.event_order_checked && this.repeats == [2,1] && this.rng_samples.len()==2 && this.rng_samples[0]!=this.rng_samples[1] {
             verdict(true, "");
         } else {
-            verdict(false, "the same-tick event ordering assertion did not complete");
+            verdict(false, "causal name/payload order or distinct same-name event RNG assertion failed");
         }
     }
 }
@@ -63,8 +72,9 @@ fn on_event(me, evt, ctx) {
 fn on_tick(me, ctx) {
     if this.done { return; }
     if this.elapsed == 0.0 {
+        emit("mission_event_storm", 0);
         for i in 0..STORM_COUNT {
-            emit("mission_event_storm", i);
+            emit("unrelated_mission_traffic", i);
         }
     }
     this.elapsed += dt();

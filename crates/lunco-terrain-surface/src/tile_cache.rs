@@ -24,7 +24,7 @@ use crate::tile_mesh::{TileMesh, bake_tile_mesh_with_boundary};
 /// Current geometry/layout contract for persisted visual tile bakes. Bump on
 /// changes to sampling math, boundary topology, normals, morphs, or blob layout.
 /// The revision is part of the content key; incompatible bakes cannot be read.
-const CACHE_FORMAT_VERSION: u64 = 18;
+const CACHE_FORMAT_VERSION: u64 = 19;
 
 /// One tile bake as a [`lunco_precompute::Bake`] entry.
 struct TileBake<'a> {
@@ -32,8 +32,6 @@ struct TileBake<'a> {
     coord: QuadCoord,
     region: Square,
     res: usize,
-    dem_half_extent: f64,
-    origin_xz: [f64; 2],
 }
 
 impl lunco_precompute::Bake for TileBake<'_> {
@@ -86,8 +84,8 @@ impl lunco_precompute::Bake for TileBake<'_> {
             self.oracle,
             self.region,
             self.res,
-            self.dem_half_extent,
-            self.origin_xz,
+            f64::from(self.oracle.domain_half_extent()),
+            self.region.center,
             origin_y,
             self.oracle.domain_resolution(),
         );
@@ -98,8 +96,8 @@ impl lunco_precompute::Bake for TileBake<'_> {
         lunco_precompute::store_blob(dir, "mesh.bin", &tile_mesh_to_bytes(out))
     }
 
-    fn load(dir: &Path) -> Option<TileMesh> {
-        tile_mesh_from_bytes(&lunco_precompute::load_blob(dir, "mesh.bin")?)
+    fn load(&self, dir: &Path) -> Option<TileMesh> {
+        tile_mesh_from_bytes(&lunco_precompute::load_blob(dir, "mesh.bin")?, self.res)
     }
 }
 
@@ -124,8 +122,6 @@ pub fn bake_tile_mesh_cached(
     coord: QuadCoord,
     region: Square,
     res: usize,
-    dem_half_extent: f64,
-    origin_xz: [f64; 2],
 ) -> TileMesh {
     lunco_precompute::bake_or_load(
         &TileBake {
@@ -133,8 +129,6 @@ pub fn bake_tile_mesh_cached(
             coord,
             region,
             res,
-            dem_half_extent,
-            origin_xz,
         },
         &lunco_assets_core::cache_dir(),
     )
@@ -149,8 +143,6 @@ pub async fn bake_tile_mesh_cached_async(
     coord: QuadCoord,
     region: Square,
     res: usize,
-    dem_half_extent: f64,
-    origin_xz: [f64; 2],
 ) -> TileMesh {
     use lunco_precompute::Bake;
 
@@ -159,12 +151,10 @@ pub async fn bake_tile_mesh_cached_async(
         coord,
         region,
         res,
-        dem_half_extent,
-        origin_xz,
     };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(TileBake::NAMESPACE, &key_hex).await {
-        if let Some(mesh) = tile_mesh_from_bytes(&blob) {
+        if let Some(mesh) = tile_mesh_from_bytes(&blob, res) {
             return mesh;
         }
     }
@@ -210,17 +200,24 @@ fn tile_mesh_to_bytes(m: &TileMesh) -> Vec<u8> {
     out
 }
 
-fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
+fn tile_mesh_from_bytes(b: &[u8], resolution: usize) -> Option<TileMesh> {
     let mut off = 0usize;
     let take = |off: &mut usize, n: usize| -> Option<&[u8]> {
-        let s = b.get(*off..*off + n)?;
-        *off += n;
+        let end = off.checked_add(n)?;
+        let s = b.get(*off..end)?;
+        *off = end;
         Some(s)
     };
-    let verts = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
-    let idx_count = u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?) as usize;
+    let verts = usize::try_from(u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?)).ok()?;
+    let idx_count =
+        usize::try_from(u64::from_le_bytes(take(&mut off, 8)?.try_into().ok()?)).ok()?;
+    if verts < resolution.max(2).checked_pow(2)? || idx_count == 0 || idx_count % 3 != 0 {
+        return None;
+    }
     // Sanity: total size must match exactly (corrupt / truncated → rebake).
-    let expect = 16 + verts * (3 + 3 + 3 + 3 + 4 + 2) * 4 + idx_count * 4;
+    let expect = 16_usize
+        .checked_add(verts.checked_mul((3 + 3 + 3 + 3 + 4 + 2) * 4)?)?
+        .checked_add(idx_count.checked_mul(4)?)?;
     if b.len() != expect {
         return None;
     }
@@ -260,7 +257,26 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
     }
     let mut indices = Vec::with_capacity(idx_count);
     for _ in 0..idx_count {
-        indices.push(u32::from_le_bytes(take(&mut off, 4)?.try_into().ok()?));
+        let index = u32::from_le_bytes(take(&mut off, 4)?.try_into().ok()?);
+        if index as usize >= verts {
+            return None;
+        }
+        indices.push(index);
+    }
+    if positions
+        .iter()
+        .chain(&morph_targets)
+        .chain(&morph_normals)
+        .chain(&normals)
+        .flatten()
+        .any(|v| !v.is_finite())
+        || edge_masks
+            .iter()
+            .flatten()
+            .chain(uvs.iter().flatten())
+            .any(|v| !v.is_finite())
+    {
+        return None;
     }
     Some(TileMesh {
         positions,
@@ -276,6 +292,11 @@ fn tile_mesh_from_bytes(b: &[u8]) -> Option<TileMesh> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corrupted_tile_header_cannot_overflow_decode() {
+        assert!(tile_mesh_from_bytes(&[255; 16], 2).is_none());
+    }
 
     #[test]
     fn visual_bake_retains_submillimetre_measured_relief() {
@@ -298,8 +319,6 @@ mod tests {
                 half: 1.0,
             },
             res: 5,
-            dem_half_extent: 4.0,
-            origin_xz: [1.0, 1.0],
         }
         .bake();
         // This interior tile's first row crosses the measured post at (1, 0).
@@ -339,23 +358,29 @@ mod tests {
     #[test]
     fn roundtrip_bytes() {
         let m = TileMesh {
-            positions: vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-            morph_targets: vec![[1.5, 2.0, 3.0], [4.0, 5.5, 6.0]],
-            // Deliberately distinct from `normals` so a serializer that dropped or
-            // aliased this array fails the roundtrip instead of passing by luck.
-            morph_normals: vec![[0.0, 0.6, 0.8], [1.0, 0.0, 0.0]],
-            normals: vec![[0.0, 1.0, 0.0], [0.0, 0.8, 0.6]],
-            edge_masks: vec![[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]],
-            uvs: vec![[0.0, 0.0], [1.0, 1.0]],
-            indices: vec![0, 1, 0],
+            positions: vec![[0., 1., 0.], [1., 2., 0.], [0., 3., 1.], [1., 4., 1.]],
+            morph_targets: vec![[0., 0., 0.], [1., 0., 0.], [0., 0., 1.], [1., 0., 1.]],
+            morph_normals: vec![[1., 0., 0.]; 4],
+            normals: vec![[0., 1., 0.]; 4],
+            edge_masks: vec![[1., 0., 1., 0.]; 4],
+            uvs: vec![[0., 0.], [1., 0.], [0., 1.], [1., 1.]],
+            indices: vec![0, 1, 2, 2, 1, 3],
         };
         let b = tile_mesh_to_bytes(&m);
-        let r = tile_mesh_from_bytes(&b).expect("roundtrip");
+        let r = tile_mesh_from_bytes(&b, 2).expect("roundtrip");
         assert_eq!(m, r);
+        assert!(tile_mesh_from_bytes(&b, 3).is_none());
+        assert!(tile_mesh_from_bytes(&[0; 16], 2).is_none());
+        let mut invalid = m.clone();
+        invalid.indices[0] = 4;
+        assert!(tile_mesh_from_bytes(&tile_mesh_to_bytes(&invalid), 2).is_none());
+        invalid.indices[0] = 0;
+        invalid.positions[0][1] = f32::NAN;
+        assert!(tile_mesh_from_bytes(&tile_mesh_to_bytes(&invalid), 2).is_none());
         // Truncated / padded blobs are rejected (→ rebake), never mis-parsed.
-        assert!(tile_mesh_from_bytes(&b[..b.len() - 1]).is_none());
+        assert!(tile_mesh_from_bytes(&b[..b.len() - 1], 2).is_none());
         let mut padded = b;
         padded.push(0);
-        assert!(tile_mesh_from_bytes(&padded).is_none());
+        assert!(tile_mesh_from_bytes(&padded, 2).is_none());
     }
 }

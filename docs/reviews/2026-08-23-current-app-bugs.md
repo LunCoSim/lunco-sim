@@ -325,13 +325,10 @@ windowed `target/debug/luncosim` run reached `/api/ready` with
 2561x1553 PNG with non-clear pixels (`min=0`, `max=62708`). The startup UI no
 longer opens the heavy rover-build/Modelica presentation by default.
 
-The offscreen clear-frame defect had two independent causes. Cold GPU pipelines
-could consume the first capture before they were ready, and interactive API
-image captures queued `Readback::texture` before the render-target write for the
-frame. The recorder now applies a one-second offscreen warm-up before frame 0,
-and API image captures are queued and dispatched in `Last`, sharing the same
-render boundary as offline recording. Fresh production checks passed for both
-paths: a 10-frame 640x360 take exited after draining with non-clear pixels
+Offscreen capture admits the actual captured image target and its occupied
+color-phase pipelines via a render-world receipt. API image captures are queued
+and dispatched in `Last`, sharing the render boundary of offline recording.
+Historical production checks: a 10-frame 640x360 take exited after draining with non-clear pixels
 (`min=0`, `max=65535`), while interactive API `CaptureScreenshot` and
 `CaptureFromCamera` each produced a 1280x720 non-clear PNG. Typed `Exit` closed
 the API session and released its port.

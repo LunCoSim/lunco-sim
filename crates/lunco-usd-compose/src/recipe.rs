@@ -11,6 +11,7 @@ pub struct StageLayerBytes(Arc<LayerSource>);
 #[derive(Debug)]
 struct LayerSource {
     bytes: openusd::ar::SharedBuffer,
+    nesting: OnceLock<Result<(), String>>,
     dependencies: OnceLock<(String, Vec<String>)>,
 }
 
@@ -18,6 +19,7 @@ impl From<Vec<u8>> for StageLayerBytes {
     fn from(bytes: Vec<u8>) -> Self {
         Self(Arc::new(LayerSource {
             bytes: openusd::ar::SharedBuffer::new(bytes),
+            nesting: OnceLock::new(),
             dependencies: OnceLock::new(),
         }))
     }
@@ -50,6 +52,23 @@ impl StageLayerBytes {
         self.0.bytes.clone().into()
     }
 
+    /// The recursive text parser's admission proof belongs to these immutable
+    /// bytes, not to a layer identifier or a particular stage open.
+    pub(crate) fn validate_nesting(&self) -> anyhow::Result<()> {
+        let result = self
+            .0
+            .nesting
+            .get_or_init(|| match std::str::from_utf8(self) {
+                Ok(text) => crate::validate_usda_nesting(text).map_err(|error| error.to_string()),
+                Err(error) if self.starts_with(openusd::usda::MAGIC) => Err(error.to_string()),
+                Err(_) => Ok(()),
+            });
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => Err(anyhow::anyhow!("{error}")),
+        }
+    }
+
     /// The anchor selects the file codec and resolves relative identifiers.
     /// A second identity for these bytes must perform its own native scan.
     pub fn child_layer_ids(&self, id: &str) -> anyhow::Result<Vec<String>> {
@@ -57,9 +76,9 @@ impl StageLayerBytes {
             if anchor == id {
                 return Ok(children.clone());
             }
-            return crate::child_layer_ids(id, self);
+            return crate::child_layer_ids_for_layer(id, self);
         }
-        let children = crate::child_layer_ids(id, self)?;
+        let children = crate::child_layer_ids_for_layer(id, self)?;
         let _ = self.0.dependencies.set((id.to_owned(), children.clone()));
         Ok(children)
     }
@@ -390,6 +409,7 @@ mod tests {
             ["twin://fixture/a/part.usda"]
         );
         assert!(Arc::ptr_eq(&recipe.bytes[id].0, &layer.0));
+        assert!(matches!(layer.0.nesting.get(), Some(Ok(()))));
         assert_eq!(layer.0.dependencies.get().unwrap().0, id);
         assert_eq!(
             layer.child_layer_ids(relocated).unwrap(),
@@ -404,6 +424,48 @@ mod tests {
             layer.child_layer_ids(id).unwrap(),
             ["twin://fixture/a/part.usda"]
         );
+    }
+
+    #[test]
+    fn nesting_proof_is_shared_by_discovery_and_resolver_but_not_replacement_bytes() {
+        use openusd::ar::Resolver;
+
+        let id = "lunco://fixtures/root.usda";
+        let valid: StageLayerBytes = b"#usda 1.0\ndef Scope \"Root\" {}\n".to_vec().into();
+        let resolver =
+            crate::LuncoUsdResolver::new(HashMap::from([(id.to_owned(), valid.clone())]))
+                .expect("valid dependency admission");
+        assert!(matches!(valid.0.nesting.get(), Some(Ok(()))));
+        let path = openusd::ar::ResolvedPath::new(id);
+        resolver.open_asset(&path).expect("validated bytes open");
+
+        // The live-stage owner may replace resolver bytes without running
+        // dependency discovery first. The new buffer must validate independently.
+        let excessive = format!(
+            "#usda 1.0\n{}{}",
+            "{".repeat(crate::MAX_USDA_NESTING + 1),
+            "}".repeat(crate::MAX_USDA_NESTING + 1)
+        );
+        let invalid: StageLayerBytes = excessive.into_bytes().into();
+        resolver
+            .shared()
+            .borrow_mut()
+            .insert(id.to_owned(), invalid.clone());
+        assert!(invalid.0.nesting.get().is_none());
+        let first = resolver
+            .open_asset(&path)
+            .err()
+            .expect("invalid replacement is refused");
+        assert_eq!(first.kind(), std::io::ErrorKind::InvalidData);
+        assert!(first.to_string().contains("nesting exceeds"));
+        assert!(matches!(invalid.0.nesting.get(), Some(Err(_))));
+        let again = resolver
+            .open_asset(&path)
+            .err()
+            .expect("invalid replacement remains refused");
+        assert_eq!(first.to_string(), again.to_string());
+        resolver.shared().borrow_mut().insert(id.to_owned(), valid);
+        resolver.open_asset(&path).expect("valid replacement opens");
     }
 
     #[test]

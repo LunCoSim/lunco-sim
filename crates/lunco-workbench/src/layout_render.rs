@@ -113,7 +113,7 @@ pub(super) fn render_layout(
     let viewport_empty = world
         .get_resource::<ViewportPlaceholder>()
         .is_some_and(|p| p.message.is_some());
-    let no_active_scene_camera = !scene_camera_is_rendering(world);
+    let no_active_scene_camera = !scene_camera_is_exposed(world);
     let needs_full_backdrop = needs_full_backdrop(layout, viewport_empty, no_active_scene_camera);
     viewport::set_workbench_backdrop(
         world,
@@ -1147,7 +1147,7 @@ pub(super) fn render_layout(
     // in View mode and close enough in Build.
     let scene_loading = world
         .get_resource::<lunco_viewport_core::SceneViewport>()
-        .is_some_and(|viewport| viewport.loading);
+        .is_some_and(|viewport| viewport.is_loading());
     let placeholder = world
         .get_resource::<ViewportPlaceholder>()
         .filter(|_| !scene_loading)

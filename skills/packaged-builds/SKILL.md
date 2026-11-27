@@ -91,6 +91,12 @@ Use an empty shared asset cache when checking packaged fonts. Verify that
 `ListDatasets` reports `engine/fonts/dejavu_sans` as installed and confirm the
 toolbar glyphs in a window. The installer must carry both the TTF and its
 sibling `.DejaVuSans.ttf.integrity` marker.
+The Windows native builder checks the manifest-selected files in the actual
+full `.nupkg` and in the MSI through administrative extraction, without
+installing the application. Missing or changed payload files (including
+integrity markers) fail packaging; the signed update repack repeats the
+archive check. This complements, but does not replace, the clean-cache GUI
+acceptance run.
 
 Windows desktop startup must not create a console by default. Check
 **Settings → Debug → Show console on next start** across restarts and the
