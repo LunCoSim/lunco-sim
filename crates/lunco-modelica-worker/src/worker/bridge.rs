@@ -735,6 +735,7 @@ pub fn spawn_modelica_requests(
             continue;
         };
         let step_id = model.next_step_id;
+        let _dispatch = bevy::log::info_span!("modelica_dispatch_step", ?entity).entered();
         let sent = channels.tx.send(ModelicaCommand::Step {
             entity,
             session_id: model.session_id,
@@ -1657,6 +1658,9 @@ pub fn handle_modelica_responses(
             // Validate its sequence and communication point before clearing the
             // in-flight flag or touching the model clock. This is the local
             // equivalent of an FMI master's `doStep` transaction fence.
+            let _admission = (!lifecycle_result).then(|| {
+                bevy::log::info_span!("modelica_admit_step_result", entity = ?result.entity).entered()
+            });
             let accepted_step = if !lifecycle_result {
                 let Some(in_flight) = model.in_flight_step.as_ref() else {
                     let detail = format!(
