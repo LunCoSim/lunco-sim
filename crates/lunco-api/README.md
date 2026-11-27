@@ -182,6 +182,9 @@ is `{ kind, value }`: `kind` is `finite`, `not_a_number`, `positive_infinity` or
 have `value = ()`. This classification happens at the diagnostic API adapter;
 the simulation keeps the original IEEE value. Overflow diagnostics therefore
 remain queryable through JSON without fabricating a finite number.
+The terminal `runtime_fault` also carries the registered stable `global_id`
+and `entity_name` when available, alongside local `entity_bits`, `subject`,
+and owner-provided `detail`. Absent identities are null, not guessed.
 
 Data-returning queries use the same `POST /api/commands` envelope as commands.
 `ReadExposures` reads the generic runtime capability registry used by HTML/CSS

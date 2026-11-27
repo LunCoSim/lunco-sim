@@ -566,29 +566,35 @@ pub fn apply_jointed_tire_forces(
                         .max(tire.min_validated_speed),
                 )
             };
+            let brake_limit = if braking { motor.brake_torque } else { 0.0 };
+            let minimum_slip_speed = tire
+                .longitudinal_slip_denominators
+                .minimum(drive_torque != 0.0 || brake_limit > 0.0);
             let patch = |i: usize, w: f64| {
                 let contact = &contacts[i];
                 let tread = (w + housing_speed) * tire.radius;
-                let denom = contact.v_long.abs().max(tread.abs()).max(
-                    tire.longitudinal_slip_denominators
-                        .minimum(drive_torque != 0.0 || (braking && motor.brake_torque > 0.0)),
-                );
+                let denom = contact
+                    .v_long
+                    .abs()
+                    .max(tread.abs())
+                    .max(minimum_slip_speed);
                 let long = tire.slip_stiffness
                     * (contact.normal_force / total_normal_force)
                     * ((tread - contact.v_long) / denom);
                 responses[i].wrench(tread, long, angle(contact, tread), tire.friction_mu)
             };
+            let traction_bound = tire.radius * tire.friction_mu * total_normal_force
+                + responses
+                    .iter()
+                    .map(|p| p.rolling_moment_limit)
+                    .sum::<f64>();
             let step = match solve_axle_step_with_roundoff(
                 omega,
                 tire.axle_inertia,
                 tire.bearing_damping,
                 drive_torque,
-                if braking { motor.brake_torque } else { 0.0 },
-                tire.radius * tire.friction_mu * total_normal_force
-                    + responses
-                        .iter()
-                        .map(|p| p.rolling_moment_limit)
-                        .sum::<f64>(),
+                brake_limit,
+                traction_bound,
                 full_dt,
                 |w| {
                     contacts
@@ -601,54 +607,21 @@ pub fn apply_jointed_tire_forces(
                         .sum()
                 },
                 |w| {
-                    // Subtraction of nearly equal tread/hub velocities can
-                    // amplify one speed ulp by the unsaturated slip stiffness.
-                    // Coulomb projection is nonexpansive; include both force
-                    // components and the cone's arithmetic scale. No absolute
-                    // force floor: the bound scales with authored force laws.
                     contacts
                         .iter()
                         .enumerate()
                         .map(|(i, contact)| {
-                            let tread = (w + housing_speed) * tire.radius;
-                            let velocity_scale = tire.radius * (w.abs() + housing_speed.abs())
-                                + contact.v_long.abs();
-                            let reference = contact.v_long.abs().max(tread.abs()).max(
-                                tire.longitudinal_slip_denominators.minimum(
-                                    drive_torque != 0.0 || (braking && motor.brake_torque > 0.0),
-                                ),
-                            );
-                            if responses[i].is_soil() {
-                                return 64.0
-                                    * f64::EPSILON
-                                    * (tire.radius
-                                        * responses[i].tread_gain_bound
-                                        * velocity_scale
-                                        + tire.radius * tire.friction_mu * contact.normal_force
-                                        + responses[i].rolling_moment_limit);
-                            }
-                            let rolling = contact
-                                .v_long
-                                .abs()
-                                .max(tread.abs())
-                                .max(tire.min_validated_speed);
-                            let lateral_gain = responses[i].angular_gain_bound();
-                            let lateral_error = if lateral_gain == 0.0 || contact.v_lat == 0.0 {
-                                0.0
-                            } else {
-                                let magnitude = rolling.hypot(contact.v_lat);
-                                lateral_gain
-                                    * (1.0
-                                        + (contact.v_lat.abs() / magnitude)
-                                            * (velocity_scale / magnitude))
-                            };
-                            tire.radius
-                                * (64.0 * f64::EPSILON)
-                                * (tire.slip_stiffness * contact.normal_force / total_normal_force
-                                    * velocity_scale
-                                    / reference
-                                    + lateral_error
-                                    + tire.friction_mu * contact.normal_force)
+                            responses[i].axle_roundoff(
+                                w,
+                                housing_speed,
+                                tire.radius,
+                                contact.v_long,
+                                contact.v_lat,
+                                minimum_slip_speed,
+                                tire.min_validated_speed,
+                                tire.slip_stiffness * (contact.normal_force / total_normal_force),
+                                tire.friction_mu,
+                            )
                         })
                         .sum()
                 },
@@ -659,11 +632,26 @@ pub fn apply_jointed_tire_forces(
                         holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
                     }
                     if let Some(faults) = faults.as_deref_mut() {
+                        let contact_inputs = contacts
+                            .iter()
+                            .zip(&responses)
+                            .map(|(contact, response)| {
+                                (
+                                    contact.normal_force,
+                                    contact.v_long,
+                                    contact.v_lat,
+                                    response.is_soil(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
                         faults.raise(
                             "physics-wheel-step-invalid",
                             Some(wheel),
                             "wheel mechanical step",
-                            detail,
+                            format!(
+                                "{detail}; speed={omega:e} rad/s, inertia={:e} kg m², bearing={:e}, drive={drive_torque:e} N m, brake_limit={brake_limit:e} N m, traction_bound={traction_bound:e} N m, load={total_normal_force:e} N, radius={:e} m, mu={:e}, slip_stiffness={:e}, min_slip_speed={minimum_slip_speed:e} m/s, min_validated_speed={:e} m/s, lateral_graph={:?}, contacts(load_N,v_long_mps,v_lat_mps,soil)={contact_inputs:?}, housing_speed={housing_speed:e} rad/s, dt={full_dt:e} s",
+                                tire.axle_inertia, tire.bearing_damping, tire.radius, tire.friction_mu, tire.slip_stiffness, tire.min_validated_speed, tire.lateral_stiffness_graph,
+                            ),
                         );
                     }
                     return;

@@ -73,9 +73,17 @@ impl ApiQueryProvider for BrokenConnectionsProvider {
             .get_resource::<lunco_core::RuntimeFaults>()
             .and_then(|faults| faults.first.as_ref())
             .map(|fault| {
+                let global_id = fault.entity.and_then(|entity| {
+                    world
+                        .get_resource::<lunco_api::registry::ApiEntityRegistry>()?
+                        .api_id_for(entity)
+                });
+                let entity_name = fault.entity.and_then(|entity| world.get::<Name>(entity));
                 api_value!({
                     "kind": fault.kind,
                     "entity_bits": fault.entity.map(|entity| entity.to_bits()),
+                    "global_id": global_id.map(|id| id.get()),
+                    "entity_name": entity_name.map(Name::as_str),
                     "subject": fault.subject.clone(),
                     "detail": fault.detail.clone(),
                 })

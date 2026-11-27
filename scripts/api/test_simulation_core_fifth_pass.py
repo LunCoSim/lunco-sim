@@ -26,6 +26,7 @@ CASES = {
     "tires-dynamic": ("simulation_core_fifth_tires", "SIMULATION CORE FIFTH TIRES dynamic", 10),
     "tires-comoving": ("simulation_core_fifth_tires", "SIMULATION CORE FIFTH TIRES comoving", 10),
     "tires-stationary": ("simulation_core_fifth_tires", "SIMULATION CORE FIFTH TIRES stationary", 10),
+    "tires-subnormal": ("axle_subnormal", "SUBNORMAL AXLE BALANCE", 8),
 }
 
 
@@ -86,20 +87,22 @@ def raycast_ops(mode: str) -> tuple[list[dict], dict]:
     adjusted = []
     for entry in ops:
         kind, fields = next(iter(entry.items()))
-        if mode == "stationary" and (fields.get("path") == "/World/DeckSlide"
+        if mode in ("stationary", "subnormal") and (fields.get("path") == "/World/DeckSlide"
                                      or fields.get("name") == "DeckSlide"):
             continue
         if kind == "SetVariantSelection":
             fields["variant"] = "raycast"
         if kind == "SetTranslate" and fields["path"] == rover:
-            fields["value"] = [0.0, 1.051, 0.0]
-        if mode == "stationary" and kind == "SetApiSchemas" and fields["path"] == deck:
+            fields["value"] = [0.0, 10.0 if mode == "subnormal" else 1.051, 0.0]
+        if mode in ("stationary", "subnormal") and kind == "SetApiSchemas" and fields["path"] == deck:
             fields["schemas"] = ["PhysicsCollisionAPI"]
+        if mode == "subnormal" and kind == "SetAttribute" and fields["name"] == "physics:gravityMagnitude":
+            fields["value"] = "0"
         adjusted.append(entry)
     if mode == "comoving":
         for path in (rover, deck):
             adjusted.append(attribute(path, "physics:velocity", "vector3f", "(0, 0, 2)"))
-    bodies = [rover] if mode == "stationary" else [rover, deck]
+    bodies = [rover] if mode in ("stationary", "subnormal") else [rover, deck]
     return adjusted, {"mode": mode, "rover_path": rover, "deck_path": deck, "body_paths": bodies,
                       "momentum_tolerance": 0.1, "velocity_tolerance": 0.01,
                       "force_tolerance": 0.01, "spin_tolerance": 0.01}
@@ -122,7 +125,7 @@ def main() -> None:
         scenario_hash = hashlib.sha256(scenario_file.read_bytes()).hexdigest()
         os.environ["LUNCOSIM_CONFIG"] = str(evidence / (case + "-config"))
         process = None
-        with ProductionSession(args.port, windowed=True, extra_args=["--scene", str(scene)],
+        with ProductionSession(args.port, windowed=case != "tires-subnormal", extra_args=["--scene", str(scene)],
                                log_path=evidence / (case + ".log")) as session:
             process = session.process
             pid = process.pid
@@ -153,8 +156,9 @@ def main() -> None:
             wait(lambda: execute("RunRhai", code='find_path("/World/Source")>=0')["stdout"] == "true"
                  and admitted(), "exact source fixture admission")
             docs = execute("ListOpenDocuments")["open_documents"]
-            doc = next(d["doc_id"] for d in docs if d.get("origin", {}).get("path") == str(scene))
-            twin = int(execute("RunRhai", code='query("ReadActiveTwinContract").twin_id')["stdout"])
+            document = next(d for d in docs if d.get("origin", {}).get("path") == str(scene))
+            doc = document["doc_id"]
+            twin = document["runtime_context"]["twin"]
             params = {"doc_id": doc}
             ops = []
             if case.startswith("tires-"):
