@@ -293,3 +293,19 @@ Each row counts the waves in which a participant finished numerical work last
 or was admitted last. Ordered receipt time includes time waiting on the solver.
 Admission also depends on the host's next completion-service opportunity.
 Inspect these intervals together with the frame and fixed schedules.
+
+### Mission event speed
+
+Use the runtime log from a single uninstrumented playback. For Griffin, the
+powered-descent interval starts at ignition and ends at flight handoff. It
+spans 1,422 completed ticks at 60 Hz.
+
+```sh
+python3 scripts/perf/mission_event_rate.py runtime.log \
+    griffin_powered_descent_started lander_flight_handoff \
+    --expected-ticks 1422 --min-rate 2
+```
+
+The command reports simulated seconds divided by elapsed wall seconds. It
+exits 0 when the measured rate meets the threshold, 1 when it falls short,
+and 2 for missing or ambiguous events or an unexpected tick count.
