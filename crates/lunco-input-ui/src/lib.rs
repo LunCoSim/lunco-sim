@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Resource, Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
 pub struct InputOverlaySettings {
     /// Whether the overlay is rendered.
-    pub enabled: bool,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 impl SettingsSection for InputOverlaySettings {
@@ -35,10 +36,10 @@ fn on_toggle_input_overlay(
     trigger: On<ToggleInputOverlay>,
     mut settings: ResMut<InputOverlaySettings>,
 ) {
-    let new = trigger.event().enabled;
+    let new = Some(trigger.event().enabled);
     if settings.enabled != new {
         settings.enabled = new;
-        info!("[input-overlay] set enabled to {new}");
+        info!("[input-overlay] set enabled to {}", new.unwrap_or(false));
     }
 }
 
@@ -55,7 +56,7 @@ pub fn draw_input_overlay(
     authority: Option<Res<lunco_core::markers::FlightAuthority>>,
 ) {
     let authority = authority.map(|a| *a).unwrap_or_default();
-    if !settings.enabled {
+    if !settings.enabled.unwrap_or(false) {
         return;
     }
     let Ok(ctx) = egui_ctx.ctx_mut() else { return };
@@ -169,11 +170,44 @@ pub fn draw_input_overlay(
 
 register_commands!(on_toggle_input_overlay,);
 
+fn register_hud_menu(world: &mut World) {
+    let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
+    else {
+        return;
+    };
+    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::BuiltIn, |ui, ctx| {
+        let Some(mut settings) = ctx.resource::<InputOverlaySettings>().copied() else {
+            return;
+        };
+        if let Some(choice) = (lunco_workbench_core::HudVisibility {
+            enabled: settings.enabled.unwrap_or(false),
+            available: true,
+        })
+        .menu_row(ui, "Input HUD", settings.enabled)
+        .choice
+        {
+            settings.enabled = choice;
+            ctx.set_resource(settings);
+        }
+    });
+}
+
+fn set_all_visibility(
+    event: On<lunco_workbench_core::SetAllHudVisibility>,
+    mut settings: ResMut<InputOverlaySettings>,
+) {
+    if settings.enabled != Some(event.0) {
+        settings.enabled = Some(event.0);
+    }
+}
+
 /// Register the typed presentation commands without installing the egui panel.
 pub fn register_input_overlay_commands(app: &mut App) {
     app.register_settings_section::<InputOverlaySettings>();
     app.init_resource::<InputOverlaySettings>();
     app.init_resource::<lunco_core::markers::FlightAuthority>();
+    app.add_systems(Startup, register_hud_menu)
+        .add_observer(set_all_visibility);
     register_all_commands(app);
 }
 
@@ -193,6 +227,6 @@ mod tests {
     #[test]
     fn input_overlay_settings_use_the_shared_persisted_section() {
         assert_eq!(InputOverlaySettings::KEY, "input_overlay");
-        assert!(!InputOverlaySettings::default().enabled);
+        assert!(!InputOverlaySettings::default().enabled.unwrap_or(false));
     }
 }

@@ -262,19 +262,60 @@ impl HudVisibility {
         self.enabled && self.available
     }
 
-    /// Render the common visibility control without changing the availability rules.
-    /// A checked but unavailable HUD will appear when its owner permits it.
-    pub fn menu_row(self, ui: &mut Ui, title: impl Into<egui::WidgetText>) -> Option<bool> {
-        let mut enabled = self.enabled;
-        let mut changed = false;
+    /// Render one control for the owner's automatic/show/hide preference.
+    /// Availability is independent of the selected preference.
+    pub fn menu_row(
+        self,
+        ui: &mut Ui,
+        title: impl Into<egui::WidgetText>,
+        preference: Option<bool>,
+    ) -> HudMenuRow {
+        let mut row = HudMenuRow::default();
         ui.horizontal(|ui| {
-            changed = ui.checkbox(&mut enabled, title).changed();
-            if !self.available {
-                ui.label(egui::RichText::new("Unavailable here").weak().small())
-                    .on_hover_text("This HUD needs a different perspective or scene state.");
+            ui.label(title);
+            for (label, value) in [("Auto", None), ("Show", Some(true)), ("Hide", Some(false))] {
+                let response = ui.selectable_label(preference == value, label);
+                match value {
+                    None => row.automatic = response.rect,
+                    Some(true) => row.show = response.rect,
+                    Some(false) => row.hide = response.rect,
+                }
+                if response.clicked() {
+                    row.choice = Some(value);
+                }
             }
+            ui.label(
+                egui::RichText::new(if !self.available {
+                    "Unavailable"
+                } else if self.visible() {
+                    "Visible"
+                } else {
+                    "Hidden"
+                })
+                .weak()
+                .small(),
+            );
         });
-        changed.then_some(enabled)
+        row
+    }
+}
+
+/// Actual controls and a pending selection, for menu owners and UI diagnostics.
+pub struct HudMenuRow {
+    pub choice: Option<Option<bool>>,
+    pub automatic: egui::Rect,
+    pub show: egui::Rect,
+    pub hide: egui::Rect,
+}
+
+impl Default for HudMenuRow {
+    fn default() -> Self {
+        Self {
+            choice: None,
+            automatic: egui::Rect::NOTHING,
+            show: egui::Rect::NOTHING,
+            hide: egui::Rect::NOTHING,
+        }
     }
 }
 
@@ -285,9 +326,8 @@ pub struct SetAllHudVisibility(pub bool);
 /// Stable ordering of the HUD menu's independently owned sections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum HudMenuGroup {
-    Guidance,
-    Native,
-    Runtime,
+    BuiltIn,
+    Twin,
 }
 
 /// Registry of menu contributions owned by the workbench contract layer.

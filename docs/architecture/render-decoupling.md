@@ -165,7 +165,7 @@ tonemapping. The main viewport inherits the saved **Fixed viewport exposure** se
 camera's fixed EV100 is off. It uses scene exposure when both controls are off.
 The Graphics profile EV is the calibration for newly constructed unauthored
 cameras, not a separate operator exposure control. Feeds with fixed EV100 off
-use their source exposure. These controls preserve the source's physical exposure and have no effect on the depth display.
+use their source exposure. **Reset EV** restores the inherited EV100 as the fixed value; unchecking fixed exposure follows the inherited value dynamically. These controls preserve the source's physical exposure and have no effect on the depth display.
 
 `lunco-render` owns this validated presentation intent. `lunco-render-bevy`
 converts it at the named GPU boundary and runs the standard-library

@@ -16,7 +16,7 @@ pub mod tree;
 
 pub use icons::{UiIcon, icon_button, icon_button_sized, icon_text_button, paint_icon};
 
-/// Edit an optional photographic exposure, starting from the inherited EV100.
+/// Edit an optional photographic exposure, starting from or resetting to the inherited EV100.
 pub fn fixed_exposure_ev100(
     ui: &mut egui::Ui,
     label: &str,
@@ -29,9 +29,25 @@ pub fn fixed_exposure_ev100(
         *value = fixed.then_some(inherited);
     }
     let edited = value.as_mut().is_some_and(|ev100| {
-        ui.add(egui::DragValue::new(ev100).speed(0.1).suffix(" EV100"))
-            .on_hover_text("Lower EV100 brightens the image. Higher EV100 darkens it.")
-            .changed()
+        ui.horizontal(|ui| {
+            let changed = ui
+                .add(egui::DragValue::new(ev100).speed(0.1).suffix(" EV100"))
+                .on_hover_text("Lower EV100 brightens the image. Higher EV100 darkens it.")
+                .changed();
+            if ui
+                .add_enabled(*ev100 != inherited, egui::Button::new("Reset EV"))
+                .on_hover_text(format!(
+                    "Restore the inherited default ({inherited:.1} EV100)"
+                ))
+                .clicked()
+            {
+                *ev100 = inherited;
+                true
+            } else {
+                changed
+            }
+        })
+        .inner
     });
     toggled || edited
 }

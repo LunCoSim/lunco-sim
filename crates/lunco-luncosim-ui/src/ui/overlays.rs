@@ -5,12 +5,10 @@
 
 use bevy::prelude::*;
 use lunco_capture::camera_feed::{CameraFeeds, CreateCameraFeed, MAX_CAMERA_FEEDS};
-use lunco_input_ui::InputOverlaySettings;
 use lunco_settings::{AppSettingsExt, SettingsSection};
 use lunco_workbench_core::{
     HudVisibility, MenuCtx, SetAllHudVisibility, WorkbenchMenuRegistry, WorkbenchSnapshot,
 };
-use lunco_workbench_perf_ui::PerfHudSettings;
 use lunco_workbench_state::RuntimeSurfaceLayouts;
 use serde::{Deserialize, Serialize};
 
@@ -29,11 +27,11 @@ pub(crate) struct OverlaySettings {
     schema_version: u8,
     #[serde(default)]
     /// The sky-time pill (top-left): the shared CelestialTime epoch.
-    pub sky_clock: bool,
+    pub sky_clock: Option<bool>,
     #[serde(default)]
     /// The view-mode switcher pill (top-centre): Surface / Moon / Earth, which
     /// doubles as the readout of which body the camera is focused on.
-    pub view_switcher: bool,
+    pub view_switcher: Option<bool>,
 }
 
 const OVERLAY_SETTINGS_SCHEMA_VERSION: u8 = 1;
@@ -48,8 +46,8 @@ impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
             schema_version: OVERLAY_SETTINGS_SCHEMA_VERSION,
-            sky_clock: false,
-            view_switcher: false,
+            sky_clock: None,
+            view_switcher: None,
         }
     }
 }
@@ -59,7 +57,7 @@ impl SettingsSection for OverlaySettings {
 
     fn migrate_persisted(&mut self) {
         if self.schema_version < OVERLAY_SETTINGS_SCHEMA_VERSION {
-            self.sky_clock = false;
+            self.sky_clock = None;
             self.schema_version = OVERLAY_SETTINGS_SCHEMA_VERSION;
         }
     }
@@ -67,7 +65,7 @@ impl SettingsSection for OverlaySettings {
 
 /// `run_if` for the sky-clock overlay.
 pub(crate) fn sky_clock_visible(settings: Option<Res<OverlaySettings>>) -> bool {
-    settings.is_some_and(|s| s.sky_clock)
+    settings.is_some_and(|s| s.sky_clock.unwrap_or(false))
 }
 
 /// Contribute celestial clock controls to the Time menu. Visibility belongs
@@ -87,18 +85,25 @@ pub(crate) fn register_time_menu(world: &mut World) {
 
 const CELESTIAL_VIEW_SURFACE_ID: &str = "celestial-view";
 
-fn in_view(ctx: &MenuCtx<'_>) -> bool {
-    ctx.resource::<WorkbenchSnapshot>()
-        .and_then(|s| s.active_perspective())
-        .is_some_and(|id| id.as_str() == lunco_workbench_core::VIEW_PERSPECTIVE_ID)
+fn scene_view_available(ctx: &MenuCtx<'_>) -> bool {
+    super::interactive_scene_view(
+        ctx.resource::<WorkbenchSnapshot>(),
+        ctx.resource::<lunco_viewport_core::SceneViewport>(),
+    )
 }
 
-fn visibility_row(ui: &mut bevy_egui::egui::Ui, value: &mut bool, available: bool, label: &str) {
+fn visibility_row(
+    ui: &mut bevy_egui::egui::Ui,
+    value: &mut Option<bool>,
+    available: bool,
+    label: &str,
+) {
     if let Some(enabled) = (HudVisibility {
-        enabled: *value,
+        enabled: value.unwrap_or(false),
         available,
     })
-    .menu_row(ui, label)
+    .menu_row(ui, label, *value)
+    .choice
     {
         *value = enabled;
     }
@@ -109,7 +114,7 @@ fn register_hud_settings_menu(world: &mut World) {
     let Some(mut menus) = world.get_resource_mut::<WorkbenchMenuRegistry>() else {
         return;
     };
-    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::Native, |ui, ctx| {
+    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::BuiltIn, |ui, ctx| {
         use bevy_egui::egui;
 
         ui.label(
@@ -122,7 +127,7 @@ fn register_hud_settings_menu(world: &mut World) {
             return;
         };
         let original_overlays = overlays;
-        let in_view = in_view(ctx);
+        let in_view = scene_view_available(ctx);
         lunco_viz::graph_hud_menu_ui(ui, ctx, in_view);
         super::camera_feed::camera_hud_menu_ui(ui, ctx, in_view);
 
@@ -188,49 +193,19 @@ fn register_hud_settings_menu(world: &mut World) {
             .small(),
         );
 
-        let Some(mut performance) = ctx.resource::<PerfHudSettings>().copied() else {
-            return;
-        };
-        let original_performance = performance;
-        visibility_row(ui, &mut performance.enabled, true, "Performance HUD");
-        if performance != original_performance {
-            ctx.set_resource(performance);
-        }
-
-        let Some(mut input) = ctx.resource::<InputOverlaySettings>().copied() else {
-            return;
-        };
-        let original_input = input;
-        visibility_row(ui, &mut input.enabled, true, "Input HUD");
-        if input != original_input {
-            ctx.set_resource(input);
-        }
-
     });
 }
 
 fn set_all_native_hud_visibility(
     event: On<SetAllHudVisibility>,
     mut overlays: ResMut<OverlaySettings>,
-    mut performance: Option<ResMut<PerfHudSettings>>,
-    mut input: Option<ResMut<InputOverlaySettings>>,
 ) {
-    let enabled = event.0;
-    if overlays.sky_clock != enabled {
-        overlays.sky_clock = enabled;
+    let preference = Some(event.0);
+    if overlays.sky_clock != preference {
+        overlays.sky_clock = preference;
     }
-    if overlays.view_switcher != enabled {
-        overlays.view_switcher = enabled;
-    }
-    if let Some(performance) = performance.as_mut() {
-        if performance.enabled != enabled {
-            performance.enabled = enabled;
-        }
-    }
-    if let Some(input) = input.as_mut() {
-        if input.enabled != enabled {
-            input.enabled = enabled;
-        }
+    if overlays.view_switcher != preference {
+        overlays.view_switcher = preference;
     }
 }
 
@@ -247,7 +222,7 @@ mod tests {
 
     #[test]
     fn default_hides_the_sky_clock() {
-        assert!(!OverlaySettings::default().sky_clock);
+        assert!(!OverlaySettings::default().sky_clock.unwrap_or(false));
     }
 
     #[test]
@@ -258,7 +233,7 @@ mod tests {
         }))
         .expect("legacy overlay settings");
         settings.migrate_persisted();
-        assert!(!settings.sky_clock);
+        assert!(!settings.sky_clock.unwrap_or(false));
         assert_eq!(settings.schema_version, OVERLAY_SETTINGS_SCHEMA_VERSION);
     }
 
@@ -266,10 +241,10 @@ mod tests {
     fn migrated_opt_in_remains_persisted() {
         let mut settings = OverlaySettings {
             schema_version: OVERLAY_SETTINGS_SCHEMA_VERSION,
-            sky_clock: true,
-            view_switcher: false,
+            sky_clock: Some(true),
+            view_switcher: None,
         };
         settings.migrate_persisted();
-        assert!(settings.sky_clock);
+        assert!(settings.sky_clock.unwrap_or(false));
     }
 }

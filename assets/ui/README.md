@@ -176,7 +176,7 @@ pose over 1.2 seconds by default. Rhai can tune
 The body-mode selector and optional mission-site card stay in the root's
 normal vertical flow. The map is absolutely positioned below whichever controls
 are visible inside the movable surface rectangle. Its authored default is
-top-centre; users can drag the window and use View ▸ HUDs ▸ Reset position to
+top-centre; users can drag the window and use View ▸ HUDs ▸ Built-in HUDs ▸ Reset position to
 remove the per-Twin override.
 
 ## Performance and placement
@@ -244,13 +244,16 @@ window, and networking scenario-download card. The two asset notices consume
 independent exposure namespaces and share the scoped Rhai action path.
 [Asset preparation contract](../../docs/architecture/asset-processing.md#desktop-startup-assets)
 
-The View ▸ HUDs submenu is the user-facing view over the existing global HUD
-owners, active Twin settings, and the guided-card/runtime-manifest user visibility
-overrides. Supply a human-readable `title` separately from the stable surface
+The View ▸ HUDs submenu splits **Built-in HUDs** (application-owner controls
+and application manifest surfaces marked `built_in_hud`) from **Twin HUDs**
+(active manifest, guidance cards and authored floating perspective panels).
+Every row offers Auto, Show and Hide; eligibility is reported separately. Supply a human-readable `title` separately from the stable surface
 id. A checked HUD can be unavailable in the current perspective or scene.
-Camera-status is gated by the active Twin's generic
-`ui.camera_status` setting and defaults on when that key is absent; set it to
-`false` in `twin.toml` to hide it. Rover, terrain, download, and tutorial HUDs retain their authored visibility
+Camera-status follows the active Twin's generic `ui.camera_status` setting
+in automatic mode and defaults on when that key is absent. The HUD choice
+can show or hide it for the current scene, and **Auto** restores the
+Twin setting without modifying `twin.toml`. Camera status follows the interactive
+main scene viewport, including Twin-authored scene perspectives. Rover, terrain, download, and tutorial HUDs retain their authored visibility
 conditions but can be suppressed by the user. Modal and dock-panel surfaces remain lifecycle-controlled. Essential workflow
 overlays can declare `"user_dismissible": false`; other free-standing surfaces
 default to dismissible, independently of their paint layer. Camera-status has one runtime visibility row that does not edit the Twin
