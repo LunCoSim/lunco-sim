@@ -11060,6 +11060,7 @@ dependencies = [
  "avian3d",
  "bevy",
  "big_space",
+ "glam 0.33.12",
  "lunco-api",
  "lunco-api-core",
  "lunco-assets-core",

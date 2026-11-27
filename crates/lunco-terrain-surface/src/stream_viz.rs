@@ -40,6 +40,8 @@ use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid, Stationary};
+#[cfg(test)]
+use glam::dcamera::rh::view::look_to_mat4;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_materials::{
     ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET, ParamValue, ShaderLook,
@@ -7647,15 +7649,6 @@ pub(crate) fn bind_shadow_cache_to_tiles(
 }
 
 #[cfg(test)]
-#[expect(
-    deprecated,
-    reason = "Bevy reexports DMat4 but does not expose glam's dcamera replacement"
-)]
-fn test_view(eye: DVec3, forward: DVec3, up: DVec3) -> DMat4 {
-    DMat4::look_to_rh(eye, forward, up)
-}
-
-#[cfg(test)]
 fn test_perspective(fov_y_rad: f64, eye: DVec3, forward: DVec3) -> TerrainProjection {
     let up = if forward.y.abs() > 0.99 {
         DVec3::NEG_Z
@@ -7665,7 +7658,7 @@ fn test_perspective(fov_y_rad: f64, eye: DVec3, forward: DVec3) -> TerrainProjec
     TerrainProjection::Perspective {
         fov_y_rad,
         clip_from_local: bevy::math::dproj::perspective_infinite_reverse(fov_y_rad, 1.0, 0.1)
-            * test_view(eye, forward, up),
+            * look_to_mat4(eye, forward, up),
     }
 }
 
@@ -7820,7 +7813,7 @@ mod draw_partition_tests {
         let visual = &mut demands.visual[0];
         visual.terrain_clips.insert(
             terrain,
-            visual.projection.clip_from_local() * test_view(DVec3::Y, DVec3::NEG_Z, DVec3::Y),
+            visual.projection.clip_from_local() * look_to_mat4(DVec3::Y, DVec3::NEG_Z, DVec3::Y),
         );
         let quadtree = Quadtree::new(100.0, 5, 1.0, 100.0);
         let mut view = LodView {
@@ -8170,7 +8163,7 @@ mod draw_partition_tests {
         let (eye, forward) = demand.terrain_poses[&terrain];
         demand.terrain_clips.insert(
             terrain,
-            demand.projection.clip_from_local() * test_view(eye, forward, DVec3::Y),
+            demand.projection.clip_from_local() * look_to_mat4(eye, forward, DVec3::Y),
         );
         view.publish_latest_demand(
             &demands,
@@ -8403,7 +8396,7 @@ mod draw_partition_tests {
     fn orthographic_clip_retains_subpixel_jitter_and_detects_roll() {
         let native = bevy::math::dproj::orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 10_000.0);
         let eye = DVec3::new(-380.25, -1918.25, -380.25);
-        let pose = test_view(eye, DVec3::NEG_Y, DVec3::NEG_Z).inverse();
+        let pose = look_to_mat4(eye, DVec3::NEG_Y, DVec3::NEG_Z).inverse();
         let projection = |roll, offset| TerrainProjection::Orthographic {
             pixels_per_metre: 50.0,
             area: [-10.0, -10.0, 10.0, 10.0],
@@ -8448,7 +8441,7 @@ mod draw_partition_tests {
                 10.0,
                 0.1,
                 2_000_000.0,
-            ) * test_view(distant_eye, DVec3::NEG_Y, DVec3::NEG_Z),
+            ) * look_to_mat4(distant_eye, DVec3::NEG_Y, DVec3::NEG_Z),
         };
         let distant_anchor = SelectionClip::new(distant, 1000.0, 2.0, distant_eye).unwrap();
         assert_eq!(
@@ -9334,7 +9327,7 @@ mod draw_partition_tests {
             }],
         };
         let clip = demands.visual[0].projection.clip_from_local()
-            * test_view(DVec3::Y, DVec3::NEG_Z, DVec3::Y);
+            * look_to_mat4(DVec3::Y, DVec3::NEG_Z, DVec3::Y);
         demands.visual[0].terrain_clips.insert(terrain, clip);
         let mut tiles = LodTiles::default();
         let mut held = HeldTerrainPreparation::default();
@@ -10184,7 +10177,7 @@ mod draw_partition_tests {
             camera.position,
             camera.forward,
             camera.projection.clip_from_local()
-                * test_view(camera.position, camera.forward, DVec3::Y),
+                * look_to_mat4(camera.position, camera.forward, DVec3::Y),
             2.0,
         )
         .expect("finite camera pose remains a valid visual demand");
