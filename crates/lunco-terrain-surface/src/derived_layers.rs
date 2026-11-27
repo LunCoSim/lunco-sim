@@ -74,13 +74,13 @@ use crate::terrain::DemVisualTargetRes;
 /// requested final shading products.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TerrainDerivedStatus {
-    /// At least one terrain has unfinished shading preparation.
+    /// At least one site raster or consumed-view clipmap has unfinished preparation.
     pub active: bool,
-    /// Terrains with current derived shading products and no replacement pending.
+    /// Current shading products with no replacement pending.
     pub ready: usize,
-    /// Terrains that can publish a derived-map product in the current render host.
+    /// Required site-raster and view-clipmap products in this render host.
     pub total: usize,
-    /// Terrains waiting for final derived shading, including deferred upgrades.
+    /// Products waiting for final derived shading, including GPU patch acknowledgement.
     pub pending: usize,
     /// Terminal failures for current source/quality requests.
     pub failed: usize,
@@ -1485,6 +1485,7 @@ fn cancel_derived_bakes_on_scene_teardown(
 /// status bus.
 fn update_derived_status(
     images: Option<Res<Assets<Image>>>,
+    relief: Option<Res<crate::relief_pages::TerrainReliefPages>>,
     horizon_config: Option<Res<lunco_environment::HorizonShadowCacheConfig>>,
     render_sun: Option<Res<lunco_environment::SunRenderState>>,
     sun: lunco_environment::SunQuery,
@@ -1611,6 +1612,12 @@ fn update_derived_status(
         pending += usize::from(!complete);
     }
 
+    if let Some(relief) = relief {
+        let (requested, complete) = relief.counts();
+        total += requested;
+        ready += complete;
+        pending += requested - complete;
+    }
     status.set_if_neq(TerrainDerivedStatus {
         active: pending > 0,
         ready,
@@ -1636,7 +1643,11 @@ fn update_derived_status(
 /// Takes the PREBUILT chain (`(data, level_count)` from
 /// [`lunco_materials::rgba8_mip_chain`],
 /// run in the bake task) — this only wraps it in an `Image`.
-fn data_texture(res: usize, (data, mip_levels): (Vec<u8>, u32), anisotropy_clamp: u16) -> Image {
+pub(crate) fn data_texture(
+    res: usize,
+    (data, mip_levels): (Vec<u8>, u32),
+    anisotropy_clamp: u16,
+) -> Image {
     use bevy::image::ImageSamplerDescriptor;
     // `new_uninit` + manual data: `Image::new` debug-asserts data == base level,
     // but ours carries the whole mip chain.

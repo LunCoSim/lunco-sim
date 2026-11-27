@@ -205,11 +205,10 @@ fn render_quality_profile(id) {
             terrain_lod_probe_resolution: 9,
             terrain_lod_bakes_per_frame: 24,
             terrain_lod_max_inflight_bakes: 64,
-            // Keep the high profile's 65² vertex tiles close and crisp without
-            // admitting a thousand draw tiles plus hidden parent fallbacks at
-            // startup. That resident set exceeded the GPU budget on the Apollo
-            // scene and caused device loss before physics admission completed.
-            terrain_lod_tile_budget: 256,
+            // Match Balanced's leaf triangle ceiling: 432 × 2 × 64² =
+            // 768 × 2 × 48². Native mesh-byte admission independently limits
+            // live geometry, cache residency and transitional parent meshes.
+            terrain_lod_tile_budget: 432,
             terrain_lod_cover_edits_per_frame: 64,
             terrain_lod_hysteresis_ratio: 1.30,
             terrain_lod_morph_start_ratio: 0.55,

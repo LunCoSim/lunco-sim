@@ -16,7 +16,7 @@ appearance is stated as data instead of as a material.
 | | what it is | where it lives | how many |
 |---|---|---|---|
 | **Parameter** | a scalar/vector uniform the shader reads | one opaque 512-byte uniform block | up to 128 `f32` scalars or 32 `vec4`s, subject to layout alignment |
-| **Texture layer** | a raster the shader samples | a bind-group entry | **14 named roles** |
+| **Texture layer** | a raster the shader samples | a bind-group entry | **15 named roles** |
 
 Parameters are cheap and open-ended. **Texture and sampler bindings are the scarce resources.** Most
 "I need another layer" instincts should be spent on a *channel*, not a slot — see
@@ -271,7 +271,7 @@ key exists.
 
 ---
 
-## Texture layers: fourteen named roles
+## Texture layers: fifteen named roles
 
 ```rust
 pub enum TextureLayer {
@@ -280,6 +280,7 @@ pub enum TextureLayer {
     Mineral,
     Surface,
     Normal,
+    TerrainRelief,
     ShadowCache,
     ContinuationAlbedo,
     RegionalAlbedo,
@@ -292,7 +293,14 @@ pub enum TextureLayer {
 }
 ```
 
-The material keeps one texture binding per role and four renderer-owned filtering samplers:
+The material keeps one texture binding per role and four renderer-owned filtering samplers.
+`TerrainRelief` uses the repeat sampler to address the persistent toroidal atlas.
+Its typed RGBA8 mip-region patches go through `lunco-render::data_texture`,
+with exact rectangle/level validation and ordered coalescing at extraction.
+Only exposed chunks are uploaded; the CPU image shadow retains the same data
+for ordinary image preparation. The sampling-window intent is published before
+`ShaderLookApplySet`, and the render adapter uploads patches before drawing.
+
 
 | Binding | Profile | Addressing | Anisotropy |
 |---|---|---|---|

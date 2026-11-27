@@ -12,7 +12,7 @@ checks.push(t_true(high_profile.ok == true
         && high_profile.value.shadow_filtering_quality == "tent3x3"
         && high_profile.value.shadow_normal_bias == 2.0
         && high_profile.value.terrain_lod_max_depth == 9
-        && high_profile.value.terrain_lod_tile_budget == 256
+        && high_profile.value.terrain_lod_tile_budget == 432
         && high_profile.value.horizon_march_steps == 96,
     "High shadow quality uses the authored high-detail values"));
 t_report(checks);

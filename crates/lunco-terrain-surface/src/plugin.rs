@@ -246,6 +246,7 @@ impl Plugin for TerrainSurfaceVisualizationPlugin {
         );
         crate::overlay::register(app);
         crate::derived_layers::register(app);
+        crate::relief_pages::register(app);
 
         app.configure_sets(
             PostUpdate,

@@ -6,6 +6,7 @@
 //!   independent → deterministic across peers), 3D-Tiles geometric-error, and
 //!   CDLOD geomorph bands. The live surface streamer evolves a persistent,
 //!   restricted cover using the shared error range and nearest 3D node distance.
+//! - [`selection`] — incremental budgeted restricted-cover evolution.
 //! - [`error`] — one sampled node descriptor for geometric error and height range.
 //! - [`tile`] — uniform planar tile-grid math: world↔tile mapping, the resident
 //!   ring of tiles around a focus (the physics-collider-ring substrate).
@@ -34,6 +35,7 @@ pub mod modifier;
 pub mod overzoom;
 pub mod quadtree;
 pub mod quantize;
+pub mod selection;
 pub mod source;
 pub mod tile;
 pub mod transfer;
@@ -44,7 +46,7 @@ pub use crater::{
     ANALYTIC_RADIUS_FLOOR_M, CRATER_REACH, Crater, CraterField, Craters, MAX_CRATERS_PER_HA,
     crater_profile, crater_profile_rim_limited,
 };
-pub use error::{NodeGeometry, measure_node_geometry};
+pub use error::{NodeGeometry, measure_lattice_geometry, measure_node_geometry};
 // `FieldKind` is NOT re-exported: it has no definition (optimization removed it as dead
 // code) and nothing referenced it but this line.
 pub use derive::{

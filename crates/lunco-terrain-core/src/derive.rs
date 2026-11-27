@@ -101,6 +101,61 @@ pub fn normal_slope_map_rows<S: HeightSource>(
     Some((normals, slopes))
 }
 
+/// A bounded height page sampled once per texel, with ghost postings for
+/// central differences. This avoids four expensive oracle evaluations per
+/// texel; the site boundary still uses the authoritative one-sided normal.
+/// Chunk row ranges keep cooperative work and scratch memory bounded.
+pub fn bounded_normal_page_rows(
+    src: &dyn HeightSource,
+    region: &Square,
+    res: usize,
+    rows: Range<usize>,
+    source_half: f64,
+    cancelled: impl Fn() -> bool,
+) -> Option<Vec<[f32; 3]>> {
+    assert!(res > 0 && rows.start <= rows.end && rows.end <= res);
+    let eps = texel_eps(region, res);
+    let origin = [
+        region.center[0] - region.half,
+        region.center[1] - region.half,
+    ];
+    let coordinate = |axis: usize, i: isize| origin[axis] + (i as f64 + 0.5) * eps;
+    let stride = res + 2;
+    let mut heights = Vec::with_capacity((rows.len() + 2) * stride);
+    for j in rows.start as isize - 1..=rows.end as isize {
+        if cancelled() {
+            return None;
+        }
+        for i in -1..=res as isize {
+            heights.push(src.height_at(
+                coordinate(0, i).clamp(-source_half, source_half),
+                coordinate(1, j).clamp(-source_half, source_half),
+            ));
+        }
+    }
+    let mut normals = Vec::with_capacity(rows.len() * res);
+    for (local_row, j) in rows.enumerate() {
+        if cancelled() {
+            return None;
+        }
+        let z = coordinate(1, j as isize);
+        for i in 0..res {
+            let x = coordinate(0, i as isize);
+            let n = if x.abs() + eps > source_half || z.abs() + eps > source_half {
+                normal_at_bounded(src, x, z, eps, source_half)
+            } else {
+                let at = (local_row + 1) * stride + i + 1;
+                let gx = (heights[at + 1] - heights[at - 1]) / (2.0 * eps);
+                let gz = (heights[at + stride] - heights[at - stride]) / (2.0 * eps);
+                let len = (gx * gx + 1.0 + gz * gz).sqrt();
+                [-gx / len, 1.0 / len, -gz / len]
+            };
+            normals.push([n[0] as f32, n[1] as f32, n[2] as f32]);
+        }
+    }
+    Some(normals)
+}
+
 /// Slope angle from vertical (radians, `0` = flat) over `region`, row-major.
 /// When the normal map is baked alongside (it always is in the surface-pack
 /// bake), use [`normal_slope_maps`] — this standalone walk re-derives the same
@@ -589,6 +644,33 @@ pub fn pack_normal_rgba8(normals: &[[f32; 3]], albedo: &[f32]) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::source::HeightSource;
+
+    #[test]
+    fn normal_page_ghost_rows_match_bounded_normal_and_join() {
+        use crate::source::BoundedHeightSource;
+        struct Surface;
+        impl HeightSource for Surface {
+            fn height_at(&self, x: f64, z: f64) -> f64 {
+                0.01 * x * x + 0.03 * z * z + 0.1 * x * z
+            }
+        }
+        let region = Square {
+            center: [3.0, -1.0],
+            half: 5.0,
+        };
+        let source = BoundedHeightSource::new(&Surface, 6.0);
+        let expected = normal_slope_maps(&source, &region, 32).0;
+        let mut pages =
+            bounded_normal_page_rows(&Surface, &region, 32, 0..13, 6.0, || false).unwrap();
+        pages.extend(
+            bounded_normal_page_rows(&Surface, &region, 32, 13..32, 6.0, || false).unwrap(),
+        );
+        assert_eq!(
+            pack_normal_rgba8(&expected, &[]),
+            pack_normal_rgba8(&pages, &[])
+        );
+        assert!(bounded_normal_page_rows(&Surface, &region, 32, 0..32, 6.0, || true).is_none());
+    }
 
     /// Flat plane at a constant height.
     struct Flat(f64);

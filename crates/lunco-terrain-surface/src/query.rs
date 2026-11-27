@@ -571,6 +571,8 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
     fn execute(&self, world: &World, params: &ApiValue) -> ApiQueryResult {
         let include_geometry =
             params.get("include_geometry").and_then(ApiValue::as_bool) == Some(true);
+        let include_draw_cover =
+            params.get("include_draw_cover").and_then(ApiValue::as_bool) == Some(true);
         let range = |offset_name: &str,
                      limit_name: &str,
                      maximum: usize|
@@ -791,6 +793,43 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                             let Some(view) = tiles.view_status(camera) else { continue; };
                             let height = field.0.height_at(local.x, local.z);
                             let envelope = world.get::<lunco_camera_core::CameraCollisionEnvelope>(camera);
+                            // Read the published draw partition, not the desired selection.
+                            // These bounded rows do not need CPU mesh payloads or GPU readback.
+                            let draw_cover = if include_draw_cover {
+                                tiles.draw_tiles(camera).map(|draw| {
+                                    let mut nodes: Vec<_> = draw.filter_map(|(coord, entity, _, stitches)| {
+                                        let (resolution, half, current) = tiles.draw_lattice(camera, coord)?;
+                                        let morph = tiles.draw_morph_band(camera, coord)?;
+                                        let region = lunco_terrain_core::quadtree::Quadtree::new(half, coord.depth, 1.0, half).region(coord);
+                                        Some((coord, api_value!({
+                                            "entity": entity.to_bits(), "depth": coord.depth, "x": coord.x, "z": coord.z,
+                                            "center_m": region.center, "half_extent_m": region.half,
+                                            "spacing_m": region.side() / (resolution - 1) as f64,
+                                            "current_lattice": current, "morph_band_m": morph,
+                                            "stitch_edges": stitches,
+                                        })))
+                                    }).collect();
+                                    nodes.sort_unstable_by_key(|(coord, _)| (coord.depth, coord.x, coord.z));
+                                    nodes.into_iter().map(|(_, value)| value).collect::<Vec<_>>()
+                                })
+                            } else { None };
+                            let relief = world.get_resource::<crate::relief_pages::TerrainReliefPages>()
+                                .and_then(|pages| pages.status(terrain, camera))
+                                .map(|relief| {
+                                    let uploaded = relief.atlas.and_then(|id| world.get_resource::<lunco_render::data_texture::DataTextureUpdates>()?.uploaded.get(&id));
+                                    api_value!({
+                                        "current": relief.current,
+                                        "center_m": relief.page.map(|p| p.0),
+                                        "half_extent_m": relief.page.map(|p| p.1),
+                                        "texel_m": relief.page.map(|p| p.2),
+                                        "atlas": relief.atlas.map(|id| format!("{id:?}")),
+                                        "chunks_reused": relief.reused,
+                                        "chunks_updated": relief.updated,
+                                        "prepared_bytes": relief.bytes,
+                                        "uploaded_patch_bytes": uploaded.map(|s| s.last_patch_bytes),
+                                        "patch_batches": uploaded.map(|s| s.batches),
+                                    })
+                                });
                             rows.push(api_value!({
                                 "source": terrain.to_bits(), "camera": raw,
                                 "position_local_m": local.to_array(), "forward_local": forward.to_array(), "clearance_m": local.y-height,
@@ -809,6 +848,8 @@ impl ApiQueryProvider for TerrainLodStatusProvider {
                                 "collision_skin_m": envelope.map(|envelope| envelope.skin_m),
                                 "wanted": view.wanted, "resident": view.resident, "drawn": view.drawn,
                                 "budget_refused": view.budget_refused, "effective_max_depth": view.effective_max_depth,
+                                "draw_cover": draw_cover,
+                                "relief": relief,
                                 "spacing_m": leaf.map(|leaf| 2.0 * f64::from(field.0.domain_half_extent()) / f64::from(1u32 << leaf.0) / view.resolution.saturating_sub(1).max(1) as f64),
                             }));
                         }

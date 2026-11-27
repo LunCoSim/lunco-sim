@@ -4,15 +4,13 @@
 //! visual mesh is suppressed (the heightfield COLLIDER still spawns, so physics
 //! is unchanged) and a set of LOD tiles is streamed every frame:
 //!
-//! 1. read the camera position in the terrain's local XZ frame → `focus`,
-//! 2. [`Quadtree::select_3d`] the node set for that focus + eye height (fine under
-//!    the camera, coarse far away),
-//! 3. diff against the currently-spawned tiles ([`LodTiles`]): bake + spawn the
-//!    new nodes ([`bake_tile_mesh`], real DEM-sampled geometry), despawn the gone,
-//! 4. draw each tile with the terrain material authored by the owning USD
-//! `UsdShade` network: its CDLOD **vertex morph**
-//!    (`POSITION → MORPH_TARGET` by camera distance, so no LOD pop) + the
-//!    fragment stage declared by the terrain's authored `UsdShade` material.
+//! 1. read the actual camera eye in terrain-local metres,
+//! 2. reserve camera-centred detail and evolve one restricted cover with
+//!    [`evolve_restricted_cover`] under the current view and resource budget,
+//! 3. prepare source-keyed mesh bakes and publish complete, ready partitions
+//!    through [`LodTiles`], retaining outgoing geometry until replacement,
+//! 4. draw the authored USD material with camera-distance CDLOD morph and
+//!    restricted-neighbour stitching in the same presentation context.
 //!
 //! # Appearance is INTENT here, not a material
 //!
@@ -21,9 +19,7 @@
 //! texture layers — plus engine-owned morph/map values. **Nothing in this crate
 //! names a production shader asset.** `lunco-render-bevy` binds the intent,
 //! caching by `ShaderLook::key()`, so every tile in the same LOD band
-//! shares ONE material and ONE bind group. That cache *is* the old hand-rolled
-//! `LodMaterials`/`MatKey` table, done generically: the `(depth, band bucket)`
-//! that `MatKey` encoded is simply the look's own content now.
+//! shares one material and one bind group when their complete look agrees.
 //!
 //! Keep the key COARSE. It is what lets tiles batch, so any per-tile parameter
 //! added here mints a material per tile and costs draw calls. The topology
@@ -47,7 +43,9 @@ use lunco_materials::{
 };
 use lunco_obstacle_field::grid_mesh;
 use lunco_render::camera::{SceneViewDemand, SceneViewLayers};
-use lunco_terrain_core::{HeightSource, NodeGeometry, measure_node_geometry};
+#[cfg(test)]
+use lunco_terrain_core::measure_node_geometry;
+use lunco_terrain_core::{HeightSource, NodeGeometry, measure_lattice_geometry};
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{
@@ -57,11 +55,15 @@ use std::{
     time::Duration,
 };
 
+use crate::band::SurfaceBand;
 use crate::derived_layers::{TerrainAuthoredMaps, TerrainDerivedMaps};
 use crate::oracle::{DemHeightField, SurfaceOracle};
 use crate::surface_change::TerrainSurfaceChange;
 use crate::terrain::DemTerrainSurface;
 use lunco_terrain_core::quadtree::{QuadCoord, Quadtree, Selected, Square};
+use lunco_terrain_core::selection::{
+    CoverScratch, covering_depth, evolve_restricted_cover, required_split_nodes,
+};
 
 /// Terrain tile resolution, refinement, bake pacing, and cache ceilings are
 /// persisted in [`lunco_render::RenderingQualitySettings`]. Keeping them there
@@ -407,7 +409,6 @@ struct TerrainVisualDemand {
     focus: [f64; 2],
     camera_y: f64,
     heading: Option<bevy::math::DVec2>,
-    view_direction: DVec3,
     screen_height_px: f64,
     projection: TerrainProjection,
     selection_clip: SelectionClip,
@@ -591,6 +592,29 @@ impl TerrainDetailDemands {
             .get(&terrain)
             .copied()
     }
+    /// Relief windows use the same consumed camera lease and local precision frame
+    /// as geometry. Ground windows ignore heading; elevated windows use the
+    /// projected ground focus.
+    pub(crate) fn relief_foci(
+        &self,
+        terrain: Entity,
+    ) -> impl Iterator<Item = (Entity, DVec3, DVec3, f64, f64)> + '_ {
+        self.visual.iter().filter_map(move |demand| {
+            let TerrainProjection::Perspective { fov_y_rad, .. } = demand.projection else {
+                return None;
+            };
+            let (local, forward) = demand.terrain_poses.get(&terrain)?;
+            let focal_px = demand.screen_height_px / (2.0 * (0.5 * fov_y_rad).tan());
+            Some((
+                demand.entity,
+                *local,
+                *forward,
+                demand.near_detail_radius_m,
+                focal_px,
+            ))
+        })
+    }
+
     /// Snapshot active camera poses in their composed BigSpace root coordinates
     /// for API diagnostics. Selection does not consume these root values: it
     /// projects each camera entity into each terrain through
@@ -991,7 +1015,6 @@ fn terrain_visual_demand(
         focus,
         camera_y: terrain_local.y,
         heading,
-        view_direction: local_forward,
         screen_height_px: demand.screen_height_px,
         projection,
         selection_clip: SelectionClip::new(
@@ -1132,396 +1155,6 @@ fn wanted_parent_fallbacks(
             node = parent;
         }
     }
-}
-
-#[cfg(test)]
-const TEST_MAX_COVER_EDITS: usize = 64;
-#[cfg(test)]
-const TEST_LOD_HYSTERESIS_RATIO: f64 = 1.30;
-
-/// Depth at which the cover covers `q`'s region from ABOVE: `Some(d ≤ q.depth)`
-/// if `q` itself or an ancestor is in the cover, `None` if the region is covered
-/// by strictly deeper nodes. Exactness (every point under exactly one cover node)
-/// is what makes these three cases exhaustive.
-fn covering_depth(cover: &HashSet<QuadCoord>, mut q: QuadCoord) -> Option<u8> {
-    loop {
-        if cover.contains(&q) {
-            return Some(q.depth);
-        }
-        q = q.parent()?;
-    }
-}
-
-/// Would replacing `p`'s four children by `p` break the 2:1 edge restriction?
-/// True iff some region edge-adjacent to `p` is covered at depth ≥ `p.depth + 2`.
-/// Tested on the depth-`p.depth+1` rim coords just outside `p`: by exactness,
-/// "neither the coord nor any ancestor is in the cover" ⟺ covered strictly
-/// deeper than `p.depth + 1`.
-fn merge_violates_restriction(cover: &HashSet<QuadCoord>, p: QuadCoord) -> bool {
-    let d1 = p.depth + 1;
-    let side = 1i64 << d1;
-    let (x0, z0) = (2 * p.x as i64, 2 * p.z as i64);
-    let rim = [
-        (x0 - 1, z0),
-        (x0 - 1, z0 + 1), // left
-        (x0 + 2, z0),
-        (x0 + 2, z0 + 1), // right
-        (x0, z0 - 1),
-        (x0 + 1, z0 - 1), // below
-        (x0, z0 + 2),
-        (x0 + 1, z0 + 2), // above
-    ];
-    rim.into_iter().any(|(x, z)| {
-        x >= 0
-            && z >= 0
-            && x < side
-            && z < side
-            && covering_depth(
-                cover,
-                QuadCoord {
-                    depth: d1,
-                    x: x as u32,
-                    z: z as u32,
-                },
-            )
-            .is_none()
-    })
-}
-
-/// Evolve the PERSISTENT cover one bounded step toward what the metric wants.
-///
-/// This replaces the global budget fit. That fit re-derived `pixel_error` every
-/// frame to hit the tile budget, and because every refine distance is a function of
-/// `pixel_error`, ANY change re-selected the entire cover — measured on moonbase as
-/// `wanted` alternating 349 <-> 532 every frame. It also had no fixed point (coarsen
-/// above 100% of budget, refine below 85%, accept up to 100%, rungs ~1.5x apart), so
-/// it oscillated and needed a dwell timer to damp a loop that should not exist.
-///
-/// Here the budget is enforced by REFUSING FURTHER SPLITS, not by moving a global
-/// metric, so there is nothing to re-derive and no mass republish is possible. The
-/// metric itself is fixed (the configured `pixel_error`), which also restores
-/// view-independent, peer-identical selection.
-///
-/// Split priority is `dist / refine_range`, so the budget is spent nearest-first.
-/// Merges run before splits (they free budget) and only past the same
-/// configured hysteresis band, so a camera parked on a
-/// threshold cannot flip a quad every frame.
-///
-/// The cover stays an exact, disjoint REPLACE cover throughout: a split swaps one
-/// node for its four children, a merge swaps four siblings for their parent, and
-/// nothing else touches it.
-///
-/// It also stays RESTRICTED (edge-adjacent nodes differ by ≤ 1 depth — the CDLOD
-/// morph contract; a 2-level seam has no band wide enough to blend it). The cover
-/// starts at `{ROOT}`, which is trivially restricted, so the invariant holds by
-/// induction: every merge is guarded ([`merge_violates_restriction`]) and every
-/// split first force-splits any coarser edge-neighbour (which, ON a restricted
-/// cover, is at most one level up — so the cascade is depth-1 per neighbour,
-/// recursing only through the chain it builds).
-///
-/// Returns the number of splits refused because they would exceed `budget` —
-/// zero at any fixed point whose wanted set fits (see
-/// [`TerrainStreamStatus::budget_refused`]).
-#[cfg(test)]
-fn evolve_cover(
-    qt: &Quadtree,
-    cover: &mut HashSet<QuadCoord>,
-    focus: [f64; 2],
-    camera_y: f64,
-    node_error: &impl Fn(QuadCoord, Square) -> f64,
-    budget: usize,
-) -> usize {
-    evolve_cover_for_foci_with_retention(
-        qt,
-        cover,
-        &[(focus, camera_y)],
-        node_error,
-        &|_, _| [0.0, 0.0],
-        budget,
-        TEST_MAX_COVER_EDITS,
-        TEST_LOD_HYSTERESIS_RATIO,
-        &|_, _| false,
-        &mut CoverScratch::default(),
-    )
-    .1
-}
-
-/// Reused candidate collections for [`evolve_cover_for_foci_with_retention`] —
-/// previously three fresh heap collections per terrain per frame, allocated to
-/// apply the configured cover-edit budget.
-#[derive(Default)]
-struct CoverScratch {
-    parents: HashSet<QuadCoord>,
-    merges: Vec<(f64, QuadCoord)>,
-    splits: Vec<(f64, QuadCoord)>,
-    chain: Vec<QuadCoord>,
-}
-
-/// The persistent-cover evolution with an optional retain band. A retain band
-/// blocks voluntary merges of already-refined tiles, but never requests new
-/// splits; it is therefore hysteresis rather than a larger detail radius.
-///
-/// Returns `(edits applied, splits refused by the budget)`. Zero edits means
-/// the cover is at its fixed point FOR THESE INPUTS — the caller can skip the
-/// pass until an input changes (see [`LodView::settled_sig`]).
-fn evolve_cover_for_foci_with_retention(
-    qt: &Quadtree,
-    cover: &mut HashSet<QuadCoord>,
-    foci: &[([f64; 2], f64)],
-    node_error: &impl Fn(QuadCoord, Square) -> f64,
-    node_heights: &impl Fn(QuadCoord, Square) -> [f64; 2],
-    budget: usize,
-    max_cover_edits: usize,
-    hysteresis_ratio: f64,
-    retain_refinement: &impl Fn(QuadCoord, Square) -> bool,
-    scratch: &mut CoverScratch,
-) -> (usize, usize) {
-    let CoverScratch {
-        parents,
-        merges,
-        splits,
-        chain,
-    } = scratch;
-    if cover.is_empty() {
-        cover.insert(QuadCoord::ROOT);
-    }
-    let range = |c: QuadCoord| qt.error_refine_range(node_error(c, qt.region(c)));
-    let dist = |c: QuadCoord| {
-        foci.iter()
-            .map(|(focus, camera_y)| {
-                qt.focus_distance(
-                    c,
-                    [focus[0], *camera_y, focus[1]],
-                    node_heights(c, qt.region(c)),
-                )
-            })
-            .reduce(f64::min)
-            .unwrap_or(f64::INFINITY)
-    };
-    // How far past its refine range a node sits: < 1 wants to be finer, > 1 coarser.
-    let slack = |c: QuadCoord| dist(c) / range(c).max(1e-9);
-
-    // Full quads whose parent could take over, ranked by how far past the band.
-    parents.clear();
-    for c in cover.iter() {
-        if let Some(p) = c.parent() {
-            parents.insert(p);
-        }
-    }
-    merges.clear();
-    merges.extend(
-        parents
-            .drain()
-            .filter(|p| p.children().iter().all(|k| cover.contains(k)))
-            .map(|p| {
-                let slack = if retain_refinement(p, qt.region(p)) {
-                    0.0
-                } else {
-                    slack(p)
-                };
-                (slack, p)
-            }),
-    );
-    // Total order for peer determinism: slack, then coord (a slack-only sort
-    // leaves equal keys in HashSet iteration order, so a budget truncation
-    // would edit different nodes on different peers/runs).
-    let merge_order = |a: &(f64, QuadCoord), b: &(f64, QuadCoord)| {
-        b.0.total_cmp(&a.0)
-            .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
-    };
-    // Sorting the FULL merge list was one of the two per-frame O(n log n)
-    // passes run to apply the configured cover-edit budget. Pass 1 only ever consumes
-    // the candidates past the hysteresis band, so partition those to the
-    // front and order just that (usually empty) prefix; the full ordering is
-    // materialised only on the rare over-budget frame (pass 2 below).
-    let mut band = 0;
-    for i in 0..merges.len() {
-        if merges[i].0 >= hysteresis_ratio {
-            merges.swap(band, i);
-            band += 1;
-        }
-    }
-    merges[..band].sort_by(merge_order);
-
-    let mut edits = 0usize;
-    let mut budget_refused = 0usize;
-    let merge_one = |cover: &mut HashSet<QuadCoord>, p: QuadCoord| {
-        // Re-check: an earlier merge in this pass may have consumed these children.
-        if !p.children().iter().all(|k| cover.contains(k)) {
-            return false;
-        }
-        for k in p.children() {
-            cover.remove(&k);
-        }
-        cover.insert(p);
-        true
-    };
-
-    // 1. Voluntary merges — the node is genuinely past the hysteresis band
-    //    (the sorted prefix holds exactly those, farthest first).
-    for &(_, p) in merges.iter().take(band) {
-        if edits >= max_cover_edits {
-            break;
-        }
-        // Restriction guard — also what makes cascade splits STABLE: a node
-        // force-split for a neighbour's sake drifts past the hysteresis band, but
-        // merging it back would re-violate, so the guard refuses and the cover
-        // keeps its fixed point instead of flip-flopping.
-        if merge_violates_restriction(cover, p) {
-            continue;
-        }
-        if merge_one(cover, p) {
-            edits += 1;
-        }
-    }
-
-    // 2. Forced merges — over budget (the budget shrank, or forced splits pushed us
-    //    past it). Give up the LEAST valuable *non-retained* quad first. A retain
-    //    band is visual stability policy, not merely a voluntary-merge hint: the
-    //    old reverse sort put its zero-slack near-camera entries FIRST here, causing
-    //    the precise fine → coarse → fine flicker it was meant to prevent. Only if
-    //    no far merge can satisfy the hard budget may this pass touch retained tiles.
-    //    Not bounded by the configured cover-edit budget: being over budget is a frame-rate problem,
-    //    and unlike a global metric change this only touches the quads it drops.
-    // Forced merges count toward the RETURNED edit total (a pass that shrank
-    // the cover is not a fixed point) but not toward the cover-edit setting — being
-    // over budget is a frame-rate problem the pass must fully resolve.
-    let mut forced = 0usize;
-    while cover.len() > budget {
-        parents.clear();
-        parents.extend(cover.iter().filter_map(|coord| coord.parent()));
-        merges.clear();
-        merges.extend(
-            parents
-                .drain()
-                .filter(|parent| parent.children().iter().all(|child| cover.contains(child)))
-                .map(|parent| {
-                    let retained = retain_refinement(parent, qt.region(parent));
-                    (if retained { 0.0 } else { slack(parent) }, parent)
-                }),
-        );
-        merges.sort_by(merge_order);
-        let before = cover.len();
-        for retained in [false, true] {
-            for &(_, parent) in merges.iter() {
-                if cover.len() <= budget {
-                    break;
-                }
-                if retain_refinement(parent, qt.region(parent)) == retained
-                    && !merge_violates_restriction(cover, parent)
-                    && merge_one(cover, parent)
-                {
-                    forced += 1;
-                }
-            }
-            if cover.len() <= budget {
-                break;
-            }
-        }
-        // A valid restricted tree always has a mergeable deepest sibling group.
-        if cover.len() == before {
-            break;
-        }
-    }
-
-    // 3. Splits, nearest-first, until the budget is spent.
-    splits.clear();
-    splits.extend(
-        cover
-            .iter()
-            .copied()
-            .filter(|c| c.depth < qt.max_depth)
-            .map(|c| (slack(c), c))
-            .filter(|&(s, _)| s < 1.0),
-    );
-    let split_order = |a: &(f64, QuadCoord), b: &(f64, QuadCoord)| {
-        a.0.total_cmp(&b.0)
-            .then_with(|| (a.1.depth, a.1.x, a.1.z).cmp(&(b.1.depth, b.1.x, b.1.z)))
-    };
-    // The second full O(n log n) sort per frame: on a moving camera the
-    // wanting-to-split set can approach the whole cover, but at most the
-    // remaining edit budget of them can LAND. Partition the best candidates
-    // to the front (total order ⇒ the partition boundary is exact) and sort
-    // only that prefix; the tail is ordered on demand ONLY if refusals or
-    // consumed cascades leave edit budget unspent — so the visit order, the
-    // applied edits and the `budget_refused` count are all identical to the
-    // full sort.
-    let prefix = max_cover_edits.saturating_sub(edits).min(splits.len());
-    if prefix > 0 && prefix < splits.len() {
-        splits.select_nth_unstable_by(prefix - 1, split_order);
-    }
-    splits[..prefix].sort_by(split_order);
-    let mut sorted_upto = prefix;
-    let mut next = 0;
-    while next < splits.len() {
-        if edits >= max_cover_edits {
-            break;
-        }
-        if next == sorted_upto {
-            // Earlier candidates were refused/consumed without spending the
-            // edit budget — order the tail before visiting it.
-            splits[sorted_upto..].sort_by(split_order);
-            sorted_upto = splits.len();
-        }
-        let (_, c) = splits[next];
-        next += 1;
-        if !cover.contains(&c) {
-            continue; // consumed by an earlier chain's cascade
-        }
-        // Splitting `c` puts depth `c.depth + 1` against every edge-adjacent
-        // region, so any neighbour covered COARSER than `c` must split first —
-        // the classic restricted-quadtree cascade. On a restricted cover each
-        // such neighbour is exactly one level up, and its own cascade needs (the
-        // ancestors the loop pushes transitively), so the chain stays short and
-        // the walk terminates at the root.
-        chain.clear();
-        chain.push(c);
-        let mut i = 0;
-        while i < chain.len() {
-            let n = chain[i];
-            for nb in n.edge_neighbours() {
-                if let Some(nd) = covering_depth(cover, nb) {
-                    if nd < n.depth {
-                        let shift = nb.depth - nd;
-                        let a = QuadCoord {
-                            depth: nd,
-                            x: nb.x >> shift,
-                            z: nb.z >> shift,
-                        };
-                        if !chain.contains(&a) {
-                            chain.push(a);
-                        }
-                    }
-                }
-            }
-            i += 1;
-        }
-        // The whole chain lands or none of it does — a partial cascade would leave
-        // the violation it exists to prevent. `continue`, not `break`: a later,
-        // cheaper split may still fit. Permit one indivisible cascade in an
-        // empty cycle so a small edit allowance cannot falsely settle the cover.
-        if edits > 0 && edits + chain.len() > max_cover_edits {
-            continue; // transient: retried next pass once the edit budget frees up
-        }
-        if cover.len() + 3 * chain.len() > budget {
-            // Unlike the edit cap this does not resolve by waiting, so it is
-            // counted and surfaced.
-            budget_refused += 1;
-            continue;
-        }
-        // Coarsest first, so every forced split lands on an already-conforming rim.
-        chain.sort_unstable_by_key(|q| q.depth);
-        for &q in chain.iter() {
-            if !cover.remove(&q) {
-                continue;
-            }
-            for k in q.children() {
-                cover.insert(k);
-            }
-            edits += 1;
-        }
-    }
-    (edits + forced, budget_refused)
 }
 
 /// Construct a disjoint candidate partition from ready leaves and ancestors.
@@ -1786,6 +1419,12 @@ impl LodTiles {
             && slot.half_extent.to_bits() == view.half_extent.to_bits();
         (slot.ready && slot.drawn).then_some((slot.resolution, slot.half_extent, current))
     }
+    pub(crate) fn draw_morph_band(&self, camera: Entity, coord: QuadCoord) -> Option<[f32; 2]> {
+        let view = self.views.get(&camera)?;
+        let slot = view.tiles.get(&coord)?;
+        let (start, end, _) = snap_band(slot.morph_end, view.morph_ratio);
+        (slot.ready && slot.drawn).then_some([start, end])
+    }
     pub(crate) fn draw_revision(&self, camera: Entity) -> Option<u64> {
         let view = self.views.get(&camera)?;
         (!view.draw_revision_exhausted).then_some(view.draw_revision)
@@ -1971,15 +1610,14 @@ struct LodView {
     /// Hard source/view inputs that retire queued preparation and wake cover
     /// reconciliation independently of the presentation cadence.
     last_admission_sig: Option<u64>,
-    /// The PERSISTENT cover: the leaves currently selected. Evolved incrementally by
-    /// `evolve_cover` instead of re-derived each frame, which is what removes the
-    /// mass re-selection the old global budget fit caused.
+    /// Persistent restricted cover including required and discretionary refinement.
+    /// Evolved incrementally under the same resource budget.
     cover: HashSet<QuadCoord>,
     /// The immutable selection derived for `cover`, committed with it from one
     /// completed cover-preparation operation.
     cover_selected: Vec<Selected>,
-    /// Camera patches already requested inside the detail radius, retained
-    /// only through the configured hysteresis band and their exact source.
+    /// Camera patches retained through the hysteresis band, plus the stable
+    /// radial cover and edge-partner lease for an unchanged radial demand.
     camera_patches: CameraPatchRetention,
     /// At most one asynchronous cover preparation may own this terrain at a time.
     pending_cover: Option<(u32, u64, u64, u64, u64)>,
@@ -1995,7 +1633,7 @@ struct LodView {
     /// permanently incomplete and the fallback it exists to provide would silently
     /// not be there. Also lets the enumeration be skipped once complete.
     coarse_ready: bool,
-    /// Budget-refused split count from the last live [`evolve_cover`] pass. Kept
+    /// Refused split count from the last [`evolve_restricted_cover`] pass. Kept
     /// on the component because the idle fast path skips selection — a
     /// starved-but-idle terrain must keep reporting, not read as healthy.
     budget_refused: usize,
@@ -2011,7 +1649,7 @@ struct LodView {
     /// interval cancelled and replaced the same near tiles repeatedly, producing
     /// coarse → fine → coarse flicker before normal traversal had even begun.
     bootstrap_ready: bool,
-    /// Selection signature at which the last `evolve_cover` pass applied ZERO
+    /// Selection signature at which the last `evolve_restricted_cover` pass applied ZERO
     /// edits — the cover's fixed point for those inputs. While the signature
     /// still matches, re-running the pass can only rebuild and re-rank the
     /// same refused split chains: a permanently `budget_refused` terrain
@@ -2411,8 +2049,8 @@ impl LodView {
     }
 }
 
-/// Exact selected coordinate lookup and its original lattice. The persistent
-/// discretionary cover and newer oracle settings may describe a different tree.
+/// Exact selected coordinate lookup and the lattice of the published selection.
+/// Newer oracle settings may describe a different lattice.
 struct SelectedCoordinateIndex {
     coords: HashSet<QuadCoord>,
     tree: Option<Quadtree>,
@@ -2589,8 +2227,8 @@ const NODE_GEOMETRY_CACHE_CAP: usize = 32 * 1024;
 #[derive(Component, Default)]
 pub struct TerrainNodeGeometry {
     map: HashMap<QuadCoord, NodeGeometry>,
-    /// Exact content identity and probe lattice that produced the measurements.
-    memo_key: Option<(u64, usize)>,
+    /// Source content, probe and mesh lattices, and measured-raster certificate revision.
+    memo_key: Option<(u64, usize, usize, bool)>,
     #[cfg(not(target_arch = "wasm32"))]
     bounds_requested: Option<(
         std::sync::Weak<SurfaceOracle>,
@@ -2599,8 +2237,19 @@ pub struct TerrainNodeGeometry {
 }
 
 impl TerrainNodeGeometry {
-    fn admit_source(&mut self, source_key: u64, probe_resolution: usize) {
-        let key = Some((source_key, probe_resolution));
+    fn admit_source(
+        &mut self,
+        source_key: u64,
+        probe_resolution: usize,
+        tile_resolution: usize,
+        curvature_ready: bool,
+    ) {
+        let key = Some((
+            source_key,
+            probe_resolution,
+            tile_resolution,
+            curvature_ready,
+        ));
         if self.memo_key != key {
             self.map.clear();
             self.memo_key = key;
@@ -2612,7 +2261,7 @@ impl TerrainNodeGeometry {
 #[test]
 fn node_geometry_does_not_reuse_probes_after_lattice_change() {
     let mut cache = TerrainNodeGeometry::default();
-    cache.admit_source(10, 9);
+    cache.admit_source(10, 9, 65, false);
     cache.map.insert(
         QuadCoord::ROOT,
         NodeGeometry {
@@ -2620,9 +2269,9 @@ fn node_geometry_does_not_reuse_probes_after_lattice_change() {
             height_range: [0.0, 1.0],
         },
     );
-    cache.admit_source(10, 9);
+    cache.admit_source(10, 9, 65, false);
     assert_eq!(cache.map.len(), 1);
-    cache.admit_source(10, 17);
+    cache.admit_source(10, 9, 33, false);
     assert!(cache.map.is_empty());
 }
 
@@ -4502,6 +4151,7 @@ fn selected_focus_leaf(
     search(cover, quadtree, point, QuadCoord::ROOT)
 }
 
+#[cfg(test)]
 fn required_focus_depth(
     cover: &HashSet<QuadCoord>,
     demands: &[TerrainVisualDemand],
@@ -4523,17 +4173,18 @@ fn projected_posting_error_floor(region: Square, tile_res: usize) -> f64 {
     region.side() / (tile_res - 1) as f64
 }
 
-fn near_field_retains_refinement(
+fn near_field_contains(
     region: Square,
     heights: [f64; 2],
     demands: &[TerrainVisualDemand],
+    radius: impl Fn(&TerrainVisualDemand) -> f64,
 ) -> bool {
     demands.iter().any(|focus| {
         focus.required
             && matches!(focus.projection, TerrainProjection::Perspective { .. })
             && region
                 .distance_to_height_range([focus.focus[0], focus.camera_y, focus.focus[1]], heights)
-                <= focus.near_detail_radius_m + focus.near_detail_hysteresis_m
+                <= radius(focus)
     })
 }
 
@@ -4958,6 +4609,7 @@ pub(crate) fn visual_max_depth(
 struct TerrainSelectionSource {
     key: u64,
     bounds: Option<[f64; 2]>,
+    curvature_ready: bool,
 }
 
 impl TerrainSelectionSource {
@@ -4965,6 +4617,7 @@ impl TerrainSelectionSource {
         Self {
             key: oracle.surface_key(),
             bounds: oracle.cached_global_height_bounds().and_then(Result::ok),
+            curvature_ready: oracle.visual_curvature_ready(),
         }
     }
 }
@@ -5005,6 +4658,7 @@ fn terrain_view_signatures(
     // The source content identity fences preparation independently of allocation identity.
     admission.write_u64(source.key);
     sig.write_u64(u64::from(!frozen && source.bounds.is_some()));
+    admission.write_u64(u64::from(!frozen && source.curvature_ready));
     // LOD knobs (Inspector) — a live tweak must re-select.
     admission.write_u64(profile.terrain_lod_pixel_error.to_bits());
     admission.write_u64(profile.terrain_lod_tile_budget as u64);
@@ -5067,6 +4721,14 @@ struct CameraPatchRetention {
     root_half_bits: u64,
     max_depth: u8,
     patches: HashMap<Entity, Vec<QuadCoord>>,
+    radial: Option<RadialCoverRetention>,
+}
+
+#[derive(Clone)]
+struct RadialCoverRetention {
+    key: u64,
+    leaves: HashSet<QuadCoord>,
+    minimum: HashSet<QuadCoord>,
 }
 
 struct PreparedTerrainCover {
@@ -5235,45 +4897,6 @@ fn preparation_corridor_nodes(
     Ok(nodes)
 }
 
-/// Bias one continuous detail region toward the visible ground while fading
-/// the bias to zero as the hit approaches the finite near-field reach.
-fn terrain_view_focus(oracle: &SurfaceOracle, demand: TerrainVisualDemand) -> [f64; 2] {
-    if matches!(demand.projection, TerrainProjection::Orthographic { .. }) {
-        return demand.focus;
-    }
-    let direction = demand.view_direction;
-    let radius = demand.near_detail_radius_m;
-    if radius <= 0.0 {
-        return demand.focus;
-    }
-    let origin = DVec3::new(demand.focus[0], demand.camera_y, demand.focus[1]);
-    // Detail finer than the selection quantum cannot affect a stable cover
-    // decision. Filter only the selection ray; geometry and physics still
-    // sample their own surface bands.
-    let selection_surface = oracle.detail_limited(2.0 * TERRAIN_FOCUS_QUANT_M);
-    let hit =
-        match crate::oracle::raycast_surface(&selection_surface, origin, direction, 2.0 * radius) {
-            Ok(hit) => hit,
-            Err(error) => {
-                warn_once!("terrain view-focus ray could not be certified: {error}");
-                return demand.focus;
-            }
-        };
-    let Some(hit) = hit else { return demand.focus };
-    let t = ((2.0 * radius - origin.distance(hit)) / radius).clamp(0.0, 1.0);
-    let blend = 0.5 * t * t * (3.0 - 2.0 * t);
-    let mut offset = bevy::math::DVec2::new(hit.x - origin.x, hit.z - origin.z) * blend;
-    let half = oracle.domain_half_extent() as f64;
-    if origin.x.abs() <= half && origin.z.abs() <= half {
-        let clearance = (origin.y - oracle.height_at(origin.x, origin.z)).abs();
-        let horizontal_reach = (radius * radius - clearance * clearance).max(0.0).sqrt();
-        if offset.length_squared() > horizontal_reach * horizontal_reach {
-            offset = offset.normalize() * horizontal_reach;
-        }
-    }
-    [demand.focus[0] + offset.x, demand.focus[1] + offset.y]
-}
-
 /// Bound clipping work independently of raster size. Missing certification keeps
 /// the node eligible; it can never discard geometry from an uncertain envelope.
 fn projected_node_height_bounds(oracle: &SurfaceOracle, region: Square) -> Option<[f64; 2]> {
@@ -5323,7 +4946,7 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
         quadtree,
         oracle,
         source,
-        mut demands,
+        demands,
         camera_patches,
         mut cover,
         mut node_geometry,
@@ -5355,17 +4978,27 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
         root_half_bits,
         max_depth,
         patches: HashMap::new(),
+        radial: None,
     };
     let camera_foci: Vec<_> = demands
         .iter()
         .copied()
         .filter(|demand| demand.required)
         .collect();
-    // Resolve the view centre during cover preparation. Keep the camera's
-    // own mandatory nodes separately.
-    for demand in &mut demands {
-        demand.focus = terrain_view_focus(&oracle, *demand);
-    }
+    let ground_foci: Vec<_> = camera_foci
+        .iter()
+        .copied()
+        .filter(|demand| {
+            matches!(demand.projection, TerrainProjection::Perspective { .. })
+                && demand.near_detail_radius_m > 0.0
+                && demand
+                    .focus
+                    .iter()
+                    .all(|v| v.abs() <= quadtree.root_half_extent)
+                && (demand.camera_y - oracle.height_at(demand.focus[0], demand.focus[1])).abs()
+                    <= demand.near_detail_radius_m
+        })
+        .collect();
     let mut selected = Vec::new();
     let mut more_work = false;
     let preparation_refused_nodes;
@@ -5373,29 +5006,38 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
         let geometry_cache = std::cell::RefCell::new(&mut node_geometry);
         let geometry = |coord: QuadCoord, region: Square| {
             cached_node_geometry(&geometry_cache, coord, || {
-                let probe_step = region.side() / (probe_resolution - 1) as f64;
-                let limited = oracle.detail_limited(probe_step);
-                measure_node_geometry(&limited, region, probe_resolution)
+                let step = region.side() / (tile_resolution - 1) as f64;
+                let mesh = SurfaceBand::visual(step).limited_region(&oracle, region, step);
+                let reference =
+                    SurfaceBand::visual(step * 0.5).limited_region(&oracle, region, step);
+                let mut measured = measure_lattice_geometry(
+                    &mesh,
+                    &reference,
+                    region,
+                    tile_resolution,
+                    probe_resolution,
+                );
+                // Retain a certificate for measured landforms even if every
+                // sampled mesh cell happened to miss their steepest curvature.
+                if source.curvature_ready
+                    && let Some(bound) = oracle.visual_base_error_bound(region, step)
+                {
+                    measured.error = measured.error.max(bound);
+                }
+                measured
             })
         };
         let mut required = Vec::new();
         let mut preparation_required = HashSet::new();
-        for (demand, camera_focus) in demands
-            .iter()
-            .map(|demand| (demand, false))
-            .chain(camera_foci.iter().map(|demand| (demand, true)))
-            .filter(|(demand, _)| demand.required)
-        {
+        for demand in &camera_foci {
             if matches!(demand.projection, TerrainProjection::Orthographic { .. }) {
                 continue;
             }
-            let inside = demand.focus[0].abs() <= quadtree.root_half_extent
-                && demand.focus[1].abs() <= quadtree.root_half_extent;
-            let within_radius = inside
-                && (demand.camera_y - oracle.height_at(demand.focus[0], demand.focus[1])).abs()
-                    <= demand.near_detail_radius_m;
+            let within_radius = ground_foci
+                .iter()
+                .any(|ground| ground.camera == demand.camera);
             if !within_radius {
-                if camera_focus && retention_matches {
+                if retention_matches {
                     if let Some(patch) = camera_patches.patches.get(&demand.camera) {
                         let retained: Vec<_> = patch
                             .iter()
@@ -5403,10 +5045,13 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
                             .filter(|coord| {
                                 let region = quadtree.region(*coord);
                                 let heights = geometry(*coord, region).height_range;
-                                near_field_retains_refinement(
+                                near_field_contains(
                                     region,
                                     heights,
                                     std::slice::from_ref(demand),
+                                    |focus| {
+                                        focus.near_detail_radius_m + focus.near_detail_hysteresis_m
+                                    },
                                 )
                             })
                             .collect();
@@ -5419,19 +5064,15 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
                 continue;
             }
             let centre = quadtree.node_containing(max_depth, demand.focus);
-            required.push(centre);
-            required.extend(centre.edge_neighbours());
-            if camera_focus {
-                // Keep the exact already-requested patch through the retention
-                // band; never request a new patch outside the detail radius.
-                let mut patch = vec![centre];
-                patch.extend(centre.edge_neighbours());
-                patch.extend(camera_diagonal_neighbours(centre));
-                patch.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
-                patch.dedup();
-                required.extend(patch.iter().copied());
-                retained_patches.patches.insert(demand.camera, patch);
-            }
+            // Keep the exact requested patch through the retention band; never
+            // request a new maximum-depth patch outside the detail radius.
+            let mut patch = vec![centre];
+            patch.extend(centre.edge_neighbours());
+            patch.extend(camera_diagonal_neighbours(centre));
+            patch.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
+            patch.dedup();
+            required.extend(patch.iter().copied());
+            retained_patches.patches.insert(demand.camera, patch);
         }
         let mut historical = HashSet::new();
         if let Some(preparation) = preparation {
@@ -5453,8 +5094,35 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
         required.dedup();
         let node_heights = |coord, region| geometry(coord, region).height_range;
         let clip_bounds = std::cell::RefCell::new(HashMap::new());
+        let geometric_error = |coord, region| {
+            // Actual triangle deviation retains the configured SSE target.
+            // Outside the protected disk, allow twice that pixel spacing for
+            // mesh postings: the independent mipped relief map carries finer
+            // surface normals without spending triangles on flat terrain.
+            geometry(coord, region)
+                .error
+                .max(0.5 * projected_posting_error_floor(region, tile_resolution))
+        };
+        let in_ground_detail = |coord, region| {
+            near_field_contains(region, node_heights(coord, region), &ground_foci, |focus| {
+                focus.near_detail_radius_m
+            })
+        };
+        let near_posting_error = |coord, region| {
+            if in_ground_detail(coord, region) {
+                projected_posting_error_floor(region, tile_resolution)
+                    .max(geometry(coord, region).error)
+            } else {
+                0.0
+            }
+        };
         let node_error = |coord, region| {
-            let measured = geometry(coord, region);
+            // Ground-local posting allocation is completed by the stable base
+            // tree below, independent of visibility. Discretionary heading
+            // changes must not trade its leaves against distant refinements.
+            if in_ground_detail(coord, region) {
+                return 0.0;
+            }
             let bounds = *clip_bounds.borrow_mut().entry(coord).or_insert_with(|| {
                 match (
                     projected_node_height_bounds(&oracle, region),
@@ -5472,12 +5140,22 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
                     .iter()
                     .any(|demand| demand.selection_clip.intersects(region, bounds))
                 {
+                    // A ground view can turn into any adjacent sector. Keep a
+                    // one-level-coarser posting target in its next radial band,
+                    // without giving off-screen relief or a telephoto orbital
+                    // view the same priority as the visible image.
+                    if near_field_contains(
+                        region,
+                        node_heights(coord, region),
+                        &ground_foci,
+                        |focus| 2.0 * focus.near_detail_radius_m,
+                    ) {
+                        return 0.25 * projected_posting_error_floor(region, tile_resolution);
+                    }
                     return 0.0;
                 }
             }
-            measured
-                .error
-                .max(projected_posting_error_floor(region, tile_resolution))
+            geometric_error(coord, region)
         };
         let focus_metric = demands
             .iter()
@@ -5493,7 +5171,7 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
                 let mut trial = admitted.clone();
                 trial.push(candidate);
                 let mut restricted = vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)];
-                quadtree.constrain_selection(&mut restricted, &trial, &node_error);
+                quadtree.constrain_selection(&mut restricted, &trial, &geometric_error);
                 if restricted.len() <= tile_budget {
                     admitted = trial;
                     reserved = restricted;
@@ -5518,18 +5196,7 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
         // admit individual fine islands when the corresponding zone cannot
         // fit. Reserve the inner zone first, then extend it with a smaller
         // additional outer-zone allowance; leave capacity for the middle distance.
-        for camera in &camera_foci {
-            if !matches!(camera.projection, TerrainProjection::Perspective { .. })
-                || camera.near_detail_radius_m <= 0.0
-                || camera
-                    .focus
-                    .iter()
-                    .any(|v| v.abs() > quadtree.root_half_extent)
-                || (camera.camera_y - oracle.height_at(camera.focus[0], camera.focus[1])).abs()
-                    > camera.near_detail_radius_m
-            {
-                continue;
-            }
+        for camera in &ground_foci {
             for (radius, limit) in [
                 (camera.near_detail_radius_m * 0.5, tile_budget / 2),
                 (
@@ -5547,7 +5214,7 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
                         continue;
                     };
                     let mut trial = reserved.clone();
-                    quadtree.constrain_selection(&mut trial, &zone, &node_error);
+                    quadtree.constrain_selection(&mut trial, &zone, &geometric_error);
                     if trial.len() <= limit {
                         admitted.extend(zone);
                         reserved = trial;
@@ -5559,64 +5226,188 @@ fn prepare_terrain_cover(request: TerrainCoverRequest) -> PreparedTerrainCover {
         admitted.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
         admitted.dedup();
         let required = admitted;
-        // Union of two refinement trees has at most A+B-1 leaves. Reserve the
-        // mandatory tree first; the camera's discretionary splits use the rest.
-        let discretionary_budget = tile_budget.saturating_sub(reserved.len() - 1).max(1);
-        let mut cover_scratch = CoverScratch::default();
-        if cover.is_empty() {
-            budget_refused = 0;
-            for _ in 0..max_depth {
-                let before = required_focus_depth(&cover, &demands, &quadtree);
-                let (_, refused) = evolve_cover_for_foci_with_retention(
+        // Use the remaining radial reservation for additional posting-error
+        // refinement. Starting from the same mandatory cover produces the same
+        // detail at a fixed eye regardless of heading or previous far selection.
+        // Do not let a rotation allocate more (or less) nearby detail because a
+        // different distant sector suddenly has a cheaper split.
+        let mut base: HashSet<_> = reserved.iter().map(|leaf| leaf.coord).collect();
+        let mut radial_refused = 0;
+        if !ground_foci.is_empty() {
+            let minimum_splits = required_split_nodes(base.iter().copied());
+            let radial_budget = (tile_budget.saturating_mul(2) / 3).max(base.len());
+            let mut radial_scratch = CoverScratch::default();
+            for _ in 0..max_depth.max(1) {
+                let (edits, refused) = evolve_restricted_cover(
                     &quadtree,
-                    &mut cover,
+                    &mut base,
                     &focus_metric,
-                    &node_error,
+                    &near_posting_error,
                     &node_heights,
-                    discretionary_budget,
+                    radial_budget,
                     cover_edits_per_cycle,
                     hysteresis_ratio,
-                    &|coord, region| {
-                        near_field_retains_refinement(region, node_heights(coord, region), &demands)
-                    },
-                    &mut cover_scratch,
+                    &|_, _| false,
+                    &minimum_splits,
+                    &HashSet::new(),
+                    &mut radial_scratch,
                 );
-                budget_refused += refused;
-                let after = required_focus_depth(&cover, &demands, &quadtree);
-                if after == before || after == Some(max_depth) {
+                radial_refused = refused;
+                if edits == 0 {
                     break;
                 }
             }
-        } else if bootstrap_ready && settled_sig != Some(signature) {
-            let (edits, refused) = evolve_cover_for_foci_with_retention(
-                &quadtree,
-                &mut cover,
-                &focus_metric,
-                &node_error,
-                &node_heights,
-                discretionary_budget,
-                cover_edits_per_cycle,
-                hysteresis_ratio,
-                &|coord, region| {
-                    near_field_retains_refinement(region, node_heights(coord, region), &demands)
-                },
-                &mut cover_scratch,
-            );
-            budget_refused = refused;
-            more_work = edits > 0;
-            settled_sig = (edits == 0).then_some(signature);
+        }
+        // A radial leaf's stitch also depends on the neighbouring cover.
+        // Preserve the actual admitted edge partners through unchanged-eye
+        // rotations; a distant split cannot consume this seam reservation.
+        let mut base_nodes: Vec<_> = base.iter().copied().collect();
+        base_nodes.sort_unstable_by_key(|coord| (coord.depth, coord.x, coord.z));
+        let mut key = lunco_precompute::Fnv1a::new();
+        key.write_u64(tile_budget as u64);
+        key.write_u64(tile_resolution as u64);
+        key.write_u64(probe_resolution as u64);
+        key.write_u64(quadtree.range_factor.to_bits());
+        key.write_u64(quadtree.morph_ratio.to_bits());
+        key.write_u64(hysteresis_ratio.to_bits());
+        for focus in &ground_foci {
+            key.write_u64(focus.camera.to_bits());
+            for value in [focus.focus[0], focus.camera_y, focus.focus[1]] {
+                key.write_u64((value / TERRAIN_FOCUS_QUANT_M).round().to_bits());
+            }
+            key.write_u64(focus.near_detail_radius_m.to_bits());
+        }
+        for node in &base_nodes {
+            key.write_u64(u64::from(node.depth));
+            key.write_u64(u64::from(node.x));
+            key.write_u64(u64::from(node.z));
+        }
+        let key = key.finish();
+        let previous = camera_patches
+            .radial
+            .as_ref()
+            .filter(|old| retention_matches && old.key == key);
+        if !ground_foci.is_empty() {
+            let make_retention = |reference: &HashSet<QuadCoord>| {
+                let mut leaves = HashSet::new();
+                let mut minimum = HashSet::new();
+                for &node in reference {
+                    if !in_ground_detail(node, quadtree.region(node)) {
+                        continue;
+                    }
+                    leaves.insert(node);
+                    for neighbour in node.edge_neighbours() {
+                        if let Some(depth) = covering_depth(reference, neighbour) {
+                            let shift = neighbour.depth - depth;
+                            leaves.insert(QuadCoord {
+                                depth,
+                                x: neighbour.x >> shift,
+                                z: neighbour.z >> shift,
+                            });
+                        } else {
+                            // A finer neighbour may merge to the same depth,
+                            // but must not become coarser and change this stitch.
+                            minimum.insert(neighbour);
+                        }
+                    }
+                }
+                minimum.extend(leaves.iter().copied());
+                RadialCoverRetention {
+                    key,
+                    leaves,
+                    minimum,
+                }
+            };
+            retained_patches.radial = Some(if let Some(previous) = previous {
+                if settled_sig.is_some() && !cover.is_empty() {
+                    make_retention(&cover)
+                } else {
+                    previous.clone()
+                }
+            } else {
+                make_retention(&base)
+            });
+        }
+        let empty_locks = HashSet::new();
+        let locked = retained_patches
+            .radial
+            .as_ref()
+            .map_or(&empty_locks, |radial| &radial.leaves);
+        let full_error = |coord, region| {
+            let mut ancestor = Some(coord);
+            while let Some(node) = ancestor {
+                if locked.contains(&node) {
+                    return 0.0;
+                }
+                ancestor = node.parent();
+            }
+            node_error(coord, region)
+        };
+        // One restricted tree owns the full budget. Mandatory and stable radial
+        // refinement share ancestors and balance closure with discretionary work.
+        let opening = cover.is_empty();
+        if opening || (bootstrap_ready && settled_sig != Some(signature)) {
+            let mut required_splits = required_split_nodes(base.iter().copied());
+            if let Some(radial) = &retained_patches.radial {
+                required_splits.extend(required_split_nodes(radial.minimum.iter().copied()));
+            }
+            if opening {
+                cover = base;
+            } else {
+                let mut existing: Vec<_> = cover
+                    .iter()
+                    .map(|&coord| quadtree.selected(coord, f64::INFINITY))
+                    .collect();
+                quadtree.constrain_selection(&mut existing, &base_nodes, &geometric_error);
+                cover = existing.into_iter().map(|leaf| leaf.coord).collect();
+            }
+            let mut cover_scratch = CoverScratch::default();
+            // Opening preparation may take several bounded steps on the worker;
+            // stop only at a true fixed point, not when the eye tile stops changing.
+            for _ in 0..if opening { max_depth.max(1) } else { 1 } {
+                let (edits, refused) = evolve_restricted_cover(
+                    &quadtree,
+                    &mut cover,
+                    &focus_metric,
+                    &full_error,
+                    &node_heights,
+                    tile_budget,
+                    cover_edits_per_cycle,
+                    hysteresis_ratio,
+                    &|coord, region| {
+                        let heights = node_heights(coord, region);
+                        // The radial tree and seam reservation protect the
+                        // current local cover. Extra hysteresis retention
+                        // applies only to the outer band.
+                        !near_field_contains(region, heights, &demands, |focus| {
+                            focus.near_detail_radius_m
+                        }) && near_field_contains(region, heights, &demands, |focus| {
+                            focus.near_detail_radius_m + focus.near_detail_hysteresis_m
+                        })
+                    },
+                    &required_splits,
+                    locked,
+                    &mut cover_scratch,
+                );
+                budget_refused = refused;
+                more_work = edits > 0;
+                settled_sig = (edits == 0).then_some(signature);
+                if edits == 0 {
+                    break;
+                }
+            }
         }
         preparation_refused_nodes = refused_preparation_nodes;
-        budget_refused += refused_mandatory;
+        budget_refused += refused_mandatory + radial_refused;
         selected.extend(cover.iter().map(|&coord| {
             let parent_range = coord
                 .parent()
-                .map(|parent| node_error(parent, quadtree.region(parent)))
+                .map(|parent| geometric_error(parent, quadtree.region(parent)))
                 .map(|error| quadtree.error_refine_range(error))
                 .unwrap_or(f64::INFINITY);
             quadtree.selected(coord, parent_range)
         }));
-        quadtree.constrain_selection(&mut selected, &required, &node_error);
+        quadtree.constrain_selection(&mut selected, &required, &geometric_error);
     }
     selected.sort_by_key(|tile| (tile.coord.depth, tile.coord.x, tile.coord.z));
     PreparedTerrainCover {
@@ -5639,10 +5430,12 @@ fn commit_prepared_terrain_cover(
     signature: u64,
     admission_signature: u64,
 ) {
-    tiles.bump_draw_revision();
+    if tiles.cover_selected != prepared.selected {
+        tiles.bump_draw_revision();
+        tiles.cover_selected = prepared.selected;
+        tiles.selected_index.take();
+    }
     tiles.cover = prepared.cover;
-    tiles.cover_selected = prepared.selected;
-    tiles.selected_index.take();
     tiles.camera_patches = prepared.camera_patches;
     tiles.budget_refused = prepared.budget_refused;
     tiles.preparation_refused_nodes = prepared.preparation_refused_nodes;
@@ -6276,7 +6069,12 @@ pub fn update_lod_tiles(
                 };
                 tiles.requested_signature = Some(sig);
                 let oracle_key = hf.0.surface_key();
-                errs.admit_source(oracle_key, profile.terrain_lod_probe_resolution);
+                errs.admit_source(
+                    oracle_key,
+                    profile.terrain_lod_probe_resolution,
+                    tile_res,
+                    selection_source.curvature_ready,
+                );
                 // Camera motion follows the wall-clock cadence. Changes to physics
                 // support or other admission inputs wake selection immediately.
                 let mut selection_due = terrain_cover_selection_due(
@@ -6360,14 +6158,16 @@ pub fn update_lod_tiles(
                 {
                     if errs.bounds_requested.as_ref().is_some_and(|(source, _)| {
                         !source.ptr_eq(&Arc::downgrade(&hf.0))
-                            || oracle.cached_global_height_bounds().is_some()
+                            || (oracle.cached_global_height_bounds().is_some()
+                                && oracle.visual_curvature_ready())
                     }) {
                         errs.bounds_requested = None;
                     }
                     if !frozen
                         && tiles.bootstrap_ready
                         && errs.bounds_requested.is_none()
-                        && oracle.cached_global_height_bounds().is_none()
+                        && (oracle.cached_global_height_bounds().is_none()
+                            || !oracle.visual_curvature_ready())
                     {
                         let source = Arc::clone(&hf.0);
                         let key = lunco_core_runtime::AsyncWorkKey::new(
@@ -6381,6 +6181,7 @@ pub fn update_lod_tiles(
                             lunco_core_runtime::AsyncWorkPriority::Background,
                             key,
                             move |_permit| {
+                                source.prepare_visual_curvature();
                                 if let Err(reason) = source.global_height_bounds() {
                                     bevy::log::warn!(%reason, "terrain global enclosure unavailable");
                                 }
@@ -7684,7 +7485,6 @@ mod draw_partition_tests {
             focus: [11.3, 13.7],
             camera_y: 10.0,
             heading: None,
-            view_direction: DVec3::NEG_Y,
             screen_height_px: 720.0,
             selection_clip: SelectionClip::new(
                 test_perspective(2.8, DVec3::new(11.3, 10.0, 13.7), DVec3::NEG_Y),
@@ -7851,6 +7651,7 @@ mod draw_partition_tests {
             TerrainSelectionSource {
                 key: 3,
                 bounds: None,
+                curvature_ready: false,
             },
             Some(&profile),
             false,
@@ -7878,6 +7679,7 @@ mod draw_partition_tests {
         let certified = TerrainSelectionSource {
             key: 3,
             bounds: Some([-1.0, 1.0]),
+            curvature_ready: false,
         };
         let (signature, admission) = terrain_view_signatures(
             &demands,
@@ -8179,6 +7981,7 @@ mod draw_partition_tests {
             TerrainSelectionSource {
                 key: 3,
                 bounds: None,
+                curvature_ready: false,
             },
             Some(&profile),
             false,
@@ -8200,6 +8003,7 @@ mod draw_partition_tests {
             TerrainSelectionSource {
                 key: 3,
                 bounds: None,
+                curvature_ready: false,
             },
             Some(&profile),
             false,
@@ -8216,6 +8020,7 @@ mod draw_partition_tests {
             TerrainSelectionSource {
                 key: 4,
                 bounds: None,
+                curvature_ready: false,
             },
             Some(&profile),
             false,
@@ -8249,6 +8054,7 @@ mod draw_partition_tests {
                 TerrainSelectionSource {
                     key: 3,
                     bounds: None,
+                    curvature_ready: false,
                 },
                 Some(&profile),
                 false,
@@ -8300,6 +8106,7 @@ mod draw_partition_tests {
                 TerrainSelectionSource {
                     key: 3,
                     bounds: None,
+                    curvature_ready: false,
                 },
                 &profile,
                 false,
@@ -8497,6 +8304,7 @@ mod draw_partition_tests {
             TerrainSelectionSource {
                 key: 3,
                 bounds: None,
+                curvature_ready: false,
             },
             Some(&profile),
             true,
@@ -8515,6 +8323,7 @@ mod draw_partition_tests {
             TerrainSelectionSource {
                 key: 3,
                 bounds: None,
+                curvature_ready: false,
             },
             Some(&profile),
             true,
@@ -8685,7 +8494,6 @@ mod draw_partition_tests {
                 focus: [0.0, 0.0],
                 camera_y: 1000.0,
                 heading: None,
-                view_direction: DVec3::Y,
                 screen_height_px: 720.0,
                 selection_clip: SelectionClip::new(
                     test_perspective(1.0, DVec3::Y * 1000.0, DVec3::Y),
@@ -9056,7 +8864,6 @@ mod draw_partition_tests {
             focus: [0.0, 0.0],
             camera_y: 1000.0,
             heading: None,
-            view_direction: DVec3::NEG_Y,
             screen_height_px: 1000.0,
             projection,
             selection_clip: SelectionClip::new(projection, 1000.0, 2.0, DVec3::Y * 1000.0).unwrap(),
@@ -9166,7 +8973,6 @@ mod draw_partition_tests {
                 focus: [0.0, 0.0],
                 camera_y: 1000.0,
                 heading: None,
-                view_direction: DVec3::NEG_Y,
                 screen_height_px: 1080.0,
                 selection_clip: SelectionClip::new(
                     test_perspective(fov_y_rad, DVec3::Y * 1000.0, DVec3::NEG_Y),
@@ -9530,7 +9336,6 @@ mod draw_partition_tests {
                     focus: [12.0, -8.0],
                     camera_y: 35.0,
                     heading: None,
-                    view_direction: DVec3::Y,
                     screen_height_px: 720.0,
                     selection_clip: SelectionClip::new(
                         test_perspective(
@@ -10722,7 +10527,7 @@ mod draw_partition_tests {
         assert_covered_exactly_once(&sel, &draw);
     }
 
-    // ── incremental cover (`evolve_cover`) ───────────────────────────────────
+    // ── camera cover preparation ────────────────────────────────────────────
 
     fn test_qt() -> Quadtree {
         // range_factor 1.0 → refine_range == node error, so the tests state
@@ -10755,7 +10560,6 @@ mod draw_partition_tests {
                 focus,
                 camera_y,
                 heading: None,
-                view_direction: DVec3::Y,
                 screen_height_px: 720.0,
                 selection_clip: SelectionClip::new(
                     test_perspective(
@@ -10943,138 +10747,6 @@ mod draw_partition_tests {
     }
 
     #[test]
-    fn terrain_view_focus_ignores_subquantum_craters() {
-        let grid = Arc::new(lunco_obstacle_field::field::HeightGrid::new_flat(3, 100.0));
-        let flat = SurfaceOracle::bare(Arc::clone(&grid));
-        let crater = lunco_terrain_core::Crater {
-            center: [15.0, 0.0],
-            radius: 0.4,
-            depth: 0.5,
-            rim_height: 0.1,
-            softness: 0.0,
-            bowl_power: 4.0,
-        };
-        let detailed = SurfaceOracle::new(
-            grid,
-            vec![crate::oracle::HeightContribution {
-                modifier: Arc::new(lunco_terrain_core::Craters::new(vec![crater])),
-                content_key: 1,
-            }],
-        );
-        let direction = DVec3::new(15.0, -10.0, 0.0).normalize();
-        let demand = TerrainVisualDemand {
-            camera: Entity::PLACEHOLDER,
-            focus: [0.0, 0.0],
-            camera_y: 10.0,
-            heading: None,
-            view_direction: direction,
-            screen_height_px: 720.0,
-            selection_clip: SelectionClip::new(
-                test_perspective(std::f64::consts::FRAC_PI_3, DVec3::Y * 10.0, direction),
-                720.0,
-                2.0,
-                DVec3::Y * 10.0,
-            )
-            .unwrap(),
-            projection: test_perspective(std::f64::consts::FRAC_PI_3, DVec3::Y * 10.0, direction),
-            required: true,
-            near_detail_radius_m: 30.0,
-            near_detail_hysteresis_m: 12.0,
-        };
-        let origin = DVec3::new(0.0, 10.0, 0.0);
-        let physical = crate::oracle::raycast_surface(&detailed, origin, direction, 60.0)
-            .unwrap()
-            .unwrap();
-        assert!(
-            (physical.x - 15.0).abs() > 0.1,
-            "fixture must change the physical hit"
-        );
-        let a = terrain_view_focus(&flat, demand);
-        let b = terrain_view_focus(&detailed, demand);
-        assert!(
-            (a[0] - b[0]).abs() < 1e-8 && (a[1] - b[1]).abs() < 1e-8,
-            "sub-quantum crater must not move the LOD focus: {a:?} != {b:?}"
-        );
-    }
-
-    #[test]
-    fn terrain_view_focus_fades_at_the_finite_reach() {
-        let oracle = SurfaceOracle::bare(Arc::new(
-            lunco_obstacle_field::field::HeightGrid::new_flat(3, 500.0),
-        ));
-        let demand = TerrainVisualDemand {
-            camera: Entity::PLACEHOLDER,
-            focus: [0.0, 0.0],
-            camera_y: 10.0,
-            heading: None,
-            view_direction: DVec3::new(15.0, -10.0, 0.0).normalize(),
-            screen_height_px: 720.0,
-            selection_clip: SelectionClip::new(
-                test_perspective(
-                    std::f64::consts::FRAC_PI_3,
-                    DVec3::Y * 10.0,
-                    DVec3::new(15.0, -10.0, 0.0).normalize(),
-                ),
-                720.0,
-                2.0,
-                DVec3::Y * 10.0,
-            )
-            .unwrap(),
-            projection: test_perspective(
-                std::f64::consts::FRAC_PI_3,
-                DVec3::Y * 10.0,
-                DVec3::new(15.0, -10.0, 0.0).normalize(),
-            ),
-            required: true,
-            near_detail_radius_m: 30.0,
-            near_detail_hysteresis_m: 12.0,
-        };
-        let near = terrain_view_focus(&oracle, demand);
-        assert!((near[0] - 7.5).abs() < 0.01, "near hit: {near:?}");
-        let edge = terrain_view_focus(
-            &oracle,
-            TerrainVisualDemand {
-                view_direction: DVec3::new(58.9, -10.0, 0.0).normalize(),
-                ..demand
-            },
-        );
-        assert!(edge[0].abs() < 0.01, "reach boundary must fade: {edge:?}");
-        let high = terrain_view_focus(
-            &oracle,
-            TerrainVisualDemand {
-                camera_y: 29.0,
-                view_direction: DVec3::new(30.0, -29.0, 0.0).normalize(),
-                ..demand
-            },
-        );
-        let horizontal_reach = (30.0_f64.powi(2) - 29.0_f64.powi(2)).sqrt();
-        assert!(
-            high[0] > 0.0 && high[0] <= horizontal_reach + 1e-9,
-            "near field must include the camera ground point: {high:?}"
-        );
-        let above = terrain_view_focus(
-            &oracle,
-            TerrainVisualDemand {
-                camera_y: 30.001,
-                view_direction: DVec3::new(30.0, -30.001, 0.0).normalize(),
-                ..demand
-            },
-        );
-        assert_eq!(
-            above, demand.focus,
-            "bias must vanish at the clearance limit"
-        );
-        let sky = terrain_view_focus(
-            &oracle,
-            TerrainVisualDemand {
-                view_direction: DVec3::Y,
-                ..demand
-            },
-        );
-        assert_eq!(sky, demand.focus);
-    }
-
-    #[test]
     fn camera_near_field_with_sky_view_reaches_finest_cover() {
         let qt = Quadtree::from_screen_metric(
             1000.0,
@@ -11090,7 +10762,6 @@ mod draw_partition_tests {
             focus: [0.0, 0.0],
             camera_y: 3.0,
             heading: None,
-            view_direction: DVec3::Y,
             screen_height_px: 1080.0,
             selection_clip: SelectionClip::new(
                 test_perspective(std::f64::consts::FRAC_PI_4, DVec3::Y * 3.0, DVec3::Y),
@@ -11114,7 +10785,12 @@ mod draw_partition_tests {
             projected_posting_error_floor(root, 49) > 0.0,
             "projected posting discovery applies beyond the near-detail radius"
         );
-        assert!(!near_field_retains_refinement(root, [0.0, 0.0], &elevated));
+        assert!(!near_field_contains(
+            root,
+            [0.0, 0.0],
+            &elevated,
+            |focus| focus.near_detail_radius_m + focus.near_detail_hysteresis_m
+        ));
         assert!(projected_posting_error_floor(root, 49) > 0.0);
         let oracle = Arc::new(SurfaceOracle::bare(Arc::new(
             lunco_obstacle_field::field::HeightGrid::new_flat(3, 1000.0),
@@ -11140,8 +10816,7 @@ mod draw_partition_tests {
             cover_edits_per_cycle: 64,
             hysteresis_ratio: 1.3,
         });
-        // Admission adds the mandatory camera patch to the published selection.
-        // The discretionary tree may stay coarse when terrain is behind the view.
+        // The shared cover includes the mandatory camera patch even under a sky view.
         let cover = prepared.selected.iter().map(|tile| tile.coord).collect();
 
         assert_eq!(
@@ -11187,7 +10862,6 @@ mod draw_partition_tests {
             focus: [0.0, 0.0],
             camera_y: 3.0,
             heading: None,
-            view_direction: DVec3::Y,
             screen_height_px: 1080.0,
             selection_clip: SelectionClip::new(
                 test_perspective(std::f64::consts::FRAC_PI_4, DVec3::Y * 3.0, DVec3::Y),
@@ -11242,8 +10916,7 @@ mod draw_partition_tests {
         assert!(selected_focus_leaf(&cover, &tree, [8.0, 8.0]).is_some());
         assert!(selected_focus_leaf(&cover, &tree, [8.01, 8.0]).is_none());
         let view = LodView {
-            // The discretionary root may have been constrained by mandatory
-            // camera/corridor nodes. The finalized geometry owns focus lookup.
+            // The finalized selected geometry owns focus lookup.
             cover: HashSet::from([QuadCoord::ROOT]),
             cover_selected: cover
                 .iter()
@@ -11518,322 +11191,6 @@ mod draw_partition_tests {
         );
     }
 
-    /// The cover must remain an exact, disjoint REPLACE cover of the root after any
-    /// number of evolution steps: every point covered by exactly one node.
-    fn assert_exact_cover(cover: &HashSet<QuadCoord>) {
-        assert!(!cover.is_empty(), "cover went empty");
-        // No node may be an ancestor of another (disjointness).
-        for a in cover.iter() {
-            let mut p = a.parent();
-            while let Some(n) = p {
-                assert!(
-                    !cover.contains(&n),
-                    "{a:?} lies under {n:?} — cover overlaps"
-                );
-                p = n.parent();
-            }
-        }
-        // Total area must equal the root's: sum of 4^-depth == 1.
-        let area: f64 = cover.iter().map(|c| 0.25f64.powi(c.depth as i32)).sum();
-        assert!(
-            (area - 1.0).abs() < 1e-9,
-            "cover area {area} != 1 — holes or overlaps"
-        );
-    }
-
-    /// Driving the camera around must never break the cover, and must never exceed
-    /// the tile budget. This is the invariant the old global budget fit enforced by
-    /// re-deriving everything; here it has to survive incremental edits.
-    #[test]
-    fn evolving_cover_stays_exact_and_within_budget() {
-        let qt = test_qt();
-        let err = |_c: QuadCoord, _r: Square| 120.0f64;
-        let budget = 40;
-        let mut cover = HashSet::new();
-
-        // Sweep the focus across the terrain, then back out to a distance.
-        for step in 0..60 {
-            let x = -900.0 + (step as f64) * 30.0;
-            evolve_cover(&qt, &mut cover, [x, 0.0], 2.0, &err, budget);
-            assert_exact_cover(&cover);
-            assert!(
-                cover.len() <= budget,
-                "cover {} exceeded budget {budget}",
-                cover.len()
-            );
-        }
-        for step in 0..30 {
-            let h = 100.0 + (step as f64) * 400.0;
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], h, &err, budget);
-            assert_exact_cover(&cover);
-            assert!(cover.len() <= budget);
-        }
-    }
-
-    /// Do two cover nodes share a boundary SEGMENT (not merely a corner)? Normalised
-    /// `[0,1]` extents are exact powers of two, so the touch/overlap tests are exact
-    /// — no epsilon.
-    fn edge_adjacent(a: QuadCoord, b: QuadCoord) -> bool {
-        let ext = |c: QuadCoord| {
-            let s = 0.5f64.powi(c.depth as i32);
-            (
-                c.x as f64 * s,
-                c.x as f64 * s + s,
-                c.z as f64 * s,
-                c.z as f64 * s + s,
-            )
-        };
-        let (ax0, ax1, az0, az1) = ext(a);
-        let (bx0, bx1, bz0, bz1) = ext(b);
-        let touch_x = ax1 == bx0 || bx1 == ax0;
-        let touch_z = az1 == bz0 || bz1 == az0;
-        let over_x = ax0 < bx1 && bx0 < ax1;
-        let over_z = az0 < bz1 && bz0 < az1;
-        (touch_x && over_z) || (touch_z && over_x)
-    }
-
-    /// Worst neighbour depth gap in a cover, with the offending pair.
-    fn worst_depth_gap(cover: &HashSet<QuadCoord>) -> (u32, Option<(QuadCoord, QuadCoord)>) {
-        let v: Vec<QuadCoord> = cover.iter().copied().collect();
-        let mut worst = 0u32;
-        let mut pair = None;
-        for i in 0..v.len() {
-            for j in (i + 1)..v.len() {
-                if !edge_adjacent(v[i], v[j]) {
-                    continue;
-                }
-                let gap = (v[i].depth as i32 - v[j].depth as i32).unsigned_abs();
-                if gap > worst {
-                    worst = gap;
-                    pair = Some((v[i], v[j]));
-                }
-            }
-        }
-        (worst, pair)
-    }
-
-    /// CONTROL for [`evolving_cover_stays_restricted`]: the checker itself must
-    /// accept a hand-built restricted cover and flag a hand-built 2-level seam,
-    /// or a pass over `evolve_cover` output proves nothing.
-    #[test]
-    fn the_restriction_checker_detects_seams() {
-        let d1 = |x, z| QuadCoord { depth: 1, x, z };
-        // (1,0,0) replaced by its four children: every edge crosses ≤ 1 level.
-        let mut restricted: HashSet<QuadCoord> =
-            [d1(1, 0), d1(0, 1), d1(1, 1)].into_iter().collect();
-        restricted.extend((0..2).flat_map(|x| (0..2).map(move |z| QuadCoord { depth: 2, x, z })));
-        let (gap, pair) = worst_depth_gap(&restricted);
-        assert!(
-            gap <= 1,
-            "checker rejects a restricted cover: gap {gap} at {pair:?}"
-        );
-        // (1,0,0) replaced by its SIXTEEN depth-3 descendants: they touch the
-        // depth-1 siblings directly — a 2-level seam the checker must flag.
-        let mut seamed: HashSet<QuadCoord> = [d1(1, 0), d1(0, 1), d1(1, 1)].into_iter().collect();
-        seamed.extend((0..4).flat_map(|x| (0..4).map(move |z| QuadCoord { depth: 3, x, z })));
-        let (gap, _) = worst_depth_gap(&seamed);
-        assert_eq!(gap, 2, "checker missed a 2-level seam");
-    }
-
-    /// THE CDLOD RESTRICTION: edge-adjacent selected nodes must differ by at most one
-    /// level, because a single morph band is all that blends them — a 2-level jump has
-    /// no band wide enough and the seam becomes a hard edge (visible as a staircase
-    /// where sub-DEM detail switches on).
-    ///
-    /// `evolve_cover` enforces this by construction — guarded merges + cascade
-    /// splits, from a trivially-restricted `{ROOT}` start (see its docs). This test
-    /// is the proof it stays that way under a camera sweep; it FAILED (gap 2 at
-    /// step 4) before the guards existed.
-    #[test]
-    fn evolving_cover_stays_restricted() {
-        let qt = test_qt();
-        // Depth-decaying error — see the control test for why a constant one is
-        // degenerate here.
-        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
-        let budget = 40;
-        let mut cover = HashSet::new();
-
-        for step in 0..60 {
-            let x = -900.0 + (step as f64) * 30.0;
-            evolve_cover(&qt, &mut cover, [x, 0.0], 2.0, &err, budget);
-            let (gap, pair) = worst_depth_gap(&cover);
-            assert!(
-                gap <= 1,
-                "step {step}: neighbour depth gap {gap} > 1 at {pair:?}"
-            );
-        }
-        for step in 0..30 {
-            let h = 100.0 + (step as f64) * 400.0;
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], h, &err, budget);
-            let (gap, pair) = worst_depth_gap(&cover);
-            assert!(
-                gap <= 1,
-                "height step {step}: neighbour depth gap {gap} > 1 at {pair:?}"
-            );
-        }
-    }
-
-    /// A STATIONARY camera must reach a fixed point and then stop editing. The old
-    /// fit could not: it alternated `wanted` 349 <-> 532 every frame forever, which
-    /// is what re-cut hundreds of tiles per frame and read as jitter.
-    #[test]
-    fn a_still_camera_reaches_a_fixed_point() {
-        let qt = test_qt();
-        let err = |_c: QuadCoord, _r: Square| 120.0f64;
-        let mut cover = HashSet::new();
-        for _ in 0..200 {
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 64);
-        }
-        let settled = cover.clone();
-        for _ in 0..50 {
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 64);
-            assert_eq!(
-                cover, settled,
-                "cover still churning on a stationary camera — no fixed point"
-            );
-        }
-    }
-
-    /// The refusal counter is starvation, not fill progress: any budget that
-    /// covers the metric's want reports zero at the fixed point, any budget
-    /// below it reports the refused splits.
-    #[test]
-    fn budget_starvation_is_reported() {
-        let qt = test_qt();
-        let err = |_c: QuadCoord, _r: Square| 120.0f64;
-        let settle = |budget: usize| {
-            let mut cover = HashSet::new();
-            for _ in 0..200 {
-                evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, budget);
-            }
-            (
-                evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, budget),
-                cover,
-            )
-        };
-        let (refused, unconstrained) = settle(usize::MAX);
-        assert_eq!(
-            refused, 0,
-            "fixed point within budget must not report refusals"
-        );
-        let want = unconstrained.len();
-        let (refused, _) = settle(want);
-        assert_eq!(refused, 0, "budget == want must not report refusals");
-        for budget in [want / 2, want / 8, 16] {
-            let (refused, cover) = settle(budget);
-            assert!(
-                refused > 0,
-                "budget {budget} < want {want} (cover {}) reached a fixed point \
-                 without reporting refusals",
-                cover.len()
-            );
-        }
-    }
-
-    /// Lowering the budget must be absorbed by merging, not by blowing past it.
-    #[test]
-    fn shrinking_the_budget_merges_down() {
-        let qt = test_qt();
-        let err = |_c: QuadCoord, _r: Square| 120.0f64;
-        let mut cover = HashSet::new();
-        for _ in 0..200 {
-            evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 256);
-        }
-        assert!(cover.len() > 16, "expected a refined cover to shrink from");
-        evolve_cover(&qt, &mut cover, [0.0, 0.0], 5.0, &err, 16);
-        assert_exact_cover(&cover);
-        assert!(
-            cover.len() <= 16,
-            "cover {} did not shrink to budget 16",
-            cover.len()
-        );
-    }
-
-    /// The cover evolution must be a pure function of its inputs — reusing the
-    /// scratch collections across calls (the per-frame hoist) must not leak
-    /// state between passes or terrains.
-    #[test]
-    fn cover_scratch_reuse_matches_fresh_scratch() {
-        let qt = test_qt();
-        let err = |c: QuadCoord, _r: Square| 120.0f64 * 0.5f64.powi(c.depth as i32);
-        let mut reused = CoverScratch::default();
-        let mut a = HashSet::new();
-        let mut b = HashSet::new();
-        for step in 0..40 {
-            let x = -900.0 + (step as f64) * 45.0;
-            let ra = evolve_cover_for_foci_with_retention(
-                &qt,
-                &mut a,
-                &[([x, 0.0], 2.0)],
-                &err,
-                &|_, _| [0.0, 0.0],
-                64,
-                TEST_MAX_COVER_EDITS,
-                TEST_LOD_HYSTERESIS_RATIO,
-                &|_, _| false,
-                &mut reused,
-            );
-            let rb = evolve_cover_for_foci_with_retention(
-                &qt,
-                &mut b,
-                &[([x, 0.0], 2.0)],
-                &err,
-                &|_, _| [0.0, 0.0],
-                64,
-                TEST_MAX_COVER_EDITS,
-                TEST_LOD_HYSTERESIS_RATIO,
-                &|_, _| false,
-                &mut CoverScratch::default(),
-            );
-            assert_eq!(a, b, "step {step}: scratch reuse changed the cover");
-            assert_eq!(
-                ra, rb,
-                "step {step}: scratch reuse changed the returned counts"
-            );
-        }
-    }
-
-    /// Zero returned edits ⇔ the cover is at its fixed point for these inputs —
-    /// the contract `LodView::settled_sig` latches on, so a budget-starved
-    /// terrain stops re-ranking its refused split chains every frame while
-    /// still reporting the starvation.
-    #[test]
-    fn zero_edits_marks_the_fixed_point_even_when_budget_refused() {
-        let qt = test_qt();
-        let err = |_c: QuadCoord, _r: Square| 120.0f64;
-        let mut scratch = CoverScratch::default();
-        let mut cover = HashSet::new();
-        let mut step = |cover: &mut HashSet<QuadCoord>| {
-            evolve_cover_for_foci_with_retention(
-                &qt,
-                cover,
-                &[([0.0, 0.0], 5.0)],
-                &err,
-                &|_, _| [0.0, 0.0],
-                16,
-                TEST_MAX_COVER_EDITS,
-                TEST_LOD_HYSTERESIS_RATIO,
-                &|_, _| false,
-                &mut scratch,
-            )
-        };
-        let mut last = (usize::MAX, 0);
-        for _ in 0..200 {
-            last = step(&mut cover);
-        }
-        assert_eq!(last.0, 0, "a settled cover must report zero edits");
-        assert!(
-            last.1 > 0,
-            "budget 16 starves this metric — refusals must still be reported"
-        );
-        let settled = cover.clone();
-        step(&mut cover);
-        assert_eq!(
-            cover, settled,
-            "zero edits must mean the cover did not change"
-        );
-    }
-
     // ── mesh cache (LRU + resident-derived cap) ──────────────────────────────
 
     #[test]
@@ -12082,52 +11439,6 @@ mod draw_partition_tests {
         view.bump_draw_revision();
         tiles.views.insert(camera, view);
         assert_eq!(tiles.draw_revision(camera), None);
-    }
-
-    #[test]
-    fn budget_pressure_sheds_far_cover_before_a_retained_quad() {
-        let qt = test_qt();
-        let retained = c(1, 0, 0);
-        let farthest = c(1, 1, 1);
-        let mut cover = (0..4)
-            .flat_map(|z| (0..4).map(move |x| c(2, x, z)))
-            .collect::<HashSet<_>>();
-        // Keep all quads inside the refine band so this exercises the forced,
-        // not voluntary, merge path.
-        let err = |_c: QuadCoord, _r: Square| 1_000_000.0f64;
-
-        evolve_cover_for_foci_with_retention(
-            &qt,
-            &mut cover,
-            &[([-700.0, -700.0], 5.0)],
-            &err,
-            &|_, _| [0.0, 0.0],
-            13,
-            TEST_MAX_COVER_EDITS,
-            TEST_LOD_HYSTERESIS_RATIO,
-            &|coord, _| coord == retained,
-            &mut CoverScratch::default(),
-        );
-
-        assert!(
-            retained
-                .children()
-                .iter()
-                .all(|child| cover.contains(child)),
-            "a retained near-camera quad must survive while another merge can satisfy the budget"
-        );
-        assert!(
-            cover.len() <= 13,
-            "non-retained quads should absorb the budget cut"
-        );
-        assert!(cover.contains(&farthest));
-        assert!(
-            farthest
-                .children()
-                .iter()
-                .all(|child| !cover.contains(child)),
-            "the farthest eligible quad must merge before nearer non-retained cover"
-        );
     }
 
     #[test]

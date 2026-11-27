@@ -32,6 +32,44 @@ pub struct MeshData {
 }
 
 impl HeightGrid {
+    /// Exact cell curvature is aggregated in small source blocks to bound
+    /// memory even for large DEMs. Queries round outward to whole blocks.
+    pub const CURVATURE_BLOCK_CELLS: usize = 8;
+
+    /// Build a camera-independent curvature hierarchy for the exact bicubic
+    /// measured raster. Call from asynchronous terrain preparation.
+    pub fn curvature_pyramid(&self) -> Option<lunco_terrain_core::error::RasterErrorPyramid> {
+        let cells = self.res.checked_sub(1)?;
+        let spacing = f64::from(self.spacing());
+        if cells == 0
+            || self.res.checked_mul(self.res)? != self.heights.len()
+            || !spacing.is_finite()
+            || spacing <= 0.0
+        {
+            return None;
+        }
+        let block = Self::CURVATURE_BLOCK_CELLS;
+        let blocks = cells.div_ceil(block);
+        let mut values = vec![0.0_f64; blocks.checked_mul(blocks)?];
+        for z in 0..cells {
+            for x in 0..cells {
+                let samples = std::array::from_fn(|j| {
+                    std::array::from_fn(|i| {
+                        self.sample_extrapolated(
+                            x as isize + i as isize - 1,
+                            z as isize + j as isize - 1,
+                        )
+                    })
+                });
+                let at = (z / block) * blocks + x / block;
+                values[at] = values[at].max(lunco_terrain_core::error::catmull_cell_curvature(
+                    samples, spacing,
+                ));
+            }
+        }
+        lunco_terrain_core::error::RasterErrorPyramid::new(blocks, values)
+    }
+
     /// Conservative height enclosure inside one raster cell. Interval
     /// evaluation uses the same Catmull-Rom polynomial as `height_at`, including
     /// extrapolated boundary posts. Kurbo restricts its tensor-product Bézier

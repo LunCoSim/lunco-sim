@@ -85,6 +85,8 @@ pub enum TextureLayer {
     Surface,
     /// Tangent/world-space normals — DEM-derived relief the procedural FBM cannot carry.
     Normal,
+    /// Camera-local, georeferenced terrain relief, derived from the height oracle.
+    TerrainRelief,
     /// Pre-baked sun visibility (R8Unorm), so the fragment shader samples once
     /// instead of running the configured horizon march.
     ShadowCache,
@@ -107,6 +109,11 @@ pub enum TextureLayer {
     /// Authored scalar displacement, separate from the runtime terrain shadow heightfield.
     Displacement,
 }
+
+/// Render adapter applies changed material intent after producers publish
+/// associated data-texture updates in the same frame.
+#[derive(bevy::ecs::schedule::SystemSet, Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ShaderLookApplySet;
 
 /// A custom-shader surface, stated as data.
 ///

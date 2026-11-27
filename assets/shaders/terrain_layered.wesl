@@ -10,7 +10,7 @@ import bevy_pbr::render::{
 };
 import super::horizon_march::terrain_horizon_visibility;
 import super::lunar_brdf::regolith_factor;
-import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_local_overlap_weight, terrain_map_weights, terrain_authored_normal_weight, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
+import super::terrain_surface::{aa_fade, bump_layer, decode_dem_normal, dem_normal_to_world, filter_detail_roughness, layer_height, ramp, surface_fbm, terrain_set_sun_response, terrain_detail_normal_to_local, terrain_detail_normal_to_world, terrain_detail_position, terrain_continuation_gradients, terrain_continuation_weight, terrain_local_overlap_weight, terrain_map_weights, terrain_authored_normal_weight, terrain_relief_residual, terrain_surface_occlusion, surface_annotation_tints, SurfaceAnnotationTints};
 
 //!@capability lunco.surface-annotations.v1
 //! Layered lunar terrain material — `regolith.wesl` + non-destructive map layers.
@@ -132,6 +132,8 @@ import super::terrain_surface::{aa_fade, bump_layer, dem_normal_to_world, filter
 //!@default site_authored_surface_on 0.0
 //!@default regional_uv_scale 0.0
 //!@default regional_albedo_on 0.0
+//!@default relief_page 0,0,0,0
+//!@default relief_phase 0,0
 //!@default morph_start  1.0e20
 //!@default morph_end    1.0e21
 //!@default stitch_edges 0,0,0,0
@@ -206,6 +208,8 @@ struct Material {
     detail_normal_strength: f32,
     detail_rough_weight: f32,
     detail_ao_weight: f32,
+    relief_page: vec4<f32>, // centre XZ, half extent, texel spacing in metres
+    relief_phase: vec2<f32>, // exact wrapped chunk origin, supplied by atlas owner
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(16)
@@ -224,6 +228,8 @@ var detail_surface_tex: texture_2d<f32>;
 // linear light and alpha carries the measured-coverage fraction.
 @group(constants::MATERIAL_BIND_GROUP) @binding(25)
 var regional_albedo_tex: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(27)
+var terrain_relief_tex: texture_2d<f32>;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)
 var<uniform> mat: Material;
@@ -449,9 +455,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
     // project it onto the selected landform normal without erasing grain.
     let geometric_n = normalize(in.world_normal);
     let normal_variation = length(fwidth(geometric_n));
-    @if((VERTEX_UVS_A)) if (map_weight_normal > 0.0) {
-        let n_baked = dem_normal_to_world(
-            map_n.xyz, in.instance_index);
+    @if((VERTEX_UVS_A)) {
+        let n_baked = dem_normal_to_world(map_n.xyz, in.instance_index);
         let detail_slope = geometric_n - n / max(dot(n, geometric_n), 1e-4);
         let normal_size = textureDimensions(normal_tex);
         let normal_texel_m = 2.0 * mat.terrain_half_extent
@@ -459,7 +464,50 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @locatio
         let authored_weight = terrain_authored_normal_weight(
             map_weight_normal, mat.terrain_geometry_on, pw / normal_texel_m, normal_variation);
         let landform_weight = select(map_weight_normal, authored_weight, mat.authored_normal_on > 0.5);
-        let landform_n = normalize(mix(geometric_n, n_baked, landform_weight));
+        var landform_n = normalize(mix(geometric_n, n_baked, landform_weight));
+        // The common normal window comes from the finer band of the SAME
+        // terrain oracle. Replace the unresolved landform normal rather than
+        // adding the fine slopes twice. All tiles sample the same world lattice.
+        let page_half = max(mat.relief_page.z, 1e-6);
+        let page_uv = (detail_p.xz - mat.relief_page.xy) / (2.0 * page_half) + vec2(0.5);
+        // World-aligned toroidal addressing: each chunk retains the same
+        // physical texture slot as the camera window translates. Derivatives
+        // must precede wrapping, otherwise the wrap seam selects a coarse mip.
+        let atlas_uv = page_uv + mat.relief_phase;
+        let page_dx = dpdx(atlas_uv);
+        let page_dy = dpdy(atlas_uv);
+        if (mat.relief_page.z > 0.0) {
+            let distance_from_center = max(abs(page_uv.x - 0.5), abs(page_uv.y - 0.5));
+            let edge_weight = 1.0 - smoothstep(0.375, 0.5, distance_from_center);
+            let texel = max(mat.relief_page.w, 1e-6);
+            // The blend uses physical pixel footprint, not the mesh tile's
+            // current level. Adjacent tiles shade the same world point alike.
+            let raster_weight = smoothstep(0.45, 1.0, pw / texel);
+            // Chunk mips stop at one texel per chunk; larger footprints use
+            // the coarser site map instead of filtering unresident atlas edges.
+            let chunk_span = page_half * 0.25;
+            let coarse_fade = 1.0 - smoothstep(chunk_span * 0.25, chunk_span * 0.5, pw);
+            let page_weight = raster_weight * edge_weight * local_overlap_weight * coarse_fade;
+            if (page_weight > 0.0) {
+                let encoded = textureSampleGrad(terrain_relief_tex, detail_sampler, atlas_uv, page_dx, page_dy).xyz;
+                var page_n = dem_normal_to_world(encoded, in.instance_index);
+                if (mat.authored_normal_on > 0.5) {
+                    // Keep the authored normal's resolved band. Subtract the
+                    // page's own authored-scale low pass before adding the
+                    // fine slope, so measured relief is not counted twice.
+                    // At subpixel footprints both page samples converge.
+                    let coarse_gradient = max(1.0, normal_texel_m / max(pw, 1e-6));
+                    let coarse_encoded = textureSampleGrad(terrain_relief_tex, detail_sampler, atlas_uv, page_dx * coarse_gradient, page_dy * coarse_gradient).xyz;
+                    let fine_local = decode_dem_normal(encoded);
+                    let coarse_local = decode_dem_normal(coarse_encoded);
+                    let authored_local = decode_dem_normal(map_n.xyz);
+                    let combined = terrain_detail_normal_to_world(
+                        terrain_relief_residual(authored_local, fine_local, coarse_local), in.instance_index);
+                    page_n = normalize(mix(page_n, combined, clamp(mat.weight_normal, 0.0, 1.0)));
+                }
+                landform_n = normalize(mix(landform_n, page_n, page_weight));
+            }
+        }
         let landform_slope = detail_slope - landform_n * dot(detail_slope, landform_n);
         n = normalize(landform_n - landform_slope);
     }

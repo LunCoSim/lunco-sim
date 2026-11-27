@@ -154,6 +154,8 @@ pub struct ShaderMaterial {
     pub displacement_map: Option<Handle<Image>>,
     /// Regional reflectance with coverage-premultiplied RGB and alpha mask.
     pub regional_albedo_map: Option<Handle<Image>>,
+    /// World-aligned local terrain normal page.
+    pub terrain_relief_map: Option<Handle<Image>>,
     /// Per-instance fragment shader. **Not** a bind-group resource — it drives
     /// pipeline specialization (see [`ShaderMaterial::specialize`]) and is kept
     /// as a strong handle so the asset stays loaded.
@@ -222,6 +224,7 @@ impl Default for ShaderMaterial {
             detail_surface_map: None,
             displacement_map: None,
             regional_albedo_map: None,
+            terrain_relief_map: None,
             shader: Handle::default(),
             vertex_shader: None,
             schema: empty_schema_arc(),
@@ -400,6 +403,7 @@ macro_rules! material_textures {
             (21, detail_surface_map, true),
             (23, displacement_map, true),
             (25, regional_albedo_map, true),
+            (27, terrain_relief_map, true),
         }
     };
 }

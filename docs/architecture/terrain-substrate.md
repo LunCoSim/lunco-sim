@@ -154,10 +154,27 @@ Perspective error uses output pixels, vertical FOV and three-dimensional camera
 distance. Orthographic error uses pixels per metre from the finalized projection
 area and output dimensions. Translating an orthographic camera along its viewing
 axis preserves scale; zoom and lateral motion change detail or its footprint.
-Both projections clip nodes against the finalized view volume using conservative
-full-source height bounds. A projected posting-size floor keeps unresolved small
-features eligible at every distance, including telephoto views where coarse probes
-filter them out. The immutable oracle caches its full-domain enclosure; a native
+Orthographic covers and discretionary perspective refinement outside the
+camera-centred detail radius clip nodes against the retained view envelope using
+conservative full-source height bounds. Perspective selection measures distance
+from the actual camera eye, as does the vertex morph. A ground camera
+reserves a stable radial tree by projected posting size before heading-dependent
+discretionary refinement, preventing rough distant patches from monopolizing
+near detail. The full cover protects the radial tree’s split nodes and the
+settled nearby leaves and their edge partners for an unchanged radial demand.
+Restriction cascades cannot refine locked leaves, and adjacent minimum depths
+preserve their stitch state. The outer retention band preserves
+existing refinement without
+requesting new detail outside that radius. Direction affects streaming priority
+and distant visibility, never a tile’s intrinsic morph range. A low perspective
+view also requests one coarser posting target in the next radial band (twice the
+near radius), independent of heading. This prefetch competes within the same
+resource budget; it is not a mandatory extra resident set. A projected posting-size floor keeps unresolved features eligible at every
+distance, including telephoto views. The stable ground zone retains the full
+posting target; discretionary visible geometry allows twice the configured
+pixel spacing, and the next off-screen radial band allows twice that again.
+Measured geometric error retains the full screen-space error target at all
+distances. The immutable oracle caches its full-domain enclosure; a native
 background job computes it after coarse geometry is admitted. Cover preparation
 only reads an already cached certificate and otherwise keeps uncertain nodes
 eligible. Selection retains
@@ -177,12 +194,28 @@ counts are odd, so parent and child grids nest. Graphics maximum depth describes
 local domain; a power-of-two regional expansion adds its exact depth offset while
 preserving finest spacing in metres. Unsupported domain ratios or effective depth
 are diagnosed before admission. Collider settings do not select visual resolution.
+Selection measures stratified cells of the actual visual mesh lattice against
+the next finer visual surface band, using the same indexed triangles as the
+mesh. The probe resolution bounds work without substituting a coarse proxy
+lattice for the rendered mesh. The projected posting-size target protects
+detail outside the sampled cells. The immutable measured raster also supplies a
+cached max hierarchy of conservative bicubic Hessian bounds. Each source block
+aggregates the exact cell control-hull curvature, and a mesh's interpolation
+bound uses its actual posting spacing. This protects steep measured relief even
+when the stratified probes miss it. Local and unblended regional grids share
+this mechanism; the registered blend and analytic modifiers retain their
+separate sampled/enclosure contracts, so the complete composite estimate is not
+a certified full-surface error. The background certificate is prepared after
+the drawable bootstrap cover, and its readiness invalidates the cached node
+measurements. The cache also keys the mesh and probe lattices independently.
 The overzoom visual reconstruction measures craterlet resolvability by bowl
 diameter and fades the contribution continuously. Its physical radius-based
 sampling contract is unchanged. Streamed visual geometry and derived maps use the same
 filter role; cache identities version the reconstruction.
 
-Each consumed view has its configured tile budget. Cover preparation and tile
+Each consumed view has its configured tile budget. High (432 leaves at 65²)
+and Balanced (768 leaves at 49²) have the same regular leaf triangle ceiling;
+byte admission independently accounts transition and cache residency. Cover preparation and tile
 bakes share bounded asynchronous admission, upload budgets and cache byte limits.
 The graphics byte ceiling retains its GPU upload meaning. Accounting counts
 unique uploaded geometry across views and sources, including live old generations
@@ -215,9 +248,21 @@ views reserve complete camera-centred detail disks before discretionary projecte
 error refinement. Each disk receives one affordable minimum depth, including
 its restricted neighbour closure; the inner disk and outer disk share a bounded
 portion of the view budget, leaving capacity for the visible middle distance.
+One restricted cover includes mandatory, stable radial and discretionary refinement;
+shared subtrees and neighbour closure consume capacity once. The generic
+`lunco-terrain-core::selection::evolve_restricted_cover` protects the admitted
+mandatory split nodes, reclaims lower-benefit complete sibling groups under
+pressure and exchanges capacity only when the entire restricted split is feasible
+with hysteresis and the stable radial seam reservation. Unclipped intrinsic errors determine morph bands, including
+retained tiles. Physics and source content do not change.
 Camera retention is bounded
 in three dimensions and scoped to its view and source. A requested minimum detail
 tree that cannot fit the selected resource budget is reported as unfulfilled quality.
+`TerrainLodStatus` with `include_draw_cover: true` reports the actual published
+per-camera tile coordinates, entity identity, lattice spacing, current source
+generation, snapped morph band and stitch edges. The production rotation gate
+checks these throughout two complete fixed-eye sweeps, not only the selected
+leaf under the camera.
 Physics never waits for visual preparation.
 
 ### Progressive startup

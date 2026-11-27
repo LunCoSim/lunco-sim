@@ -139,6 +139,42 @@ raster to reduce shimmer while retaining at least half the geometric normal
 contribution. This does not change the authored normal weight on non-terrain
 geometry.
 
+For streamed perspective views, `relief_pages` publishes a world-aligned
+normal clipmap over the same source oracle. Ground views retain a window around
+all headings; elevated views choose a projected ground focus and a mip-level
+resolution from their pixel footprint. A wide distant view uses the existing
+site raster whenever it resolves the image; telephoto refinement is still
+eligible. Resolution is capped by the derived raster quality and 2048 texels per
+atlas side. The atlas is an eight-by-eight torus of individually content-keyed
+normal chunks; chunk span and level spacing are quantized, so cameras with the
+same source and sampling level reuse cached chunk artifacts. World chunk
+coordinates map to fixed atlas slots, including negative coordinates. A camera
+translation retains the atlas image and prepares only newly exposed chunks.
+
+Each chunk samples a ghost-ring height lattice from the oracle and builds mips
+through its own one-texel level. Chunk boundaries align at every admitted mip;
+coarser footprints fade to the site raster instead of filtering unrelated atlas
+slots. The previous valid window remains available until a complete replacement
+is prepared off-thread. The renderer receives ordered RGBA8 mip rectangles via
+its shared `DataTextureUpdates` adapter, with a matching CPU image shadow and
+material window applied before rendering. The visible/current status includes
+upload acknowledgement; capture readiness waits for the required shading.
+Source and output retirement withdraw their work and GPU upload identity.
+
+The shader samples world-aligned UVs with unwrapped derivatives and blends by
+pixel footprint and smooth window-edge overlap, not by the active mesh tile's
+level. It replaces unresolved landform normals without changing geometric
+height, contact, silhouette or cast shadows. With an authored normal raster,
+the page's authored-scale low-pass slope is subtracted from its fine slope and
+the residual is composed with the authored normal; at subpixel footprints the
+residual converges to zero. `TerrainLodStatus.camera_cover[].relief` reports
+currentness, centre, extent, texel size, reused/updated chunks, persistent atlas
+identity, and actual uploaded patch bytes and batch count.
+
+The clipmap follows the viewer-centred filtered-grid principles of
+[Geometry Clipmaps](https://hhoppe.com/proj/geomclipmap/) and the projected error
+and asynchronous coverage principles of [Cesium Native](https://cesium.com/learn/cesium-native/ref-doc/selection-algorithm-details.html).
+
 DEM-global UVs use the terrain owner's `terrain_half_extent` for procedural
 detail coordinates, their pixel footprint, and authored albedo texel size.
 `hf_size` describes the independent shadow heightfield and must not choose

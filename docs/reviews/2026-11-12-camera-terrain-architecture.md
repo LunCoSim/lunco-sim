@@ -458,6 +458,41 @@ existing ignored test), plus two terrain-core row/cancellation regressions.
 The impossibility proof, shared-edge focus lookup, cache invalidation, exact
 layer reuse, staged memory lifetime and ordered pixel assembly are covered.
 
+## 2026-11-27 — radial terrain quality and yaw stability
+
+Summer Space School exposed uneven procedural crater density and rotation-driven
+LOD changes. The pure restricted-cover selector now lives in
+`lunco-terrain-core::selection`; the surface owner computes actual camera-centred
+radial demand, the retained clipped discretionary demand, and the published
+stitch/morph state. Required subtrees and discretionary work share one budget.
+Hysteretic budget exchange preserves required splits, and the admitted radial
+leaves and their edge partners reject direct or cascaded splits on unchanged-eye
+turns. Near posting density is evaluated without heading bias. High and Balanced
+have the same regular leaf triangle cap; byte admission still bounds residency.
+The physical collider lattice and authored Twin are unchanged.
+
+Production `traverse_apollo15.usda`, RTX 5060 Laptop GPU (Vulkan), High,
+1600×900 GPU offscreen: two 360° fixed-eye sweeps (16 headings) passed all
+seven authored rotation checks with both cold and warm terrain caches. Each
+run preserved all 201 drawn tiles intersecting the 50 m disk, including mesh
+identities, snapped morph bands and stitch edges. Source-relative radial
+posting ranges at 10/20/30/40/60 m were 3.05–6.10 / 6.10–12.21 / 12.21 /
+12.21–24.41 / 12.21–24.41 cm, identical cold and warm. The initial 256-leaf
+comparison had 24.41 cm patches at 20 m but 6.10 cm patches at 40 and 60 m.
+Final startup and cardinal snapshots had 430/430 selected/resident/drawn
+leaves at the opening, 322.7–338.9 MiB maximum observed mesh accounting
+(1024 MiB ceiling), no upload refusal, no render or runtime diagnostics, and
+the same 20 ready physical contact lattice identities. The cold and warm
+near geometry coordinates, morph bands and stitches were equal. More distant
+selection may still change; offscreen `EnginePerformance` was unavailable,
+so these results do not establish a desktop FPS improvement. Evidence:
+`/tmp/luncosim-terrain-rotation.eyqNzn/final-cold/` and
+`/tmp/luncosim-terrain-rotation.eyqNzn/final-warm/` (JSON, log and PNGs).
+
+The 11 pure restricted-cover tests include saturated allocation exchange,
+mandatory-tree protection and a negative locked-neighbour cascade. The
+surface package and tests compile; the full native production build succeeded.
+
 ## External architecture references
 
 [Cesium Native view integration](https://cesium.com/learn/cesium-native/ref-doc/rendering-3d-tiles.html)
@@ -470,3 +505,115 @@ projection and shape-cast mechanisms. Standard lens facts remain owned by
 [UsdGeomCamera](https://openusd.org/release/api/class_usd_geom_camera.html).
 GPU precision admission follows the [WGSL floating-point accuracy contract](https://www.w3.org/TR/WGSL/#floating-point-accuracy),
 including its rounding freedom and inherited distance/mix accuracy.
+
+### 2026-11-27: geometry error and independent surface relief
+
+The local DEM visual streamer measures stratified cells of each actual indexed
+mesh lattice against the next finer oracle band. The geometric SSE target
+remains unchanged; outside the protected ground disk the posting criterion
+allows twice the pixel spacing, and the offscreen radial band twice that again.
+The camera-local normal window is independent of geometry subdivision and
+collision. Its shared 2048² mipmapped texture recovers the missing relief
+without generating additional mesh triangles. An authored normal retains its
+resolved band through a fine-minus-coarse slope residual from the same window.
+See [terrain layered rendering](../architecture/terrain-layered-rendering.md)
+for its ownership, sampling, source lease and cache contract. Continuous
+projection and sampling math belongs to the renderer, not a scene-specific
+Rhai policy; the production Rhai scenarios own the acceptance verdicts.
+
+Apollo 15 real-scene GPU offscreen at 1600×900, High, RTX 5060 Vulkan: the
+fully cold terrain cache passed eight yaw checks plus five elevated-range
+checks; the warm cache passed the same thirteen plus five translation checks
+at a 45 m displacement. All 201 tiles intersecting the 50 m disk had equal
+coordinates, spacing, stitch and morph keys cold/warm. The 240 m normal window
+(11.72 cm texels) remained unchanged across all 16 headings. The window moved
+from (-390,-390) to (-330,-390) m through retained coverage, and at 156 m
+clearance it retired. The corresponding drawn leaf count fell from 430 to
+118–121, resident mesh bytes from 165.8 to 46.0–47.2 MiB, and the posting under
+the eye increased from 3.05 cm to 1.95 m. All 20 contact lattices remained
+ready and unchanged. The full-cold fixed-eye settlement took 12.0 s for geometry
+and 16.0 s including shading, the warm run 0.52 s for both; these intervals
+start at the driver's fixed-eye settlement poll, not process launch. The
+settled image improves the mid-distance crater field. The elevated image still
+shows the authored 1 km DEM/globe data and material boundary; this is separate
+from the visual LOD streamer and needs regional coverage for comparable detail.
+There were no runtime diagnostics or introduced shader warnings. The offscreen
+performance query did not provide interactive FPS.
+
+Pure terrain-core tests: 139 passed, two ignored. Production numerical normal
+shader panel: three frames, central green minimum 1.0 and red maximum 0.0. The
+full scene-test discovery wrapper failed on the unrelated
+`dynamic_reference_composition/initial_allow.usda` Twin-scope asset dependency;
+the same existing normal-transform fixture passed directly in the production
+binary with the standard offline arguments and pixel threshold. Evidence:
+`/tmp/luncosim-terrain-rotation.eyqNzn/relief-full-cold/`,
+`/tmp/luncosim-terrain-rotation.eyqNzn/relief-warm/`, and
+`/tmp/luncosim-terrain-rotation.eyqNzn/normal-panel/`.
+
+### 2026-11-27: persistent relief clipmap and measured raster hierarchy
+
+The current relief atlas uses 8 × 8 independently cached world-aligned chunks.
+A chunk's key includes the local oracle content and physical sampling lattice;
+its mip chain ends at the chunk's one-texel level. A translated view retains a
+single GPU atlas and uses ordered, validated RGBA8 mip-region updates through
+the shared render adapter, with matching CPU shadow and same-frame look
+publication. The window's exact toroidal phase derives from integer chunk
+coordinates; shading weights depend on screen footprint rather than mesh LOD.
+The previous coverage stays live during background preparation; currentness
+requires GPU patch acknowledgement. Projection footprint selects useful relief
+levels even in elevated/telephoto views. The site raster remains the coarse
+level when a local relief window no longer adds resolvable signal.
+
+Measured bicubic raster landforms now have a cached hierarchy of conservative
+Hessian control-hull bounds, aggregated in eight-cell blocks. This certificate
+is prepared after bootstrap cover in the existing background enclosure job.
+The measured interpolation bound supplements stratified actual-lattice probes;
+regional transition and analytic modifier relief still use their existing
+sample/enclosure contracts rather than claiming a certified complete composite
+error. Node-cache identity includes both mesh and probe resolutions and the
+certificate revision, and stale preparation cannot repopulate a revised cache.
+The radial reserve also accounts for actual relief still within its stable disk.
+
+Production Apollo 15 acceptance at High, 1600×900: there were 31 authored checks
+in the full-cold GPU offscreen run and 31 in the warm native GPU Wayland run
+(yaw 8, translation 8, 100 m traverse 5, two elevated-range gates of 5 each).
+The 45 m translation crossed the actual retained boundary, reused 42 of 64
+chunks, kept its image identity, and uploaded 7.33 MiB. A subsequent one-column
+shift reused 56 chunks and uploaded 2.67 MiB instead of allocating the 21.33
+MiB atlas: 87.5% fewer uploaded bytes. The 100 m path had 100 camera commands
+at 0.1 s step spacing and retained drawable coverage, atlas identity and all
+20 physical contact lattices. Returning to the exact eye and heading produced
+zero RGB difference in the bottom 36% of the offscreen frame (whole-frame
+mean absolute difference < 0.09/255). Cold fixed-eye settlement was 12.89 s
+for geometry and 15.70 s including relief; warm native settlement was 0.46 s.
+These are post-camera placement settlement times, not process startup time.
+
+The 12.5 cm local atlas was unchanged throughout both yaw sweeps. At approx.
+156 m clearance the relief texel spacing was 25 cm; at 606 m the site raster
+alone was sufficient. Cold drawn leaves were 430, 172 and 133 respectively;
+resident mesh memory was 165.8, 66.7 and 51.8 MiB. Native quality was measured
+on a private 1600×900 Weston GL output (NVIDIA RTX 5060 Laptop GPU, DRM
+`renderD129`, native Vulkan app adapter); the actual active avatar viewport
+was 1600×900. No competing GPU process was recorded before launch. With
+vsync/throttle disabled, a five-second stationary window measured 101.34 FPS
+(508 samples, p95 10.31 ms); the ten-second 100-command motion window measured
+94.97 FPS (950 samples, p95 11.42 ms, p99 12.69 ms, maximum 52.69 ms, two
+frames above 16.7 ms). This is application frame history, not compositor repaint
+rate, GPU-only time, or a prior-version speedup comparison. Both runs had zero
+runtime diagnostics and clean render logs. The initial translation fixture had
+moved within startup hysteresis rather than across its actual boundary; the
+final gate computes the direction from the admitted centre rather than assuming
+it starts at the nearest quantized position.
+
+The final images still show the school site's surveyed 1 km DEM to globe
+boundary at elevation. The diagnostic regional data candidates are not
+production-qualified; see [open regional surface review](open-lunar-regional-surface.md)
+for measured source registration, streaks and outer-tier coverage gaps. No
+unqualified DEM or authored school assets were substituted. This is a separate
+asset/registration task, not a visual LOD selection or atlas failure.
+
+Evidence: `/tmp/luncosim-terrain-atlas-validation/final-cold/`,
+`/tmp/luncosim-terrain-atlas-validation/native/`, `comparison.jpg` in that
+validation root. Pure terrain-core tests: 141 passed, two ignored; both typed
+data-texture patch tests passed, including invalid mip rectangle rejection and
+latest-slot coalescing.

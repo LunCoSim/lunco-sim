@@ -117,7 +117,9 @@ impl ShaderTexture {
             | TextureLayer::ContinuationSurface
             | TextureLayer::DetailSurface
             | TextureLayer::Displacement => Some(Rgba8MipMode::Linear),
-            TextureLayer::Normal | TextureLayer::DetailNormal => Some(Rgba8MipMode::Normal),
+            TextureLayer::Normal | TextureLayer::DetailNormal | TextureLayer::TerrainRelief => {
+                Some(Rgba8MipMode::Normal)
+            }
             TextureLayer::Height | TextureLayer::ShadowCache | TextureLayer::SurfaceAnnotations => {
                 None
             }

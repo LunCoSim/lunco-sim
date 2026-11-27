@@ -67,6 +67,12 @@ fn upload_patches(
                 DataTextureTexels::R8Unorm(bytes) => {
                     descriptor.format == TextureFormat::R8Unorm && bytes.len() == count
                 }
+                DataTextureTexels::Rgba8MipRegions(regions) => {
+                    descriptor.format == TextureFormat::Rgba8Unorm
+                        && regions
+                            .iter()
+                            .all(|region| region.valid(patch.size, descriptor.mip_level_count))
+                }
             };
         if !valid {
             error!("data texture patch violates its image format or extent");
@@ -89,6 +95,34 @@ fn upload_patches(
                     },
                 );
                 bytes.len()
+            }
+            DataTextureTexels::Rgba8MipRegions(regions) => {
+                let mut uploaded = 0;
+                for region in regions {
+                    let mut destination = image.texture.as_image_copy();
+                    destination.mip_level = region.level;
+                    destination.origin = Origin3d {
+                        x: region.origin.x,
+                        y: region.origin.y,
+                        z: 0,
+                    };
+                    queue.write_texture(
+                        destination,
+                        &region.bytes,
+                        TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(region.size.x * 4),
+                            rows_per_image: Some(region.size.y),
+                        },
+                        Extent3d {
+                            width: region.size.x,
+                            height: region.size.y,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    uploaded += region.bytes.len();
+                }
+                uploaded
             }
             DataTextureTexels::Rgba32Float(texels) => {
                 // Each run stays within one row; unchanged texels are never uploaded.

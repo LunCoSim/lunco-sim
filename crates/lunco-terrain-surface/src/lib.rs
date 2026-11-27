@@ -51,6 +51,7 @@ pub mod oracle;
 pub mod overlay;
 pub mod plugin;
 pub mod query;
+mod relief_pages;
 mod solar_visibility;
 pub use occlusion::{SurfaceOcclusionBudget, SurfaceOcclusionCache};
 pub mod stream_viz;

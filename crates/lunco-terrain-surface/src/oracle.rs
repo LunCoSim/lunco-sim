@@ -95,6 +95,8 @@ pub struct SurfaceOracle {
     /// Geometry-wide certificate prepared once by asynchronous presentation work.
     /// Clones share immutable geometry; filtered variants own a fresh certificate.
     global_bounds: Arc<OnceLock<Result<[f64; 2], String>>>,
+    base_curvature: Arc<OnceLock<Option<lunco_terrain_core::error::RasterErrorPyramid>>>,
+    regional_curvature: Arc<OnceLock<Option<lunco_terrain_core::error::RasterErrorPyramid>>>,
 }
 
 fn checked_height_bounds(bounds: [f64; 2]) -> Result<[f64; 2], String> {
@@ -126,6 +128,71 @@ fn validated_grid_cell_count(grid: &HeightGrid) -> Result<usize, String> {
 impl SurfaceOracle {
     pub(crate) fn has_regional_surface(&self) -> bool {
         self.regional.is_some()
+    }
+    pub(crate) fn visual_curvature_ready(&self) -> bool {
+        self.base_curvature.get().is_some()
+            && (self.regional.is_none() || self.regional_curvature.get().is_some())
+    }
+    pub(crate) fn prepare_visual_curvature(&self) {
+        self.base_curvature
+            .get_or_init(|| self.base.curvature_pyramid());
+        if let Some(regional) = &self.regional {
+            self.regional_curvature
+                .get_or_init(|| regional.regional_grid().curvature_pyramid());
+        }
+    }
+    /// Conservative interpolation bound for measured raster landforms,
+    /// independent of sparse visual probes. The registered transition itself
+    /// blends two sources and retains its separate enclosure/probe contract.
+    pub(crate) fn visual_base_error_bound(
+        &self,
+        region: lunco_terrain_core::Square,
+        step: f64,
+    ) -> Option<f64> {
+        let local_half = f64::from(self.base.half_extent);
+        let within_local = region
+            .center
+            .iter()
+            .all(|v| v.abs() + region.half <= local_half);
+        let (grid, pyramid) = if within_local || self.regional.is_none() {
+            (&self.base, self.base_curvature.get()?.as_ref()?)
+        } else {
+            let regional = self.regional.as_ref()?;
+            if !region
+                .center
+                .iter()
+                .any(|v| v.abs() - region.half >= local_half + regional.blend_width_m())
+            {
+                return None;
+            }
+            (
+                regional.regional_grid(),
+                self.regional_curvature.get()?.as_ref()?,
+            )
+        };
+        let half = f64::from(grid.half_extent);
+        let spacing = f64::from(grid.spacing());
+        let cells = grid.res.checked_sub(1)?;
+        let edge = |v: f64, hi: bool| {
+            let p = (v + half) / spacing;
+            (if hi { p.ceil() } else { p.floor() }).clamp(0.0, cells as f64) as usize
+        };
+        let rect = [
+            edge(region.center[0] - region.half, false),
+            edge(region.center[1] - region.half, false),
+            edge(region.center[0] + region.half, true),
+            edge(region.center[1] + region.half, true),
+        ];
+        let block = HeightGrid::CURVATURE_BLOCK_CELLS;
+        let rect = [
+            rect[0] / block,
+            rect[1] / block,
+            rect[2].div_ceil(block),
+            rect[3].div_ceil(block),
+        ];
+        // Linear barycentric interpolation: each coordinate's weighted
+        // variance is <= step²/4; Taylor's Hessian remainder is <= M/2.
+        Some((pyramid.max_rect(rect)? * step * step * 0.25).next_up())
     }
     /// Ordered modifier composition shared by scalar and affine query products.
     fn fold_modifiers<T>(
@@ -323,6 +390,8 @@ impl SurfaceOracle {
             base_key,
             local_base_key: base_key,
             global_bounds: Arc::new(OnceLock::new()),
+            base_curvature: Arc::new(OnceLock::new()),
+            regional_curvature: Arc::new(OnceLock::new()),
         }
     }
 
@@ -369,6 +438,8 @@ impl SurfaceOracle {
             base_key,
             local_base_key: base_key,
             global_bounds: Arc::new(OnceLock::new()),
+            base_curvature: Arc::new(OnceLock::new()),
+            regional_curvature: Arc::new(OnceLock::new()),
         }
     }
 
@@ -520,6 +591,8 @@ impl SurfaceOracle {
             base_key: self.base_key,
             local_base_key: self.local_base_key,
             global_bounds: Arc::new(OnceLock::new()),
+            base_curvature: self.base_curvature.clone(),
+            regional_curvature: self.regional_curvature.clone(),
         }
     }
 

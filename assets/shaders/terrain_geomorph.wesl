@@ -94,6 +94,8 @@ struct Material {
     detail_normal_strength: f32,
     detail_rough_weight: f32,
     detail_ao_weight: f32,
+    relief_page: vec4<f32>,
+    relief_phase: vec2<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0)

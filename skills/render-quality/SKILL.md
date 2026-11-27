@@ -147,12 +147,39 @@ GPU acceptance still require the rendered fixture and a clean process log.
    pure `morphed_child_matches_every_parent_triangle` test in
    `lunco-terrain-surface`; changes to bake math also require a tile-cache
    version bump and a settled production camera traversal.
+   When fine crater geometry is beyond its sampling band, inspect the
+   consumed camera's `TerrainLodStatus.camera_cover[].relief` normal clipmap.
+   It uses the same oracle, independently cached world chunks and a persistent
+   toroidal atlas. Shading blends by pixel footprint, not mesh tile identity;
+   authored normals receive only the missing high-frequency slope. It cannot
+   replace physical height, silhouettes or cast shadows.
+   Use `test_terrain_rotation_cover.py` with `--max-relief-texel-m`,
+   `--relief-translation-m`, `--traverse-distance-m`, `--mid-range-height-m`,
+   and `--long-range-height-m`. Require stable near geometry under yaw, actual
+   incremental GPU mip-region uploads with stable atlas identity under motion,
+   coarser relief or retirement with distance, and unchanged physics contacts.
+   Include `--measure-native --windowed` on an isolated GPU Wayland output for
+   native stationary and moving frame time samples; offscreen status alone
+   is not performance evidence. See `scripts/perf/README.md`.
    For patchy crater density, inspect the drawn camera cover, not just the
    selected depth under its eye. Perspective views reserve whole camera-centred
    minimum-detail disks before discretionary refinement. Missing replacement
    meshes cannot publish an unselected ancestor over previously drawn finer
    detail. Check stationary and moving views independently, with the same
-   authored overzoom, tile and cache budgets.
+   authored overzoom, tile and cache budgets. Perspective selection and
+   geomorph use the actual eye position; the near-field demand is independent
+   of heading, a coarser surrounding band prefetches likely yaw reveals, and
+   mandatory and discretionary refinement share one restricted cover budget.
+   Settled radial leaves and their edge partners retain their topology across
+   unchanged-eye yaw. Use `TerrainLodStatus` with `include_draw_cover: true` to inspect
+   the published tile lattice, snapped morph bands and stitch edges without mesh
+   readback. Run `scripts/api/test_terrain_rotation_cover.py` with the production
+   scene, freeflight camera path, low fixed eye in the active physics frame,
+   radius and explicit maximum spacing. The driver defaults to GPU offscreen
+   capture; use `--windowed` with an isolated display for desktop acceptance.
+   Its authored presentation scenario
+   checks eight verdicts throughout two 360° yaw sweeps, including a stable near
+   cover, actual heading changes and bounded distance-band posting inversions. Inspect captured images separately.
    The visual overzoom filter retains resolvable crater diameters in medium
    LODs while physical filtering retains its independent radius-based contract.
    Compare geometry and material relief at each visual band; do not inflate

@@ -146,6 +146,14 @@ fn terrain_authored_normal_weight(
         select(0.0, 1.0, geometry_on > 0.5));
 }
 
+/// Compose only the high-frequency slope of an oracle normal page with the
+/// authored-scale normal field. Equal page samples preserve the authored normal.
+fn terrain_relief_residual(authored: vec3<f32>, fine: vec3<f32>, coarse: vec3<f32>) -> vec3<f32> {
+    let slope = authored.xz / max(authored.y, 0.05)
+        + fine.xz / max(fine.y, 0.05) - coarse.xz / max(coarse.y, 0.05);
+    return normalize(vec3(slope.x, 1.0, slope.y));
+}
+
 /// Resolve one terrain material's map roles from the shared CPU source contract.
 ///
 /// The streamed CDLOD and static-mesh paths must make the same decision when a
