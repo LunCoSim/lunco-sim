@@ -192,13 +192,18 @@ The Bevy 0.20 client uses Tracy 0.14.1. Use an unmodified matching tool checkout
 
 ```sh
 cmake -S ../tracy-0.14.1/csvexport -B ../tracy-0.14.1/csvexport/build \
-  -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-  -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+  -DCMAKE_BUILD_TYPE=Release
 cmake --build ../tracy-0.14.1/csvexport/build --target TracyServer -j4
 bash scripts/perf/build_tracy_samples.sh ../tracy-0.14.1
 target/perf/tracy-samples "$CAPTURE" "$OWNED_PID" 0 "$BEGIN_NS" "$END_NS" \
   > .cache/constructor-samples.csv
 ```
+
+Compiler caching is optional. To use Kache, set CMake's
+`CMAKE_C_COMPILER_LAUNCHER` and `CMAKE_CXX_COMPILER_LAUNCHER` to `kache`
+at configuration time, and set `CXX_COMPILER_LAUNCHER=kache` when invoking
+`build_tracy_samples.sh`. The script uses `CXX` (default `c++`) directly when
+no launcher is supplied.
 
 Arguments require the recorded process PID, an OS thread ID (`0` selects all
 threads), and a half-open capture-relative nanosecond interval. The exporter

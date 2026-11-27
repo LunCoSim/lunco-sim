@@ -269,14 +269,14 @@ package checks after changing skill metadata or packaging.
 
 - **Disk-space recovery preserves source and shared caches.** Before cleanup,
   inspect free space and this checkout's `target/` size. Never delete crates,
-  `Cargo.lock`, sibling worktrees, the Cargo registry, or the shared `sccache`
+  `Cargo.lock`, sibling worktrees, the Cargo registry, or the shared compiler
   cache. Stop only this task's live app through its API before replacing or
   removing its executable. Prefer `cargo clean -p <affected-package>` to remove
   stale package outputs while retaining unrelated incremental artifacts. If
   that cannot free enough space, `cargo clean` may remove this checkout's old
   `target/` build outputs and executables; it leaves source crates and shared
   caches intact but discards local incremental outputs. Rebuild in the normal
-  `target/` directory with `-j 4` and regular `sccache`; do not lower profile
+  `target/` directory with `-j 4` and the configured compiler cache (Kache on local hosts); do not lower profile
   settings or use a temporary build directory as the default space workaround.
 - Test scenes live under `assets/scenes/tests/`, scenarios under
   `assets/scenarios/tests/`. A green gate needs a negative fixture and a real
@@ -316,7 +316,7 @@ package checks after changing skill metadata or packaging.
   complete and immediately before the final diff review and commit.
 - Establish a behavior baseline before physics/vehicle changes and rerun it.
   Use focused tests first, then production luncosim. Use `-j 4`, the repository
-  `target/`, and regular `sccache`; never use managed temporary build directories
+  `target/`, and the configured compiler cache (Kache on local hosts); never use managed temporary build directories
   or custom temporary files, and avoid overlapping Cargo builds. Minimize
   unnecessary test runs: reuse a valid result when the tested code and inputs
   have not changed, do not duplicate equivalent unit/scene coverage, and run

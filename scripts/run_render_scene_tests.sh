@@ -41,7 +41,7 @@ export LUNCOSIM_CONFIG="$REPO_ROOT/$LOG_DIR/config-render-suite-$RUN_ID"
 
 if [[ ! -x "$BIN" ]]; then
     echo "render scene gate: production binary is missing or not executable: $BIN" >&2
-    echo "build it first with: RUSTC_WRAPPER=sccache cargo build -j 4 -p lunco-luncosim --bin luncosim" >&2
+    echo "build it first with: cargo build -j 4 -p lunco-luncosim --bin luncosim" >&2
     exit 2
 fi
 

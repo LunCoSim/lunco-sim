@@ -177,8 +177,7 @@ parse check into runtime evidence.
 - **Rust tests → the owning target** — use
   `scripts/run_rust_tests.sh -p <package> --module <source-module>` (or
   `--filter <module>::<test>`). It selects the large crate's single
-  owning crate's direct `--test <source-module>` target, uses `sccache` when
-  installed, and accepts `--check` for compile-only feedback, `--no-run` to
+  owning crate's direct `--test <source-module>` target, respects Cargo’s configured compiler wrapper, and accepts `--check` for compile-only feedback, `--no-run` to
   build without running, or `--lib` for inline library tests. Select the owning
   crate instead of invoking every workspace test target.
 - **Tutorial world/time contract → USD** — choose fixed `DistantLight`, celestial

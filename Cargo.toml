@@ -558,7 +558,7 @@ disallowed_methods = "deny"
 # `split-debuginfo = "unpacked"` keeps that debuginfo in side .dwo files
 # instead of copying it into every dependent binary, so the per-example
 # binaries shrink from GBs to MBs. Mirrors web-dev/profiling, which already
-# use line-tables-only. sccache does NOT affect target/ size — only rebuild
+# use line-tables-only. Compiler caching does NOT affect target/ size — only rebuild
 # speed — so this profile change is the actual disk-fill fix.
 [profile.dev]
 opt-level = 1

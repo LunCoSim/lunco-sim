@@ -272,22 +272,6 @@ should_rebuild_worker() {
     return 1
 }
 
-# Wrap cargo with sccache when it's installed.
-#
-# sccache caches per-rustc-invocation across worktrees / branches /
-# `cargo clean` cycles — biggest win on the cold rebuild that follows
-# a dependency-version bump. Disables Cargo incremental (sccache and
-# incremental fight; sccache is the better trade-off for our flow).
-maybe_sccache_env() {
-    if command -v sccache &> /dev/null; then
-        export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
-        export CARGO_INCREMENTAL=0
-        info "sccache: enabled (RUSTC_WRAPPER=$RUSTC_WRAPPER, CARGO_INCREMENTAL=0)"
-    else
-        info "sccache: not installed — install with \`cargo install sccache\` for cross-worktree caching"
-    fi
-}
-
 # Build the WASM binary
 build_wasm() {
     local binary="$1"
@@ -303,8 +287,6 @@ build_wasm() {
     info "Crate: $crate"
     info "Target: wasm32-unknown-unknown"
     info "Profile: $profile"
-
-    maybe_sccache_env
 
     # Select the application's UI and transport-free API features explicitly.
     # lunica owns `api`; luncosim owns `api-transport`. Browser transport comes

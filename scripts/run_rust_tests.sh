@@ -4,7 +4,7 @@
 #
 # Cargo auto-discovers each `tests/*.rs` file as its own integration target.
 # This wrapper keeps that fast edit-loop behavior while removing the need to
-# remember the target name. It also uses sccache when it is installed.
+# remember the target name. Cargo uses the configured compiler wrapper.
 #
 #   ./scripts/run_rust_tests.sh -p lunco-modelica-core --module rumoca_api_coverage
 #   ./scripts/run_rust_tests.sh -p lunco-usd-commands --file commands
@@ -207,10 +207,6 @@ if ((LIST)); then
     CARGO_ARGS+=(-- --list)
 elif ((${#HARNESS_ARGS[@]} > 0)); then
     CARGO_ARGS+=(-- "${HARNESS_ARGS[@]}")
-fi
-
-if [[ -z "${RUSTC_WRAPPER+x}" ]] && command -v sccache >/dev/null 2>&1; then
-    export RUSTC_WRAPPER=sccache
 fi
 
 exec cargo "${CARGO_ARGS[@]}"
