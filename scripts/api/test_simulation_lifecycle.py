@@ -29,13 +29,14 @@ def main():
         assert Path(f"/proc/{pid}/exe").resolve() == BINARY.resolve()
         receipt["pid"] = pid
         run_authored_scenario(session, "lunco://scenarios/tests/simulation_lifecycle.rhai",
-                              title="SIMULATION LIFECYCLE", check_count=11,
-                              params={"scene": "lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda"})
+                              title="SIMULATION LIFECYCLE", check_count=15,
+                              params={"scene": "lunco://scenes/tests/twin_session_retirement/replacement/replacement.usda",
+                                      "replacement_twin": str(ROOT / "assets/scenes/tests/twin_search_paths")})
         if args.windowed:
             session.capture_screenshot(output / "stopped.png")
-    receipt.update(checks=11, port_released=True)
+    receipt.update(checks=15, port_released=True)
     (output / "report.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    print(f"11 authored checks passed; owned port {args.port} released")
+    print(f"15 authored checks passed; owned port {args.port} released")
 
 
 if __name__ == "__main__":

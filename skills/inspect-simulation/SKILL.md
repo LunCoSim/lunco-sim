@@ -277,6 +277,8 @@ simulation still advances. Physics fault subjects identify the USD prim or
 native entity name. `SimulationTimingProfile` reports retained fixed demand;
 render easing must remain within completed endpoints even when that demand
 exceeds a timestep.
+Scene retirement clears that demand and resets the rate to 1×; a same-scene
+pause or admission hold retains it.
 
 For a Time-menu acceleration report, compare completed `sim_tick` intervals
 against `clock_snapshot().wall_elapsed_s` at 1x and the requested rate. A selected
