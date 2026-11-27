@@ -155,6 +155,27 @@ def reopen(session, root, expected, source, marker):
     return current
 
 
+def verify_camera_hud_override(session, root):
+    execute(session, "ActivatePerspective", id="sandbox_view")
+    execute(session, "SetTwinSetting", key="ui.camera_status", value=False)
+    authored_manifest = (root / "twin.toml").read_bytes()
+
+    def camera_hud():
+        return next((hud for hud in execute(session, "InspectRuntimeHuds")["huds"]
+                     if hud["id"] == "camera-status"), {})
+
+    for override, expected in ((None, False), (True, True), (False, False), (None, False)):
+        params = {"id": "camera-status"}
+        if override is not None:
+            params["visible"] = override
+        execute(session, "SetRuntimeHudVisibility", **params)
+        wait_for(session, lambda: camera_hud().get("rendered") is expected,
+                 f"camera status rendered={expected}")
+        verdict(session, "verify_camera_status_override", override, expected)
+    if (root / "twin.toml").read_bytes() != authored_manifest:
+        raise RuntimeError("runtime HUD override changed the Twin manifest")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, required=True)
@@ -250,7 +271,7 @@ def main():
         verdict(session, "verify_scene_document_admission", current, "explicit.usda")
         wait_for_ready(session.port)
         verdict(session, "verify_scene_loading", False, "cli", "explicit.usda", "explicit")
-        execute(session, "SetTwinSetting", key="ui.camera_status", value=False)
+        verify_camera_hud_override(session, root)
         manifest = tomllib.loads((root / "twin.toml").read_text())
         if manifest["usd"]["default_scene"] != "default.usda":
             raise RuntimeError(f"explicit scene changed the authored default: {manifest}")

@@ -142,14 +142,10 @@ impl CompiledArtifactCache {
         let Some(limits) = self.disk_limits else {
             return Ok(None);
         };
-        self.load_disk_at(
-            &FileStorage::new(),
-            &StorageHandle::File(Self::disk_path(key)),
-            key,
-            numeric,
-            binding_schema,
-            limits,
-        )
+        let storage = FileStorage::new();
+        read_with_prebuilt(&Self::disk_path(key), |handle| {
+            self.load_disk_at(&storage, handle, key, numeric, binding_schema, limits)
+        })
     }
 
     fn load_disk_at(
@@ -199,9 +195,6 @@ impl CompiledArtifactCache {
             .source_content
             .parse::<lunco_hash::content::Cid>()
             .map_err(|_| ModelicaCacheReadError::Identity)?;
-        if let Err(error) = storage.mark_cache_file_used(handle) {
-            log::warn!("[modelica-runtime] compiled-artifact cache use was not recorded: {error}");
-        }
         Ok(Some(super::CompiledModelArtifact {
             compiled: record.compiled,
             prepared_source_key: super::prepared_source_key(source_content),
@@ -266,6 +259,47 @@ impl CompiledArtifactCache {
         };
         encode_record(&record, limits)
     }
+}
+
+/// Prebuilt records are read-only. Both sources go through the same bounded decoder and identity checks.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_with_prebuilt<T>(
+    local: &std::path::Path,
+    mut read: impl FnMut(&StorageHandle) -> Result<Option<T>, ModelicaCacheReadError>,
+) -> Result<Option<T>, ModelicaCacheReadError> {
+    let handle = StorageHandle::File(local.to_owned());
+    let local_result = read(&handle);
+    if let Ok(Some(value)) = local_result {
+        if let Err(error) = FileStorage::new().mark_cache_file_used(&handle) {
+            log::warn!("Modelica artifact use was not recorded: {error}");
+        }
+        return Ok(Some(value));
+    }
+    static ROOT: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    let Some(root) = ROOT.get_or_init(|| match std::env::var_os("LUNCOSIM_MODELICA_PREBUILT") {
+        Some(path) => (!path.is_empty()).then(|| std::path::PathBuf::from(path)),
+        None => lunco_assets_core::assets_dir_abs()
+            .ok()
+            .map(|assets| assets.join("prebuilt/modelica"))
+            .filter(|path| path.is_dir()),
+    }) else {
+        return local_result;
+    };
+    if let Err(error) = &local_result {
+        log::warn!(
+            "local Modelica artifact {} rejected: {error}",
+            local.display()
+        );
+    }
+    let relative = local
+        .strip_prefix(modelica_dir())
+        .map_err(|_| ModelicaCacheReadError::Identity)?;
+    let path = root.join(relative);
+    let value = read(&StorageHandle::File(path.clone()))?;
+    if value.is_some() {
+        log::info!("read prebuilt Modelica artifact {}", path.display());
+    }
+    Ok(value)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

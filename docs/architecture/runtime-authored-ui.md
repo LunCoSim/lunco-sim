@@ -324,8 +324,9 @@ The fields are:
 | `bindings` | Optional map from template property name to exposure property name. A `map` translates exact rendered values. `css: true` explicitly projects a binding into a CSS custom property; prose stays in template text. |
 | `actions` | Maps a unique HUI callback name to a built-in semantic action or a Twin-authored action identifier. Built-ins are handled by the host or shared Rhai action policy; unclaimed identifiers become the typed `runtime.ui.action` event for the Twin. |
 | `title` | Optional nonblank human-readable HUD menu label. The stable identity is still `id`. |
+| `built_in_hud` | Application manifest only: lists a dismissible surface in Built-in HUDs even when scene composition has not admitted it. Twin layers cannot assign this classification. Other dismissible runtime surfaces list under Twin HUDs for the active Twin. |
 | `visible_in_perspective` | Optional workbench perspective id or array of 1–32 distinct nonempty ids. The same filter gates interactive rendering and capture readiness; omission means unrestricted. |
-| `gate` | Optional named host gate. Unknown gates are closed. |
+| `gate` | Optional named host gate. Unknown gates are closed. In LunCoSim, `interactive_scene_view` follows the main scene viewport’s visibility in the interactive workbench, including Twin-authored perspectives. |
 | `setting` | Optional namespaced boolean in the active Twin's `[settings]` table. The surface is hidden when the value is false. |
 | `owner` | `workspace` by default. See [surface ownership](#application-and-workspace-surface-ownership) for application lifetime, callback scope, and reserved identities. |
 | `overlay` | `false` by default. Set `true` for a surface that must paint above the desktop dock shell. Authored pickable regions reserve the matching pointer areas in the shell. Use `owner` independently for lifetime. |
@@ -333,7 +334,7 @@ The fields are:
 | `interactive` | Enables input ownership for authored controls carrying HUI `on_press`; only those controls' computed Bevy UI rectangles enter the existing chrome/scene pick gate. The surface root and a `viewport` placement never claim the full window. |
 | `modal` | Requires an interactive viewport surface and makes its visible root claim the full-window scene-pick gate. This is the generic simple-modal primitive, not a rich dialog queue. |
 | `dismiss_action` | Optional authored semantic action emitted by Escape while the surface is visible. Rhai owns what dismissal means. |
-| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in View ▸ HUDs. |
+| `draggable` | Allows a `window` surface root to move with primary-button dragging. The user position is clamped to the live logical target, keyed by stable `id`, and reset to the authored anchor with a primary-button double click. `viewport` and `dock_panel` roots cannot opt in. The shipped `celestial-view` switcher opts in and also has a surface-specific reset in View ▸ HUDs ▸ Built-in HUDs. |
 | `resizable` | Allows a `window` surface root to resize from a descendant tagged `tag:ui_resize_handle="true"`. The runtime clamps the minimum and live-target size and stores it with the Twin's existing layout override. |
 | `resize_min_size` | Optional `[width, height]` logical minimum for a resizable window; defaults to `[320, 200]` and cannot exceed the authored window size. |
 | `placement` | The outer rectangle and its relationship to the workbench. |
@@ -369,7 +370,7 @@ second UI persistence store. A double click on the drag handle restores the
 authored anchor and removes the override. Dragging uses Bevy picking events on the retained HUI
 tree and the existing pointer propagation path; it does not add a parallel
 egui hit-test or per-frame correction loop. The shipped `celestial-view` surface
-uses a top-centre authored default; View ▸ HUDs removes only its override,
+uses a top-centre authored default; View ▸ HUDs ▸ Built-in HUDs removes only its override,
 leaving the shared layout store and other draggable surfaces unchanged.
 
 Resizable windows use the same retained pointer path. A descendant tagged
@@ -492,21 +493,27 @@ visibility owners through the shared `HudVisibility` contract. User
 permission and actual authored eligibility are independent: a checked HUD
 can be unavailable in the current scene or perspective. Runtime surfaces
 accept a human-readable `title`, independent of their stable `id`.
-An unchecked ordinary HUD is scene-locally suppressed without changing its
-exposure, authored perspective, gate or Twin setting; mounting and capture
-honor that permission. Modal, dock-panel and essential surfaces declaring
-`user_dismissible: false` remain lifecycle-controlled. The camera-status Twin setting remains an authored eligibility rule; the
-runtime permission is its only user visibility row. The celestial-view
-application preference is its only user visibility row.
+A dismissible HUD follows its authored Twin setting by default. Its Show or Hide choice
+sets a scene-local override; **Auto** clears that override.
+The override does not change exposure, perspective, gate or the Twin manifest;
+mounting and capture honor the same effective permission. Modal, dock-panel
+and essential surfaces declaring `user_dismissible: false` remain
+lifecycle-controlled. Camera-status uses this generic rule; celestial-view
+uses its native application preference.
 Scene-local overrides retire with the scene and never persist into another Twin.
-`SetRuntimeHudVisibility {id, visible}` applies the same scene-scoped display choice to a dismissible surface. A capture can retain its initial value and restore it after the take.
+`SetRuntimeHudVisibility {id, visible}` applies the same scene-scoped display choice to a dismissible surface. Omit `visible` to restore automatic behavior. A capture can retain the initial `override` value and restore it after the take.
 `InspectRuntimeHuds` reports the user permission, authored eligibility, actual
-retained root visibility, actual rectangle and measured menu row for each
+retained root visibility, group, actual rectangle and measured menu controls for each
 dismissible surface. A window placement may opt into `"region":"scene_viewport"`;
 its authored anchor and saved user override then stay within the measured
 main viewport leaf, or the full render target in a scene-only layout. Camera
 status and the celestial view switcher use this region so their HTML input
-regions cannot occupy the Guidance dock.
+regions cannot occupy the Guidance dock. Camera status uses the host
+`interactive_scene_view` gate rather than a fixed perspective identity; a
+Twin-authored scene perspective can retain camera selection. Native camera image
+controls, graph HUDs and camera windows share the same interactive scene
+visibility condition; camera window and selector popup bounds are published by
+their actual renderers and available through `InspectCameraHudWindows`.
 
 Surface policy is authored in Twin Rhai where it is project-specific. Do not
 persist live progress, current selection, or network state in the Twin merely

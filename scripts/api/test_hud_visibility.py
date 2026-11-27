@@ -81,16 +81,16 @@ def main() -> None:
             def menu(name):
                 return wait_until(session, name, lambda: inspect().get("menus", {}).get(name), timeout=10)
 
-            def scroll_to_row(read, direction, description):
+            def scroll_to_row(read, direction, description, group):
                 # egui retains submenu scroll position across openings. Scroll
                 # until the measured row is fully visible and stationary.
                 for _ in range(12):
                     rect = read()
                     if rect and rect[3] >= 17:
                         return stable_rect(read, description)
-                    x, y, w, h = menu("menu.huds.show_all")
+                    x, y, w, h = menu(f"menu.huds.{group}")
                     command(session, "InjectWindowInput", event={"PointerMove": {
-                        "x": x + w / 2, "y": y + h + 80}})
+                        "x": x + w + 80, "y": y + h + 80}})
                     command(session, "InjectWindowInput", event={"Scroll": {
                         "x": 0.0, "y": direction * 3.0}})
                     time.sleep(.25)
@@ -102,17 +102,24 @@ def main() -> None:
                     wait_until(session, "View menu closed",
                                lambda: not inspect().get("menus", {}).get("menu.huds"), timeout=10)
 
-            def open_huds():
-                if inspect().get("menus", {}).get("menu.huds.show_all"):
-                    return
-                if not inspect().get("menus", {}).get("menu.huds"):
-                    click(menu("menu.view"))
-                rect = menu("menu.huds")
-                x, y, width, height = rect
-                command(session, "InjectWindowInput", event={"PointerMove": {
-                    "x": x + width / 2, "y": y + height / 2}})
-                menu("menu.huds.show_all")
+            def open_huds(group=None):
+                if not inspect().get("menus", {}).get("menu.huds.show_all"):
+                    if not inspect().get("menus", {}).get("menu.huds"):
+                        click(menu("menu.view"))
+                    x, y, width, height = menu("menu.huds")
+                    command(session, "InjectWindowInput", event={"PointerMove": {
+                        "x": x + width / 2, "y": y + height / 2}})
+                    menu("menu.huds.show_all")
+                if group:
+                    x, y, width, height = menu(f"menu.huds.{group}")
+                    command(session, "InjectWindowInput", event={"PointerMove": {
+                        "x": x + width / 2, "y": y + height / 2}})
+                    time.sleep(.35)
 
+            wait_until(session, "built-in camera listed before Twin open",
+                       lambda: runtime_hud().get("group") == "builtin")
+            if any(row["group"] == "twin" for row in command(session, "InspectRuntimeHuds")["huds"]):
+                raise RuntimeError("Twin HUD rows leaked into the application catalog")
             command(session, "ActivatePerspective", id="sandbox_view")
             command(session, "SetGuidedHudLayout", hud="visibility-probe",
                     title="Test instructions", width=360.0)
@@ -172,9 +179,9 @@ def main() -> None:
             click(control("hide"))
             expect("hidden by user", user_hidden=True, available=True, visible=False, hint=original)
             session.capture_screenshot(output / "hidden.png")
-            open_huds()
-            rect = control("menu")
-            click(rect, left=True)
+            open_huds("twin")
+            rect = control("menu.show")
+            click(rect)
             expect("restored through menu", user_hidden=False, available=True, visible=True, hint=original)
             # Act on the menu's real native controls; showing cannot bypass authored scope.
             close_huds()
@@ -216,18 +223,18 @@ def main() -> None:
 
             wait_until(session, "rover lesson startup",
                        lambda: lab_card().get("hint", "").startswith("1/6"))
-            expect_runtime("initial HTML HUD", title="Camera status", enabled=True,
+            expect_runtime("initial HTML HUD", title="Camera status", group="builtin", enabled=True,
                            available=True, rendered=True)
             session.capture_screenshot(output / "rover-lab-float.png")
-            open_huds()
-            click(scroll_to_row(lambda: runtime_hud().get("menu"), -1,
-                                "camera status menu"), left=True)
+            open_huds("builtin")
+            click(scroll_to_row(lambda: runtime_hud().get("menu_hide"), -1,
+                                "camera status menu", "builtin"))
             expect_runtime("HTML HUD hidden", enabled=False, available=True, rendered=False)
             session.capture_screenshot(output / "html-hidden.png")
-            open_huds()
-            click(scroll_to_row(lambda: runtime_hud().get("menu"), -1,
-                                "camera status restore row"), left=True)
-            expect_runtime("HTML HUD restored", enabled=True, available=True, rendered=True)
+            open_huds("builtin")
+            click(scroll_to_row(lambda: runtime_hud().get("menu_auto"), -1,
+                                "camera status restore row", "builtin"))
+            expect_runtime("HTML HUD restored", enabled=True, available=True, rendered=True, override=None)
             session.capture_screenshot(output / "html-restored.png")
             close_huds()
             # Dock the actual authored tutorial, not just the isolated probe.
@@ -251,9 +258,9 @@ def main() -> None:
                        lambda: lab_card().get("available") and lab_card().get("user_hidden")
                        and not lab_card().get("visible"), timeout=10)
             command(session, "ActivatePerspective", id="sandbox_view")
-            open_huds()
-            click(scroll_to_row(lambda: lab_card().get("controls", {}).get("menu"), 1,
-                                "rover lab menu row"), left=True)
+            open_huds("twin")
+            click(scroll_to_row(lambda: lab_card().get("controls", {}).get("menu.show"), 1,
+                                "rover lab menu row", "twin"))
             wait_until(session, "rover guidance restored without changing the lesson",
                        lambda: lab_card().get("visible") and not lab_card().get("user_hidden")
                        and lab_card().get("hint", "").startswith("1/6"), timeout=10)
@@ -268,6 +275,107 @@ def main() -> None:
                     source_asset="lunco://scenarios/tests/guided_hud_layout.rhai", reload_policy="restart")
             wait_for_authored_verdict(session, title="GUIDED HUD LAYOUT",
                                       check_count=8, offset=offset, timeout_s=45)
+            # Crater Cup's floating signal grid is registered by its authored
+            # perspective rather than the retained surface manifest.
+            command(session, "OpenTwinAsset", manifest_asset="lunco://scenes/luncosim/twin.toml")
+            def workbench():
+                return command(session, "InspectWorkbench")
+            def floating():
+                return next((p["floating"][0] for p in workbench()["perspectives"]
+                             if p["id"] == "twin/instruments" and p["floating"]), {})
+            def grid_rendered():
+                return any(panel["id"] == "signal_grid" for panel in workbench()["rendered_panels"])
+            wait_until(session, "Crater Cup startup",
+                       lambda: workbench().get("active_perspective") == "twin/instruments"
+                       and runtime_hud().get("rendered") and grid_rendered(), timeout=180)
+            open_huds("builtin")
+            scroll_to_row(lambda: runtime_hud().get("menu_show"), -1, "built-in camera controls", "builtin")
+            session.capture_screenshot(output / "built-in-huds.png")
+            close_huds()
+            open_huds("twin")
+            scroll_to_row(lambda: floating().get("menu_show"), -1, "Twin floating grid controls", "twin")
+            session.capture_screenshot(output / "twin-huds.png")
+            for mode, override, rendered in (("hide", False, False), ("show", True, True), ("auto", None, True)):
+                open_huds("twin")
+                click(scroll_to_row(lambda: floating().get(f"menu_{mode}"), -1,
+                                    f"floating grid {mode}", "twin"))
+                wait_until(session, f"floating grid {mode} effective",
+                           lambda: floating().get("override") == override and grid_rendered() is rendered)
+            close_huds()
+            # Native windows and image controls follow the same viewport gate
+            # as the retained camera selector in the Twin's Instruments view.
+            for view in command(session, "InspectCameraHudWindows")["views"]:
+                command(session, "RemoveCameraFeed", feed=view["feed"])
+            for view in command(session, "InspectGraphHud")["huds"]:
+                command(session, "RemoveGraphHud", hud=view["hud"])
+            feed = command(session, "CreateCameraFeed")["feed"]
+            graph = command(session, "CreateGraphHud")["hud"]
+            def camera_windows():
+                return command(session, "InspectCameraHudWindows")
+            def camera_window():
+                return next((view for view in camera_windows()["views"] if view["feed"] == feed), {})
+            def graph_window():
+                return next((view for view in command(session, "InspectGraphHud")["huds"] if view["hud"] == graph), {})
+            wait_until(session, "new native camera window actually rendered", lambda: camera_window().get("rect"), timeout=15)
+            wait_until(session, "new native telemetry window actually rendered", lambda: graph_window().get("rendered"), timeout=15)
+            pad_camera = int(command(session, "RunRhai", code='print(find_path("/World/PadCam"));')["stdout"].strip())
+            plant = int(command(session, "RunRhai", code='print(find_path("/World/RelayPlant"));')["stdout"].strip())
+            command(session, "SetCameraFeed", feed=feed, source=pad_camera, label="PadCam", width=640, height=360)
+            command(session, "SetGraphHud", hud=graph, signals=[{"target_gid": plant, "signal": "process_w", "caption": "Refinery power"}], columns=1)
+            wait_until(session, "selected camera feed ready and visible",
+                       lambda: camera_window().get("rect") and any(view["feed"] == feed and view["ready"] for view in command(session, "InspectCameraFeeds")["views"]), timeout=20)
+            wait_until(session, "bound telemetry graph ready and visible",
+                       lambda: graph_window().get("rendered") and any(signal.get("samples", 0) for signal in graph_window().get("signals", [])), timeout=20)
+            session.capture_screenshot(output / "crater-native-windows.png")
+            # Use the same native retained-selector action as the operator.
+            click(runtime_hud()["rect"])
+            popup = wait_until(session, "camera selector popup", lambda: camera_windows().get("selector_popup"), timeout=15)
+            click([popup[0] + 10, popup[1] + 8, 150, 20])
+            command(session, "InjectWindowInput", event={"Key": {"key": "KeyI", "state": "Pressed", "text": "Image controls"}})
+            command(session, "InjectWindowInput", event={"Key": {"key": "KeyI", "state": "Released"}})
+            time.sleep(.5)
+            popup = wait_until(session, "filtered image controls popup", lambda: camera_windows().get("selector_popup"), timeout=10)
+            session.capture_screenshot(output / "crater-image-controls-option.png")
+            click([popup[0] + 8, popup[1] + 63, 140, 20])
+            wait_until(session, "camera image controls actually rendered", lambda: camera_windows().get("image_controls"), timeout=15)
+            session.capture_screenshot(output / "crater-image-controls.png")
+            camera_source = int(command(session, "RunRhai", code='print(find_path(current_camera_name()));')["stdout"].strip())
+            def exposure():
+                return command(session, "InspectCameraImageEffects", source=camera_source).get("exposure_ev100")
+            exp_rect = wait_until(session, "actual fixed EV control", lambda: camera_windows().get("exposure_controls"), timeout=10)
+            if exposure() is None:
+                click([exp_rect[0], exp_rect[1], 20, 18])
+            initial_ev = wait_until(session, "fixed exposure selected", lambda: [exposure()] if exposure() is not None else None, timeout=10)[0]
+            exp_rect = wait_until(session, "visible numeric EV field", lambda: camera_windows().get("exposure_controls"), timeout=10)
+            x, y = exp_rect[0] + 40, exp_rect[1] + exp_rect[3] - 9
+            command(session, "InjectWindowInput", event={"PointerMove": {"x": x, "y": y}})
+            command(session, "InjectWindowInput", event={"PointerButton": {"button": "Primary", "state": "Pressed", "x": x, "y": y}})
+            time.sleep(.12)
+            command(session, "InjectWindowInput", event={"PointerMove": {"x": x + 35, "y": y}})
+            time.sleep(.12)
+            command(session, "InjectWindowInput", event={"PointerButton": {"button": "Primary", "state": "Released", "x": x + 35, "y": y}})
+            wait_until(session, "EV changed through native HUD", lambda: exposure() is not None and exposure() != initial_ev, timeout=10)
+            session.capture_screenshot(output / "crater-ev-edited.png")
+            exp_rect = wait_until(session, "EV reset row", lambda: camera_windows().get("exposure_controls"), timeout=10)
+            click([exp_rect[0] + 95, exp_rect[1] + exp_rect[3] - 18, 65, 18])
+            wait_until(session, "EV restored to inherited default by Reset EV", lambda: exposure() == initial_ev, timeout=10)
+            session.capture_screenshot(output / "crater-ev-reset.png")
+            command(session, "ActivatePerspective", id="modelica_analyze")
+            wait_until(session, "native scene HUD windows unavailable outside a scene view",
+                       lambda: not camera_window().get("rect") and not graph_window().get("rendered")
+                       and not camera_windows().get("image_controls"), timeout=15)
+            command(session, "ActivatePerspective", id="twin/instruments")
+            wait_until(session, "native scene HUD windows restored with the viewport",
+                       lambda: camera_window().get("rect") and graph_window().get("rendered")
+                       and camera_windows().get("image_controls"), timeout=15)
+            command(session, "RemoveCameraFeed", feed=feed)
+            command(session, "RemoveGraphHud", hud=graph)
+            with tempfile.TemporaryDirectory(prefix="hud-catalog-empty-") as empty:
+                command(session, "OpenFolder", path=empty)
+                wait_until(session, "Twin catalog retired",
+                           lambda: not command(session, "ReadActiveTwinContract").get("open")
+                           and not any(row["group"] == "twin" for row in command(session, "InspectRuntimeHuds")["huds"]))
+                wait_until(session, "built-in camera retained", lambda: runtime_hud().get("group") == "builtin")
             assert_render_log_clean(session.log_path)
     print("Native guidance HUD visibility: PASS; owned API session exited.", flush=True)
 

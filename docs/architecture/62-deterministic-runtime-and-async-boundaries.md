@@ -467,6 +467,9 @@ The live Modelica worker exposes per-participant step diagnostics through
 `CosimStatus`: solver-step service duration, dispatch-to-response latency, and
 the native worker's pending-task count when the solver starts. These are
 recorded once per completed solver step and reset with the Modelica session.
+Native profiling tags dispatch, solver execution, ordered worker receipt and
+main-thread result admission with the same ECS entity. The profiler observes
+these boundaries without selecting completion order.
 `modelica_construction_profile` separates native construction queue wait from
 solver construction, metadata collection and the initial checked observation.
 The worker measures these at task boundaries and returns them through its

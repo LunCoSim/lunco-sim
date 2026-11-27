@@ -22,7 +22,11 @@ for library in "$tracy_build/libTracyServer.a" \
     fi
 done
 mkdir -p "$task_root/target/perf"
-sccache "${CXX:-c++}" -std=c++20 -O2 -DNDEBUG -Wall -Wextra -flto=4 \
+compiler=("${CXX:-c++}")
+if [[ -n "${CXX_COMPILER_LAUNCHER:-}" ]]; then
+    compiler=("$CXX_COMPILER_LAUNCHER" "${compiler[@]}")
+fi
+"${compiler[@]}" -std=c++20 -O2 -DNDEBUG -Wall -Wextra -flto=4 \
     -isystem "$tracy_root/server" -isystem "$tracy_root/public/common" -isystem "$sort_source/include" \
     "$task_root/scripts/perf/tracy_samples.cpp" \
     "$tracy_build/libTracyServer.a" \

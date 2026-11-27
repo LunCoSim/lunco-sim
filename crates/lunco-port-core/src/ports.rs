@@ -149,7 +149,7 @@ static NEXT_PORT_MAP_LAYOUT_ID: AtomicU32 = AtomicU32::new(1);
 
 fn next_port_map_layout_id() -> u32 {
     NEXT_PORT_MAP_LAYOUT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("process-local port-map layout identifier space exhausted")
 }
 

@@ -175,14 +175,16 @@ pub(crate) fn register_workspace_settings_menu(world: &mut World) {
     }
 }
 
-fn render_global_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+/// Both Settings menus edit the same live viewport override, not the scene calibration.
+pub(crate) fn render_viewport_exposure(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
     if let Some(mut exposure) = ctx
         .resource::<lunco_render::camera::ViewportExposureSettings>()
         .copied()
     {
-        let inherited = ctx
+        let active_camera = ctx
             .resource::<lunco_viewport_core::SceneViewport>()
-            .and_then(|viewport| viewport.active_camera)
+            .and_then(|viewport| viewport.active_camera);
+        let inherited = active_camera
             .and_then(|camera| ctx.get::<bevy::camera::Exposure>(camera))
             .map_or_else(
                 || bevy::camera::Exposure::default().ev100,
@@ -201,7 +203,17 @@ fn render_global_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
                 }
             }
         }
+        if let Some(ev100) = active_camera
+            .and_then(|camera| ctx.get::<lunco_render::camera_image::CameraImageEffects>(camera))
+            .and_then(|effects| effects.exposure_ev100)
+        {
+            ui.weak(format!("The active camera has its own fixed exposure ({ev100} EV100). Turn it off in Image controls… to use this setting."));
+        }
     }
+}
+
+fn render_global_settings(ui: &mut egui::Ui, ctx: &mut MenuCtx) {
+    render_viewport_exposure(ui, ctx);
     let Some(mut settings) = ctx.resource::<SceneLoadingSettings>().cloned() else {
         return;
     };

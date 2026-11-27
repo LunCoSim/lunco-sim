@@ -247,7 +247,6 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-description = "Initialize multi-crate workspace architecture for vessel control simulation"
 # Matches the Apache-2.0 text in ./LICENSE. Declared here so every member inherits
 # it: cargo emits no licence metadata without this field, so the published form of
 # any crate in this workspace would otherwise carry no licence at all — which reads
@@ -256,7 +255,6 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 bevy_ui_widgets = { version = "=0.20.0" }
-faer = { version = "0.24.4", default-features = false, features = ["std", "linalg"] }
 kurbo = "0.13.1"
 # Keep astronomy consumers on one checked native revision.
 celestial-core = { git = "https://github.com/LunCoSim/celestial", rev = "3ceda3bbc8770023e0ab527e826828b7e9bf5aec" }
@@ -301,14 +299,7 @@ bevy = { version = "0.20.0", default-features = false, features = [
 ] }
 # ECS-only substrate for small protocol crates that do not need the Bevy facade.
 bevy_ecs = { version = "0.20.0", default-features = false, features = ["std"] }
-lunco-assets = { path = "crates/lunco-assets" }
 lunco-assets-datasets = { path = "crates/lunco-assets-datasets" }
-lunco-assets-transport = { path = "crates/lunco-assets-transport" }
-lunco-assets-download = { path = "crates/lunco-assets-download" }
-lunco-assets-processing = { path = "crates/lunco-assets-processing" }
-sysmlv2-semantics = "=0.1.1"
-sysmlv2-syntax = "=0.1.2"
-sysmlv2-stdlib = "=0.1.0"
 # NOTE: `debug-plugin` is deliberately OFF. It pulls bevy_gizmos → bevy_render →
 # wgpu/naga/x11rb into every consumer, including the `--no-ui` server and the
 # wasm worker — the same feature-unification trap as A1. Nothing in the tree
@@ -385,33 +376,27 @@ lightyear = { version = "0.31.0", default-features = false, features = [
 web-time = { version = "1", features = ["serde"] }
 # getrandom 0.2 with js feature for wasm32 support (needed by rand, uuid, etc.)
 getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
-lunco-api = { path = "crates/lunco-api" }
-lunco-terrain-globe = { path = "crates/lunco-terrain-globe" }
 lunco-terrain-core = { path = "crates/lunco-terrain-core" }
 lunco-physics = { path = "crates/lunco-physics" }
 lunco-readiness = { path = "crates/lunco-readiness" }
-lunco-lint = { path = "crates/lunco-lint" }
-lunco-cosim = { path = "crates/lunco-cosim" }
-lunco-environment = { path = "crates/lunco-environment" }
-lunco-theme = { path = "crates/lunco-theme" }
 lunco-web = { path = "crates/lunco-web" }
 
 # The Modelica compiler, editor, and runtime share one upstream Rumoca revision.
-rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
+rumoca-core = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-ir-ast = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-ir-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-eval-dae = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-ir-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-phase-parse = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-compile = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-sim = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-solver-rk45 = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
 # Structural diagnostics need rumoca-sim's analysis API but not its native solver backends.
-rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-tool-build-info = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
-rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "429e3ff2765be67cb347569ad292219ea10eed18" }
+rumoca-solver = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-eval-solve = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-tool-build-info = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-tool-fmt = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
+rumoca-tool-lint = { git = "https://github.com/LunCoSim/rumoca", rev = "2bc8acb1c109250bc63e93009d18e23f70bf3ba3" }
 
 # Centralised here so version drift across crates is visible in one
 # place. Each crate opts in via `dep = { workspace = true }`.
@@ -432,11 +417,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 indexmap = { version = "2.14", features = ["serde"] }
 smol_str = { version = "0.3", features = ["serde"] }
 crossbeam-channel = "0.5"
-# Link-time distributed registry (life-before-main collection). Backs the
-# asset-scheme registry: any crate `inventory::submit!`s its `AssetSchemeProvider`
-# and the pre-AssetPlugin registrar drains them — no central hardcoded scheme
-# list. wasm-safe (collected via wasm-bindgen module init).
-inventory = "0.3"
 egui_plot = "0.37.0"
 rfd = "0.17"
 tempfile = "3.27"
@@ -498,10 +478,8 @@ multihash-codetable = { version = "0.2", default-features = false, features = ["
 bevy_reflect = "0.20.0"
 bevy_math = "0.20.0"
 bevy_mesh = "0.20.0"
-bevy_shader = "0.20.0"
 wesl = { version = "0.6.0", features = ["naga-ext"] }
 bevy_asset = "0.20.0"
-bevy_picking = "0.20.0"
 
 # ── Lints (inherited via `[lints] workspace = true` per crate) ───────
 # Encodes policy decisions:
@@ -580,7 +558,7 @@ disallowed_methods = "deny"
 # `split-debuginfo = "unpacked"` keeps that debuginfo in side .dwo files
 # instead of copying it into every dependent binary, so the per-example
 # binaries shrink from GBs to MBs. Mirrors web-dev/profiling, which already
-# use line-tables-only. sccache does NOT affect target/ size — only rebuild
+# use line-tables-only. Compiler caching does NOT affect target/ size — only rebuild
 # speed — so this profile change is the actual disk-fill fix.
 [profile.dev]
 opt-level = 1

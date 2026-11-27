@@ -782,15 +782,13 @@ impl Plugin for ModelicaUiPlugin {
         // first to avoid
         // panics during mixed-mode or deferred plugin builds.
         app.init_resource::<lunco_workbench_browser::BrowserSectionRegistry>();
-        // One section per domain — `ModelicaSection` reads installed source
-        // roots from `PackageTreeCache`, Twin files from `Twin::files()`, open
-        // documents from `ModelicaDocuments`, and generated networks from
-        // their runtime registry. No parallel Modelica inventory is maintained
-        // here. Future domain sections (`UsdSection`, `SysmlSection`, ...) follow
-        // the same outer pattern.
-        app.world_mut()
-            .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>()
-            .register(browser_section::ModelicaSection);
+        // Authored sources and generated networks use separate views over
+        // their existing owner inventories, without another source cache.
+        let mut sections = app
+            .world_mut()
+            .resource_mut::<lunco_workbench_browser::BrowserSectionRegistry>();
+        sections.register(browser_section::ModelicaSection);
+        sections.register(browser_section::GeneratedModelicaSection);
         // Dataset provisioning is an opt-in browser capability. Keeping it in
         // its own package prevents generic browser hosts from linking the
         // archive, HTTP, raster, and SVG processing stack.

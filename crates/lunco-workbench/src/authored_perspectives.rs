@@ -726,7 +726,16 @@ impl lunco_api::ApiQueryProvider for InspectWorkbench {
                                     plan.floating_panels
                                         .iter()
                                         .map(|panel| {
+                                            let control = |mode: &str| {
+                                                world.get_resource::<lunco_workbench_core::presentation::HelpAnchors>()
+                                                    .and_then(|anchors| anchors.get(&format!("hud.floating.{}.{}.{mode}", p.id().as_str(), panel.tab.debug_id())))
+                                                    .map_or(HookValue::Unit, |rect| HookValue::Array([rect.min.x, rect.min.y, rect.width(), rect.height()].into_iter().map(|n| HookValue::Float(f64::from(n))).collect()))
+                                            };
                                             HookValue::map([
+                                                ("override", layout.floating_hud_preference(&p.id(), panel.tab).map_or(HookValue::Unit, HookValue::Bool)),
+                                                ("menu_auto", control("auto")),
+                                                ("menu_show", control("show")),
+                                                ("menu_hide", control("hide")),
                                                 ("tab", HookValue::str(panel.tab.debug_id())),
                                                 ("width", HookValue::UInt(u64::from(panel.width))),
                                                 (

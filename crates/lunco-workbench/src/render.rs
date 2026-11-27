@@ -1501,7 +1501,7 @@ pub(crate) fn render_status_bar_inner(
         StatusBarNotificationSnapshot::Hidden | StatusBarNotificationSnapshot::Ready => None,
     };
     let perf_stats = world.resource::<PerfStats>().clone();
-    let perf_enabled = world.resource::<PerfHudSettings>().enabled;
+    let perf_enabled = world.resource::<PerfHudSettings>().enabled.unwrap_or(false);
     // Engine frame health advances with rendered frames, including before a
     // Twin is active. Its shared snapshot owns this history; simulation
     // telemetry remains sampled on its fixed simulation clock.
@@ -2707,7 +2707,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                 .text_style(lunco_theme::TypographyRole::Label.text_style())
                 .weak(),
         );
-        if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>() {
+        if let Some(current) = ctx.resource::<lunco_render::RenderingQualitySettings>().copied() {
             let Some(profiles) = ctx.resource::<lunco_render::RenderingQualityProfiles>() else {
                 ui.label("Rendering profiles are unavailable until the authored policy loads.");
                 return;
@@ -2723,7 +2723,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                 ui.label("Rendering profiles are unavailable: the authored default is missing.");
                 return;
             };
-            let mut settings = *current;
+            let mut settings = current;
             let current_preset = settings.preset(&profiles);
             let mut selected_preset = current_preset.unwrap_or(default_quality);
             let preset_label = current_preset.map_or("Custom", |preset| preset.label());
@@ -3096,11 +3096,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
                     .into_iter()
                     .map(|(msaa, label)| (msaa, label.to_owned())),
                 );
-                ui.add(
-                    egui::DragValue::new(&mut settings.camera_exposure_ev100)
-                        .speed(0.1)
-                        .prefix("Unauthored camera exposure (EV100): "),
-                );
+                crate::twin_settings::render_viewport_exposure(ui, ctx);
                 ui.add(
                     egui::DragValue::new(&mut settings.camera_bloom_intensity)
                         .speed(0.01)
@@ -3354,7 +3350,7 @@ pub(crate) fn register_graphics_settings_menu(world: &mut World) {
             // over multiple UI interactions. Runtime consumers validate at their
             // own boundaries and preserve the last applied quality; the settings
             // persister likewise refuses to replace the last valid disk value.
-            if settings != *current {
+            if settings != current {
                 ctx.set_resource(settings);
             }
         }

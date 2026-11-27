@@ -1246,7 +1246,9 @@ current default.
   package and its public contract cannot express the requirement.
 - Render the generated Modelica icons and connection graph from the same model
   source; do not create a second visual-only network.
-- Make the generated browser entry useful on first click: a single-unit
+- The Twin browser’s **Generated Modelica** view reads the generated-source
+  registry directly. Its Source button opens the existing read-only document
+  in Text mode; its network row uses normal class navigation. A single-unit
   network opens its unit class so the member graph is visible, while a
   multi-unit network opens the root wrapper. Keep both classes in the ordinary
   Modelica source/drill-in hierarchy; this is a navigation choice, not a second

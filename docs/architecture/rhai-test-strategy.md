@@ -377,8 +377,8 @@ recipes and their acceptance scenes stay in the owning Twin.
    ```
 
    The wrapper maps `--module`/`--file` to `--test <source-file>`, maps a
-   `module::test` filter to that same target, uses four Cargo jobs, and enables
-   `sccache` when available. Use `--check` for compile-only feedback (it does
+   `module::test` filter to that same target, uses four Cargo jobs, and respects
+   Cargo’s configured compiler wrapper. Use `--check` for compile-only feedback (it does
    not link or run a test binary); use `--no-run` when linking the actual test
    binary is part of the check. Add `--lib` for inline library tests; with that
    selector, `--no-run` compiles the unit-test harness while `--check` checks

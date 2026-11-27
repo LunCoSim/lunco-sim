@@ -10,7 +10,7 @@
 //! shared LunCoSim settings file so the user's choice survives restarts.
 //! Three ways to flip it:
 //!
-//! - **Settings menu** — `Settings ▸ Performance HUD` checkbox.
+//! - **HUD menu** — `View ▸ HUDs ▸ Built-in HUDs`.
 //! - **Typed command** — [`TogglePerfHud`] over the API/script bus.
 //! - **Direct mutation** — write to [`PerfHudSettings::enabled`].
 //!
@@ -35,7 +35,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Resource, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Debug)]
 pub struct PerfHudSettings {
     /// Whether the HUD shows in the status bar.
-    pub enabled: bool,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 impl SettingsSection for PerfHudSettings {
@@ -77,7 +78,7 @@ pub struct TogglePerfHud {
 
 #[on_command(TogglePerfHud)]
 fn on_toggle_perf_hud(trigger: On<TogglePerfHud>, mut settings: ResMut<PerfHudSettings>) {
-    let new = trigger.event().enabled;
+    let new = Some(trigger.event().enabled);
     if settings.enabled != new {
         settings.enabled = new;
     }
@@ -107,7 +108,7 @@ fn sync_perf_stats(
     settings: Res<PerfHudSettings>,
     mut stats: ResMut<PerfStats>,
 ) {
-    if !settings.enabled {
+    if !settings.enabled.unwrap_or(false) {
         if stats.fps != 0.0
             || stats.frame_ms != 0.0
             || stats.physics_ms.is_some()
@@ -129,38 +130,41 @@ fn sync_perf_stats(
         exposure_number(exposures.as_deref(), "modelica_worker_step_ms");
 }
 
-/// Push the perf HUD's row into the workbench Settings menu.
-fn register_settings_submenu(world: &mut World) {
-    use bevy_egui::egui;
+/// Register the HUD at its preference owner.
+fn register_hud_menu(world: &mut World) {
     let Some(mut menus) = world.get_resource_mut::<lunco_workbench_core::WorkbenchMenuRegistry>()
     else {
         return;
     };
-    menus.register_settings_submenu("Performance", |ui, ctx| {
-        ui.label(
-            egui::RichText::new("Performance HUD")
-                .text_style(lunco_theme::TypographyRole::Label.text_style())
-                .weak(),
-        );
+    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::BuiltIn, |ui, ctx| {
         let Some(mut settings) = ctx.resource::<PerfHudSettings>().copied() else {
             return;
         };
-        let original = settings;
-        ui.checkbox(&mut settings.enabled, "Show FPS / frame time in status bar")
-            .on_hover_text(
-                "Bottom-right of the status bar shows live FPS, frame \
-                 time, physics step time, and Modelica worker time per physics step. \
-                 Persisted to the shared LunCoSim settings file.",
-            );
-        if settings != original {
+        if let Some(choice) = (lunco_workbench_core::HudVisibility {
+            enabled: settings.enabled.unwrap_or(false),
+            available: true,
+        })
+        .menu_row(ui, "Performance HUD", settings.enabled)
+        .choice
+        {
+            settings.enabled = choice;
             ctx.set_resource(settings);
         }
     });
 }
 
+fn set_all_visibility(
+    event: On<lunco_workbench_core::SetAllHudVisibility>,
+    mut settings: ResMut<PerfHudSettings>,
+) {
+    if settings.enabled != Some(event.0) {
+        settings.enabled = Some(event.0);
+    }
+}
+
 /// Adds [`PerfStats`] (live view samples), [`PerfHudSettings`] (persisted
 /// pref via `lunco-settings`), the [`TogglePerfHud`] command, Bevy's
-/// frame-time diagnostics, and the Settings-menu row. Idempotent.
+/// frame-time diagnostics, and the HUD-menu row. Idempotent.
 ///
 /// `FrameTimeDiagnosticsPlugin` is registered unconditionally so toggling the
 /// HUD works immediately. The HUD does not independently sample or publish
@@ -183,7 +187,8 @@ impl Plugin for PerfHudPlugin {
             PostUpdate,
             sync_perf_stats.in_set(lunco_core::RuntimeCycleSet::Ui),
         );
-        app.add_systems(Startup, register_settings_submenu);
+        app.add_systems(Startup, register_hud_menu)
+            .add_observer(set_all_visibility);
         register_all_commands(app);
     }
 }

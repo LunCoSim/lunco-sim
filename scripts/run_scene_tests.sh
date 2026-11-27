@@ -194,11 +194,6 @@ fi
 # all, which is the fast script/scene iteration path.
 if ((BUILD)); then
     echo "==> building luncosim test runner (one cargo invocation, -j 4)"
-    # Reuse the shared compiler cache when present, but keep a clean checkout
-    # usable on hosts that do not have sccache installed.
-    if [[ -z "${RUSTC_WRAPPER+x}" ]] && command -v sccache >/dev/null 2>&1; then
-        export RUSTC_WRAPPER=sccache
-    fi
     if ! cargo build -q -p lunco-luncosim --bin luncosim -j 4; then
         echo "BUILD FAILED — no scenes run" >&2
         exit 2

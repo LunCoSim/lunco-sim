@@ -1,5 +1,65 @@
 # Griffin loading profile — 2026-11-26
 
+## November 27 desktop rebuild with prebuilt Modelica records
+
+In consecutive runs on a quiet host, the previous release took **16.58 seconds**
+to reach lander physics readiness with an empty Modelica cache. The Kache
+rebuild took **9.71 seconds** with the prebuilt bundle and an empty local
+cache (6.86 seconds saved, 41% shorter, 1.71× speedup). Two other fresh
+processes with the bundle took 9.75 and 10.22 seconds. The same new executable
+without the bundle took 16.66 seconds. The measured first-open gain came
+primarily from reusing the prebuilt records. Two previous-release cold runs
+that overlapped other compiler jobs took 20.69 and 21.35 seconds. All runs
+used the same Griffin source snapshot and private desktop setup.
+
+| Desktop run | Open to physics ready | Shared session construction | Of which, prepare/read component | Longest live constructor | DAE / checked component hits |
+|---|---:|---:|---:|---:|---:|
+| Quiet pair, previous release, empty cache | 16.58 s | 5.31 s | 3.59 s | 2.93 s | 0 / 0 |
+| Quiet pair, Kache rebuild, prebuilt | 9.71 s | 3.04 s | 1.39 s | 2.46 s | 16 / 15 |
+| Previous release, populated local cache | 10.31 s | 3.65 s | 1.84 s | 2.59 s | 16 / 15 |
+| Kache rebuild, empty local cache | 16.66 s | 5.33 s | 3.53 s | 2.69 s | 0 / 0 |
+| Kache rebuild, prebuilt first open | 9.75 s | 3.39 s | 1.65 s | 2.51 s | 16 / 15 |
+| Kache rebuild, prebuilt repeat in a fresh process | 10.22 s | 3.44 s | 1.63 s | 2.81 s | 16 / 15 |
+
+The release uses Rust 1.100.0 and LunCoSim Rumoca commit
+`50972f69a6548e3c2997f1602508f3d6f61a8e1e`. Its executable SHA-256 is
+`c126f64b762c7556aa5bac3ec4b634307009044c892ac57a78a1c112e2d62196`.
+Kache built the executable. The bundled records are a separate runtime
+optimization. The producer opened Griffin directly. The desktop opened a
+different Twin before Griffin. Using the stable logical asset identity in the
+compiler context allowed both launches to share records. In the first seeded
+run the altimeter prepared locally in 18 ms.
+
+The popup reported four sources remaining at 3.46 seconds, a shared solve
+for eight participants at 3.60 seconds, and the start of eight live sessions
+at 7.05 seconds. A screenshot from a regular cached open showed the shared
+solve and `Scene elapsed: 00:03` together. The regular desktop took 18.16
+seconds to populate its cache and 11.71 seconds on reopening. All 15 participants entered co-simulation. All 199 named
+initial observations matched the earlier binary64 digest. An independent
+package-layout run used the staged assets with automatic bundle discovery and
+reached readiness in 10.15 seconds. Installing the 32 records under the source
+checkout’s default assets directory gave a 9.06-second first open with no
+environment override and an empty local Modelica cache (31 prebuilt hits).
+A run with a missing DAE, a DAE stored
+under the wrong key, and a truncated shared component reached readiness in
+12.91 seconds with identical observations. The initialization and Twin
+replacement scenarios passed 47 checks. The inconsistent fixture produced
+the expected terminal initialization fault. Separate desktop sessions passed the
+landing handoff and terrain checks at 52.21 seconds on the previous release and
+50.30 seconds with the new seeded release.
+
+**What still costs time.** The seeded shared session took 3.04–3.44 seconds,
+including 1.39–1.65 seconds reading and checking the shared component.
+Constructing the live sessions after the shared observation added 2.51–2.89
+seconds through certification. These constructors run concurrently. The
+separate dispatch probe observed 1,243 whole-residual handles, 70 selected
+residual handles, 129 Jacobian-row handles and three Jacobian-batch handles.
+The seeded processes still issued about 29,570 fresh Cranelift function
+compilations apiece. A single dispatched handle can call many generated
+functions. Determine which functions those entry points reach before deferring
+more code generation. For a further reduction in the first open, compare
+shared-component decoding and native session construction separately.
+
 ## Desktop profile of the integrated release
 
 Local merge `5235460ca`, built from `usd`, reached lander physics readiness in

@@ -516,19 +516,35 @@ pub(super) fn render_layout(
                             let button = ui.button(label);
                             anchor_rects.push((Cow::Borrowed(if visible { "menu.huds.show_all" } else { "menu.huds.hide_all" }), button.rect));
                             if button.clicked() {
+                                let panels = twin_floating_huds(layout);
+                                for (perspective, panel) in panels {
+                                    layout.set_floating_hud_preference(perspective, panel, Some(visible));
+                                }
                                 lunco_workbench_core::trigger_or_defer(
                                     world, lunco_workbench_core::SetAllHudVisibility(visible),
                                 );
                             }
                         }
                         ui.separator();
-                        egui::ScrollArea::vertical()
-                            .max_height((ui.ctx().viewport_rect().height() * 0.65).max(100.0))
-                            .show(ui, |ui| {
-                                for (_, callback) in &menus.hud_menu {
-                                    run_menu_callback(ui, world, callback.as_ref());
-                                }
+                        for (group, label, key) in [
+                            (lunco_workbench_core::HudMenuGroup::BuiltIn, "Built-in HUDs", "menu.huds.builtin"),
+                            (lunco_workbench_core::HudMenuGroup::Twin, "Twin HUDs", "menu.huds.twin"),
+                        ] {
+                            let section = ui.menu_button(label, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt(key)
+                                    .max_height((ui.ctx().viewport_rect().height() * 0.65).max(100.0))
+                                    .show(ui, |ui| {
+                                        for (_, callback) in menus.hud_menu.iter().filter(|(g, _)| *g == group) {
+                                            run_menu_callback(ui, world, callback.as_ref());
+                                        }
+                                        if group == lunco_workbench_core::HudMenuGroup::Twin {
+                                            render_twin_floating_hud_menu(ui, layout, world, anchor_rects);
+                                        }
+                                    });
                             });
+                            anchor_rects.push((Cow::Borrowed(key), section.response.rect));
+                        }
                     });
                     anchor_rects.push((Cow::Borrowed("menu.huds"), huds.response.rect));
                 }
@@ -1260,6 +1276,77 @@ pub(super) fn render_layout(
                 activate(&mut panel_ctx);
                 panel_ctx.take_intents().apply(world);
             }
+        }
+    }
+}
+
+/// The current Twin's floating HUD panels come from its registered perspective plans.
+fn twin_floating_huds(
+    layout: &WorkbenchLayout,
+) -> Vec<(
+    lunco_workbench_core::PerspectiveId,
+    lunco_workbench_core::PerspectiveFloatingPanel,
+)> {
+    layout
+        .perspectives
+        .iter()
+        .filter(|p| p.id().as_str().starts_with("twin/"))
+        .flat_map(|p| {
+            p.layout()
+                .floating_panels
+                .into_iter()
+                .map(|panel| (p.id(), panel))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn render_twin_floating_hud_menu(
+    ui: &mut egui::Ui,
+    layout: &mut WorkbenchLayout,
+    world: &World,
+    anchors: &mut Vec<(Cow<'static, str>, egui::Rect)>,
+) {
+    let rows = twin_floating_huds(layout);
+    if !rows.is_empty() {
+        ui.separator();
+        ui.label("Floating panels");
+    }
+    for (perspective, panel) in rows {
+        let available = layout.active_perspective.as_ref() == Some(&perspective);
+        let preference = layout.floating_hud_preference(&perspective, panel.tab);
+        let enabled = preference.unwrap_or(true);
+        let title = match panel.tab {
+            TabId::Singleton(id) => layout.panels.get(&id).map(|panel| panel.title()),
+            TabId::Instance { kind, instance } => layout
+                .instance_panels
+                .get(&kind)
+                .map(|panel| panel.title(world, instance)),
+        }
+        .unwrap_or_else(|| panel.tab.debug_id());
+        let row = ui.push_id((perspective.as_str(), panel.tab), |ui| {
+            lunco_workbench_core::HudVisibility { enabled, available }
+                .menu_row(ui, title, preference)
+        });
+        for (mode, rect) in [
+            ("auto", row.inner.automatic),
+            ("show", row.inner.show),
+            ("hide", row.inner.hide),
+        ] {
+            let rect = rect.intersect(ui.clip_rect());
+            if rect.is_positive() {
+                anchors.push((
+                    Cow::Owned(format!(
+                        "hud.floating.{}.{}.{mode}",
+                        perspective.as_str(),
+                        panel.tab.debug_id()
+                    )),
+                    rect,
+                ));
+            }
+        }
+        if let Some(choice) = row.inner.choice {
+            layout.set_floating_hud_preference(perspective, panel, choice);
         }
     }
 }

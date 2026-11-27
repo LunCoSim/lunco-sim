@@ -210,6 +210,8 @@ pub enum BrowserAction {
         doc_id: u64,
         /// Fully-qualified Modelica path to the class.
         qualified_path: String,
+        /// Explicit presentation request; omitted keeps the usual tab mode.
+        view: Option<LoadedClassView>,
     },
     /// User clicked the close (✕) control on a workspace-document row
     /// in the Files section → close the document, all its tabs, and
@@ -228,6 +230,13 @@ pub enum BrowserAction {
         /// Stable panel id string of the panel to open.
         id: String,
     },
+}
+
+/// Presentation intent for opening an already-loaded Modelica class.
+#[derive(Debug, Clone, Copy)]
+pub enum LoadedClassView {
+    Text,
+    Diagram,
 }
 
 /// Frame-scoped outbox of actions emitted by sections during render.

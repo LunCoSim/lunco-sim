@@ -307,7 +307,7 @@ impl DerivedRasterAssemblyBudget {
         let bytes = raster_staging_bytes(res);
         let limit = raster_staging_bytes(max_res);
         self.0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 used.checked_add(bytes).filter(|next| *next <= limit)
             })
             .ok()?;

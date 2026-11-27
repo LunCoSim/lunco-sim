@@ -30,7 +30,7 @@ examples under `assets/tutorials/`.
 Describe the exact visible action and its location (for example, “Click the
 Take control of rover button below”). Report the specific unmet progression
 condition and distinguish control ownership from camera selection. Keep cards
-compact; learners can minimize or hide them and reopen them using **View → HUDs**.
+compact; learners can minimize or hide them and reopen them using **View → HUDs → Twin HUDs**.
 
 ## Add a lesson
 

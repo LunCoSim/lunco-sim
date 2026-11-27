@@ -86,7 +86,9 @@ fn task(me, ctx) {
                 t_true(value(this.target, "com_x") == this.com, "the rejected batch preserves its otherwise valid companion input"),
                 t_true(query("PhysicsPerformance").step_number == this.native_steps, "native physics does not integrate the failed communication point"),
                 t_true(value(this.source, "sampleTime") == this.source_time, "Modelica does not advance beyond the rejected shared communication point"),
-                t_true(wiring.runtime_fault != () && wiring.runtime_fault.kind == "cosim-input-write-rejected", "the public wiring report retains the terminal failure"),
+                t_true(wiring.runtime_fault != () && wiring.runtime_fault.kind == "cosim-input-write-rejected"
+                    && wiring.runtime_fault.global_id == this.target && wiring.runtime_fault.entity_name != (),
+                    "the public wiring report retains the terminal failure and registered target identity"),
                 t_true(type_of(rejected) == "map" && rejected.kind == "finite"
                     && rejected.value == value(this.source, "mass"),
                     "the diagnostic retains the exact finite rejected sample")

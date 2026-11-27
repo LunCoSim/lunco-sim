@@ -31,6 +31,30 @@ fn shows_plots(title, count) {
         && grid.time_span_s != () && grid.time_span_s[1] > grid.time_span_s[0])
 }
 
+fn camera_selector_clear_of_plots() {
+    let workbench = query("InspectWorkbench", #{});
+    let camera = ();
+    for hud in cmd_data("InspectRuntimeHuds", #{}).huds {
+        if hud.id == "camera-status" { camera = hud; }
+    }
+    if workbench.active_perspective != "twin/instruments" ||
+        camera == () || !camera.rendered || camera.rect == () { return false; }
+    for panel in workbench.rendered_panels {
+        if panel.id != "signal_grid" { continue; }
+        let rect = camera.rect;
+        return rect[0] + rect[2] <= panel.left || panel.left + panel.width <= rect[0] ||
+            rect[1] + rect[3] <= panel.top || panel.top + panel.height <= rect[1];
+    }
+    false
+}
+
+fn verify_crater_camera_hud() {
+    report_verdict([
+        t_true(camera_selector_clear_of_plots(),
+            "the startup Instruments perspective renders the camera selector outside the live plots")
+    ], "CRATER CUP CAMERA HUD", "CRATER_CUP_CAMERA_HUD")
+}
+
 fn task(me, ctx) {
     seq([
         wait_until(|m| query("GetReadiness", #{}).ready
@@ -39,7 +63,8 @@ fn task(me, ctx) {
             && cmd_data("InspectGuidedHud", #{}).cards.len() > 0),
         wait(0.5),
         once(|m| {
-            this.checks = [t_true(shows_plots("overview", 2), "live plant plots appear before any click")];
+            this.checks = [t_true(shows_plots("overview", 2), "live plant plots appear before any click"),
+                t_true(camera_selector_clear_of_plots(), "camera selection remains accessible beside live plots")];
             this.aim_at(OXYGEN);
         }),
         wait(0.25), once(Fn("click")), wait(0.6),

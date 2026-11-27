@@ -36,7 +36,7 @@ a file picker does not complete an exercise.
 
 ## Controls and recovery
 
-Minimize or hide the lesson card using its header controls, or choose **Dock** to move it into the Guidance panel. Choose **Float** to return it to the viewport. Restore hidden cards in **View → HUDs**.
+Minimize or hide the lesson card using its header controls, or choose **Dock** to move it into the Guidance panel. Choose **Float** to return it to the viewport. Restore hidden cards in **View → HUDs → Twin HUDs**.
 The lesson displays the active semantic input bindings.
  **Take control of rover**
 acquires the training rover directly; selection and possession remain separate

@@ -57,7 +57,7 @@ struct HudCard {
     // None uses the host default; Some([]) explicitly allows all perspectives.
     perspectives: Option<Vec<String>>,
     layout: HudLayout,
-    user_hidden: bool,
+    visibility_override: Option<bool>,
     collapsed: bool,
     docked: bool,
 }
@@ -105,7 +105,7 @@ impl HudCard {
                     .is_none_or(|id| active == Some(id)),
             };
         HudVisibility {
-            enabled: !self.user_hidden,
+            enabled: self.visibility_override.unwrap_or(true),
             available,
         }
     }
@@ -213,7 +213,7 @@ fn clear_current_script_card(
 #[derive(Event)]
 struct SetCardVisibility {
     owner: HudOwner,
-    visible: bool,
+    visible: Option<bool>,
 }
 
 #[derive(Event)]
@@ -230,7 +230,7 @@ struct SetCardDocked {
 fn has_docked_guidance(huds: &GuidedHuds) -> bool {
     huds.cards
         .values()
-        .any(|card| card.docked && !card.user_hidden && card.has_content())
+        .any(|card| card.docked && card.visibility_override.unwrap_or(true) && card.has_content())
 }
 
 fn focus_guidance(commands: &mut Commands) {
@@ -306,7 +306,7 @@ impl Panel for GuidancePanel {
                     }),
                     Some(HeaderAction::Hide) => ctx.trigger(SetCardVisibility {
                         owner: owner.clone(),
-                        visible: false,
+                        visible: Some(false),
                     }),
                     None => {}
                 }
@@ -329,9 +329,9 @@ fn set_card_visibility(
     mut commands: Commands,
 ) {
     if let Some(card) = huds.cards.get_mut(&event.owner) {
-        card.user_hidden = !event.visible;
+        card.visibility_override = event.visible;
         if card.docked {
-            if !event.visible {
+            if !event.visible.unwrap_or(true) {
                 close_guidance_if_empty(&huds, &mut commands);
             } else if defaults.as_ref().is_some_and(|defaults| {
                 card.visible(
@@ -363,7 +363,7 @@ fn set_all_card_visibility(
 ) {
     let had_docked = has_docked_guidance(&huds);
     for card in huds.cards.values_mut() {
-        card.user_hidden = !event.0;
+        card.visibility_override = Some(event.0);
     }
     if !event.0 && had_docked {
         close_guidance_if_empty(&huds, &mut commands);
@@ -462,7 +462,7 @@ fn register_hud_menu(world: &mut World) {
     else {
         return;
     };
-    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::Guidance, |ui, ctx| {
+    menus.register_hud_menu(lunco_workbench_core::HudMenuGroup::Twin, |ui, ctx| {
         let Some(huds) = ctx.resource::<GuidedHuds>() else {
             return;
         };
@@ -476,12 +476,12 @@ fn register_hud_menu(world: &mut World) {
         let rows: Vec<_> = huds
             .cards
             .iter()
-            .filter(|(_, card)| card.has_content())
             .map(|(owner, card)| {
                 (
                     owner.clone(),
                     card_label(card),
                     card.visibility(&defaults, active.as_ref()),
+                    card.visibility_override,
                 )
             })
             .collect();
@@ -489,13 +489,24 @@ fn register_hud_menu(world: &mut World) {
             return;
         }
         ui.label("Guidance");
-        for (owner, label, visibility) in rows {
-            let row = ui.push_id(&owner, |ui| visibility.menu_row(ui, label));
+        for (owner, label, visibility, preference) in rows {
+            let row = ui.push_id(&owner, |ui| visibility.menu_row(ui, label, preference));
             let rect = row.response.rect.intersect(ui.clip_rect());
             if let Some(key) = card_anchor(&owner, "menu").filter(|_| rect.is_positive()) {
                 ctx.landmark(key, rect);
             }
-            if let Some(visible) = row.inner {
+            for (key, rect) in [
+                ("menu.auto", row.inner.automatic),
+                ("menu.show", row.inner.show),
+                ("menu.hide", row.inner.hide),
+            ] {
+                if let Some(anchor) = card_anchor(&owner, key)
+                    .filter(|_| rect.intersect(ui.clip_rect()).is_positive())
+                {
+                    ctx.landmark(anchor, rect.intersect(ui.clip_rect()));
+                }
+            }
+            if let Some(visible) = row.inner.choice {
                 ctx.trigger(SetCardVisibility { owner, visible });
             }
         }
@@ -832,6 +843,8 @@ fn on_inspect_guided_hud(
         "menu.huds",
         "menu.huds.show_all",
         "menu.huds.hide_all",
+        "menu.huds.builtin",
+        "menu.huds.twin",
     ]
     .into_iter()
     .filter_map(|key| rect_for(key).map(|rect| (key, rect)))
@@ -884,16 +897,24 @@ fn on_inspect_guided_hud(
                 interactive: visible,
                 title: card_label(card),
                 docked,
-                controls: ["collapse", "dock", "hide", "menu"]
-                    .into_iter()
-                    .filter_map(|key| {
-                        card_anchor(owner, key)
-                            .and_then(|name| rect_for(&name))
-                            .map(|rect| (key, rect))
-                    })
-                    .collect(),
+                controls: [
+                    "collapse",
+                    "dock",
+                    "hide",
+                    "menu",
+                    "menu.auto",
+                    "menu.show",
+                    "menu.hide",
+                ]
+                .into_iter()
+                .filter_map(|key| {
+                    card_anchor(owner, key)
+                        .and_then(|name| rect_for(&name))
+                        .map(|rect| (key, rect))
+                })
+                .collect(),
                 layout: &card.layout,
-                user_hidden: card.user_hidden,
+                user_hidden: !card.visibility_override.unwrap_or(true),
                 collapsed: card.collapsed,
             }
         })
@@ -1059,7 +1080,7 @@ pub(crate) fn draw_guided_hud(
                         }),
                         Some(HeaderAction::Hide) => commands.trigger(SetCardVisibility {
                             owner: owner.clone(),
-                            visible: false,
+                            visible: Some(false),
                         }),
                         None => {}
                     }
@@ -1133,7 +1154,7 @@ mod tests {
         app.world_mut().trigger(ToggleCardCollapsed(owner.clone()));
         app.world_mut().trigger(SetCardVisibility {
             owner: owner.clone(),
-            visible: false,
+            visible: Some(false),
         });
         let default = GuidedHudVisibility::default();
         let view = PerspectiveId::new("view");

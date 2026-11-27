@@ -24,13 +24,23 @@ exact wire response.
 ## Find Modelica sources in the native browser
 
 In the Twin Browser, select **Modelica** to browse installed package roots,
-generated scene networks, open standalone documents, and every `.mo` file
+open standalone documents, and every `.mo` file
 indexed by the active Twin. Native builds include the engine's structured
 Modelica packages even when no external source library is installed. Expand a
 package to browse it; an active filter searches all installed package roots on
 background workers and filters Twin files by their indexed relative paths.
 Opening a Twin row uses that Twin's indexed relative path. Installed source
 files use the shared read-only source loader.
+
+Select **Generated Modelica** in the same dropdown to browse the current
+scene’s synthesized networks, separately from authored sources. Search by
+network path, human-readable model name, generated `.mo` filename, or member
+identity. Models group by their composed owner paths; expand a model’s
+disclosure to inspect its exact identity, topology and ports. The **Source**
+button opens the exact generated document in the ordinary read-only Modelica
+text view; click the network name to navigate to its model diagram. The list
+reflects current projection metadata and retires with the scene. Closing a
+generated model’s tab only closes the view, never its running network.
 
 Opening a `.mo` file displays its source and parse diagnostics; it does not
 establish that the file is runnable alone. For example, a component such as
@@ -196,6 +206,11 @@ block numerical admission.
 `scripts/api/test_modelica_initialization_receipt.py --output <evidence-directory>`
 requires both the initialization verdict and the receipt's retirement across a
 scene replacement in one owned production session.
+
+For a native Twin distribution, prebuild the exact scene using the production
+binary. Verify both artifact families on first open after another Twin has been
+active and compare initialized values across the cold and prebuilt runs.
+Use the [Modelica artifact deployment instructions](../../docs/architecture/20-domain-modelica.md).
 
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
@@ -616,7 +631,8 @@ a Rust rebuild. A present editable directory is authoritative: unreadable or
 empty directories and parse failures are errors. Packaged/wasm builds use their
 compiled-in asset set because no editable source tree is available.
 
-When reviewing a generated diagram, click its generated browser row first. A
+When reviewing a generated diagram, select **Generated Modelica** in the
+Twin browser and click its network row. A
 single-unit network opens the unit-level class and shows its real members;
 multi-unit networks open the root wrapper. Use `FitCanvas` after drill-in when
 the tab was opened alongside the root, since navigation is scoped to the

@@ -966,7 +966,7 @@ fn dispatch_live_construction(
         PreparationWork::Participant(work) => &work.doc_uri,
     };
     plan.component_cache = pool.component_cache.request(work.compiled(), doc_uri);
-    let lane = match (&work, lane) {
+    let (lane, entity) = match (&work, lane) {
         (
             PreparationWork::Initialization(initialization),
             ConstructionLane::Initialization(lane),
@@ -984,7 +984,9 @@ fn dispatch_live_construction(
             }
             return;
         }
-        (PreparationWork::Participant(_), ConstructionLane::Participant(lane)) => lane,
+        (PreparationWork::Participant(participant), ConstructionLane::Participant(lane)) => {
+            (lane, participant.entity)
+        }
         _ => {
             pending.insert(id, work);
             pipeline.constructed.insert(
@@ -1000,6 +1002,7 @@ fn dispatch_live_construction(
     pending.insert(id, work);
     if let Err(error) = live_session::construct(
         id,
+        entity,
         lane,
         dae,
         plan,

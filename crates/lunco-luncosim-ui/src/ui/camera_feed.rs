@@ -26,9 +26,48 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct ShowCameraImageSettings {
     pub source: Option<GlobalEntityId>,
 }
+/// Inspect the camera HUD windows actually drawn during the last UI pass.
+#[Command(default)]
+pub struct InspectCameraHudWindows {}
+
+#[on_command(InspectCameraHudWindows)]
+fn inspect_camera_hud_windows(
+    _: On<InspectCameraHudWindows>,
+    feeds: Res<CameraFeeds>,
+    anchors: Res<lunco_workbench_core::presentation::HelpAnchors>,
+    state: Res<CameraFeedUiState>,
+) -> Result<Ack, String> {
+    let rect = |key: &str| {
+        anchors
+            .get(key)
+            .map(|r| [r.min.x, r.min.y, r.width(), r.height()])
+    };
+    let views: Vec<_> = feeds
+        .instances
+        .keys()
+        .map(|id| {
+            lunco_api_core::api_value!({
+                "feed": *id,
+                "enabled": state.visibility_overrides.get(id).copied().unwrap_or(true),
+                "rect": rect(&format!("hud.camera.feed.{id}")),
+            })
+        })
+        .collect();
+    Ok(Ack::with_data(
+        OpId::new(),
+        lunco_api_core::api_value!({
+            "views": views,
+            "image_controls": rect("hud.camera.image_controls"),
+            "exposure_controls": rect("hud.camera.image_controls.exposure"),
+            "selector_popup": rect("hud.runtime.dropdown.camera-status::camera-selection"),
+        }),
+    ))
+}
+
 pub(super) fn install(app: &mut App) {
     register_all_commands(app);
     app.mark_client_local::<ShowCameraImageSettings>();
+    app.mark_client_local::<InspectCameraHudWindows>();
     app.init_resource::<PendingRuntimeViewRestore>()
         .init_resource::<SignalDescriptorRestoreCursor>()
         .add_systems(Update, restore_pending_runtime_views)
@@ -457,7 +496,7 @@ fn show_image_settings(
     state.main_open = true;
     Ok(Ack::new(OpId::new()))
 }
-register_commands!(show_image_settings);
+register_commands!(show_image_settings, inspect_camera_hud_windows);
 
 #[derive(Resource, Default)]
 pub(super) struct CameraFeedUiState {
@@ -467,7 +506,7 @@ pub(super) struct CameraFeedUiState {
     main_open: bool,
     main_source: Option<GlobalEntityId>,
     layouts: BTreeMap<u64, CameraFeedWindowLayout>,
-    hidden: BTreeSet<u64>,
+    visibility_overrides: BTreeMap<u64, bool>,
     revision: u64,
     catalog: Option<std::sync::Arc<CameraFeedCatalog>>,
 }
@@ -536,7 +575,7 @@ impl CameraFeedCatalog {
 #[derive(Event)]
 struct SetCameraHudVisibility {
     id: u64,
-    enabled: bool,
+    enabled: Option<bool>,
 }
 
 fn set_camera_hud_visibility(
@@ -547,10 +586,10 @@ fn set_camera_hud_visibility(
     if !feeds.instances.contains_key(&event.id) {
         return;
     }
-    if event.enabled {
-        state.hidden.remove(&event.id);
+    if let Some(enabled) = event.enabled {
+        state.visibility_overrides.insert(event.id, enabled);
     } else {
-        state.hidden.insert(event.id);
+        state.visibility_overrides.remove(&event.id);
     }
 }
 
@@ -559,11 +598,7 @@ fn set_all_camera_hud_visibility(
     feeds: Res<CameraFeeds>,
     mut state: ResMut<CameraFeedUiState>,
 ) {
-    if event.0 {
-        state.hidden.clear();
-    } else {
-        state.hidden = feeds.instances.keys().copied().collect();
-    }
+    state.visibility_overrides = feeds.instances.keys().map(|id| (*id, event.0)).collect();
 }
 
 /// List existing camera HUDs without closing or reallocating their render feeds.
@@ -587,13 +622,18 @@ pub(super) fn camera_hud_menu_ui(
             } else {
                 feed.label.clone()
             };
-            (*id, title, !state.hidden.contains(id))
+            (*id, title, state.visibility_overrides.get(id).copied())
         })
         .collect();
-    for (id, title, enabled) in rows {
+    for (id, title, preference) in rows {
         if let Some(enabled) = ui
             .push_id(("camera_hud", id), |ui| {
-                lunco_workbench_core::HudVisibility { enabled, available }.menu_row(ui, title)
+                lunco_workbench_core::HudVisibility {
+                    enabled: preference.unwrap_or(true),
+                    available,
+                }
+                .menu_row(ui, title, preference)
+                .choice
             })
             .inner
         {
@@ -819,8 +859,12 @@ pub(super) fn draw_camera_feed(
     viewport_exposure: Res<lunco_render::camera::ViewportExposureSettings>,
     exposures: Query<&Exposure>,
     authored_images: Query<(&bevy_hui::prelude::Tags, &InheritedVisibility)>,
+    mut anchors: ResMut<lunco_workbench_core::presentation::HelpAnchors>,
+    mut pick_gate: ResMut<lunco_workbench_core::scene_pick::ScenePickGate>,
 ) {
-    state.hidden.retain(|id| feeds.instances.contains_key(id));
+    state
+        .visibility_overrides
+        .retain(|id, _| feeds.instances.contains_key(id));
     let previous_layout_count = state.layouts.len();
     state
         .layouts
@@ -841,17 +885,66 @@ pub(super) fn draw_camera_feed(
             feeds.instances.contains_key(id)
         }
     });
+    if state.main_open {
+        let source = cameras.iter().find(|(id, name, ..)| {
+            state.main_source.map_or_else(
+                || selection.active_name.as_deref() == Some(name.as_str()),
+                |source| source == **id,
+            )
+        });
+        let Ok(ctx) = contexts.ctx_mut() else {
+            return;
+        };
+        let mut open = state.main_open;
+        let response = egui::Window::new("Camera image controls")
+            .id(egui::Id::new("camera-image-controls"))
+            .open(&mut open)
+            .default_width(390.0)
+            .show(ctx, |ui| {
+                if let Some((source, name, callsign, catalog, settings, exposure)) = source {
+                    ui.strong(entity_display_name(Some(name), callsign, catalog));
+                    ui.label(name.as_str());
+                    let mut effects = settings.cloned().unwrap_or_default();
+                    let draft = state
+                        .shader_drafts
+                        .entry((true, source.get()))
+                        .or_insert_with(|| effects.shader.clone());
+                    let inherited = viewport_exposure
+                        .ev100
+                        .unwrap_or_else(|| f64::from(exposure.copied().unwrap_or_default().ev100));
+                    let (changed, exposure_rect) =
+                        image_controls(ui, &mut effects, draft, inherited);
+                    anchors.set_static("hud.camera.image_controls.exposure", exposure_rect);
+                    if changed {
+                        commands.trigger(SetCameraImageEffects {
+                            feed: None,
+                            source: Some(*source),
+                            settings: effects,
+                        });
+                    }
+                } else {
+                    ui.label("Select a main camera to edit its image.");
+                }
+            });
+        if let Some(response) = response {
+            let rect = response.response.rect;
+            anchors.set_static("hud.camera.image_controls", rect);
+            pick_gate.record_chrome_panel(rect, rect);
+        }
+        state.main_open = open;
+    }
     let embedded: std::collections::BTreeSet<u64> = authored_images
         .iter()
         .filter(|(_, visibility)| visibility.get())
         .filter_map(|(tags, _)| tags.tags().get("camera_feed")?.parse().ok())
         .collect();
     // Retire per-feed drafts before the visibility check, but do not prepare
-    // a dropdown for a hidden or author-embedded camera view.
+    // a dropdown for a hidden or author-embedded camera view. The main
+    // camera image controls have already been drawn independently.
     if feeds
         .instances
         .keys()
-        .all(|id| embedded.contains(id) || state.hidden.contains(id))
+        .all(|id| embedded.contains(id) || state.visibility_overrides.get(id) == Some(&false))
     {
         return;
     }
@@ -878,7 +971,7 @@ pub(super) fn draw_camera_feed(
     let candidates = &catalog.candidates;
     for (index, (id, feed)) in feeds.instances.iter().enumerate() {
         // An authored HUD owns presentation of this same native image.
-        if embedded.contains(id) || state.hidden.contains(id) {
+        if embedded.contains(id) || state.visibility_overrides.get(id) == Some(&false) {
             continue;
         }
         let target = feed.image.as_ref().and_then(|handle| {
@@ -918,7 +1011,7 @@ pub(super) fn draw_camera_feed(
                     ui.menu_button("Style",|ui| {
                         let draft=state.shader_drafts.entry((false,*id)).or_insert_with(||effects.shader.clone());
                         let exposure = feed.render_camera().and_then(|camera| exposures.get(camera).ok());
-                        if image_controls(ui,&mut effects,draft, f64::from(exposure.copied().unwrap_or_default().ev100)) {
+                        if image_controls(ui,&mut effects,draft, f64::from(exposure.copied().unwrap_or_default().ev100)).0 {
                             commands.trigger(SetCameraImageEffects{feed:Some(*id),source:None,settings:effects.clone()});
                         }
                     });
@@ -988,6 +1081,8 @@ pub(super) fn draw_camera_feed(
             });
         if let Some(response) = response {
             let rect = response.response.rect;
+            anchors.set(format!("hud.camera.feed.{id}"), rect);
+            pick_gate.record_chrome_panel(rect, rect);
             let measured = CameraFeedWindowLayout {
                 position: [rect.min.x, rect.min.y],
                 size: [rect.width(), rect.height()],
@@ -1007,46 +1102,6 @@ pub(super) fn draw_camera_feed(
             commands.trigger(RemoveCameraFeed { feed: *id });
         }
     }
-    if state.main_open {
-        let source = cameras.iter().find(|(id, name, ..)| {
-            state.main_source.map_or_else(
-                || selection.active_name.as_deref() == Some(name.as_str()),
-                |source| source == **id,
-            )
-        });
-        let Ok(ctx) = contexts.ctx_mut() else {
-            return;
-        };
-        let mut open = state.main_open;
-        egui::Window::new("Camera image controls")
-            .id(egui::Id::new("camera-image-controls"))
-            .open(&mut open)
-            .default_width(390.0)
-            .show(ctx, |ui| {
-                if let Some((source, name, callsign, catalog, settings, exposure)) = source {
-                    ui.strong(entity_display_name(Some(name), callsign, catalog));
-                    ui.label(name.as_str());
-                    let mut effects = settings.cloned().unwrap_or_default();
-                    let draft = state
-                        .shader_drafts
-                        .entry((true, source.get()))
-                        .or_insert_with(|| effects.shader.clone());
-                    let inherited = viewport_exposure
-                        .ev100
-                        .unwrap_or_else(|| f64::from(exposure.copied().unwrap_or_default().ev100));
-                    if image_controls(ui, &mut effects, draft, inherited) {
-                        commands.trigger(SetCameraImageEffects {
-                            feed: None,
-                            source: Some(*source),
-                            settings: effects,
-                        });
-                    }
-                } else {
-                    ui.label("Select a main camera to edit its image.");
-                }
-            });
-        state.main_open = open;
-    }
 }
 
 fn image_controls(
@@ -1054,7 +1109,7 @@ fn image_controls(
     effects: &mut CameraImageEffects,
     shader: &mut String,
     inherited_ev100: f64,
-) -> bool {
+) -> (bool, egui::Rect) {
     ui.set_max_width(390.0);
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -1065,12 +1120,15 @@ fn image_controls(
             .selectable_value(&mut effects.mode, CameraImageMode::Depth, "Depth")
             .changed();
     });
-    changed |= lunco_workbench_widgets::fixed_exposure_ev100(
-        ui,
-        "Fixed color exposure",
-        &mut effects.exposure_ev100,
-        inherited_ev100,
-    );
+    let exposure = ui.scope(|ui| {
+        lunco_workbench_widgets::fixed_exposure_ev100(
+            ui,
+            "Fixed color exposure",
+            &mut effects.exposure_ev100,
+            inherited_ev100,
+        )
+    });
+    changed |= exposure.inner;
     if effects.mode == CameraImageMode::Depth {
         ui.weak("Opaque axial depth · metres · near red → yellow → far green; sky black");
         ui.horizontal(|ui| {
@@ -1149,9 +1207,9 @@ fn image_controls(
     });
     if let Err(error) = effects.validate() {
         ui.colored_label(ui.visuals().error_fg_color, error);
-        return false;
+        return (false, exposure.response.rect);
     }
-    changed
+    (changed, exposure.response.rect)
 }
 
 #[cfg(test)]
