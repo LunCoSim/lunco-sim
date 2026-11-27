@@ -68,20 +68,22 @@ fragments without an enclosing vehicle use those omitted-input defaults; native
 wheel admission still requires a real vehicle mount owner. `minValidatedSpeed`
 remains the tire's measured lateral-speed envelope and does not regularize
 longitudinal slip. A zero contact-torque bound reduces the axle balance to a
-direct linear solve, including subnormal shaft speeds. Loaded axles bisect
-representable speeds across the full floating-point
-exponent range and certify a finite, scaled torque-balance residual; an interval
+direct linear solve, including subnormal shaft speeds. A loaded axle first
+tries the speed predicted from its rest contact torque and checks the actual
+contact law at that speed. It bisects the remaining representable speeds when
+needed and certifies a finite, scaled torque-balance residual; an interval
 narrowing around a discontinuity fails visibly. At adjacent speeds, both
 endpoints are evaluated and the admissible one with the smaller residual is
 selected. Both wheel realizations use the same contact-specific evaluation
 error bound; the residual bound also includes the finite torque resolution of
 one speed ULP even when the contact-torque bound is subnormal. The wheel fault
 records the mechanical inputs of the rejected step for numerical reproduction.
-The solver retains the rounding remainder from incoming momentum, drive and
+The solver retains the rounding remainder from the inertial product, drive and
 braking until it subtracts the trial contact torque. The convergence tolerance
 uses the resulting net balance, so matched drive and traction preserve even
-a tiny incoming shaft speed. When a light axle's inertial torque would
-underflow, it evaluates that same balance in speed units. Brake reversals compare
+a tiny incoming shaft speed. When forming the inertial torque would lose
+subnormal precision, it adds the scaled torque terms before dividing for the
+shaft speed. Brake reversals compare
 signs without multiplying speeds. A positive stopping
 duration below floating-point resolution contributes no representable work and
 the remainder is advanced from rest.

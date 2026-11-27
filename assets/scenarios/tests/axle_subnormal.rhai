@@ -66,11 +66,11 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(moving, "both signs of subnormal shaft motion are preserved"));
         this.checks.push(t_true(sim_tick() > this.mark, "native simulation ticks continue"));
         let released = true;
-        for i in [2, 3] {
+        for i in [1, 2, 3] {
             let result = cmd("SetPorts", #{target: this.wheels[i], writes: [["drive", 0.0]]});
             released = released && result.ok;
         }
-        this.checks.push(t_true(released, "drive released on both light rear axles"));
+        this.checks.push(t_true(released, "drive released on the three coasting axles"));
         this.mark = sim_tick(); this.phase = 2; return;
     }
     if this.phase == 2 {
@@ -82,6 +82,10 @@ fn on_tick(me, ctx) {
         let right = sample(this.wheels[3], "shaft_speed");
         this.checks.push(t_true(least > 0.0 && scaled(left) == least && scaled(right) == -least,
             `light axles coast to one signed speed unit under bearing drag (left=${left}, right=${right} rad/s)`));
+        // The front-right axle retains 15/31 per step, below the half-unit tie.
+        let front = sample(this.wheels[1], "shaft_speed");
+        this.checks.push(t_true(scaled(front) == 0.0,
+            `front-right bearing drag brings its axle to rest before braking (speed=${front} rad/s)`));
         this.checks.push(t_true(brake(this.rover).ok, "brake command accepted"));
         this.mark = sim_tick(); this.phase = 3; return;
     }

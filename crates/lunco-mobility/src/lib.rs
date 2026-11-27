@@ -1640,9 +1640,10 @@ pub(crate) fn solve_axle_step_with_roundoff(
             return Err("axle step is not representable");
         }
         let momentum_rate = inertial_rate * old;
-        // A light axle can underflow when translating speed into torque. In
-        // that range divide the balance by its diagonal and compare speeds.
-        let carry_speed = inertial_rate < 1.0 && momentum_rate.abs() < f64::MIN_POSITIVE;
+        // A subnormal momentum term can lose bits on either side of unit
+        // inertia/time. In that range solve the balance in speed units.
+        let carry_speed = momentum_rate.abs() < f64::MIN_POSITIVE;
+        let momentum_error = inertial_rate.mul_add(old, -momentum_rate);
         let balance = axle_torque_balance(
             if carry_speed { 0.0 } else { momentum_rate },
             drive_torque,
@@ -1650,26 +1651,36 @@ pub(crate) fn solve_axle_step_with_roundoff(
         );
         let torque_unit = if carry_speed { diagonal } else { 1.0 };
         let slope = diagonal / torque_unit;
-        let rhs_at = |contact| {
-            let net = balance(contact);
-            if !carry_speed {
-                return net;
-            }
-            if old != 0.0 && net.abs() <= f64::MIN_POSITIVE {
-                // Keep both speed contributions above subnormal rounding
-                // until their sum is formed. Scaling by a power of two is exact.
+        let speed_from_torque = |net: f64| {
+            if carry_speed && old != 0.0 && net.abs() <= f64::MIN_POSITIVE {
+                // Scale by exact powers of two and add the applied torque
+                // before division. The diagonal's spacing normalizes even
+                // subnormal coefficients without rounding their ratio first.
                 const SCALE: f64 = (1_u64 << f64::MANTISSA_DIGITS) as f64;
-                return (inertial_rate / diagonal).mul_add(old * SCALE, (net * SCALE) / diagonal)
-                    / SCALE;
+                let unit = diagonal - diagonal.next_down();
+                let numerator = (inertial_rate / unit).mul_add(old * SCALE, (net * SCALE) / unit);
+                return (numerator / (diagonal / unit)) / SCALE;
             }
             inertial_rate.mul_add(old, net) / diagonal
+        };
+        let rhs_at = |contact| {
+            let net = balance(contact);
+            if carry_speed {
+                speed_from_torque(net)
+            } else {
+                net + momentum_error
+            }
         };
         // With no contact torque, the linear balance has a unique solution.
         // Its correctly rounded speed may be subnormal (or zero), in which
         // case recomputing the torque residual cannot certify the division
         // using a relative tolerance. No traction iteration is needed.
         if traction_bound == 0.0 {
-            let speed = rhs_at(0.0) / slope;
+            let speed = if brake == 0.0 {
+                speed_from_torque(drive_torque)
+            } else {
+                rhs_at(0.0) / slope
+            };
             if !speed.is_finite() {
                 return Err("axle step is not representable");
             }
@@ -1688,7 +1699,7 @@ pub(crate) fn solve_axle_step_with_roundoff(
         }
         let mut lower = rhs_at(traction_bound) / slope;
         let mut upper = rhs_at(-traction_bound) / slope;
-        if ![lower, upper].into_iter().all(f64::is_finite) {
+        if ![lower, upper].into_iter().all(f64::is_finite) || lower > upper {
             return Err("axle step is not representable");
         }
         let evaluate = |trial: f64| -> Result<(f64, f64), &'static str> {
@@ -1705,20 +1716,44 @@ pub(crate) fn solve_axle_step_with_roundoff(
             }
             Ok((residual, inertial.abs().max(target.abs())))
         };
+        let converged = |residual: f64, scale: f64| {
+            residual == 0.0 || residual.abs() <= scale * (64.0 * f64::EPSILON)
+        };
+        // Zero and the speed predicted by the cached rest contact give cheap
+        // probes. Narrow only with an evaluated residual of the actual law.
+        let rest_target = rhs_at(rest_contact);
+        if !rest_target.is_finite() {
+            return Err("axle contact residual is not finite");
+        }
+        if lower < 0.0 && upper > 0.0 {
+            if rest_target == 0.0 {
+                return Ok(0.0);
+            }
+            if rest_target > 0.0 {
+                lower = 0.0;
+            } else {
+                upper = 0.0;
+            }
+        }
+        let prediction = (rest_target / slope).clamp(lower, upper);
+        let (residual, scale) = evaluate(prediction)?;
+        if converged(residual, scale) {
+            return Ok(prediction);
+        }
+        if residual > 0.0 {
+            upper = prediction;
+        } else {
+            lower = prediction;
+        }
         for _ in 0..=64 {
-            // Split at zero first; within either sign, IEEE-754 magnitude
+            // Within either sign, IEEE-754 magnitude
             // bits are ordered by speed. Bisect representable speeds rather
             // than real-valued interval widths, which can take over 1,000
             // halvings to reach a root near zero from a physical load bound.
-            let middle = if lower < 0.0 && upper > 0.0 {
-                0.0
-            } else {
-                let magnitude =
-                    f64::from_bits(lower.abs().to_bits().midpoint(upper.abs().to_bits()));
-                if upper <= 0.0 { -magnitude } else { magnitude }
-            };
+            let magnitude = f64::from_bits(lower.abs().to_bits().midpoint(upper.abs().to_bits()));
+            let middle = if upper <= 0.0 { -magnitude } else { magnitude };
             let (residual, scale) = evaluate(middle)?;
-            if residual == 0.0 || residual.abs() <= scale * (64.0 * f64::EPSILON) {
+            if converged(residual, scale) {
                 return Ok(middle);
             }
             if middle == lower || middle == upper {
@@ -1962,6 +1997,58 @@ mod tire_patch_tests {
     }
 
     #[test]
+    fn subnormal_axle_matches_exact_linear_balance() {
+        let least = f64::from_bits(1);
+        // Rates are exact multiples of 1/8. Compute the numerator in
+        // integer speed units so rounding happens only at the endpoint.
+        for inertia in 1..=64 {
+            for damping in 0..=24 {
+                for old in -12..=12 {
+                    let contacts: &[i32] = if old == 0 { &[-5, 0, 5] } else { &[0] };
+                    for drive in -7..=7 {
+                        for &contact in contacts {
+                            let numerator = inertia * old + 8 * (drive - contact);
+                            let expected = (numerator as f64 / (inertia + damping) as f64)
+                                .round_ties_even()
+                                * least;
+                            let traction = contact as f64 * least;
+                            let step = solve_axle_step(
+                                old as f64 * least,
+                                inertia as f64 / 8.0,
+                                damping as f64 / 8.0,
+                                drive as f64 * least,
+                                0.0,
+                                traction.abs(),
+                                1.0,
+                                |_| traction,
+                            )
+                            .unwrap();
+                            assert_eq!(
+                                step.speed, expected,
+                                "inertia={inertia}/8 damping={damping}/8 old={old} drive={drive} contact={contact}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cancelling_drive_retains_the_inertial_product_remainder() {
+        for old in [0.3_f64, -0.3] {
+            for contact in [0.0, 0.5 * old.signum()] {
+                let drive = contact - 10.0 * old;
+                let expected = 10.0_f64.mul_add(old, drive - contact) / 10.0;
+                let step =
+                    solve_axle_step(old, 10.0, 0.0, drive, 0.0, contact.abs(), 1.0, |_| contact)
+                        .unwrap();
+                assert_eq!(step.speed, expected);
+            }
+        }
+    }
+
+    #[test]
     fn saturated_contact_preserves_incoming_speed_and_one_ulp_drive_changes() {
         let dt = 0.125;
         for direction in [-1.0, 1.0] {
@@ -1987,7 +2074,16 @@ mod tire_patch_tests {
             ] {
                 let expected = old + dt * (drive - direction * 8.0);
                 assert_eq!(contact(expected), direction * 8.0);
-                let step = solve_axle_step(old, 1.0, 0.0, drive, 0.0, 8.0, dt, contact).unwrap();
+                let evaluations = std::cell::Cell::new(0);
+                let step = solve_axle_step(old, 1.0, 0.0, drive, 0.0, 8.0, dt, |speed| {
+                    evaluations.set(evaluations.get() + 1);
+                    contact(speed)
+                })
+                .unwrap();
+                assert!(
+                    evaluations.get() <= 2,
+                    "saturated contact should close on its first prediction"
+                );
                 assert!(
                     (step.speed / expected - 1.0).abs() <= 64.0 * f64::EPSILON,
                     "old={old:e}, drive={drive:e}, expected={expected:e}, got={:e}",
