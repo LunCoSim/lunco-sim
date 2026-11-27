@@ -685,10 +685,11 @@ admission key and restores a zero-delta `Time<Physics>` at this boundary.
 The time owner registers `SimulationStepControl` as scene state so its final
 reset retires manual holds and pending cycles after terminal callbacks;
 the gizmo owner releases its independent scene-interaction key. The time owner keeps
-`SimTick` and `Time<Fixed>` continuous across scene changes; it reanchors the
-new mission epoch at the current tick and holds fixed cycles until the new scene
-is ready. Any admitted fixed-time balance remains with that shared clock and
-advances only after its causal holds clear. The controller/core owners clear
+`SimTick` and completed fixed elapsed time continuous across scene changes; it
+reanchors the new mission epoch at the current tick and holds fixed cycles until
+the new scene is ready. Teardown resets the rate to 1× and retires the outgoing
+fixed overstep and sampled virtual delta. Causal holds within the same scene
+retain pending demand. The controller/core owners clear
 scene-keyed input and control-path state. Do not add an asset-local pause flag;
 readiness and deliberate physics stepping must be owned by the incoming scene.
 

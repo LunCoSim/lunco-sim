@@ -102,6 +102,10 @@ after presentation producers. The fixed-loop diagnostic reads the final debt
 and includes both service phases, with pure waiting outside its timer.
 Fixed debt remains queued through pauses and is drained on resume;
 catch-up must not be mistaken for a change to the requested transport rate.
+Scene retirement is a different boundary: the time owner resets the requested
+rate to 1×, clears the outgoing fixed overstep and clears the already sampled
+virtual delta. A replacement scene never catches up time owed to its predecessor.
+Completed master ticks, fixed elapsed time and the fixed quantum remain unchanged.
 The render frame is application-owned, never shared with a concurrent World
 evaluator.
 This is a generic host-service invariant, with no authored routing or selection

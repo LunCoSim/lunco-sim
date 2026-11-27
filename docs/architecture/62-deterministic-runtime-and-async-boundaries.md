@@ -365,8 +365,10 @@ positions or rotations beyond completed endpoints. Typed scene-tool and menu hoo
 requests or the current frame's fixed-step work. The UI and simulation still
 share the GUI thread: a long tick or catch-up burst delays the next native input
 poll and the next visible frame. Under sustained overload, retained simulation
-demand can grow faster than the owner drains it. Discarding that balance would
-drop authoritative ticks. `SimulationTimingProfile` is the shared,
+demand can grow faster than the owner drains it. Discarding that balance within
+the same live scene would drop authoritative ticks. Scene teardown instead
+retires unexecuted demand along with its causal world, so no replacement scene
+inherits the old rate or backlog. `SimulationTimingProfile` is the shared,
 bounded observation path until ownership is split: it reports the most recent
 240 completed `FixedMain` tick service times and rate-derived service budgets,
 plus per-app-update fixed-loop duration, completed-step count, remaining

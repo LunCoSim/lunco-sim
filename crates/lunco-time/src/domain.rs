@@ -1218,9 +1218,9 @@ pub(crate) fn on_apply_scene_time_selection(
         crate::TransportMode::Playing
     };
 
-    // SimTick and Time<Fixed> remain continuous across scene changes. The new
-    // scene epoch is anchored at the current completed tick, so its mission
-    // time starts at zero without resetting any fixed-cycle consumer.
+    // SimTick and completed fixed elapsed time remain continuous across scene
+    // changes. Teardown retires the outgoing pacing demand; the new scene
+    // anchors its mission epoch at the current completed tick.
     *mission = crate::MissionClock::anchored(epoch_jd, tick.0);
     scene_time.finish_selection_application();
     if let Some(pending_scene_pause) = pending_scene_pause.as_deref_mut() {
@@ -1455,7 +1455,6 @@ mod tests {
         let mut app = App::new();
         let mut fixed = Time::<Fixed>::from_hz(60.0);
         fixed.advance_by(std::time::Duration::from_secs(3));
-        fixed.accumulate_overstep(std::time::Duration::from_millis(20));
         let mut progress = lunco_core_runtime::SimulationProgress::default();
         progress.acquire(
             lunco_core_runtime::SimulationProgressKey::scene_transition(transition_id),
@@ -1500,7 +1499,7 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<Time<Fixed>>().overstep(),
-            std::time::Duration::from_millis(20)
+            std::time::Duration::ZERO
         );
         assert_eq!(
             app.world().resource::<crate::TimeTransport>().mode,
