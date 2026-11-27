@@ -236,11 +236,11 @@ jobs:
           dotnet tool install --global vpk --version "$VELOPACK_CLI_VERSION"
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
-      # Match rust-toolchain.toml and OpenUSD's minimum compiler version.
+      # Match the repository toolchain in rust-toolchain.toml.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.97.1
+          toolchain: 1.100.0
           components: rust-src
 
       - name: Check out Windows Velopack fork
