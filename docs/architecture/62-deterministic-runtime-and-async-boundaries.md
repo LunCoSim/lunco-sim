@@ -65,7 +65,15 @@ Native XPBD passes order each joint type by ascending live entity index, so
 unrelated component changes and disable/re-enable operations cannot change the
 order of corrections to shared bodies. This world-local ordering still relies
 on deterministic application entity creation and topology admission; it is not
-a source identity or a cross-platform numerical guarantee.
+a source identity or a cross-platform numerical guarantee. During each
+coupled velocity-relaxation substep, Avian selects the contact constraints
+belonging to the admitted joint-connected islands once. The selection borrows
+the original graph rows; complete colors retain their contiguous slice,
+partial colors retain disjoint mutable references, and unselected colors do
+no solve work. Every iteration preserves serial overflow-first priority,
+graph-color order and independent same-color body access. No substeps or
+relaxation iterations are removed, and graph structure cannot change while
+the selection is borrowed.
 The `native_force_drives`, joint, differential, and continuous-contact production
 scenes qualify behavior; compilation alone does not qualify physics.
 

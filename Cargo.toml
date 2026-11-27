@@ -691,16 +691,16 @@ bevy_shader = { git = "https://github.com/LunCoSim/bevy", rev = "8671dfe743d284f
 bevy_render = { git = "https://github.com/LunCoSim/bevy", rev = "c7582e05fadde13b9ebd9247a883d4b0edab80d2" }
 # Exact picking hit reuse shares the validated native presentation branch.
 bevy_picking = { git = "https://github.com/LunCoSim/bevy", rev = "b33d65990122c80aa73f835cd0c77d5a22ab4dd0" }
-# Exact retained camera and directional-shadow visibility share their sorted membership owner.
-bevy_camera = { git = "https://github.com/LunCoSim/bevy", rev = "6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2" }
-bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "6bc3e3381c5dde8cb7043b2f0cc9b8d077619eb2" }
-# Change-driven CPU extraction and retained prepared uniforms share the render-buffer revision.
-bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "c7582e05fadde13b9ebd9247a883d4b0edab80d2" }
+# Exact retained camera visibility and batched local/directional shadow caster membership.
+bevy_camera = { git = "https://github.com/LunCoSim/bevy", rev = "4f66e4bc7b04782681d454e400308b85e49df1c3" }
+bevy_light = { git = "https://github.com/LunCoSim/bevy", rev = "4f66e4bc7b04782681d454e400308b85e49df1c3" }
+# Native prepared uniforms and persistent shadow allocation/layer leases.
+bevy_pbr = { git = "https://github.com/LunCoSim/bevy", rev = "994611cd8cf2d286958a14daa1047622fafa436f" }
 bevy_sprite_render = { git = "https://github.com/LunCoSim/bevy", rev = "4cea221a4792adb3922abffd522b5c779b5b5c0f" }
-# Exposes the path-tracing schedule set used by native forward composition.
-bevy_solari = { git = "https://github.com/LunCoSim/bevy", rev = "89d20883269eee3bd1dac89b6e02536c74fbb4f8" }
+# Native forward composition and demand-driven raytracing acceleration structures.
+bevy_solari = { git = "https://github.com/LunCoSim/bevy", rev = "a919cc58cd0241baf8bf187ef7a73d92da519f56" }
 # Orders the Flair style recalculation set after Bevy UI propagation.
 bevy_flair_style = { git = "https://github.com/LunCoSim/bevy_flair", rev = "554b2344ec5f5ade2dcc75199b56932a7718dd94" }
-# Native joint/contact relaxation and checked inertia/gyroscopic numerics share one revision.
-avian3d = { git = "https://github.com/LunCoSim/avian", rev = "b8d1f5a3d5aeeb61220813e82607ca6a74e7057a" }
+# Native coupled contacts retain exact selected graph rows per substep.
+avian3d = { git = "https://github.com/LunCoSim/avian", rev = "ee50e6fc49be0a5f8a17567fa35fcbde6cd7f33c" }
 transform-gizmo-bevy = { git = "https://github.com/LunCoSim/mitchty-transform-gizmo", rev = "6d87d6c28ed1ad3bd134c444e8367ce8cf8d7e41" }

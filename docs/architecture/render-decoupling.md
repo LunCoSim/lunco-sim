@@ -582,8 +582,15 @@ installs that native delegate with Bevy's current-population query condition
 through the public schedule replacement API, preserving its implicit type set,
 visibility set and native preparation/visibility ordering edges. With no local
 lights the pass has no output and is skipped;
-adding either light type wakes it on the next update. Directional caster work
-and native shadow-LOD extraction retain their own schedules. The native
+adding either light type wakes it on the next update. Native local visibility
+retains exact per-face memberships and their per-frame visibility union.
+Changed caster membership, bounds, transforms, masks, visibility ranges and
+component retirement reconcile affected stable light views. When light poses,
+frusta or widely changed inventories require a full rebuild, all admitted
+local views share one parallel caster traversal and separate per-light result
+queues. The native sphere, oriented-bound and frustum tests remain authoritative;
+only changed sorted memberships advance the extracted visibility component.
+Directional caster work and native shadow-LOD extraction retain their own schedules. The native
 execution-tick regression covers empty and directional-only worlds, point/spot
 addition and removal, and installation into both uninitialized and initialized
 schedules.
@@ -594,7 +601,34 @@ When Bevy removes an invisible `ExtractedPointLight`, the adapter retires its
 commit. Removing that native tracker invokes Bevy's existing shadow-view cleanup;
 re-extraction supplies a fresh required tracker. Parked lights therefore cannot
 leave render-graph roots behind, and same-boundary re-extraction retains live
-views. Main-world light and document lifetimes are unchanged.
+views. Main-world light and document lifetimes are unchanged. Native shadow
+extraction updates only changed lights; table retirement separately checks
+the complete current shadow-enabled source inventory. An unchanged light
+keeps its extracted caster table, and a renewed render-entity mapping
+re-extracts it. Zero-output, invisible, or shadow-disabled sources retire
+their tables without disturbing unchanged neighbors.
+
+Native point and directional/spot depth arrays are GPU-owned allocations
+retained while their complete texture descriptors match, including their
+sampling views. Every local shadow view records the exact texture identity and
+array-layer index. Texture replacement, changed point-light ordering and
+changes to the directional cascade reservation rebind affected shadow views
+even when the light itself is unchanged. GPU recovery reinitializes the array
+owner. Shadow depth is still drawn using the native pass; allocation retention
+does not admit depth-content reuse. Moving lights require new projections,
+and any future content reuse must prove the complete caster, material, shader,
+deformation and draw-completion contract as well as the allocation lease.
+
+### Raytracing geometry admission
+
+Bevy Solari retains mesh compatibility metadata independently of instance
+admission. The render-world raytracing mesh instances request acceleration
+structures for compatible resident meshes, including meshes extracted before
+the backend was selected. Multiple instances share one BLAS. Mesh replacement
+or retirement invalidates the corresponding BLAS and compatibility state;
+retirements keep the native TLAS lifetime contract. The preparation system
+never encodes or submits an empty build. Ordinary raster-only meshes do not
+cause acceleration-structure construction.
 
 When adding a crate to the simulation core, check both sides before merging:
 
