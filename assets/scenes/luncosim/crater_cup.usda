@@ -852,6 +852,8 @@ def Xform "World" (
                 {
                     double3 xformOp:translate = (0.0, 0.0, -0.36)
                     double3 lunco:cameraLookAt = (0.0, 0.0, -12.0)
+                    float exposure:fStop = 16.0
+                    float exposure:time = 0.00390625
                 }
                 def Cylinder "Optics0"
                 {
@@ -1029,6 +1031,8 @@ def Xform "World" (
             double3 xformOp:translate = (3.6, 2.8, 4.8)
             double3 lunco:cameraLookAt = (0.0, 0.5, -0.65)
             float focalLength = 22.0
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
         def PhysicsRevoluteJoint "TiltJoint"
         {
@@ -1103,6 +1107,11 @@ def Xform "World" (
             {
                 float lunco:tire:minValidatedSpeed = 2.4000000953674316
             }
+        }
+        over "FrontCamera"
+        {
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
     }
     def Xform "Comet" (
@@ -1179,6 +1188,8 @@ def Xform "World" (
             double3 xformOp:translate = (1.05, 2.67, 6.8)
             double3 lunco:cameraLookAt = (0.0, 0.27, -4.4)
             float focalLength = 14.0
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
         def Xform "Coachwork" (
             prepend references = @lunco://vessels/rovers/comet/body.usda@</World>
@@ -1912,6 +1923,11 @@ def Xform "World" (
         {
             float physics:lowerLimit = -43.0
             float physics:upperLimit = 43.0
+        }
+        over "FrontCamera"
+        {
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
     }
     def Xform "Sample1" (
@@ -4434,6 +4450,13 @@ def Xform "World" (
             double3 xformOp:translate = (2.95, 2.1, 4.75)
             double3 lunco:cameraLookAt = (0.0, 0.34, -0.53)
             float focalLength = 20.0
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
+        }
+        over "FrontCamera"
+        {
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
     }
     def Xform "Tailings" (
@@ -4583,6 +4606,13 @@ def Xform "World" (
             double3 xformOp:translate = (2.95, 2.1, 4.75)
             double3 lunco:cameraLookAt = (0.0, 0.34, -0.53)
             float focalLength = 20.0
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
+        }
+        over "FrontCamera"
+        {
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
     }
     def Xform "Tanker" (
@@ -4797,6 +4827,13 @@ def Xform "World" (
             double3 xformOp:translate = (2.95, 2.1, 4.75)
             double3 lunco:cameraLookAt = (0.0, 0.34, -0.53)
             float focalLength = 20.0
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
+        }
+        over "FrontCamera"
+        {
+            float exposure:fStop = 16.0
+            float exposure:time = 0.00390625
         }
     }
     def Xform "PolarWorks" (
