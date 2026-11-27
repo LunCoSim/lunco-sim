@@ -841,13 +841,54 @@ pub(super) fn draw_camera_feed(
             feeds.instances.contains_key(id)
         }
     });
+    if state.main_open {
+        let source = cameras.iter().find(|(id, name, ..)| {
+            state.main_source.map_or_else(
+                || selection.active_name.as_deref() == Some(name.as_str()),
+                |source| source == **id,
+            )
+        });
+        let Ok(ctx) = contexts.ctx_mut() else {
+            return;
+        };
+        let mut open = state.main_open;
+        egui::Window::new("Camera image controls")
+            .id(egui::Id::new("camera-image-controls"))
+            .open(&mut open)
+            .default_width(390.0)
+            .show(ctx, |ui| {
+                if let Some((source, name, callsign, catalog, settings, exposure)) = source {
+                    ui.strong(entity_display_name(Some(name), callsign, catalog));
+                    ui.label(name.as_str());
+                    let mut effects = settings.cloned().unwrap_or_default();
+                    let draft = state
+                        .shader_drafts
+                        .entry((true, source.get()))
+                        .or_insert_with(|| effects.shader.clone());
+                    let inherited = viewport_exposure
+                        .ev100
+                        .unwrap_or_else(|| f64::from(exposure.copied().unwrap_or_default().ev100));
+                    if image_controls(ui, &mut effects, draft, inherited) {
+                        commands.trigger(SetCameraImageEffects {
+                            feed: None,
+                            source: Some(*source),
+                            settings: effects,
+                        });
+                    }
+                } else {
+                    ui.label("Select a main camera to edit its image.");
+                }
+            });
+        state.main_open = open;
+    }
     let embedded: std::collections::BTreeSet<u64> = authored_images
         .iter()
         .filter(|(_, visibility)| visibility.get())
         .filter_map(|(tags, _)| tags.tags().get("camera_feed")?.parse().ok())
         .collect();
     // Retire per-feed drafts before the visibility check, but do not prepare
-    // a dropdown for a hidden or author-embedded camera view.
+    // a dropdown for a hidden or author-embedded camera view. The main
+    // camera image controls have already been drawn independently.
     if feeds
         .instances
         .keys()
@@ -1006,46 +1047,6 @@ pub(super) fn draw_camera_feed(
         if !open {
             commands.trigger(RemoveCameraFeed { feed: *id });
         }
-    }
-    if state.main_open {
-        let source = cameras.iter().find(|(id, name, ..)| {
-            state.main_source.map_or_else(
-                || selection.active_name.as_deref() == Some(name.as_str()),
-                |source| source == **id,
-            )
-        });
-        let Ok(ctx) = contexts.ctx_mut() else {
-            return;
-        };
-        let mut open = state.main_open;
-        egui::Window::new("Camera image controls")
-            .id(egui::Id::new("camera-image-controls"))
-            .open(&mut open)
-            .default_width(390.0)
-            .show(ctx, |ui| {
-                if let Some((source, name, callsign, catalog, settings, exposure)) = source {
-                    ui.strong(entity_display_name(Some(name), callsign, catalog));
-                    ui.label(name.as_str());
-                    let mut effects = settings.cloned().unwrap_or_default();
-                    let draft = state
-                        .shader_drafts
-                        .entry((true, source.get()))
-                        .or_insert_with(|| effects.shader.clone());
-                    let inherited = viewport_exposure
-                        .ev100
-                        .unwrap_or_else(|| f64::from(exposure.copied().unwrap_or_default().ev100));
-                    if image_controls(ui, &mut effects, draft, inherited) {
-                        commands.trigger(SetCameraImageEffects {
-                            feed: None,
-                            source: Some(*source),
-                            settings: effects,
-                        });
-                    }
-                } else {
-                    ui.label("Select a main camera to edit its image.");
-                }
-            });
-        state.main_open = open;
     }
 }
 
