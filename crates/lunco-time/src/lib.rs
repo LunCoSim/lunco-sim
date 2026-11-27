@@ -648,7 +648,8 @@ pub fn next_fixed_deadline(world: &World, latest: Instant) -> Instant {
 
 /// Run each admitted fixed tick as one complete causal cycle.
 ///
-/// The clock conserves admitted duration across completed and pending time:
+/// Within a scene, the clock conserves admitted duration across completed and
+/// pending time:
 /// each fixed cycle transfers one timestep from `overstep` to `elapsed`. A
 /// solver or scene admission barrier can arise inside a burst, so the remaining
 /// admitted time stays in the shared accumulator until its owner releases the
@@ -879,6 +880,14 @@ impl Default for TimeTransport {
             mode: TransportMode::Playing,
             rate: 1.0,
         }
+    }
+}
+
+impl SceneResource for TimeTransport {
+    fn clear_scene(&mut self) {
+        // The requested rate belongs to the outgoing scene. The scene-time
+        // lifecycle owns the play/pause intent of the replacement.
+        self.rate = Self::default().rate;
     }
 }
 
@@ -1254,8 +1263,16 @@ impl Plugin for TimePlugin {
         // self-sufficient where it doesn't.
         // Own admission here as well. The fixed runner bounds work while
         // retaining pending time; consumers must not clip the virtual input.
-        app.init_resource::<Time<Virtual>>()
-            .init_resource::<Time<Fixed>>();
+        app.init_scene_resource_with::<Time<Virtual>>(|clock| {
+            // The current frame may already have sampled the outgoing scene's
+            // rate before teardown. Do not admit that delta into its successor.
+            clock.advance_by(Duration::ZERO);
+        })
+        .init_scene_resource_with::<Time<Fixed>>(|clock| {
+            // Preserve the completed application clock and quantum, but retire
+            // all unexecuted demand belonging to the removed causal world.
+            clock.discard_overstep(clock.overstep());
+        });
         // First runs before scene-transition observers and PreUpdate admission.
         // Keep the virtual clock closed through that first time sample so a
         // startup hold cannot arrive after Bevy has already produced a fixed
@@ -1279,7 +1296,7 @@ impl Plugin for TimePlugin {
             .init_scene_resource::<TransportThroughput>()
             .init_resource::<lunco_core_runtime::SimulationExecutionMode>()
             .init_resource::<MissionClock>()
-            .init_resource::<TimeTransport>()
+            .init_scene_resource::<TimeTransport>()
             .init_resource::<lunco_core::RuntimeFaults>()
             .init_resource::<PendingScenePause>()
             .init_resource::<WorldTime>()
@@ -2018,6 +2035,34 @@ mod tests {
         service_pending_simulation(world, || true);
         assert_eq!(world.resource::<FixedRunCount>().0, max_cycles + 3);
         assert_eq!(world.resource::<Time<Fixed>>().overstep(), Duration::ZERO);
+    }
+
+    #[test]
+    fn scene_teardown_retires_transport_rate_and_pending_pacing_demand() {
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, TimePlugin));
+        let world = app.world_mut();
+        let timestep = world.resource::<Time<Fixed>>().timestep();
+        world.resource_mut::<SimTick>().0 = 12;
+        let mut fixed = world.resource_mut::<Time<Fixed>>();
+        fixed.advance_by(timestep * 12);
+        fixed.accumulate_overstep(timestep * 60);
+        world.resource_mut::<TimeTransport>().rate = 64.0;
+        let mut pacing = world.resource_mut::<Time<Virtual>>();
+        pacing.set_relative_speed_f64(64.0);
+        pacing.advance_by(timestep * 64);
+
+        lunco_core::run_scene_teardown(world);
+
+        let fixed = world.resource::<Time<Fixed>>();
+        assert_eq!(fixed.overstep(), Duration::ZERO);
+        assert_eq!(fixed.elapsed(), timestep * 12);
+        assert_eq!(fixed.timestep(), timestep);
+        assert_eq!(world.resource::<SimTick>().0, 12);
+        assert_eq!(world.resource::<Time<Virtual>>().delta(), Duration::ZERO);
+        assert_eq!(world.resource::<TimeTransport>().rate, 1.0);
+        project_time_transport(world);
+        assert_eq!(world.resource::<Time<Virtual>>().relative_speed_f64(), 1.0);
     }
 
     #[test]

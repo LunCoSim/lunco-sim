@@ -836,8 +836,9 @@ move the OS cursor or mutate the native `Window` to make a test gesture work.
 
 Use `python3 scripts/api/test_simulation_lifecycle.py --output <evidence-dir>`
 with `LUNCOSIM_BIN` set to the production binary. The retained application
-observer checks 11 transport and teardown assertions while paused and after
-scene replacement; `--windowed` also captures the terminal presentation. The
+observer checks 15 transport and teardown assertions while paused, after
+scene replacement, after restart, and after switching Twins at non-default rates; `--windowed`
+also captures the terminal presentation. The
 fresh-host observer waits for its first admitted simulation tick before the
 initial clear; presentation work can start while scene admission is pending.
 The four `SIMULATION_*` Info channels describe actual start, user pause/unpause and
