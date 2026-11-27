@@ -279,3 +279,17 @@ the images and convergence error before accepting a different default.
 
 `--maximize` uses the native desktop framebuffer. Read the recorded pixel size;
 startup window-placement flags do not prove a requested render resolution.
+
+
+For a settled interval within a single Twin lifetime, attribute complete
+native Modelica dispatch waves with the matching Tracy CSV exporter:
+
+```sh
+python3 scripts/perf/modelica_tick_latency.py capture.tracy START_SECONDS END_SECONDS \
+  --exporter ../tracy/csvexport/build/tracy-csvexport-0.14.1
+```
+
+Each row counts the waves in which a participant finished numerical work last
+or was admitted last. Ordered receipt time includes time waiting on the solver.
+Admission also depends on the host's next completion-service opportunity.
+Inspect these intervals together with the frame and fixed schedules.

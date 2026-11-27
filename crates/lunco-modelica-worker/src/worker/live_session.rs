@@ -29,6 +29,7 @@ struct PendingStep {
 /// An admitted session identity and last observed clock; it owns no solver state.
 pub(super) struct SessionHandle {
     lane: Lane<Sessions>,
+    entity: bevy::prelude::Entity,
     id: u64,
     time: f64,
     input_names: Vec<String>,
@@ -42,6 +43,7 @@ fn owner_error(message: impl Into<String>) -> SimulationDiagnosticError {
 
 pub(super) fn construct(
     id: u64,
+    entity: bevy::prelude::Entity,
     lane: Lane<Sessions>,
     dae: std::sync::Arc<rumoca_ir_dae::Dae>,
     plan: LiveBuildPlan,
@@ -82,6 +84,7 @@ pub(super) fn construct(
                 profile.queue_wait_ns = Some(queue_wait_ns);
                 let handle = SessionHandle {
                     lane: session_lane,
+                    entity,
                     id,
                     time: stepper.time(),
                     input_names: stepper.input_names().to_vec(),
@@ -130,10 +133,11 @@ impl SessionHandle {
         self.last_step_duration_ns = None;
         let (tx, rx) = bounded(1);
         let id = self.id;
+        let entity = self.entity;
         let submitted = self.lane.submit(move |sessions| {
             // Tracy includes span fields in source-location identity. Keep the
             // per-step zone bounded; transaction ids live in the receipts.
-            let _span = bevy::log::info_span!("modelica_live_step_job").entered();
+            let job_span = bevy::log::info_span!("modelica_live_step_job", ?entity).entered();
             let Some(stepper) = sessions.get_mut(&id) else {
                 let _ = tx.send(Err(owner_error(format!(
                     "live session {id} is absent from its owner"
@@ -167,6 +171,7 @@ impl SessionHandle {
             if receipt.outputs.is_err() {
                 sessions.remove(&id);
             }
+            drop(job_span);
             let _ = tx.send(Ok(receipt));
         });
         self.pending = Some(PendingStep {
@@ -203,6 +208,7 @@ impl SessionHandle {
                 "live transaction receipt does not match its ordered command",
             ));
         }
+        let _span = bevy::log::info_span!("modelica_ordered_step_receipt", entity = ?self.entity).entered();
         let receipt =
             pending.receipt.map_err(owner_error)?.recv().map_err(|_| {
                 owner_error("live session owner disconnected during a transaction")

@@ -1146,11 +1146,12 @@ other documents at `Background`, in stable priority/document/generation order.
 Verify the exact registry link and participant document before attributing a
 wait to scheduling. A priority repair does not establish a construction or
 end-to-end loading gain; running work is not preempted.
-For mixed loading and live execution, inspect `modelica_live_step_job` queue
-wait and execution separately. Match its construction identity and thread to
-preparation/construction spans before attributing a response-latency rise to
-mailbox blocking; response latency also includes transport and main-thread
-admission. Preserve the fixed-tick backlog and barrier state alongside timings.
+For native live execution, correlate the `modelica_dispatch_step`,
+`modelica_live_step_job`, `modelica_ordered_step_receipt` and
+`modelica_admit_step_result` spans by ECS entity. The job ends before its
+receipt is sent. The ordered receipt includes the coordinator's blocking wait.
+Use `scripts/perf/modelica_tick_latency.py` on a settled trace interval and
+match entities to the runtime log's live-affinity records. Preserve the fixed-tick backlog and barrier state alongside timings.
 Modelica and scripted snapshot publication use `ScalarPortMap::upsert_samples`.
 The destination retains slot hints, but validates each live layout and exact
 name on every copy. Name validation and the bit-exact update share one mutable
