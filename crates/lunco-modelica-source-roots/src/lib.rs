@@ -1060,7 +1060,12 @@ fn on_load_twin_modelica_source_root(
         .authority_for_root(&twin.root)
         .map_err(|_| "Twin asset source is unavailable".to_owned())?
         .ok_or_else(|| "Twin asset source is unavailable".to_owned())?;
-    let source_root_id = format!("twin:{}:modelica:{}", request.twin_id, request.source_index);
+    // The compiler persists this name in its admitted context. The runtime lease
+    // is checked separately by the registry owner and its operation generation.
+    let source = roots
+        .logical_identity_for_authority(&authority)
+        .map_err(|error| error.to_string())?;
+    let source_root_id = format!("twin:{source}:modelica:{}", request.source_index);
 
     let authored_path = PathBuf::from(&request.path);
     let root_dir = if authored_path.is_absolute() {

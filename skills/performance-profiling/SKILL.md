@@ -25,6 +25,16 @@ that key without rehashing the declaration inventory. Never remove those
 checks or weaken duplicate-alias, non-finite, stale-session or atomic-write gates
 to improve a timing.
 
+For native Modelica startup comparisons, use the same production executable
+and scene to measure an empty local cache with and without a prebuilt directory.
+Generate it with `scripts/prebuild_modelica.py` and select it with
+`LUNCOSIM_MODELICA_PREBUILT`. Count both strict DAE and checked component hits
+and compare initialized observations and the active participant count.
+Set `RUMOCA_PROFILE_NATIVE_ENTRIES=1` for a separate diagnostic run. The
+`rumoca_native_entry first_call` events count dispatched native entries by
+family, once per handle. Emitted symbols and repeated calls are different
+measurements.
+
 ## Required separation
 
 - For authored metadata queries, use `QueryUsdPrim`/`QueryUsdPrims` with

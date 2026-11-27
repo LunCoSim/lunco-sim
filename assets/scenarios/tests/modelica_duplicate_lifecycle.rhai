@@ -288,8 +288,6 @@ fn on_tick(me, params) {
         if parent_doc == () || child == () || parent_doc.origin.kind != "file" || child.origin.kind != "file"
             || parent_doc.dirty != false || child.dirty != false || !ready(this.child, "Child") { return; }
         let source_index = 0;
-        let root_id = "twin:" + this.expected_owner.twin.to_string()
-            + ":modelica:" + source_index.to_string();
         let loaded = cmd("LoadTwinModelicaSourceRoot", #{source_index: source_index,
             path: "HeaderImports"});
         if loaded == () || loaded.ok != true {

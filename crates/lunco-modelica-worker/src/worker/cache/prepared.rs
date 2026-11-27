@@ -132,11 +132,11 @@ impl Request {
         solver: &str,
     ) -> Result<SimulationSession, SimulationDiagnosticError> {
         let key = component_key(&self.source, solver, &options);
-        let handle = StorageHandle::File(path(&key));
+        let local = path(&key);
         let storage = FileStorage::new();
         let started = std::time::Instant::now();
         let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.read(&storage, &handle, &key)
+            super::read_with_prebuilt(&local, |handle| self.read(&storage, handle, &key))
         }))
         .unwrap_or_else(|_| {
             Err(ModelicaCacheReadError::Codec(serde_json::Error::io(
@@ -165,9 +165,6 @@ impl Request {
         let component = if let Some(component) =
             cached.filter(|_| decision == ArtifactCacheDecision::Reuse)
         {
-            if let Err(error) = storage.mark_cache_file_used(&handle) {
-                log::warn!("prepared Modelica component use was not recorded: {error}");
-            }
             log::info!(
                 "reused prepared Modelica component for {} in {:.3} s",
                 self.doc_uri,
