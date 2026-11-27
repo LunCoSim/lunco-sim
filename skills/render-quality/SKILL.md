@@ -12,7 +12,7 @@ authored USD Material/Shader network and its assets own visual intent; the
 runtime binder projects that intent to Bevy.
 
 Before comparing lighting, check **Fixed viewport exposure** in Settings →
-General and **Fixed color exposure** in the camera's **Image controls…**.
+General (also in Graphics → Camera look) and **Fixed color exposure** in the camera's **Image controls…**.
 Disable both to inspect the scene's exposure calibration. A feed has its own
 **Fixed color exposure** in **Style**.
 

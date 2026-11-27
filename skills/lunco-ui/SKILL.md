@@ -145,7 +145,8 @@ controls on one toolbar line, with the graph HUD frame and `+`/`×` buttons.
 Its image controls affect only that feed. Fixed color exposure (EV100), depth
 range, noise, seed, animation, quantization and shader asset are live typed settings.
 The main camera's fixed EV100 takes precedence over **Settings → General →
-Fixed viewport exposure**.
+Fixed viewport exposure** (also in Graphics → Camera look). The main image
+controls must open even when no independent feed exists.
 See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)
 for owners, shader bindings, physical scope and completion events. Verify both
 actual rendered depth/noise and negative `SetCameraImageEffects` admissions;
