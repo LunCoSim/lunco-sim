@@ -62,10 +62,17 @@ fn inspect_preview(me) {
 }
 fn reveal_source(me) { cmd("RevealNavigationSource", #{uri: this.source}); }
 fn revealed(me) { get_setting("BrowserView.section") == "lunco.workbench.files" && get_setting("BrowserQuery.text").ends_with("site.usda") }
-fn choose_library(me) {
+fn choose_generated(me) {
     this = record(this, revealed(me), "revealing a document selects Files and filters its exact source");
-    cmd("SetBrowserSection", #{id: "lunco.workbench.library"});
+    cmd("SetBrowserSection", #{id: "lunco.modelica.generated"});
 }
+fn generated_view_ready(me) { get_setting("BrowserView.section") == "lunco.modelica.generated" }
+fn inspect_generated_view(me) {
+    this = record(this, generated_view_ready(me) && get_setting("BrowserQuery.text") == "", "Generated Modelica is a separate registered view with its own cleared filter");
+    this = record(this, nav().scene_path == this.scene, "choosing generated sources preserves the scene");
+    print("NAV_CAPTURE:generated-view");
+}
+fn choose_library(me) { cmd("SetBrowserSection", #{id: "lunco.workbench.library"}); }
 fn library_view_ready(me) { get_setting("BrowserView.section") == "lunco.workbench.library" }
 fn inspect_library_view(me) {
     print("NAV_CAPTURE:library-view");
@@ -160,6 +167,7 @@ fn inspect_scene_view(me) {
     this = record(this, hidden && scene_view_ready(me) && nav().scene_path == this.scene, "scene-backed View keeps background previews hidden and preserves the loaded world");
     print("NAV_CAPTURE:scene-view");
 }
+fn select_generated_before_replacement(me) { cmd("SetBrowserSection", #{id: "lunco.modelica.generated"}); }
 fn replace_twin(me) { cmd("OpenTwin", #{path: this.replacement}); }
 fn replacement_ready(me) { let current = nav(); current.twin_id != () && current.twin_id != this.twin }
 fn inspect_retirement(me) {
@@ -183,7 +191,9 @@ fn task(me, ctx) {
             wait_until(Fn("ready")), once(Fn("begin")), check(Fn("valid")),
             wait_until(Fn("twin_results_ready")), once(Fn("open_twin_source")), check(Fn("valid")),
             wait_until(Fn("preview_ready")), once(Fn("inspect_preview")), check(Fn("valid")), wait(1.0),
-            once(Fn("reveal_source")), wait_until(Fn("revealed")), once(Fn("choose_library")), check(Fn("valid")),
+            once(Fn("reveal_source")), wait_until(Fn("revealed")), once(Fn("choose_generated")), check(Fn("valid")),
+            wait_until(Fn("generated_view_ready")), once(Fn("inspect_generated_view")), check(Fn("valid")), wait(1.0),
+            once(Fn("choose_library")),
             wait_until(Fn("library_view_ready")), once(Fn("inspect_library_view")), check(Fn("valid")), wait(1.0),
             wait_until(Fn("view_rejection_ready")), once(Fn("find_library")), check(Fn("valid")), wait_until(Fn("library_results_ready")), once(Fn("inspect_library_results")), check(Fn("valid")), wait(1.0),
             once(Fn("open_library")), wait_until(Fn("library_ready")), once(Fn("inspect_library")), check(Fn("valid")),
@@ -201,6 +211,7 @@ fn task(me, ctx) {
             once(Fn("press_escape")), wait(0.05), once(Fn("release_escape")), wait_until(Fn("search_closed")),
             once(Fn("switch_to_scene")), wait_until(Fn("scene_view_ready")), once(Fn("park_preview")), wait(0.1),
             once(Fn("inspect_scene_view")), check(Fn("valid")), wait(1.0),
+            once(Fn("select_generated_before_replacement")), wait_until(Fn("generated_view_ready")),
             once(Fn("replace_twin")), wait_until(Fn("replacement_ready")), once(Fn("inspect_retirement")),
         ]),
         seq([wait(45.0), once(Fn("timeout"))]),

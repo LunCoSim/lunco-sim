@@ -11,6 +11,7 @@
 //! the source when it lands.
 
 use bevy::prelude::*;
+use lunco_workbench_browser::twin_browser::LoadedClassView;
 use lunco_workbench_browser::{BrowserAction, BrowserActions};
 
 /// Drain the Twin Browser action outbox each frame and dispatch.
@@ -99,6 +100,7 @@ pub fn drain_browser_actions(world: &mut World) {
             BrowserAction::OpenLoadedClass {
                 doc_id,
                 qualified_path,
+                view,
             } => {
                 let doc = lunco_doc::DocumentId::new(doc_id);
                 // Resolve the doc's "default class" (first
@@ -107,26 +109,40 @@ pub fn drain_browser_actions(world: &mut World) {
                 // tab allocated with `drilled_class = None` by the
                 // OpenFile / new-doc paths. `ensure_preview_for_with_default`
                 // dedups them so both paths converge on one tab.
-                let default_class: Option<String> = world
+                let Some(host) = world
                     .get_resource::<crate::ui::document_context::ModelicaDocuments>()
-                    .and_then(|r| r.host(doc))
-                    .and_then(|h| {
-                        h.document()
-                            .index()
-                            .classes
-                            .values()
-                            .find(|c| {
-                                !matches!(c.kind, lunco_modelica_index::index::ClassKind::Package)
-                            })
-                            .map(|c| c.name.clone())
-                    });
+                    .and_then(|registry| registry.host(doc))
+                else {
+                    log::warn!("Cannot open retired Modelica browser document: {doc:?}");
+                    continue;
+                };
+                let default_class = host
+                    .document()
+                    .index()
+                    .classes
+                    .values()
+                    .find(|class| {
+                        !matches!(class.kind, lunco_modelica_index::index::ClassKind::Package)
+                    })
+                    .map(|class| class.name.clone());
                 let (tab_id, evict) = {
                     let mut model_tabs = world.resource_mut::<crate::model_tabs::ModelTabs>();
-                    model_tabs.ensure_preview_for_with_default(
+                    let (tab, evict) = model_tabs.ensure_preview_for_with_default(
                         doc,
                         Some(qualified_path),
                         default_class.as_deref(),
-                    )
+                    );
+                    if let Some(view) = view {
+                        use crate::model_tabs_types::ModelViewMode;
+                        model_tabs.set_view_mode(
+                            tab,
+                            match view {
+                                LoadedClassView::Text => ModelViewMode::Text,
+                                LoadedClassView::Diagram => ModelViewMode::Canvas,
+                            },
+                        );
+                    }
+                    (tab, evict)
                 };
                 // ensure_preview_for never rebinds TabIds; an evicted
                 // previous preview is closed here. Layout mutation goes
@@ -167,30 +183,7 @@ pub fn drain_browser_actions(world: &mut World) {
                     .active_document = Some(doc);
             }
             BrowserAction::CloseDoc { doc } => {
-                use crate::model_tabs::ModelTabs;
-                use crate::ui::MODEL_VIEW_KIND;
-                // Close every tab bound to the doc — dock layout via
-                // CloseTab triggers, ModelTabs state via
-                // `close_all_for_doc`, canvas via `drop_tab` — then
-                // the document itself. `CloseDocument`'s observers
-                // handle registry removal and package-tree cleanup;
-                // on wasm the resulting `DocumentClosed` also clears
-                // the localStorage autosave entry, so a restored
-                // draft stops resurrecting on reload.
-                let tab_ids = world.resource_mut::<ModelTabs>().close_all_for_doc(doc);
-                for tab in tab_ids {
-                    world
-                        .commands()
-                        .trigger(lunco_workbench_core::commands::CloseTab {
-                            kind: MODEL_VIEW_KIND.as_str().to_owned(),
-                            instance: tab,
-                        });
-                    if let Some(mut state) = world
-                        .get_resource_mut::<crate::ui::panels::canvas_diagram::CanvasDiagramState>(
-                    ) {
-                        state.drop_tab(tab);
-                    }
-                }
+                // The document close owner retires every view and the registry entry.
                 world
                     .commands()
                     .trigger(lunco_doc_bevy::CloseDocument { doc_id: doc });

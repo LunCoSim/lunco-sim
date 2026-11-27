@@ -1492,18 +1492,13 @@ pub fn on_document_closed_cleanup(
         &mut modals,
         &mut pending_save_close,
     );
-    for tab in model_tabs.close_all_for_doc(doc) {
-        commands.trigger(lunco_workbench_core::commands::CloseTab {
-            kind: MODEL_VIEW_KIND.as_str().to_owned(),
-            instance: tab,
-        });
-    }
+    retire_document_views(
+        doc,
+        &mut model_tabs,
+        canvas_state.as_deref_mut(),
+        &mut commands,
+    );
     cache.in_memory_models.retain(|e| e.doc != doc);
-    // Drop the per-doc canvas entry (viewport, selection, in-flight
-    // projection task) so a later tab reusing the id starts fresh.
-    if let Some(canvas) = canvas_state.as_mut() {
-        canvas.drop_doc(doc);
-    }
     // TODO(backlog): this active_document reset is generic workspace behavior that
     // belongs in a lunco-workspace CloseDocument observer (the StatusBus and
     // DocumentDiagnostics halves were already re-homed). Trap for the split:
@@ -1521,6 +1516,39 @@ pub fn on_document_closed_cleanup(
     // Setup drafts belong to the document; completed runs belong to history.
     if let Some(d) = drafts.as_mut() {
         d.forget_doc(doc);
+    }
+}
+
+/// A scene projection may retire its generated document without a user close
+/// command. The registry lifecycle event closes its editor views as well.
+pub fn retire_closed_document_views(
+    trigger: On<lunco_doc_bevy::DocumentClosed>,
+    mut model_tabs: ResMut<ModelTabs>,
+    mut canvas_state: Option<ResMut<crate::ui::panels::canvas_diagram::CanvasDiagramState>>,
+    mut commands: Commands,
+) {
+    retire_document_views(
+        trigger.doc,
+        &mut model_tabs,
+        canvas_state.as_deref_mut(),
+        &mut commands,
+    );
+}
+
+fn retire_document_views(
+    document: DocumentId,
+    tabs: &mut ModelTabs,
+    canvas: Option<&mut crate::ui::panels::canvas_diagram::CanvasDiagramState>,
+    commands: &mut Commands,
+) {
+    for instance in tabs.close_all_for_doc(document) {
+        commands.trigger(lunco_workbench_core::commands::CloseTab {
+            kind: MODEL_VIEW_KIND.as_str().to_owned(),
+            instance,
+        });
+    }
+    if let Some(canvas) = canvas {
+        canvas.drop_doc(document);
     }
 }
 
@@ -1675,6 +1703,7 @@ pub fn drain_pending_tab_closes(
     registry: Res<ModelicaDocuments>,
     mut model_tabs: ResMut<ModelTabs>,
     mut dialogs: ResMut<CloseDialogState>,
+    mut workspace: ResMut<lunco_workspace::WorkspaceResource>,
     mut commands: Commands,
 ) {
     let mut unclaimed = Vec::new();
@@ -1714,13 +1743,17 @@ pub fn drain_pending_tab_closes(
             });
             continue;
         };
-        let (is_dirty, is_read_only) = registry
+        let (is_dirty, is_read_only, is_generated) = registry
             .host(doc)
             .map(|h| {
                 let d = h.document();
-                (d.is_dirty(), d.is_read_only())
+                (
+                    d.is_dirty(),
+                    d.is_read_only(),
+                    crate::ui::document_context::is_generated_document(d),
+                )
             })
-            .unwrap_or((false, false));
+            .unwrap_or((false, false, false));
         if is_dirty && !is_read_only {
             if !dialogs
                 .pending
@@ -1742,8 +1775,16 @@ pub fn drain_pending_tab_closes(
                     state.drop_tab(instance);
                 }
             });
+            // Generated documents are scene-owned; closing their last view must
+            // not close the live document or despawn its linked participant.
             if model_tabs.count_for_doc(doc) == 0 {
-                commands.trigger(CloseDocument { doc_id: doc });
+                if is_generated {
+                    if workspace.active_document == Some(doc) {
+                        workspace.active_document = None;
+                    }
+                } else {
+                    commands.trigger(CloseDocument { doc_id: doc });
+                }
             }
         }
     }

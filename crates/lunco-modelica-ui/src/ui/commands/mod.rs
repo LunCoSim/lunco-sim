@@ -57,6 +57,7 @@ impl Plugin for ModelicaCommandsPlugin {
             .add_observer(lifecycle::on_close_picker_cancelled)
             .add_observer(lifecycle::on_close_picker_unsupported)
             .add_observer(lifecycle::on_document_closed_cleanup)
+            .add_observer(lifecycle::retire_closed_document_views)
             .add_observer(super::panels::canvas_diagram::loads::retire_twin_duplicates)
             .add_observer(super::panels::canvas_diagram::loads::retire_remote_duplicates)
             .add_observer(lifecycle::retire_twin_file_diagnostics)

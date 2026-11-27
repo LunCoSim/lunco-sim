@@ -812,8 +812,17 @@ Its root uses the active Twin's manifest name, and indexed file rows carry
 open/dirty markers. Untitled and loose documents have separate rows; saved Twin
 files appear once in their folders.
 
-A single selector chooses Files, Libraries, Modelica, open USD documents,
-Connections, Twin resources or Scene files. Scene files lists the resolved
+A single selector chooses Files, Libraries, Modelica, Generated Modelica,
+open USD documents, Connections, Twin resources or Scene files. Generated
+Modelica lists the current scene’s synthesized read-only network documents
+from the projection owner. Compact rows group by the composed path owner,
+using the shared human-readable identifier formatter and tree disclosure. The
+right-aligned Source control opens text, selecting the model opens its diagram,
+and expanding a row reveals exact paths, classes, interfaces and topology. It filters by
+network, generated filename, and member identities; no authored file or
+second source cache is created. Closing a generated editor tab leaves the live
+network intact; projection retirement closes its editor views through the
+document registry lifecycle event. Scene files lists the resolved
 references of the open scene, including its Modelica source files, with paths
 relative to the active Twin or library root. Only the selected owner renders.
 The `BrowserSectionRegistry` remains the contribution owner; sections publish

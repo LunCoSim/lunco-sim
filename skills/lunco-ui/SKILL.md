@@ -1063,7 +1063,9 @@ the browser, rather than only its allocated tab/source identity. Scene-backed pe
 keep background previews parked so they cannot cover the live world.
 
 The Twin panel defaults to the active Twin's files. Its selector displays one
-registered Files, Library or specialist view at a time. Changing views clears
+registered Files, Library or specialist view at a time. **Generated Modelica**
+reads current scene network metadata directly and opens the existing read-only
+Modelica document in Text or Diagram mode. Changing views clears
 `BrowserQuery`; `SetBrowserSection` rejects unknown identities without changing
 selection. Untitled/loose documents get standalone rows; saved Twin files appear
 once with open/dirty markers. Scene choices remain in Scenarios. Editor tab

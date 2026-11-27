@@ -32,6 +32,8 @@
 use bevy_egui::egui;
 use lunco_doc::DocumentId;
 use lunco_modelica_ast::ClassType;
+use lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry;
+use lunco_workbench_browser::twin_browser::LoadedClassView;
 use lunco_workbench_browser::{BrowserAction, BrowserCtx, BrowserQuery, BrowserSection};
 
 // `DrilledInClassNames` reads migrated to
@@ -40,6 +42,9 @@ use crate::ui::document_context::ModelicaDocuments;
 
 /// Stable id of the Modelica section in the shared Twin Browser.
 pub const MODELICA_BROWSER_SECTION_ID: &str = "lunco.modelica.classes";
+
+/// Stable id of the generated Modelica view.
+pub const GENERATED_MODELICA_BROWSER_SECTION_ID: &str = "lunco.modelica.generated";
 
 /// One Modelica class entry rendered in the tree.
 #[derive(Debug, Clone)]
@@ -318,15 +323,6 @@ impl BrowserSection for ModelicaSection {
             })
             .unwrap_or_default();
 
-        let generated = ctx
-            .resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
-            .map(|sources| sources.entries.clone())
-            .unwrap_or_default();
-        let matching_generated: Vec<_> = generated
-            .into_iter()
-            .filter(|entry| generated_entry_matches(entry, &query))
-            .collect();
-
         let has_matching_library_item = ctx
             .resource::<crate::package_tree::PackageTreeCache>()
             .is_some_and(|cache| {
@@ -342,17 +338,12 @@ impl BrowserSection for ModelicaSection {
 
         let has_matching_workspace_doc = !workspace_docs.is_empty();
         let has_matching_twin_file = !twin_model_rows.is_empty();
-        let has_matching_generated = !matching_generated.is_empty();
         let has_matching_library_item = if query.is_active() {
             has_matching_library_item
         } else {
             !library_rows.is_empty()
         };
-        if !has_matching_library_item
-            && !has_matching_workspace_doc
-            && !has_matching_twin_file
-            && !has_matching_generated
-        {
+        if !has_matching_library_item && !has_matching_workspace_doc && !has_matching_twin_file {
             ui.label(
                 egui::RichText::new(if query.is_active() {
                     "No Modelica items match the filter."
@@ -367,27 +358,207 @@ impl BrowserSection for ModelicaSection {
         for (doc_id, doc_name) in workspace_docs {
             render_workspace_doc_row(ui, ctx, doc_id, &doc_name);
         }
+    }
+}
 
-        // Generated USD-owned islands are ordinary read-only Modelica documents
-        // linked to their scene-network entity. They use the same class/view
-        // path as every other model — source editor, diagram, and telemetry —
-        // rather than opening in the generic text viewer.
-        if !matching_generated.is_empty() {
-            let theme = ctx
-                .resource::<lunco_theme::Theme>()
-                .cloned()
-                .unwrap_or_else(lunco_theme::Theme::dark);
-            ui.separator();
-            let header = egui::CollapsingHeader::new("Generated scene networks")
-                .id_salt("twin.modelica.generated")
-                .default_open(false)
-                .open(query.is_active().then_some(true));
-            header.show(ui, |ui| {
-                for entry in matching_generated {
-                    render_generated_network_row(ui, ctx, &theme, &entry);
-                }
-            });
+/// Current scene's generated documents, separate from authored sources and libraries.
+#[derive(Default)]
+pub struct GeneratedModelicaSection;
+
+impl BrowserSection for GeneratedModelicaSection {
+    fn id(&self) -> &str {
+        GENERATED_MODELICA_BROWSER_SECTION_ID
+    }
+
+    fn title(&self) -> &str {
+        "Generated Modelica"
+    }
+
+    fn search_hint(&self) -> &'static str {
+        "Search generated models…"
+    }
+
+    fn order(&self) -> u32 {
+        101
+    }
+
+    fn render(&mut self, ui: &mut egui::Ui, ctx: &mut BrowserCtx<'_, '_>) {
+        let query = ctx.resource::<BrowserQuery>().cloned().unwrap_or_default();
+        let active_doc = ctx
+            .resource::<lunco_workspace::WorkspaceResource>()
+            .and_then(|workspace| workspace.active_document);
+        let theme = ctx
+            .resource::<lunco_theme::Theme>()
+            .cloned()
+            .unwrap_or_else(lunco_theme::Theme::dark);
+        let Some(sources) =
+            ctx.resource::<lunco_modelica_runtime::generated_source::GeneratedModelicaSources>()
+        else {
+            ui.weak("No generated Modelica networks in the current scene.");
+            return;
+        };
+        if sources.entries.is_empty() {
+            ui.weak("No generated Modelica networks in the current scene.");
+            return;
         }
+        let groups: Vec<_> = generated_model_groups(&sources.entries)
+            .into_iter()
+            .filter_map(|(group_path, entries)| {
+                let is_group = entries.len() > 1;
+                let matching: Vec<_> = entries
+                    .into_iter()
+                    .filter(|entry| generated_entry_matches(entry, &query))
+                    .collect();
+                (!matching.is_empty()).then_some((group_path, is_group, matching))
+            })
+            .collect();
+        let matching_count = groups
+            .iter()
+            .map(|(_, _, entries)| entries.len())
+            .sum::<usize>();
+        if matching_count == 0 {
+            ui.weak("No generated Modelica models match the filter.");
+            return;
+        }
+        ui.horizontal(|ui| {
+            let total = sources.entries.len();
+            let count = if query.is_active() {
+                format!("{matching_count} of {total} models")
+            } else {
+                format!("{total} generated model{}", plural_suffix(total))
+            };
+            ui.strong(count);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.weak("Read-only");
+            });
+        });
+        ui.label(
+            egui::RichText::new("Select a model for its diagram, or Source for code.")
+                .weak()
+                .text_style(lunco_theme::TypographyRole::Caption.text_style()),
+        );
+        ui.separator();
+        let mut actions = Vec::new();
+        for (group_path, is_group, matching) in groups {
+            let mut paint_rows = |ui: &mut egui::Ui| {
+                for entry in &matching {
+                    let label = generated_row_label(&group_path, &entry.network_root, is_group);
+                    if let Some(action) =
+                        render_generated_network_row(ui, active_doc, &theme, entry, &label)
+                    {
+                        actions.push(action);
+                    }
+                }
+            };
+            if is_group {
+                let label = format!(
+                    "{} ({})",
+                    generated_owner_label(&group_path),
+                    matching.len()
+                );
+                lunco_workbench_widgets::tree::branch(
+                    ui,
+                    ui.make_persistent_id(("generated-group", &group_path)),
+                    true,
+                    query.is_active().then_some(true),
+                    |ui| {
+                        lunco_workbench_widgets::tree::label(
+                            ui,
+                            egui::RichText::new(label).strong(),
+                            ui.available_width(),
+                            egui::Sense::click(),
+                        )
+                        .on_hover_text(&group_path)
+                        .clicked()
+                    },
+                    paint_rows,
+                );
+            } else {
+                paint_rows(ui);
+            }
+        }
+        for action in actions {
+            ctx.actions.push(action);
+        }
+    }
+}
+
+/// Group by the first composed owner path beneath a shared outer scene root.
+/// Derive the grouping from the complete inventory, not the active search, so
+/// filtering never changes model identities or their group membership.
+fn generated_model_groups(
+    entries: &[GeneratedModelicaSourceEntry],
+) -> std::collections::BTreeMap<String, Vec<&GeneratedModelicaSourceEntry>> {
+    let outer_root = entries.first().and_then(|entry| {
+        entry
+            .network_root
+            .trim_matches('/')
+            .split('/')
+            .next()
+            .filter(|root| !root.is_empty())
+    });
+    let shared_outer = outer_root.filter(|outer| {
+        entries.iter().all(|entry| {
+            let mut parts = entry.network_root.trim_matches('/').split('/');
+            parts.next() == Some(*outer) && parts.next().is_some_and(|part| !part.is_empty())
+        })
+    });
+    let mut groups: std::collections::BTreeMap<String, Vec<&GeneratedModelicaSourceEntry>> =
+        Default::default();
+    for entry in entries {
+        let mut parts = entry.network_root.trim_matches('/').split('/');
+        let first = parts.next().unwrap_or_default();
+        let group = if shared_outer.is_some() {
+            format!("/{first}/{}", parts.next().unwrap_or_default())
+        } else if first.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{first}")
+        };
+        groups.entry(group).or_default().push(entry);
+    }
+    for entries in groups.values_mut() {
+        entries.sort_by(|a, b| (&a.network_root, &a.uri).cmp(&(&b.network_root, &b.uri)));
+    }
+    groups
+}
+
+fn generated_owner_label(path: &str) -> String {
+    if path == "/" {
+        "Scene root".to_string()
+    } else {
+        lunco_core::humanize_identifier(crate::ui::generated_source::path_leaf(path))
+    }
+}
+
+fn generated_row_label(group: &str, path: &str, grouped: bool) -> String {
+    let name = if grouped {
+        let relative = path.strip_prefix(group).unwrap_or(path).trim_matches('/');
+        if relative.is_empty() {
+            return format!("{} (root model)", generated_owner_label(group));
+        }
+        relative
+    } else {
+        // Preserve the relative owner path for solitary deeper networks.
+        let first = group.rsplit('/').next().unwrap_or_default();
+        let suffix = path.strip_prefix(group).unwrap_or(path).trim_matches('/');
+        if suffix.is_empty() {
+            first
+        } else {
+            return std::iter::once(first)
+                .chain(suffix.split('/'))
+                .map(lunco_core::humanize_identifier)
+                .collect::<Vec<_>>()
+                .join(" / ");
+        }
+    };
+    if name.is_empty() {
+        "Root model".to_string()
+    } else {
+        name.split('/')
+            .map(lunco_core::humanize_identifier)
+            .collect::<Vec<_>>()
+            .join(" / ")
     }
 }
 
@@ -520,190 +691,157 @@ fn render_twin_modelica_file(
 /// the user will find after opening it.
 fn render_generated_network_row(
     ui: &mut egui::Ui,
-    ctx: &mut BrowserCtx<'_, '_>,
+    active_doc: Option<DocumentId>,
     theme: &lunco_theme::Theme,
-    entry: &lunco_modelica_runtime::generated_source::GeneratedModelicaSourceEntry,
-) {
-    let display_name = crate::ui::generated_source::network_display_name(&entry.network_root);
-    let member_count = entry
-        .units
-        .iter()
-        .map(|unit| unit.members.len())
-        .sum::<usize>();
-    let topology_count = if entry.units.is_empty() && !entry.component_paths.is_empty() {
-        format!(
-            "{} composed USD component{}",
-            entry.component_paths.len(),
-            plural_suffix(entry.component_paths.len())
-        )
-    } else {
-        format!("{} member{}", member_count, plural_suffix(member_count))
-    };
+    entry: &GeneratedModelicaSourceEntry,
+    label: &str,
+) -> Option<BrowserAction> {
     let open_class = generated_network_open_class(entry);
-    let active_doc = ctx
-        .resource::<lunco_workspace::WorkspaceResource>()
-        .and_then(|workspace| workspace.active_document);
-    // The row represents the generated document, not only the preferred first
-    // class. Keep it active while the user is viewing the root, a unit, or a
-    // dependency class drilled from that same read-only document.
     let is_open = active_doc == Some(entry.document);
+    let can_open = !entry.document.is_unassigned() && !entry.source.is_empty();
     let open_hint = format!(
-        "Open generated Modelica\nClass: {}\nDocument: {}\nSource is read-only and rebuilt from the composed USD network.",
-        open_class, entry.uri
+        "Open diagram\nUSD: {}\nClass: {}",
+        entry.network_root, open_class
     );
-
-    ui.push_id(&entry.uri, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let can_open = !entry.document.is_unassigned() && !entry.source.is_empty();
-            let response = ui
-                .selectable_label(
-                    is_open,
-                    egui::RichText::new(display_name)
-                        .strong()
-                        .color(if can_open {
-                            theme.schematic.text_heading
-                        } else {
-                            theme.schematic.text_muted
-                        }),
-                )
-                .on_hover_text(if can_open {
-                    open_hint
-                } else if entry.projection_error.is_some() {
-                    "Generated source is unavailable because synthesis failed.".to_string()
-                } else {
-                    "Generated source is still being projected.".to_string()
-                });
-            if can_open && response.clicked() {
-                ctx.actions.push(BrowserAction::OpenLoadedClass {
-                    doc_id: entry.document.raw(),
-                    qualified_path: open_class.clone(),
-                });
-            }
-            ui.colored_label(theme.schematic.class_model_badge, "GENERATED");
-        });
-
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                egui::RichText::new(&entry.network_root)
-                    .small()
-                    .color(theme.schematic.text_muted),
-            );
-            ui.label(
-                egui::RichText::new(format!(
-                    "class {}",
-                    crate::ui::generated_source::class_display_name(&entry.model_name)
-                ))
-                .small()
-                .color(theme.schematic.text_muted),
-            )
-            .on_hover_text(format!("Modelica class: {}", entry.model_name));
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} unit{} · {}",
-                    entry.units.len(),
-                    plural_suffix(entry.units.len()),
-                    topology_count,
-                ))
-                .small()
-                .color(theme.schematic.text_muted),
-            );
-            ui.label(
-                egui::RichText::new(format!(
-                    "interface {} in / {} out",
-                    entry.boundary_inputs.len(),
-                    entry.boundary_outputs.len(),
-                ))
-                .small()
-                .color(theme.schematic.text_muted),
-            );
-            if !entry.member_output_aliases.is_empty() {
-                ui.label(
-                    egui::RichText::new(format!("telemetry {}", entry.member_output_aliases.len()))
-                        .small()
-                        .color(theme.schematic.text_muted),
-                );
-            }
-        });
-
-        if let Some(error) = &entry.projection_error {
-            ui.colored_label(theme.tokens.error, format!("Projection error: {error}"));
-        } else if entry.source.is_empty() {
-            ui.colored_label(theme.tokens.warning, "Projection unavailable");
-        }
-
-        egui::CollapsingHeader::new("Inspect topology and interface")
-            .id_salt(("generated-details", &entry.uri))
-            .default_open(false)
-            .show(ui, |ui| {
-                let inputs = if entry.boundary_inputs.is_empty() {
-                    "none".to_string()
-                } else {
-                    entry.boundary_inputs.join(", ")
-                };
-                let outputs = if entry.boundary_outputs.is_empty() {
-                    "none".to_string()
-                } else {
-                    entry.boundary_outputs.join(", ")
-                };
-                ui.label(format!("Inputs: {inputs}"));
-                ui.label(format!("Outputs: {outputs}"));
-                if !entry.source_roots.is_empty() {
-                    ui.label(format!("Source roots: {}", entry.source_roots.join(", ")));
+    let mut action = None;
+    let id = ui.make_persistent_id(("generated-model", &entry.uri));
+    lunco_workbench_widgets::tree::branch(
+        ui,
+        id,
+        false,
+        None,
+        |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(can_open, egui::Button::new("Source"))
+                    .on_hover_text(format!("Open read-only generated file: {}", entry.uri))
+                    .clicked()
+                {
+                    action = Some(BrowserAction::OpenLoadedClass {
+                        doc_id: entry.document.raw(),
+                        qualified_path: entry.model_name.clone(),
+                        view: Some(LoadedClassView::Text),
+                    });
                 }
-                if entry.units.is_empty() && !entry.component_paths.is_empty() {
-                    ui.label("Composed USD components:");
-                    for path in &entry.component_paths {
-                        ui.label(path);
-                    }
-                }
-                for unit in &entry.units {
-                    let unit_label = crate::ui::generated_source::unit_display_name(unit);
-                    ui.collapsing(
-                        format!("{} · {} member(s)", unit_label, unit.members.len()),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("Modelica class: {}", unit.name))
-                                    .small()
-                                    .color(theme.schematic.text_muted),
-                            );
-                            for member in &unit.members {
-                                if let Some((_, asset, class)) =
-                                    entry.members.iter().find(|(path, _, _)| path == member)
-                                {
-                                    ui.label(crate::ui::generated_source::member_display_name(
-                                        member, class,
-                                    ))
-                                    .on_hover_text(format!("USD: {member}\nSource asset: {asset}"));
-                                } else {
-                                    ui.label(crate::ui::generated_source::path_leaf(member))
-                                        .on_hover_text(member);
-                                }
-                            }
-                        },
-                    );
-                }
-                if !entry.member_output_aliases.is_empty() {
-                    ui.collapsing(
-                        format!("Promoted telemetry ({})", entry.member_output_aliases.len()),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new("Operator-facing member values")
-                                    .small()
-                                    .color(theme.schematic.text_muted),
-                            );
-                            for (member, output, alias) in &entry.member_output_aliases {
-                                ui.label(crate::ui::generated_source::member_output_display_name(
-                                    member, output,
-                                ))
-                                .on_hover_text(format!(
-                                    "Generated alias: {alias}\nUSD: {member}.outputs:{output}"
-                                ));
-                            }
-                        },
-                    );
+                let width = ui.available_width();
+                if ui
+                    .add_enabled_ui(can_open, |ui| {
+                        lunco_workbench_widgets::tree::selectable_label(ui, is_open, label, width)
+                            .on_hover_text(&open_hint)
+                    })
+                    .inner
+                    .clicked()
+                {
+                    action = Some(BrowserAction::OpenLoadedClass {
+                        doc_id: entry.document.raw(),
+                        qualified_path: open_class.clone(),
+                        view: Some(LoadedClassView::Diagram),
+                    });
                 }
             });
-    });
+            // Only the disclosure toggles details; the label opens the diagram.
+            false
+        },
+        |ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} unit{} · {} components · {} in / {} out",
+                    entry.units.len(),
+                    plural_suffix(entry.units.len()),
+                    entry.component_paths.len(),
+                    entry.boundary_inputs.len(),
+                    entry.boundary_outputs.len()
+                ))
+                .weak(),
+            );
+            if let Some(error) = &entry.projection_error {
+                ui.colored_label(theme.tokens.error, error);
+            }
+            ui.label("USD network");
+            ui.weak(&entry.network_root);
+            ui.label("Generated file");
+            ui.weak(&entry.uri);
+            ui.label("Modelica class");
+            ui.weak(&entry.model_name);
+            for (name, values) in [
+                ("Inputs", &entry.boundary_inputs),
+                ("Outputs", &entry.boundary_outputs),
+                ("Source roots", &entry.source_roots),
+            ] {
+                if !values.is_empty() {
+                    ui.collapsing(format!("{name} ({})", values.len()), |ui| {
+                        for value in values {
+                            ui.label(value);
+                        }
+                    });
+                }
+            }
+            if entry.units.is_empty() && !entry.component_paths.is_empty() {
+                ui.collapsing(
+                    format!("Components ({})", entry.component_paths.len()),
+                    |ui| {
+                        for path in &entry.component_paths {
+                            ui.label(crate::ui::generated_source::path_leaf(path))
+                                .on_hover_text(path);
+                        }
+                    },
+                );
+            }
+            for unit in &entry.units {
+                let unit_label = crate::ui::generated_source::unit_display_name(unit);
+                ui.collapsing(
+                    format!("{} · {} member(s)", unit_label, unit.members.len()),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("Modelica class: {}", unit.name))
+                                .small()
+                                .color(theme.schematic.text_muted),
+                        );
+                        for member in &unit.members {
+                            if let Some((_, asset, class)) =
+                                entry.members.iter().find(|(path, _, _)| path == member)
+                            {
+                                ui.label(crate::ui::generated_source::member_display_name(
+                                    member, class,
+                                ))
+                                .on_hover_text(format!("USD: {member}\nSource asset: {asset}"));
+                            } else {
+                                ui.label(crate::ui::generated_source::path_leaf(member))
+                                    .on_hover_text(member);
+                            }
+                        }
+                    },
+                );
+            }
+            if !entry.member_output_aliases.is_empty() {
+                ui.collapsing(
+                    format!("Promoted telemetry ({})", entry.member_output_aliases.len()),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new("Operator-facing member values")
+                                .small()
+                                .color(theme.schematic.text_muted),
+                        );
+                        for (member, output, alias) in &entry.member_output_aliases {
+                            ui.label(crate::ui::generated_source::member_output_display_name(
+                                member, output,
+                            ))
+                            .on_hover_text(format!(
+                                "Generated alias: {alias}\nUSD: {member}.outputs:{output}"
+                            ));
+                        }
+                    },
+                );
+            }
+        },
+    );
+    if let Some(error) = &entry.projection_error {
+        ui.colored_label(theme.tokens.error, "Projection failed")
+            .on_hover_text(error);
+    } else if !can_open {
+        ui.colored_label(theme.tokens.warning, "Generating source…");
+    }
+    action
 }
 
 /// Select the useful first view for a generated network.
@@ -765,6 +903,8 @@ fn generated_entry_matches(
     }
     query.matches(&entry.network_root)
         || query.matches(&entry.model_name)
+        || query.matches(&entry.uri)
+        || query.matches(&lunco_core::humanize_identifier(&entry.network_root))
         || query.matches(&crate::ui::generated_source::network_display_name(
             &entry.network_root,
         ))
@@ -1334,6 +1474,7 @@ fn render_class_row(
             ctx.actions.push(BrowserAction::OpenLoadedClass {
                 doc_id: doc_id.raw(),
                 qualified_path: class.qualified_path.clone(),
+                view: None,
             });
         }
         {
@@ -1390,6 +1531,7 @@ fn render_class_row(
             ctx.actions.push(BrowserAction::OpenLoadedClass {
                 doc_id: doc_id.raw(),
                 qualified_path: class.qualified_path.clone(),
+                view: None,
             });
         }
     }
