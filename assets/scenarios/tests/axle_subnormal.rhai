@@ -65,8 +65,25 @@ fn on_tick(me, ctx) {
         this.checks.push(t_true(retained, "wheel ports retain the exact nonzero torque"));
         this.checks.push(t_true(moving, "both signs of subnormal shaft motion are preserved"));
         this.checks.push(t_true(sim_tick() > this.mark, "native simulation ticks continue"));
-        this.checks.push(t_true(brake(this.rover).ok, "brake command accepted"));
+        let released = true;
+        for i in [2, 3] {
+            let result = cmd("SetPorts", #{target: this.wheels[i], writes: [["drive", 0.0]]});
+            released = released && result.ok;
+        }
+        this.checks.push(t_true(released, "drive released on both light rear axles"));
         this.mark = sim_tick(); this.phase = 2; return;
+    }
+    if this.phase == 2 {
+        if sim_tick() - this.mark < 40 { return; }
+        // At 60 Hz the rear wheels retain 15/23 of their speed per step.
+        // In f64 their decay settles at one signed subnormal unit.
+        let least = scaled(5.0e-324);
+        let left = sample(this.wheels[2], "shaft_speed");
+        let right = sample(this.wheels[3], "shaft_speed");
+        this.checks.push(t_true(least > 0.0 && scaled(left) == least && scaled(right) == -least,
+            `light axles coast to one signed speed unit under bearing drag (left=${left}, right=${right} rad/s)`));
+        this.checks.push(t_true(brake(this.rover).ok, "brake command accepted"));
+        this.mark = sim_tick(); this.phase = 3; return;
     }
     let stopped = true;
     for wheel in this.wheels { stopped = stopped && scaled(sample(wheel, "shaft_speed")) == 0.0; }

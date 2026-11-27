@@ -1526,19 +1526,33 @@ pub struct AxleStep {
     pub intervals: [AxleInterval; 2],
 }
 
-/// Sum three finite torque terms without first losing a much smaller term
-/// that survives cancellation of two large opposing torques.
-fn sum_axle_torques(a: f64, b: f64, c: f64) -> f64 {
+/// Keep the rounding remainder until the contact torque is known. A saturated
+/// contact can exactly cancel the leading term of the applied torque.
+fn axle_torque_balance(a: f64, b: f64, c: f64) -> impl Fn(f64) -> f64 {
     let mut terms = [a, b, c];
     terms.sort_unstable_by(|a, b| b.abs().total_cmp(&a.abs()));
     let [large, medium, small] = terms;
-    if large.is_sign_negative() != medium.is_sign_negative() {
-        (large + medium) + small
-    } else if large.is_sign_negative() != small.is_sign_negative() {
-        (large + small) + medium
+    // Pair opposite signs first so an intermediate sum cannot overflow
+    // when the final sum is representable.
+    let (second, third) = if large.is_sign_negative() == medium.is_sign_negative()
+        && large.is_sign_negative() != small.is_sign_negative()
+    {
+        (small, medium)
     } else {
-        large + (medium + small)
-    }
+        (medium, small)
+    };
+    let pair = large + second;
+    let pair_error = second - (pair - large);
+    let total = pair + third;
+    // FastTwoSum recovers the rounding error by subtracting the larger
+    // addend first. Cancellation in the first sum can change this order.
+    let total_error = if pair.abs() >= third.abs() {
+        third - (total - pair)
+    } else {
+        pair - (total - third)
+    };
+    let remainder = pair_error + total_error;
+    move |contact| (total - contact) + remainder
 }
 
 /// Backward-Euler axle balance with viscous drag and passive Coulomb braking.
@@ -1621,17 +1635,41 @@ pub(crate) fn solve_axle_step_with_roundoff(
         if !inertial_rate.is_finite() || inertial_rate <= 0.0 {
             return Err("axle inertial coefficient is not representable");
         }
-        let rhs = sum_axle_torques(inertial_rate * old, drive_torque, brake);
         let diagonal = inertial_rate + bearing_damping;
-        if !rhs.is_finite() || !diagonal.is_finite() || diagonal <= 0.0 {
+        if !diagonal.is_finite() || diagonal <= 0.0 {
             return Err("axle step is not representable");
         }
+        let momentum_rate = inertial_rate * old;
+        // A light axle can underflow when translating speed into torque. In
+        // that range divide the balance by its diagonal and compare speeds.
+        let carry_speed = inertial_rate < 1.0 && momentum_rate.abs() < f64::MIN_POSITIVE;
+        let balance = axle_torque_balance(
+            if carry_speed { 0.0 } else { momentum_rate },
+            drive_torque,
+            brake,
+        );
+        let torque_unit = if carry_speed { diagonal } else { 1.0 };
+        let slope = diagonal / torque_unit;
+        let rhs_at = |contact| {
+            let net = balance(contact);
+            if !carry_speed {
+                return net;
+            }
+            if old != 0.0 && net.abs() <= f64::MIN_POSITIVE {
+                // Keep both speed contributions above subnormal rounding
+                // until their sum is formed. Scaling by a power of two is exact.
+                const SCALE: f64 = (1_u64 << f64::MANTISSA_DIGITS) as f64;
+                return (inertial_rate / diagonal).mul_add(old * SCALE, (net * SCALE) / diagonal)
+                    / SCALE;
+            }
+            inertial_rate.mul_add(old, net) / diagonal
+        };
         // With no contact torque, the linear balance has a unique solution.
         // Its correctly rounded speed may be subnormal (or zero), in which
         // case recomputing the torque residual cannot certify the division
         // using a relative tolerance. No traction iteration is needed.
         if traction_bound == 0.0 {
-            let speed = rhs / diagonal;
+            let speed = rhs_at(0.0) / slope;
             if !speed.is_finite() {
                 return Err("axle step is not representable");
             }
@@ -1648,8 +1686,8 @@ pub(crate) fn solve_axle_step_with_roundoff(
             }
             return Ok(speed);
         }
-        let mut lower = (rhs - traction_bound) / diagonal;
-        let mut upper = (rhs + traction_bound) / diagonal;
+        let mut lower = rhs_at(traction_bound) / slope;
+        let mut upper = rhs_at(-traction_bound) / slope;
         if ![lower, upper].into_iter().all(f64::is_finite) {
             return Err("axle step is not representable");
         }
@@ -1659,12 +1697,13 @@ pub(crate) fn solve_axle_step_with_roundoff(
             } else {
                 traction_torque(trial)
             };
-            let inertial = diagonal * trial;
-            let residual = inertial + contact - rhs;
+            let target = rhs_at(contact);
+            let inertial = slope * trial;
+            let residual = inertial - target;
             if !residual.is_finite() {
                 return Err("axle contact residual is not finite");
             }
-            Ok((residual, inertial.abs().max(contact.abs()).max(rhs.abs())))
+            Ok((residual, inertial.abs().max(target.abs())))
         };
         for _ in 0..=64 {
             // Split at zero first; within either sign, IEEE-754 magnitude
@@ -1694,20 +1733,22 @@ pub(crate) fn solve_axle_step_with_roundoff(
                             return Err("axle contact evaluation error is invalid");
                         }
                         // The physical bracket can round to a single speed, and a
-                        // relative torque tolerance can itself underflow. Include one
-                        // representable speed interval's inertial torque resolution.
+                        // relative tolerance can itself underflow. Include one
+                        // representable interval in the solved speed coordinate.
                         let speed_resolution = [trial.next_up() - trial, trial - trial.next_down()]
                             .into_iter()
                             .filter(|spacing| spacing.is_finite())
                             .fold(0.0_f64, f64::max);
-                        let inertial_roundoff = diagonal * speed_resolution;
-                        if !inertial_roundoff.is_finite() {
+                        let torque_error =
+                            (traction_bound * (64.0 * f64::EPSILON)).max(evaluation_error);
+                        let resolution = slope * speed_resolution;
+                        if !resolution.is_finite() {
                             return Err("axle speed resolution is not representable");
                         }
                         Ok(residual.abs()
-                            <= (scale.max(traction_bound) * (64.0 * f64::EPSILON))
-                                .max(evaluation_error)
-                                .max(inertial_roundoff))
+                            <= (scale * (64.0 * f64::EPSILON))
+                                .max(torque_error / torque_unit)
+                                .max(resolution))
                     };
                 let middle_ok = certify(middle, residual, scale)?;
                 // Magnitude-bit bisection rounds its midpoint toward zero.
@@ -1735,9 +1776,10 @@ pub(crate) fn solve_axle_step_with_roundoff(
         }
         Err("axle contact law did not converge to a finite torque balance")
     };
+    let torque_at_rest = |brake| axle_torque_balance(drive_torque, -rest_contact, brake)(0.0);
     let from_rest = |h: f64| -> Result<AxleInterval, &'static str> {
         let brake = -brake_limit * rest_torque.signum();
-        let remaining = sum_axle_torques(drive_torque, -rest_contact, brake);
+        let remaining = torque_at_rest(brake);
         if rest_torque == 0.0
             || (rest_torque > 0.0 && remaining <= 0.0)
             || (rest_torque < 0.0 && remaining >= 0.0)
@@ -1782,7 +1824,7 @@ pub(crate) fn solve_axle_step_with_roundoff(
     }
     // The implicit endpoint at zero has no viscous torque. The constant
     // command/contact torque determines the stop time, before any reversal.
-    let stop_torque = sum_axle_torques(drive_torque, -rest_contact, brake);
+    let stop_torque = torque_at_rest(brake);
     if !stop_torque.is_finite() || stop_torque == 0.0 || stop_torque.signum() == speed.signum() {
         return Err("axle brake stop could not be resolved within the step");
     }
@@ -1888,6 +1930,70 @@ mod tire_patch_tests {
             let step = solve_axle_step(0.0, 1.0, 0.0, direction * 10.0, 10.0, 1e-20, 0.1, contact)
                 .unwrap();
             assert!((step.speed / (direction * 1e-21) - 1.0).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn light_axle_retains_subnormal_coasting_and_damped_speeds() {
+        let least = f64::from_bits(1);
+        for sign in [-1.0, 1.0] {
+            for (old, damping, expected) in [(least, 0.0, least), (6.0 * least, 0.125, 3.0 * least)]
+            {
+                for contact in [0.0, sign] {
+                    let step = solve_axle_step(
+                        sign * old,
+                        0.125,
+                        damping,
+                        contact,
+                        0.0,
+                        contact.abs(),
+                        1.0,
+                        |_| contact,
+                    )
+                    .unwrap();
+                    assert_eq!(step.speed, sign * expected);
+                }
+            }
+            let step =
+                solve_axle_step(sign * least, 0.5, 1.5, sign * least, 0.0, 0.0, 1.0, |_| 0.0)
+                    .unwrap();
+            assert_eq!(step.speed, sign * least);
+        }
+    }
+
+    #[test]
+    fn saturated_contact_preserves_incoming_speed_and_one_ulp_drive_changes() {
+        let dt = 0.125;
+        for direction in [-1.0, 1.0] {
+            let hub = -direction;
+            let contact = |speed: f64| {
+                let tread = 0.5 * speed;
+                0.5 * tire_patch_force(
+                    128.0,
+                    tread - hub,
+                    tread.abs().max(1.0),
+                    1.0,
+                    0.0,
+                    16.0,
+                    1.0,
+                    TireLateralStiffnessGraph::default(),
+                )
+                .0
+            };
+            for (old, drive) in [
+                (direction * 1.0e-20, direction * 8.0),
+                (0.0, direction * 8.0_f64.next_up()),
+                (0.0, direction * 8.0_f64.next_down()),
+            ] {
+                let expected = old + dt * (drive - direction * 8.0);
+                assert_eq!(contact(expected), direction * 8.0);
+                let step = solve_axle_step(old, 1.0, 0.0, drive, 0.0, 8.0, dt, contact).unwrap();
+                assert!(
+                    (step.speed / expected - 1.0).abs() <= 64.0 * f64::EPSILON,
+                    "old={old:e}, drive={drive:e}, expected={expected:e}, got={:e}",
+                    step.speed
+                );
+            }
         }
     }
 

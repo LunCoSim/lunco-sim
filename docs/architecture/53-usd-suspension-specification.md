@@ -68,8 +68,8 @@ fragments without an enclosing vehicle use those omitted-input defaults; native
 wheel admission still requires a real vehicle mount owner. `minValidatedSpeed`
 remains the tire's measured lateral-speed envelope and does not regularize
 longitudinal slip. A zero contact-torque bound reduces the axle balance to a
-linear equation, solved by correctly rounded division, including subnormal
-speeds. Loaded axles bisect representable speeds across the full floating-point
+direct linear solve, including subnormal shaft speeds. Loaded axles bisect
+representable speeds across the full floating-point
 exponent range and certify a finite, scaled torque-balance residual; an interval
 narrowing around a discontinuity fails visibly. At adjacent speeds, both
 endpoints are evaluated and the admissible one with the smaller residual is
@@ -77,8 +77,11 @@ selected. Both wheel realizations use the same contact-specific evaluation
 error bound; the residual bound also includes the finite torque resolution of
 one speed ULP even when the contact-torque bound is subnormal. The wheel fault
 records the mechanical inputs of the rejected step for numerical reproduction.
-Opposing drive, brake and inertial torques are summed with cancellation first
-so a small remaining physical torque is not lost. Brake reversals compare
+The solver retains the rounding remainder from incoming momentum, drive and
+braking until it subtracts the trial contact torque. The convergence tolerance
+uses the resulting net balance, so matched drive and traction preserve even
+a tiny incoming shaft speed. When a light axle's inertial torque would
+underflow, it evaluates that same balance in speed units. Brake reversals compare
 signs without multiplying speeds. A positive stopping
 duration below floating-point resolution contributes no representable work and
 the remainder is advanced from rest.

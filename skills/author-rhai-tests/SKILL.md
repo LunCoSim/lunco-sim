@@ -46,8 +46,9 @@ live COM allocation, moving-support contacts, and ordered Modelica lifecycle
 commands. Its Python adapter supplies typed unsaved fixtures and process
 lifecycle; every behavioral verdict belongs to the authored Rhai scenario.
 The `--case tires-subnormal` gate applies signed subnormal drive torques to
-unloaded raycast wheels, checks continued native ticks and shaft samples, then
-brakes through the representable zero-speed boundary.
+unloaded raycast wheels and checks continued native ticks. It releases the
+light rear axles, verifies that bearing drag brings each to its expected signed
+shaft speed, then checks that braking stops all four wheels.
 
 `scripts/api/test_simulation_core_sixth_pass.py` covers native accumulated
 increment rejection, finite combined force/gravity, bound static/terrain material

@@ -26,7 +26,7 @@ CASES = {
     "tires-dynamic": ("simulation_core_fifth_tires", "SIMULATION CORE FIFTH TIRES dynamic", 10),
     "tires-comoving": ("simulation_core_fifth_tires", "SIMULATION CORE FIFTH TIRES comoving", 10),
     "tires-stationary": ("simulation_core_fifth_tires", "SIMULATION CORE FIFTH TIRES stationary", 10),
-    "tires-subnormal": ("axle_subnormal", "SUBNORMAL AXLE BALANCE", 8),
+    "tires-subnormal": ("axle_subnormal", "SUBNORMAL AXLE BALANCE", 10),
 }
 
 
@@ -102,6 +102,11 @@ def raycast_ops(mode: str) -> tuple[list[dict], dict]:
     if mode == "comoving":
         for path in (rover, deck):
             adjusted.append(attribute(path, "physics:velocity", "vector3f", "(0, 0, 2)"))
+    if mode == "subnormal":
+        for corner in ("RL", "RR"):
+            wheel = f"{rover}/Suspension_{corner}/Wheel_{corner}"
+            adjusted.append(attribute(wheel, "physxVehicleWheel:moi", "float", "0.00390625"))
+            adjusted.append(attribute(wheel, "physxVehicleWheel:dampingRate", "float", "0.125"))
     bodies = [rover] if mode in ("stationary", "subnormal") else [rover, deck]
     return adjusted, {"mode": mode, "rover_path": rover, "deck_path": deck, "body_paths": bodies,
                       "momentum_tolerance": 0.1, "velocity_tolerance": 0.01,
