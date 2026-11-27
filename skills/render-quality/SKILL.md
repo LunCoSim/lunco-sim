@@ -174,6 +174,19 @@ GPU acceptance still require the rendered fixture and a clean process log.
    Compare first, near and fully prepared screenshots and repeat against the
    same warmed cache. Do not substitute a world-readiness flag for visual
    publication or treat preview shading as final capture quality.
+   With `--verify-view-retirement`, the production driver rapidly closes and
+   reopens a feed, checks the unaffected output identities and the new feed's
+   rendered pixels, then retires feeds and retunes the remaining cover. The
+   native layer owner retains exact surviving geometry references, not a
+   frame-count quarantine. On an upload pressure fault, inspect
+   `stream.mesh_transition_required_bytes` and the configured byte ceiling;
+   the measured necessary floor is not a prediction of unbaked mesh sizes.
+   For the windowless path, run `scripts/api/test_offscreen_terrain_recording.py`
+   with the same scene and a warm cache; verify the canonical viewport pose
+   owner, nonempty `camera_cover`, complete derived preparation and the actual
+   numbered images. The capture mirror is a consumer, not a second camera
+   selector. Read `startup_blocker` and `camera_cover[].presentation_reason`
+   when recording remains armed.
    If a crater remains irregular with native shadows disabled, inspect albedo
    and geometric normals separately. Missing orthophoto coverage can coincide
    with stereo-DEM voids. Follow `skills/geo-assets/SKILL.md` to regenerate those
@@ -444,6 +457,10 @@ The loading backdrop does not deactivate a physically admitted main camera:
 terrain cover and GPU pipeline preparation run concurrently with initial
 simulation preparation. Validate the first visible main-view screenshot as
 well as settled coverage, since main-world draw publication is not GPU receipt.
+Use `TerrainLodStatus.exposed_viewport_camera` for the exposed-camera milestone,
+not a nonzero tile count. The progressive-startup driver checks the first
+polled exposure independently of tile residency, and checks actual numbered
+and view-retirement pixels when `--viewport-probe` is supplied.
 
 Query `TerrainLodStatus` and inspect `max_depth`, `tile_budget`, and
 `budget_refused` before changing the High LOD. A resident count close to the

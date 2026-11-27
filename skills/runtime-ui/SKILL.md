@@ -121,16 +121,18 @@ each new preference.
 
 ## User visibility
 
-**View → HUDs** lists current guided cards, runtime HUDs and native HUD
-preferences. `HudVisibility` distinguishes user permission from current
+**View → HUDs** separates **Built-in HUDs** from **Twin HUDs**. An application
+manifest may declare `built_in_hud: true`; Twin runtime surfaces, guided cards
+and authored floating perspective panels are discovered dynamically. Use the
+shared Auto/Show/Hide control at each owner. `HudVisibility` distinguishes user permission from current
 authored eligibility; a checked row may be unavailable here. Set an explicit
 human-readable `title` on HTML surfaces. Guided cards can minimize, hide,
 dock in Guidance or return to floating; content and callback bindings have one
 owner. Restore hidden cards from the menu. The global show/hide actions reach
 all current user-controlled HUD owners. Modal, dock-panel and essential overlay
-surfaces are not dismissible HUDs. Camera-status uses the runtime row without editing Twin policy, while
+surfaces are not dismissible HUDs. Camera-status follows its authored setting automatically; its runtime row can override it with show or hide, and Auto resets the override. No Twin file is edited, while
 celestial-view uses the native application preference, not a second hide bit. Inspect HTML HUD permission, eligibility, and root visibility with
-`InspectRuntimeHuds`. Use `SetRuntimeHudVisibility {id, visible}` to change a listed HUD for the current scene. Restore the captured `enabled` value after a temporary recording override. Window HUDs anchored to the scene may set
+`InspectRuntimeHuds`. Use `SetRuntimeHudVisibility {id, visible}` to change a listed HUD for the current scene. Omit `visible` to reset to automatic. Restore the captured `override` value after a temporary recording override. Window HUDs anchored to the scene may set
 `"region": "scene_viewport"` to constrain their authored and dragged rectangles
 to its measured dock leaf. Verify native interactions with `scripts/api/test_hud_visibility.py --port <free-port>`.
 
@@ -300,7 +302,9 @@ generated hexadecimal/UUID-like owner suffixes are hidden, and an unavoidable
 normalized collision gets an ordinal. The full USD path remains the typed
 selection value and hover/diagnostic text. Rhai owns selection policy
 (`set_camera(name)`) and can read the fact with `get_exposure(...)`; HUI/CSS
-owns rendering. Camera status emits `CameraSelectionStatusChanged` after its
+owns rendering. Camera status uses the `interactive_scene_view` host gate,
+which follows the main viewport rather than a fixed perspective ID. Native camera windows, image controls and graph HUDs share that visibility condition. Keep
+Twin-authored floating panels clear of the selector. Camera status emits `CameraSelectionStatusChanged` after its
 camera/viewport lifecycle projection changes, and the exposure observer
 consumes that event. The UI is revision-gated. Do not add a Rhai `on_tick`
 loop, a timer poll, or a per-frame camera scan for this HUD.

@@ -5,7 +5,7 @@
 //! (visibility), and *what rect* it occupies — modelled on an Omniverse
 //! Viewport. [`reconcile_scene_viewport`] is the **single authority** that
 //! turns that into Bevy's per-camera `Camera::is_active` + `Camera::viewport`;
-//! nothing else writes those for window cameras. Contributors only supply data:
+//! nothing else writes those for presentation pose owners. Contributors only supply data:
 //! - the switch here rebinds the viewport's active camera;
 //! - the workbench sets visibility + rect from its layout perspective.
 //!
@@ -56,6 +56,18 @@ pub struct ViewportCameraSelection {
     /// authored director. Camera-track plans use it to re-emit their held cut
     /// even when the held camera name did not change.
     director_revision: u64,
+}
+
+/// Lease on an authored window presentation camera retargeted by the offscreen
+/// host. The exact image target distinguishes pose owners from ordinary RTT
+/// cameras, including cameras using `CameraOutputMode::Skip` for composition.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub struct OffscreenPoseOwner(pub bevy::camera::ImageRenderTarget);
+
+impl OffscreenPoseOwner {
+    pub fn matches_target(&self, target: &RenderTarget) -> bool {
+        matches!(target, RenderTarget::Image(image) if image == &self.0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -350,11 +362,8 @@ pub struct CameraContractStatus {
 }
 
 impl ViewportCameraSelection {
-    /// Whether `entity` is the camera most recently selected by an explicit
-    /// director or operator command. The authored path is the stable identity
-    /// across asynchronous USD re-projection; the entity argument keeps the
-    /// offscreen renderer on the same selected camera in the current world.
-    pub fn matches_requested(&self, entity: Entity, path: Option<&UsdPrimPath>) -> bool {
+    /// Whether `entity` matches the current request across USD re-projection.
+    fn matches_requested(&self, entity: Entity, path: Option<&UsdPrimPath>) -> bool {
         match (&self.requested, path) {
             (Some(RequestedCamera::Entity(requested)), _) => *requested == entity,
             (Some(RequestedCamera::Authored(requested)), Some(path)) => {
@@ -625,21 +634,31 @@ fn is_window_render_target(target: &RenderTarget) -> bool {
     matches!(target, RenderTarget::Window(_))
 }
 
-fn is_offscreen_pose_owner(target: &RenderTarget, camera: &Camera) -> bool {
-    matches!(
-        (&camera.output_mode, target),
-        (bevy::camera::CameraOutputMode::Skip, RenderTarget::Image(_))
-    )
+fn is_offscreen_pose_owner(
+    target: &RenderTarget,
+    camera: &Camera,
+    owner: Option<&OffscreenPoseOwner>,
+) -> bool {
+    matches!(camera.output_mode, bevy::camera::CameraOutputMode::Skip)
+        && owner.is_some_and(|owner| owner.matches_target(target))
 }
 
-fn is_viewport_render_target(target: &RenderTarget, camera: &Camera) -> bool {
-    is_window_render_target(target) || is_offscreen_pose_owner(target, camera)
+fn is_viewport_render_target(
+    target: &RenderTarget,
+    camera: &Camera,
+    owner: Option<&OffscreenPoseOwner>,
+) -> bool {
+    is_window_render_target(target) || is_offscreen_pose_owner(target, camera, owner)
 }
 
-fn is_selectable_camera_target(target: Option<&RenderTarget>, camera: Option<&Camera>) -> bool {
+fn is_selectable_camera_target(
+    target: Option<&RenderTarget>,
+    camera: Option<&Camera>,
+    owner: Option<&OffscreenPoseOwner>,
+) -> bool {
     target.is_none_or(|target| {
         is_window_render_target(target)
-            || camera.is_some_and(|camera| is_offscreen_pose_owner(target, camera))
+            || camera.is_some_and(|camera| is_offscreen_pose_owner(target, camera, owner))
     })
 }
 
@@ -733,13 +752,22 @@ pub fn on_resume_camera_director(
 pub fn cycle_active_camera(
     _request: On<lunco_camera_core::CycleCamera>,
     vp: Res<SceneViewport>,
-    q_cams: Query<(Entity, &RenderTarget, &Name), With<SceneCamera>>,
+    q_cams: Query<
+        (
+            Entity,
+            &RenderTarget,
+            &Camera,
+            Option<&OffscreenPoseOwner>,
+            &Name,
+        ),
+        With<SceneCamera>,
+    >,
     mut commands: Commands,
 ) {
     let mut cams: Vec<(Entity, &str)> = q_cams
         .iter()
-        .filter(|(_, target, _)| is_window_render_target(target))
-        .map(|(e, _, name)| (e, name.as_str()))
+        .filter(|(_, target, camera, owner, _)| is_viewport_render_target(target, camera, *owner))
+        .map(|(e, _, _, _, name)| (e, name.as_str()))
         .collect();
     if cams.len() < 2 {
         return;
@@ -765,7 +793,12 @@ pub fn cycle_active_camera(
 pub fn on_activate_camera(
     trigger: On<ActivateCamera>,
     q_cams: Query<
-        (Option<&RenderTarget>, Option<&UsdPrimPath>, Option<&Camera>),
+        (
+            Option<&RenderTarget>,
+            Option<&UsdPrimPath>,
+            Option<&Camera>,
+            Option<&OffscreenPoseOwner>,
+        ),
         With<SceneCamera>,
     >,
     q_identity: Query<(Option<&Name>, Option<&UsdPrimPath>, Has<SceneCamera>)>,
@@ -780,8 +813,8 @@ pub fn on_activate_camera(
         // valid in --no-ui/headless runs and while the render host is still
         // binding a projected camera; the reconciler will act when the
         // selected presentation surface exists.
-        Ok((render_target, path, camera)) => {
-            if is_selectable_camera_target(render_target, camera) {
+        Ok((render_target, path, camera, owner)) => {
+            if is_selectable_camera_target(render_target, camera, owner) {
                 selection.requested = Some(match path {
                     Some(path) => RequestedCamera::Authored(UsdCameraKey {
                         stage: path.stage_handle.id(),
@@ -801,7 +834,7 @@ pub fn on_activate_camera(
                     selection.owner
                 );
             } else {
-                let message = format!("camera {target:?} is not a window camera");
+                let message = format!("camera {target:?} is not a presentation pose owner");
                 record_camera_error(&mut status, message, "camera-selection", &mut commands);
             }
         }
@@ -821,13 +854,13 @@ pub fn on_activate_camera(
     }
 }
 
-/// The **single authority** over presentation-camera binding and window-camera
+/// The **single authority** over presentation-camera binding and pose-owner
 /// `is_active` + `viewport`.
 ///
 /// Reads the [`SceneViewport`] (active-camera binding + visibility + rect) and
 /// actuates it: the bound camera is active when visible and ready for
-/// presentation; all other window cameras are off. An image-target camera participates in the
-/// binding only when it is an explicit non-writing pose owner; ordinary RTT
+/// presentation; all other presentation pose owners are off. An image-target
+/// camera participates only with its exact non-writing lease; ordinary RTT
 /// cameras remain ignored. Also updates the persistent BigSpace
 /// [`OriginAnchor`] to the active camera's `WorldGrid` cell using the
 /// authoritative f64 hierarchy pose. The camera is a render consumer; it never
@@ -852,6 +885,7 @@ pub fn reconcile_scene_viewport(
             Option<&UsdPrimPath>,
             Has<lunco_render::CameraRetiring>,
             Has<SceneCamera>,
+            Option<&OffscreenPoseOwner>,
         ),
         With<Camera3d>,
     >,
@@ -876,14 +910,15 @@ pub fn reconcile_scene_viewport(
             Option<&UsdPrimPath>,
             Has<lunco_render::CameraRetiring>,
             Has<SceneCamera>,
+            Option<&OffscreenPoseOwner>,
         ),
         With<Camera3d>,
     >,
                        e: Entity|
      -> bool {
         q.get(e).is_ok_and(
-            |(_, camera, t, has_proj, clusters, _, retiring, scene_camera)| {
-                let is_pose_owner = is_viewport_render_target(t, camera);
+            |(_, camera, t, has_proj, clusters, _, retiring, scene_camera, owner)| {
+                let is_pose_owner = is_viewport_render_target(t, camera, owner);
                 let has_render_clusters =
                     clusters.is_none_or(|clusters| clusters.dimensions != UVec3::ZERO);
                 !retiring
@@ -893,7 +928,7 @@ pub fn reconcile_scene_viewport(
                     && camera
                         .physical_viewport_size()
                         .is_some_and(|size| size.x > 0 && size.y > 0)
-                    && (has_render_clusters || is_offscreen_pose_owner(t, camera))
+                    && (has_render_clusters || is_offscreen_pose_owner(t, camera, owner))
             },
         )
     };
@@ -904,14 +939,14 @@ pub fn reconcile_scene_viewport(
             RequestedCamera::Entity(entity) => Some(*entity),
             RequestedCamera::Authored(wanted) => q_cams
                 .iter()
-                .find(|(_, _, _, _, _, path, retiring, scene_camera)| {
+                .find(|(_, _, _, _, _, path, retiring, scene_camera, _)| {
                     *scene_camera
                         && !*retiring
                         && path.is_some_and(|path| {
                             path.stage_handle.id() == wanted.stage && path.path == wanted.path
                         })
                 })
-                .map(|(entity, _, _, _, _, _, _, _)| entity),
+                .map(|(entity, _, _, _, _, _, _, _, _)| entity),
         }?;
         activatable(&q_cams, entity).then_some(entity)
     });
@@ -925,10 +960,10 @@ pub fn reconcile_scene_viewport(
     let visible = vp.visible;
     let rect = vp.rect;
 
-    // ── Actuate: the ONE writer of window-camera is_active + viewport ────
-    for (e, mut cam, target, _, _, _, _, _) in q_cams.iter_mut() {
-        if !is_window_render_target(target) {
-            continue; // RTT/offscreen cameras are self-managed
+    // Only presentation pose owners are actuated here, not writing image views.
+    for (e, mut cam, target, _, _, _, _, _, owner) in q_cams.iter_mut() {
+        if !is_viewport_render_target(target, &cam, owner) {
+            continue;
         }
         // `active` is gated by projection, target, and cluster admission, so an
         // incomplete native camera never reaches extraction. Pipeline work can
@@ -1070,7 +1105,17 @@ pub fn update_camera_origin(
 pub fn update_camera_selection_status(
     selection: Res<ViewportCameraSelection>,
     vp: Res<SceneViewport>,
-    q_cams: Query<(Entity, &Name, &RenderTarget, Has<LocalEmbodiment>), With<SceneCamera>>,
+    q_cams: Query<
+        (
+            Entity,
+            &Name,
+            &RenderTarget,
+            &Camera,
+            Option<&OffscreenPoseOwner>,
+            Has<LocalEmbodiment>,
+        ),
+        With<SceneCamera>,
+    >,
     q_tracks: Query<(), With<crate::camera_track::CameraTrackPlan>>,
     prims: Query<&UsdPrimPath>,
     owners: Query<&UsdPrimPath, With<ControlBinding>>,
@@ -1079,8 +1124,10 @@ pub fn update_camera_selection_status(
 ) {
     let mut cameras: Vec<(Entity, String, bool)> = q_cams
         .iter()
-        .filter(|(_, _, target, _)| is_window_render_target(target))
-        .map(|(entity, name, _, avatar)| (entity, name.as_str().to_string(), avatar))
+        .filter(|(_, _, target, camera, owner, _)| {
+            is_viewport_render_target(target, camera, *owner)
+        })
+        .map(|(entity, name, _, _, _, avatar)| (entity, name.as_str().to_string(), avatar))
         .collect();
     cameras.sort_by(|a, b| a.1.cmp(&b.1));
     let active_name = vp.active_camera.and_then(|active| {
@@ -3182,6 +3229,81 @@ mod tests {
 
         assert!(app.world().get::<Camera>(active).unwrap().is_active);
         assert!(!app.world().get::<Camera>(orphan).unwrap().is_active);
+    }
+
+    #[test]
+    fn selected_offscreen_pose_owner_switches_without_actuating_rtt_cameras() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SceneViewport>()
+            .init_resource::<ViewportCameraSelection>()
+            .init_resource::<CameraSelectionStatus>()
+            .add_observer(on_activate_camera)
+            .add_systems(Update, reconcile_scene_viewport);
+        let image = bevy::camera::ImageRenderTarget {
+            handle: Handle::default(),
+            scale_factor: 1.0,
+        };
+        let rt = RenderTarget::Image(image.clone());
+        let first = app.world_mut().spawn(window_cam(true, "first")).id();
+        let second = app.world_mut().spawn(window_cam(true, "second")).id();
+        let writing_rtt = app.world_mut().spawn(window_cam(true, "writing RTT")).id();
+        let skip_rtt = app
+            .world_mut()
+            .spawn(window_cam(true, "compositing RTT"))
+            .id();
+        for source in [first, second] {
+            app.world_mut()
+                .entity_mut(source)
+                .insert((rt.clone(), OffscreenPoseOwner(image.clone())));
+            app.world_mut()
+                .get_mut::<Camera>(source)
+                .unwrap()
+                .output_mode = bevy::camera::CameraOutputMode::Skip;
+        }
+        for rtt in [writing_rtt, skip_rtt] {
+            app.world_mut().entity_mut(rtt).insert(rt.clone());
+        }
+        app.world_mut()
+            .get_mut::<Camera>(skip_rtt)
+            .unwrap()
+            .output_mode = bevy::camera::CameraOutputMode::Skip;
+
+        app.world_mut().trigger(ActivateCamera::director(second));
+        app.update();
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            Some(second)
+        );
+        assert!(!app.world().get::<Camera>(first).unwrap().is_active);
+        assert!(app.world().get::<Camera>(second).unwrap().is_active);
+        for rtt in [writing_rtt, skip_rtt] {
+            assert!(app.world().get::<Camera>(rtt).unwrap().is_active);
+        }
+
+        app.world_mut().trigger(ActivateCamera::user(first));
+        app.update();
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            Some(first)
+        );
+        assert!(app.world().get::<Camera>(first).unwrap().is_active);
+        assert!(!app.world().get::<Camera>(second).unwrap().is_active);
+
+        // A Skip flag alone is not an offscreen lease, even for the same image.
+        app.world_mut().trigger(ActivateCamera::user(skip_rtt));
+        app.update();
+        assert_eq!(
+            app.world().resource::<SceneViewport>().active_camera,
+            Some(first)
+        );
+        assert!(
+            app.world()
+                .resource::<CameraSelectionStatus>()
+                .last_error
+                .is_some()
+        );
+        assert!(app.world().get::<Camera>(skip_rtt).unwrap().is_active);
     }
 
     /// When the viewport is not visible (workbench Design perspective), no

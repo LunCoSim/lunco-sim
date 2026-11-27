@@ -47,8 +47,10 @@ existing authored Rhai rendering policy. Projection math, balanced-cover invaria
 collision math and resource admission remain Rust engine mechanisms. No new
 scenario-selection hook or duplicate material-selection policy is introduced.
 
-View removal cancels its exact queued cover work and retires its geometry. Render
-layers are quarantined through extraction retirement before reuse. Scene-derived
+View removal cancels its exact queued cover work and retires its geometry. Private
+render layers are reusable only after their last surviving geometry mask reference
+has retired; the current native extraction consumes this same final inventory.
+Scene-derived
 camera demands, stream status and preparation targets use `SceneResource` teardown;
 streamed tiles and exterior collar geometry carry `SceneOwned`. Camera preparation never gates physics admission.
 
@@ -164,7 +166,8 @@ High quality, main view and StereoLeft feed):
 The native stream starts root geometry and projected cover planning concurrently,
 then admits exact, disjoint 2:1-restricted partition replacements in camera-near
 order. Hidden ancestor entities retire as their branches publish. Camera-near
-readiness means actually drawn geometry, not just completed CPU meshes. Full
+readiness means the main-world published drawable partition, not a GPU pixel
+receipt or just completed CPU meshes. Full
 derived rasters and horizon-cache work use bounded background admission;
 source and quality leases fence completion. The worker and finalized camera
 demand use one certificate-aware selection signature, so a paused camera can
@@ -305,6 +308,155 @@ deadline to collect all 240 fresh frames instead of implicitly enforcing a
 coverage but exceeded the original twelve-second sampling deadline.
 Evidence: `/tmp/luncosim-terrain-audit/startup-integrated-cold/` and
 `/tmp/luncosim-terrain-audit/startup-integrated-warm2/`.
+
+### Presentation and preparation contract audit
+
+The main viewport's exposed-camera authority is now shared by editing,
+picking, and window capture. Workbench hosts without a scene viewport retain
+their independent pointer routing. Offscreen numbered capture requires the
+actual output image and all occupied color-phase pipelines; a request entity
+owns each delivered frame. Terminal terrain diagnostics abort recording before
+another sampling ticket can be issued.
+
+Static horizon maps and pending bakes retire on mesh-handle or authored
+resolution changes. Mesh admission distinguishes a temporarily full cache from
+a single mesh larger than the entire configured ceiling. The latter is a
+terminal diagnostic until that lease or ceiling changes, not a repeated bake.
+The streamer also reuses its live mesh inventory and skips pose collection
+when no camera targets request terrain.
+
+The native driver samples the first observed exposed viewport independently of
+tile draw counts, requires a nonempty exact main-view cover, and checks pixels
+in numbered capture and after feed retirement. This is sampled evidence, not
+an assertion that every GPU frame has been inspected. The focused six-package
+test pass covered 363 passing tests and one existing ignored test.
+
+The production build on `8906e198a` plus the audit changes passed both the
+cold-terrain and warm workshop runs on port 3743 at 1600×1000. The first
+sampled exposed main viewport had 100% lit probe pixels; complete and final
+views had approximately 95%, with the numbered captures matching the final
+probe. The complete main-world partition followed physical readiness by
+1.67 s cold and 0.74 s warm. All 567 tile identities remained stable from
+interactive preview to final cold shading, three stationary-cover checks
+passed on both runs, and warm feed retirement/probe retuning passed. Median
+settled frame times were 16.98 ms cold and 17.94 ms warm (58.90 and 55.74 FPS).
+Final cold shading arrived 124.12 s after launch under shared machine load;
+this is not an isolated performance improvement measurement. Runtime
+diagnostics reported zero errors and warnings in both windowed runs.
+
+On the offscreen `sun_material_precision.usda` fixture, the actual image
+target acknowledged ready pipelines and the recorder started 38 ms later,
+then produced two valid 640×360 images and exited. The workshop's offscreen
+run at 640×360 did not complete during that pass: the pipeline receipt arrived,
+but two planetary covers and one terrain selection/presentation remained
+pending despite 208/208 resident tiles. The next audit resolved the shared
+pose-owner defect and verified real workshop recordings, below.
+
+Evidence: `/tmp/luncosim-terrain-audit/deep-audit-warm/`,
+`/tmp/luncosim-terrain-audit/deep-audit-cold/`,
+`/tmp/luncosim-terrain-audit/deep-audit-offscreen-fixture/`, and
+`/tmp/luncosim-terrain-audit/deep-audit-offscreen/`.
+
+### Shared windowless presentation and bake lease audit
+
+Offscreen uses the same authored viewport and origin selection as a windowed
+host. The separate image-render camera is a leased output consumer; the
+selected authored pose owner drives planetary LOD and terrain precision. The
+recorder checks the target's occupied opaque, masked, transmissive and
+transparent render phases. Generic GPU readbacks are not capture requests.
+Duplicate starts reject without altering an existing take; output/readback
+failures preserve the terminal outcome through teardown and CLI exit.
+
+Static and streamed horizon maps retire only the image owned by their source
+lease. Invalid streamed heightfield and visibility jobs stop at a row boundary; DEM
+removal retires queued derived work and its published maps. Scoped heightfield
+sampling and invariant AO ray setup preserve the authored quality contract.
+The AO regression matched the direct integral bit for bit. The seven-package
+owner suite compiled and, after correcting the new readback test fixture's
+deferred-command flush, passed 440 distinct tests with one existing ignored
+test; the AO regression passed separately.
+
+The production build on `0e56812e1` plus the audit changes includes main's
+retained native camera/light visibility revision. On port 3743, the formerly
+blocked workshop at 640×360 admitted its canonical viewport source and a complete
+205/205 tile capture partition, with no selection, presentation or derived
+pending work. It recorded six inspected images and exited successfully. The
+competing start returned HTTP 409 without creating a second destination. An
+invalid CLI output directory independently exited with status 1 and zero frames.
+
+The 1600×1000 cold-terrain windowed run published the first root 0.329 s after
+visual demand and the complete draw partition 0.908 s after physical world
+readiness. Preview published at 32.51 s and final shading at 93.34 s from
+launch; all 567 tile identities were unchanged. The first exposed viewport,
+numbered frames, final viewport, and post-retirement/retune image passed the
+ground-pixel probe, with zero runtime diagnostic errors or warnings and three
+passing stationary-cover checks. Median settled FPS was 43.71 (22.88 ms;
+p95 150.31 ms) on the shared machine, not an isolated performance comparison.
+
+Evidence: `/tmp/luncosim-terrain-audit/review2-offscreen3/`,
+`/tmp/luncosim-terrain-audit/review2-invalid-output/`, and
+`/tmp/luncosim-terrain-audit/review2-cold/`.
+
+The combined tree at `7a0687c9f` also passed the workshop offscreen gate. Its
+warm windowed run exposed a late-stop GPU lifetime defect: Bevy still owned an
+already-submitted `Screenshot` when the recorder retired it. The recorder now
+cancels its logical numbered lease without deleting a submitted window request;
+Bevy's completion and `Captured` cleanup retain physical ownership. The
+deterministic late-stop regression and all eight recording-readiness tests
+passed, and the exact windowed rerun completed recording, feed retirement and
+probe retuning. Detailed cover followed readiness by 0.333 s; all 567 tiles
+remained stable, the initial and numbered pixel probes passed, and diagnostics
+were empty. Warm median FPS was 63.37 (15.78 ms; p95 24.43 ms). The prior failed
+run's 12.84 FPS overlapped heavy compiler and swap activity; it is not a clean
+comparison. The final binary also repeated the offscreen gate: 205/205 complete
+tiles, six numbered images, competing-start rejection and successful own exit.
+Evidence: `/tmp/luncosim-terrain-audit/review2-late-stop-warm/` and
+`/tmp/luncosim-terrain-audit/review2-final-offscreen/`.
+
+## Final preparation and visibility ownership
+
+The native Bevy camera and directional visibility owners now invalidate their
+retained membership on entity disable and re-enable. Both sparse-path regressions
+failed before the source fix; the published revision and regression evidence are
+recorded in [native-visibility-2026-11-26.md](native-visibility-2026-11-26.md).
+
+The terrain stream recognizes a measured impossible mesh transition separately
+from ordinary transient pressure. Its lower-bound proof counts unique allocations
+for the final cover, same-partition refresh or atomic topology group and never
+releases the outgoing draw cover on refusal. An exact changed selection,
+generation or raised ceiling makes the transition eligible again. The selected
+cover retains its measured residency and actual constrained coordinate index
+until mutation, avoiding repeated leaf-wide accounting at rest. Private output
+channels retire against surviving geometry masks rather than elapsed frames.
+
+Native final raster preparation uses bounded, cancellable row jobs, with a
+separate staging reservation held until worker memory is released. Assembly,
+cache writing and mip preparation remain off the main thread. A real cold-cache
+workshop run published preview shading at 13.00 s and final shading at 26.21 s
+from launch; the complete draw partition appeared 1.25 s after physical world
+readiness. Both packed textures at 256² and 2048² matched the previous serial
+baker's cache bytes exactly, and all 567 selected tile identities stayed stable.
+The authored stationary-cover checks, numbered captures, rapid feed reopening,
+feed retirement and probe retune passed, with no runtime diagnostic errors or
+warnings. Rapid reopening kept the other two cameras' drawn entities unchanged
+and produced a real saved feed image. Settled median frame time was 13.53 ms
+(73.89 FPS; p95 17.81 ms, 240 frames). Earlier cold final preparation took 93.34 s;
+different concurrent workloads prevent attributing the whole difference to the
+row-job change. Evidence: `/tmp/luncosim-terrain-audit/rest-cold/`.
+
+The warm run on a fresh private display settled the full draw partition 0.35 s
+after world readiness, with 567 unchanged tile identities and the same
+stationary, capture, retirement and retune verdicts. Median frame time was
+12.98 ms (77.02 FPS; p95 14.20 ms, 240 frames). The no-window recording passed
+with 205/205 complete tiles, 2048² current shading, all six numbered images,
+and explicit competing-start rejection. Evidence:
+`/tmp/luncosim-terrain-audit/rest-warm2/` and
+`/tmp/luncosim-terrain-audit/rest-offscreen/`.
+
+The focused owner suites passed 352 render and terrain-surface tests (one
+existing ignored test), plus two terrain-core row/cancellation regressions.
+The impossibility proof, shared-edge focus lookup, cache invalidation, exact
+layer reuse, staged memory lifetime and ordered pixel assembly are covered.
 
 ## External architecture references
 

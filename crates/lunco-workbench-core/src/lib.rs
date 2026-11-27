@@ -24,9 +24,9 @@ pub mod commands;
 pub mod presentation;
 
 pub use menu::{
-    CustomMenu, DeferredWorldTriggers, HudMenuGroup, HudVisibility, MenuCallback, MenuCtx,
-    MenuIntents, ScriptedMenu, SetAllHudVisibility, SettingsSubmenu, UndoProbe, UndoProbeCtx,
-    WorkbenchMenuRegistry, trigger_command_with_origin, trigger_or_defer,
+    CustomMenu, DeferredWorldTriggers, HudMenuGroup, HudMenuRow, HudVisibility, MenuCallback,
+    MenuCtx, MenuIntents, ScriptedMenu, SetAllHudVisibility, SettingsSubmenu, UndoProbe,
+    UndoProbeCtx, WorkbenchMenuRegistry, trigger_command_with_origin, trigger_or_defer,
 };
 pub use panel::{
     InstancePanel, InstancePanelMenuEntry, Panel, PanelCtx, PanelId, PanelIntents, PanelMenuGroup,

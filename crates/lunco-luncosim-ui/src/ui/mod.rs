@@ -693,15 +693,15 @@ impl Plugin for LunCoSimUiPlugin {
                     camera_feed::draw_camera_feed
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline))
-                        .run_if(in_view_perspective),
+                        .run_if(interactive_scene_view_visible),
                     lunco_viz::draw_graph_hud
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline))
-                        .run_if(in_view_perspective),
+                        .run_if(interactive_scene_view_visible),
                     celestial_time::draw_celestial_time
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
                         .run_if(not(recording_offline))
-                        .run_if(in_view_perspective)
+                        .run_if(interactive_scene_view_visible)
                         .run_if(overlays::sky_clock_visible),
                     draw_runtime_ui_dropdowns
                         .in_set(lunco_workbench_core::ApplicationOverlayRenderSet)
@@ -732,6 +732,7 @@ impl Plugin for LunCoSimUiPlugin {
 
 fn update_runtime_ui_gates(
     layout: Option<Res<WorkbenchSnapshot>>,
+    viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
     overlays: Option<Res<overlays::OverlaySettings>>,
     recording: Option<Res<lunco_capture::screenshot::OfflineRecordingState>>,
     mut gates: ResMut<runtime_ui::RuntimeUiGates>,
@@ -739,21 +740,21 @@ fn update_runtime_ui_gates(
 ) {
     let changed = !*initialized
         || layout.as_ref().is_some_and(|value| value.is_changed())
+        || viewport.as_ref().is_some_and(|value| value.is_changed())
         || overlays.as_ref().is_some_and(|value| value.is_changed())
         || recording.as_ref().is_some_and(|value| value.is_changed());
     if !changed {
         return;
     }
     *initialized = true;
-    let in_view = layout.is_some_and(|value| {
-        value.active_perspective()
-            == Some(lunco_workbench_core::PerspectiveId::new(
-                VIEW_PERSPECTIVE_ID,
-            ))
-    });
-    let overlay_enabled = overlays.is_some_and(|value| value.view_switcher);
+    let scene_visible = interactive_scene_view(layout.as_deref(), viewport.as_deref());
+    gates.set("interactive_scene_view", scene_visible);
+    let overlay_enabled = overlays.is_some_and(|value| value.view_switcher.unwrap_or(false));
     let recording = recording.is_some_and(|value| value.active);
-    gates.set("view_switcher", in_view && overlay_enabled && !recording);
+    gates.set(
+        "view_switcher",
+        scene_visible && overlay_enabled && !recording,
+    );
 }
 
 fn recording_offline(
@@ -762,13 +763,20 @@ fn recording_offline(
     recording.is_some_and(|recording| recording.active)
 }
 
-fn in_view_perspective(layout: Option<Res<WorkbenchSnapshot>>) -> bool {
-    layout.is_some_and(|layout| {
-        layout.active_perspective()
-            == Some(lunco_workbench_core::PerspectiveId::new(
-                VIEW_PERSPECTIVE_ID,
-            ))
-    })
+/// Shared availability for native and retained scene HUDs, independent of
+/// the identifier of a built-in or Twin-authored perspective.
+fn interactive_scene_view(
+    layout: Option<&WorkbenchSnapshot>,
+    viewport: Option<&lunco_viewport_core::SceneViewport>,
+) -> bool {
+    layout.is_some() && viewport.is_some_and(|viewport| viewport.visible)
+}
+
+fn interactive_scene_view_visible(
+    layout: Option<Res<WorkbenchSnapshot>>,
+    viewport: Option<Res<lunco_viewport_core::SceneViewport>>,
+) -> bool {
+    interactive_scene_view(layout.as_deref(), viewport.as_deref())
 }
 
 fn on_runtime_ui_action(
@@ -1281,22 +1289,13 @@ fn draw_runtime_ui_dropdowns(
     roots: Query<(Entity, &runtime_ui::RuntimeUiSurface, &Visibility)>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility)>,
     manifest_state: Res<runtime_ui::RuntimeUiManifestState>,
-    layout: Option<Res<WorkbenchSnapshot>>,
     theme: Option<Res<lunco_theme::Theme>>,
     mut pick_gate: ResMut<lunco_workbench_core::scene_pick::ScenePickGate>,
+    mut help_anchors: ResMut<lunco_workbench_core::presentation::HelpAnchors>,
     mut commands: Commands,
     workspace: Option<Res<lunco_workspace::WorkspaceResource>>,
     scene: Option<Res<lunco_core::SceneTransitionCoordinator>>,
 ) {
-    if !layout.is_some_and(|layout| {
-        layout.active_perspective()
-            == Some(lunco_workbench_core::PerspectiveId::new(
-                VIEW_PERSPECTIVE_ID,
-            ))
-    }) {
-        dropdowns.close();
-        return;
-    }
     let Some(open_key) = dropdowns.open.clone() else {
         return;
     };
@@ -1420,6 +1419,10 @@ fn draw_runtime_ui_dropdowns(
     });
     if let Some(popup) = popup {
         pick_gate.record_chrome_panel(popup.response.rect, popup.response.rect);
+        help_anchors.set(
+            format!("hud.runtime.dropdown.{open_key}"),
+            popup.response.rect,
+        );
     }
 
     if selected_action.is_some() {

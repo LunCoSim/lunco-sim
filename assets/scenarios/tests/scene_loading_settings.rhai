@@ -149,3 +149,23 @@ fn verify_empty_scene_editor(doc, path) {
         t_true(readiness.ready && !readiness.world_hold && !readiness.faulted, "the empty-scene session remains ready")
     ], "EMPTY SCENE EDITOR", "EMPTY_SCENE_EDITOR")
 }
+
+
+fn verify_camera_status_override(expected_override, expected_visible) {
+    let inspection = cmd("InspectRuntimeHuds");
+    let camera = ();
+    if inspection.ok {
+        for hud in inspection.data.huds {
+            if hud.id == "camera-status" { camera = hud; }
+        }
+    }
+    report_verdict([
+        t_true(camera != (), "camera status remains discoverable"),
+        t_true(camera != () && camera.available && camera["override"] == expected_override,
+            "camera status reports the scene override independently of eligibility"),
+        t_true(camera != () && camera.enabled == expected_visible && camera.rendered == expected_visible,
+            "camera status mounts or hides according to the runtime override"),
+        t_true(get_twin_setting("ui.camera_status") == false,
+            "the authored Twin setting remains disabled")
+    ], "CAMERA HUD OVERRIDE", "CAMERA_HUD_OVERRIDE")
+}

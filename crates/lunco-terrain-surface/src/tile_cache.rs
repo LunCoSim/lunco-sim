@@ -32,8 +32,6 @@ struct TileBake<'a> {
     coord: QuadCoord,
     region: Square,
     res: usize,
-    dem_half_extent: f64,
-    origin_xz: [f64; 2],
 }
 
 impl lunco_precompute::Bake for TileBake<'_> {
@@ -86,8 +84,8 @@ impl lunco_precompute::Bake for TileBake<'_> {
             self.oracle,
             self.region,
             self.res,
-            self.dem_half_extent,
-            self.origin_xz,
+            f64::from(self.oracle.domain_half_extent()),
+            self.region.center,
             origin_y,
             self.oracle.domain_resolution(),
         );
@@ -124,8 +122,6 @@ pub fn bake_tile_mesh_cached(
     coord: QuadCoord,
     region: Square,
     res: usize,
-    dem_half_extent: f64,
-    origin_xz: [f64; 2],
 ) -> TileMesh {
     lunco_precompute::bake_or_load(
         &TileBake {
@@ -133,8 +129,6 @@ pub fn bake_tile_mesh_cached(
             coord,
             region,
             res,
-            dem_half_extent,
-            origin_xz,
         },
         &lunco_assets_core::cache_dir(),
     )
@@ -149,8 +143,6 @@ pub async fn bake_tile_mesh_cached_async(
     coord: QuadCoord,
     region: Square,
     res: usize,
-    dem_half_extent: f64,
-    origin_xz: [f64; 2],
 ) -> TileMesh {
     use lunco_precompute::Bake;
 
@@ -159,8 +151,6 @@ pub async fn bake_tile_mesh_cached_async(
         coord,
         region,
         res,
-        dem_half_extent,
-        origin_xz,
     };
     let key_hex = lunco_precompute::key_hex(bake.key());
     if let Some(blob) = lunco_storage::opfs_blob::read(TileBake::NAMESPACE, &key_hex).await {
@@ -329,8 +319,6 @@ mod tests {
                 half: 1.0,
             },
             res: 5,
-            dem_half_extent: 4.0,
-            origin_xz: [1.0, 1.0],
         }
         .bake();
         // This interior tile's first row crosses the measured post at (1, 0).

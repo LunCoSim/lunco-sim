@@ -45,6 +45,11 @@ quantities, sleeping mass changes, native arithmetic rejection, joint seating,
 live COM allocation, moving-support contacts, and ordered Modelica lifecycle
 commands. Its Python adapter supplies typed unsaved fixtures and process
 lifecycle; every behavioral verdict belongs to the authored Rhai scenario.
+The `--case tires-subnormal` gate applies signed subnormal drive torques to
+unloaded raycast wheels and checks continued native ticks. It releases the
+rear axles and the front-right axle. Under bearing drag, the rear pair settles
+at one signed speed unit and the front-right axle reaches zero. Braking then
+stops all four wheels.
 
 `scripts/api/test_simulation_core_sixth_pass.py` covers native accumulated
 increment rejection, finite combined force/gravity, bound static/terrain material

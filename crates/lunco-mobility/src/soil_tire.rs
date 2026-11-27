@@ -78,7 +78,7 @@ pub(crate) struct PatchResponse<'a> {
     soil: Option<SoilTrial<'a>>,
     pub sinkage_m: f64,
     pub rolling_moment_limit: f64,
-    pub tread_gain_bound: f64,
+    tread_gain_bound: f64,
 }
 struct SoilTrial<'a> {
     evaluator: Option<&'a SoilModelica>,
@@ -143,11 +143,48 @@ impl<'a> PatchResponse<'a> {
         self.soil.is_some()
     }
 
-    pub(crate) fn angular_gain_bound(&self) -> f64 {
-        // Soil empirical lateral demand depends on geometric travel yaw and is
-        // constant during the axle iteration. The tread-dependent shear
-        // projection is bounded by the constitutive tread gain.
-        if self.is_soil() { 0.0 } else { self.stiffness }
+    /// Certify the torque evaluation at the representable-speed boundary.
+    /// Both wheel realizations use the same contact law and roundoff bound;
+    /// the housing term is zero for a raycast wheel. The stiffness argument
+    /// is this contact's share of the authored longitudinal stiffness.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn axle_roundoff(
+        &self,
+        speed: f64,
+        housing_speed: f64,
+        radius: f64,
+        v_long: f64,
+        v_lat: f64,
+        min_slip_speed: f64,
+        min_validated_speed: f64,
+        longitudinal_stiffness: f64,
+        mu: f64,
+    ) -> f64 {
+        let tread = (speed + housing_speed) * radius;
+        let velocity_scale = radius * (speed.abs() + housing_speed.abs()) + v_long.abs();
+        if self.is_soil() {
+            // Soil's geometric yaw demand is fixed during the axle solve;
+            // its constitutive tread gain bounds the varying shear/moment.
+            return 64.0
+                * f64::EPSILON
+                * (radius * self.tread_gain_bound * velocity_scale
+                    + radius * mu * self.load
+                    + self.rolling_moment_limit);
+        }
+        let reference = v_long.abs().max(tread.abs()).max(min_slip_speed);
+        let rolling = v_long.abs().max(tread.abs()).max(min_validated_speed);
+        let lateral_error = if self.stiffness == 0.0 || v_lat == 0.0 {
+            0.0
+        } else {
+            let magnitude = rolling.hypot(v_lat);
+            self.stiffness * (1.0 + (v_lat.abs() / magnitude) * (velocity_scale / magnitude))
+        };
+        // Near rolling, subtracting two nearly equal tread/hub speeds can
+        // amplify a speed ulp by the unsaturated slip stiffness. Coulomb
+        // projection is nonexpansive; include the lateral and cone scales.
+        radius
+            * (64.0 * f64::EPSILON)
+            * (longitudinal_stiffness * velocity_scale / reference + lateral_error + mu * self.load)
     }
 
     #[cfg(test)]
@@ -190,6 +227,84 @@ impl SoilTrial<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rigid_axle_contact_roundoff_closes_stiff_near_rolling_cases() {
+        let mut seed = 0xb876b87633a2dd50_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let mu = 0.6;
+        let dt = 1.0 / 60.0;
+        let damping = 0.45;
+        // Deterministic coverage of low loads, stiff near-rolling contacts,
+        // and both signs of slip and shaft velocity. The rigid response is the
+        // native contact law, not a mock rounding allowance.
+        for _ in 0..100_000 {
+            let radius = 0.1 + next() * 0.5;
+            let inertia = 0.1 + next() * 7.0;
+            let velocity = (next() * 2.0 - 1.0) * 3.0;
+            let initial = velocity / radius + (next() * 2.0 - 1.0) * 0.01;
+            let load = 10_f64.powf(next() * 6.0 - 3.0);
+            let bound = radius * mu * load;
+            let longitudinal_stiffness = 8_000.0 + next() * 12_000.0;
+            let drive = (next() * 2.0 - 1.0) * bound;
+            let response = PatchResponse::new(
+                TireLateralStiffnessGraph::default(),
+                &SoilSideForceCurve::default(),
+                None,
+                load,
+                load,
+                radius,
+                0.28,
+                velocity,
+                0.0,
+                1.07,
+                mu,
+                None,
+            );
+            let contact = |speed: f64| {
+                let tread = speed * radius;
+                let reference = tread.abs().max(velocity.abs()).max(0.1);
+                response
+                    .wrench(
+                        tread,
+                        longitudinal_stiffness * ((tread - velocity) / reference),
+                        0.0,
+                        mu,
+                    )
+                    .0
+                    * radius
+            };
+            let roundoff = |speed| {
+                response.axle_roundoff(
+                    speed,
+                    0.0,
+                    radius,
+                    velocity,
+                    0.0,
+                    0.1,
+                    1.07,
+                    longitudinal_stiffness,
+                    mu,
+                )
+            };
+            let result = crate::solve_axle_step_with_roundoff(
+                initial, inertia, damping, drive, 0.0, bound, dt, contact, roundoff,
+            )
+            .unwrap_or_else(|error| {
+                panic!("{error}: speed={initial:e}, v={velocity:e}, load={load:e}, drive={drive:e}")
+            });
+            let inertial = (inertia / dt + damping) * result.speed;
+            let rhs = inertia / dt * initial + drive;
+            let torque = contact(result.speed);
+            let tolerance =
+                (64.0 * f64::EPSILON * inertial.abs().max(torque.abs()).max(rhs.abs()).max(bound))
+                    .max(roundoff(result.speed));
+            assert!((inertial + torque - rhs).abs() <= tolerance);
+        }
+    }
 
     fn curve() -> SoilSideForceCurve {
         SoilSideForceCurve::new(vec![
@@ -416,12 +531,7 @@ mod tests {
             radius * 0.6 * 182.25 + patch.rolling_moment_limit,
             dt,
             reaction,
-            |omega| {
-                64.0 * f64::EPSILON
-                    * (radius * patch.tread_gain_bound * (omega.abs() * radius + 1.32)
-                        + radius * 0.6 * 182.25
-                        + patch.rolling_moment_limit)
-            },
+            |omega| patch.axle_roundoff(omega, 0.0, radius, 1.32, 0.0, 0.1, 1.07, 0.0, 0.6),
         )
         .unwrap();
         let (fx, fy, moment) = patch.wrench(next.speed * radius, 0., 0., 0.6);

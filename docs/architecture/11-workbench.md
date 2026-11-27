@@ -1135,7 +1135,7 @@ domain crate owns a typed slice that implements `SettingsSection`:
 
 ```rust
 #[derive(Resource, Serialize, Deserialize, Default, Clone, PartialEq)]
-struct PerfHudSettings { enabled: bool }
+struct PerfHudSettings { enabled: Option<bool> }
 
 impl SettingsSection for PerfHudSettings {
     const KEY: &'static str = "perf_hud";
@@ -1156,13 +1156,24 @@ After registration the slice is a normal `Resource`. The crate:
   panics. Atomic writes (write + rename) keep partial files from
   corrupting on kill.
 
-UI surfaces the same resource three ways — a named Settings submenu row
-(`WorkbenchMenuRegistry::register_settings_submenu`), a typed `#[Command]` for
+UI surfaces the same resource three ways — an owner-registered HUD menu row
+(`WorkbenchMenuRegistry::register_hud_menu`), a typed `#[Command]` for
 the API/script bus (e.g. `TogglePerfHud`), and direct mutation. All
-three converge on the same persisted resource.
+three converge on the same persisted resource. The optional boolean stores
+Auto (none), Show (true), or Hide (false); existing boolean values remain
+explicit choices.
 
-LunCoSim's View ▸ HUDs submenu is the discoverable view for the shipped
-visibility controls. Its Telemetry graphs row calls `SetGraphHud` over
+LunCoSim's View ▸ HUDs submenu has **Built-in HUDs** and **Twin HUDs**.
+Native application owners register their built-in controls; the application
+runtime manifest declares built-in retained surfaces independently of their
+scene lifecycle. Twin HUDs are discovered from the active composed runtime
+manifest, registered guidance cards and authored floating perspective panels.
+The catalog does not enumerate Twin-specific names in the shell. Built-in
+rows stay discoverable while unavailable; a Twin's rows retire with it.
+Every row offers Auto, Show and Hide with a separate availability/visibility
+status. Auto resets the owner's preference; native application preferences
+persist, while Twin and allocated window overrides are scene-scoped.
+The Telemetry graphs controls call `SetGraphHud` over
 `lunco-viz`'s registered scene resource. A searchable Parameters picker selects
 up to four measured channels through the shared native grid mutation owner;
 source filtering and an explicit internal-variable option keep discovery usable.
@@ -1180,7 +1191,7 @@ actual dimensions before queued user intents so a size preset remains pending.
 Each instance scopes its picker cache and UI identity separately. Scene teardown
 releases every HUD-owned grid and plot, including while hidden. These native
 windows use the measured View scene area and exclude offline capture.
-View → HUDs includes **+ Add camera view** with the current view count and
+View → HUDs → Built-in HUDs includes **+ Add camera view** with the current view count and
 eight-view limit, so the first view can be opened without an existing camera
 window. The action uses `CreateCameraFeed`; the new view then uses its toolbar
 to select a live camera. The same menu lists current guided cards and authored
@@ -1189,15 +1200,17 @@ Each provider reports user permission and current eligibility through
 `lunco_workbench_core::HudVisibility`. A checked but unavailable row says
 **Unavailable here** rather than implying pixels are currently visible. Camera
 and time menus contain domain controls, not duplicate visibility toggles.
-Camera-status uses the runtime HUD permission and its authored Twin setting
-remains a separate project eligibility rule, not a menu toggle. This works
-without editing a read-only Twin. The celestial switcher application setting
+Camera-status follows its authored Twin setting in automatic mode. Its runtime
+HUD mode overrides that setting for the current scene; **Automatic**
+restores it without editing a read-only Twin. Its eligibility follows the
+interactive main viewport, including scene-visible Twin perspectives. Native camera windows, their image controls, telemetry graphs and time/surface overlays use that same host visibility fact; their menu availability and render conditions agree. The celestial switcher application setting
 is its single user visibility owner. Native camera view rows retain their allocated feed
 and geometry when hidden, and the existing close button releases the feed.
 The menu edits native persisted settings at their owners and scene-local
 preferences for guidance, general authored runtime HUDs and camera windows.
 **Show all HUDs / Hide all HUDs** broadcasts one typed event to the owners
-of current HUDs; showing does not override their authored eligibility.
+of current HUDs; showing overrides the default HUD permission but does not
+override perspective, exposure or lifecycle gates.
 Essential overlays and modal/dock-panel workflow surfaces remain
 lifecycle-controlled. Guidance cards share one content renderer and action
 lease between their floating card and the **Guidance** dock, with minimize,

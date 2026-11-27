@@ -12,6 +12,6 @@ fn instruments(facts) {
     [#{id:"instruments", title:"Instruments", visible:false, restore:false,
        description:"Live measurements from the active vehicle or packing line.",
        scene_visible:true, interaction:"simulation",
-       floating:[#{kind:"signal_grid", instance:1, corner:"top_right",
+       floating:[#{kind:"signal_grid", instance:1, corner:"bottom_right",
                    width:285, height:196, inset:12}]}]
 }

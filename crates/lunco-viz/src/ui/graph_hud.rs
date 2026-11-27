@@ -40,7 +40,7 @@ pub struct SetGraphHud {
 /// The HUD owns its grid through scene teardown; signal history stays shared.
 #[derive(Clone, PartialEq)]
 struct GraphHud {
-    visible: bool,
+    visibility_override: Option<bool>,
     grid: Option<u64>,
     size: egui::Vec2,
     position: Option<egui::Pos2>,
@@ -51,7 +51,7 @@ struct GraphHud {
 impl Default for GraphHud {
     fn default() -> Self {
         Self {
-            visible: false,
+            visibility_override: Some(false),
             grid: None,
             size: egui::vec2(640.0, 360.0),
             position: None,
@@ -134,7 +134,7 @@ pub fn workspace_snapshots(world: &World) -> Vec<GraphHudSnapshot> {
                 .collect();
             GraphHudSnapshot {
                 id: *id,
-                visible: hud.visible,
+                visible: hud.visibility_override.unwrap_or(true),
                 columns,
                 signals: selected,
                 width: hud.size.x,
@@ -180,7 +180,7 @@ fn on_create_graph_hud(_: On<CreateGraphHud>, mut huds: ResMut<GraphHuds>) -> Re
     huds.instances.insert(
         id,
         GraphHud {
-            visible: true,
+            visibility_override: None,
             ..Default::default()
         },
     );
@@ -395,7 +395,7 @@ fn configure_hud(
         return Err("include the selected signals when changing the column count".into());
     }
     if let Some(visible) = request.visible {
-        hud.visible = visible;
+        hud.visibility_override = Some(visible);
     }
     if request.width.is_some() || request.height.is_some() {
         hud.apply_size = true;
@@ -503,13 +503,31 @@ pub(crate) fn set_all_graph_hud_visibility(
 ) {
     let mut changed = false;
     for hud in huds.instances.values_mut() {
-        if hud.visible != event.0 {
-            hud.visible = event.0;
+        if hud.visibility_override != Some(event.0) {
+            hud.visibility_override = Some(event.0);
             changed = true;
         }
     }
     if changed {
         huds.revision = huds.revision.wrapping_add(1);
+    }
+}
+
+#[derive(Event)]
+pub(crate) struct SetGraphHudMenuVisibility {
+    id: u64,
+    visible: Option<bool>,
+}
+
+pub(crate) fn set_graph_hud_menu_visibility(
+    event: On<SetGraphHudMenuVisibility>,
+    mut huds: ResMut<GraphHuds>,
+) {
+    if let Some(hud) = huds.instances.get_mut(&event.id) {
+        if hud.visibility_override != event.visible {
+            hud.visibility_override = event.visible;
+            huds.revision = huds.revision.wrapping_add(1);
+        }
     }
 }
 
@@ -521,31 +539,18 @@ pub fn graph_hud_menu_ui(ui: &mut egui::Ui, ctx: &mut MenuCtx<'_>, available: bo
     let rows: Vec<_> = huds
         .instances
         .iter()
-        .map(|(id, hud)| (*id, hud.visible))
+        .map(|(id, hud)| (*id, hud.visibility_override))
         .collect();
     ui.label(egui::RichText::new("Telemetry graphs").strong());
-    if rows.is_empty() {
-        if let Some(enabled) = (lunco_workbench_core::HudVisibility {
-            enabled: false,
+    for (id, preference) in rows {
+        if let Some(visible) = (lunco_workbench_core::HudVisibility {
+            enabled: preference.unwrap_or(true),
             available,
         })
-        .menu_row(ui, "Show graph HUD")
+        .menu_row(ui, format!("Telemetry {id}"), preference)
+        .choice
         {
-            ctx.trigger(SetGraphHud {
-                visible: Some(enabled),
-                ..Default::default()
-            });
-        }
-    }
-    for (id, enabled) in rows {
-        if let Some(visible) = (lunco_workbench_core::HudVisibility { enabled, available })
-            .menu_row(ui, format!("Telemetry {id}"))
-        {
-            ctx.trigger(SetGraphHud {
-                hud: Some(id),
-                visible: Some(visible),
-                ..Default::default()
-            });
+            ctx.trigger(SetGraphHudMenuVisibility { id, visible });
         }
     }
     if ui.button("+ New graph HUD").clicked() {
@@ -937,7 +942,7 @@ pub fn draw_graph_hud(world: &mut World, state: &mut SystemState<EguiContexts>) 
         .resource::<GraphHuds>()
         .instances
         .iter()
-        .filter(|(_, hud)| hud.visible)
+        .filter(|(_, hud)| hud.visibility_override.unwrap_or(true))
         .map(|(id, hud)| (*id, hud.clone()))
         .collect();
     if huds.is_empty() {
@@ -1083,10 +1088,10 @@ impl lunco_api::queries::ApiQueryProvider for InspectGraphHudProvider {
                     "series_color": style.series_color, "show_controls": style.show_controls, "compact_layout": style.compact_layout,
                 }))
             }).collect();
-            api_value!({"hud": *id, "visible": hud.visible, "grid": hud.grid,
+            api_value!({"hud": *id, "visible": hud.visibility_override.unwrap_or(true), "grid": hud.grid,
                 "plots": ids.iter().map(|id| id.raw()).collect::<Vec<_>>(), "signals": entries,
                 "columns": hud.grid.and_then(|grid| grids.columns(grid)), "width": hud.size.x, "height": hud.size.y,
-                "position": hud.position.map(|position| [position.x, position.y]), "rendered": hud.visible && rect.is_some(),
+                "position": hud.position.map(|position| [position.x, position.y]), "rendered": hud.visibility_override.unwrap_or(true) && rect.is_some(),
                 "rect": rect.map(|r| [r.min.x, r.min.y, r.width(), r.height()]),
                 "viewport": viewport.map(|r| [r.min.x, r.min.y, r.width(), r.height()]),
             })

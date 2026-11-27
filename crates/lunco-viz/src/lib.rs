@@ -144,6 +144,7 @@ impl Plugin for LuncoVizPlugin {
         .add_systems(lunco_core::SceneTeardown, ui::graph_hud::retire_graph_hud)
         .add_observer(ui::graph_hud::on_graph_hud_measured)
         .add_observer(ui::graph_hud::set_all_graph_hud_visibility)
+        .add_observer(ui::graph_hud::set_graph_hud_menu_visibility)
         .add_observer(kinds::line_plot::on_line_plot_edit_requested)
         .add_observer(kinds::line_plot::on_line_plot_fit_requested)
         .add_observer(panel::on_bind_channel_requested)

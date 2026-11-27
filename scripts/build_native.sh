@@ -30,6 +30,7 @@
 #     --no-cache         Skip manifest-declared bundle files (binary + assets only)
 #     --skip-download    Skip the cache asset download step (use existing shared cache)
 #     --no-assets        Skip bundling the assets/ tree
+#     --modelica-prebuilt <dir>  Stage a directory from scripts/prebuild_modelica.py
 #     --out <dir>        Output directory (default: dist/<binary>-<platform>-<arch>/)
 #     --extra <args>     Pass extra args to cargo build
 #
@@ -244,6 +245,15 @@ download_cache_for() {
         error "  download for manifest bundle '$target' failed"
         return 1
     fi
+}
+
+stage_modelica_prebuilt() {
+    local source="$1" destination="$2" record family
+    for record in "$source"/{compiled-dae,prepared-fmi}-v*/*.bin.zst; do
+        family="$(basename "$(dirname "$record")")"
+        mkdir -p "$destination/$family"
+        cp "$record" "$destination/$family/"
+    done
 }
 
 # ── Write the launcher script ─────────────────────────────────────────────
@@ -512,6 +522,7 @@ TARGET=""
 NO_CACHE=0
 SKIP_DOWNLOAD=0
 NO_ASSETS=0
+MODELICA_PREBUILT=""
 OUT_DIR=""
 VELOPACK_OUT=""
 EXTRA_ARGS=()
@@ -532,6 +543,7 @@ while [ $# -gt 0 ]; do
         --no-cache)      NO_CACHE=1; shift ;;
         --skip-download) SKIP_DOWNLOAD=1; shift ;;
         --no-assets)     NO_ASSETS=1; shift ;;
+        --modelica-prebuilt) MODELICA_PREBUILT="${2:?missing Modelica bundle directory}"; shift 2 ;;
         --out)           OUT_DIR="$2"; shift 2 ;;
         --out=*)         OUT_DIR="${1#--out=}"; shift ;;
         --velopack-out)  VELOPACK_OUT="$2"; shift 2 ;;
@@ -542,6 +554,20 @@ while [ $# -gt 0 ]; do
         *)               error "Unknown option: $1"; usage 2 ;;
     esac
 done
+
+if [[ -n "$MODELICA_PREBUILT" ]]; then
+    if [[ "$BINARY" != luncosim || "$NO_ASSETS" == 1 || "$PACK_ONLY" == 1 ]]; then
+        error "--modelica-prebuilt requires staging LunCoSim with assets"
+        exit 2
+    fi
+    MODELICA_PREBUILT="$(cd "$MODELICA_PREBUILT" && pwd -P)"
+    for family in compiled-dae prepared-fmi; do
+        if ! compgen -G "$MODELICA_PREBUILT/$family-v*/*.bin.zst" >/dev/null; then
+            error "Missing $family records in $MODELICA_PREBUILT"
+            exit 2
+        fi
+    done
+fi
 
 if [ "$PACKAGE" -eq 1 ] && [ "$VELOPACK" -eq 1 ]; then
     error "Choose either --package or --velopack, not both"
@@ -618,6 +644,13 @@ fi
 
 if [ -z "$OUT_DIR" ]; then
     OUT_DIR="$PROJECT_DIR/dist/${BINARY}-${PLATFORM}-${ARCH}"
+fi
+if [[ -n "$MODELICA_PREBUILT" && -d "$OUT_DIR" ]]; then
+    staging="$(cd "$OUT_DIR" && pwd -P)"
+    if [[ "$MODELICA_PREBUILT/" == "$staging/"* ]]; then
+        error "Keep the prebuilt source outside the package output directory"
+        exit 2
+    fi
 fi
 if [ "$PACK_ONLY" -eq 1 ] && [ ! -d "$OUT_DIR" ]; then
     error "--pack-only requires an existing staged package directory: $OUT_DIR"
@@ -713,6 +746,11 @@ if [ "$NO_ASSETS" -eq 0 ] && [ -d "$PROJECT_DIR/assets" ]; then
         -exec rm -rf {} +
 else
     [ "$NO_ASSETS" -eq 0 ] && warn "No assets/ directory found at $PROJECT_DIR/assets"
+fi
+
+if [[ -n "$MODELICA_PREBUILT" ]]; then
+    info "Staging prebuilt Modelica artifacts"
+    stage_modelica_prebuilt "$MODELICA_PREBUILT" "$OUT_DIR/assets/prebuilt/modelica"
 fi
 
 stage_app_icons "$OUT_DIR" "$BINARY" "$TRIPLE" "$PACKAGE_ICON"

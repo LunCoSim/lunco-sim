@@ -3,6 +3,7 @@
   "surfaces": [
     {
       "id": "lunica-schema",
+      "built_in_hud": true,
       "title": "Modelica schema",
       "template": "ui/lunica_schema.html",
       "stylesheet": "ui/lunica_schema.css",
@@ -162,7 +163,7 @@
         "program_color": { "source": "program_color", "css": true }
       },
       "actions": [],
-      "visible_in_perspective": "sandbox_view",
+      "gate": "interactive_scene_view",
       "interactive": true,
       "placement": { "mode": "viewport" }
     },
@@ -196,6 +197,7 @@
     },
     {
       "id": "camera-status",
+      "built_in_hud": true,
       "title": "Camera status",
       "template": "ui/camera_status.html",
       "stylesheet": "ui/camera_status.css",
@@ -223,7 +225,7 @@
           "search_hint": "Find a rover or camera…"
         }
       ],
-      "visible_in_perspective": "sandbox_view",
+      "gate": "interactive_scene_view",
       "draggable": true,
       "placement": {
         "mode": "window",
@@ -319,7 +321,6 @@
         { "callback": "runtime_view_moon", "action": "view.body.moon" },
         { "callback": "runtime_view_earth", "action": "view.body.earth" }
       ],
-      "visible_in_perspective": "sandbox_view",
       "gate": "view_switcher",
       "interactive": true,
       "draggable": true,

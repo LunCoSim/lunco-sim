@@ -207,6 +207,11 @@ block numerical admission.
 requires both the initialization verdict and the receipt's retirement across a
 scene replacement in one owned production session.
 
+For a native Twin distribution, prebuild the exact scene using the production
+binary. Verify both artifact families on first open after another Twin has been
+active and compare initialized values across the cold and prebuilt runs.
+Use the [Modelica artifact deployment instructions](../../docs/architecture/20-domain-modelica.md).
+
 Compile admission preserves an existing participant/vehicle name; generated
 class identity belongs to simulation metadata. Verify a control HUD against
 the physical vehicle identity after compile and reload.

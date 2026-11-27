@@ -264,13 +264,13 @@ pub(crate) fn update_wheel_spin(
                 None
             },
         );
+        let brake_limit = if braking { wheel.brake_torque_max } else { 0.0 };
+        let minimum_slip_speed = wheel
+            .longitudinal_slip_denominators
+            .minimum(tau_drive != 0.0 || brake_limit > 0.0);
         let patch = |omega: f64| {
             let tread = omega * r;
-            let denom = v_long.abs().max(tread.abs()).max(
-                wheel
-                    .longitudinal_slip_denominators
-                    .minimum(tau_drive != 0.0 || (braking && wheel.brake_torque_max > 0.0)),
-            );
+            let denom = v_long.abs().max(tread.abs()).max(minimum_slip_speed);
             let angle =
                 (-v_lat).atan2(v_long.abs().max(tread.abs()).max(wheel.min_validated_speed));
             response.wrench(
@@ -280,27 +280,31 @@ pub(crate) fn update_wheel_spin(
                 friction_mu,
             )
         };
+        let traction_bound = r * friction_mu * load + response.rolling_moment_limit;
         let step = crate::solve_axle_step_with_roundoff(
             wheel.spin_velocity,
             inertia,
             c_bearing,
             tau_drive,
-            if braking { wheel.brake_torque_max } else { 0.0 },
-            r * friction_mu * load + response.rolling_moment_limit,
+            brake_limit,
+            traction_bound,
             dt,
             |omega| {
                 let (fx, _, moment) = patch(omega);
                 fx * r + moment
             },
             |omega| {
-                if !response.is_soil() {
-                    return 0.0;
-                }
-                let scale = (omega * r).abs() + v_long.abs();
-                64.0 * f64::EPSILON
-                    * (r * response.tread_gain_bound * scale
-                        + r * friction_mu * load
-                        + response.rolling_moment_limit)
+                response.axle_roundoff(
+                    omega,
+                    0.0,
+                    r,
+                    v_long,
+                    v_lat,
+                    minimum_slip_speed,
+                    wheel.min_validated_speed,
+                    k_slip,
+                    friction_mu,
+                )
             },
         );
         let step = match step {
@@ -310,11 +314,18 @@ pub(crate) fn update_wheel_spin(
                     holds.set(lunco_physics::PhysicsHolds::SAFETY_FAILURE, true);
                 }
                 if let Some(faults) = faults.as_deref_mut() {
+                    let detail = format!(
+                        "{detail}; speed={:e} rad/s, inertia={inertia:e} kg m², bearing={c_bearing:e}, drive={tau_drive:e} N m, brake_limit={brake_limit:e} N m, traction_bound={traction_bound:e} N m, load={load:e} N, radius={r:e} m, mu={friction_mu:e}, slip_stiffness={k_slip:e}, min_slip_speed={minimum_slip_speed:e} m/s, min_validated_speed={:e} m/s, lateral_graph={:?}, soil={}, v_long={v_long:e} m/s, v_lat={v_lat:e} m/s, dt={dt:e} s",
+                        wheel.spin_velocity,
+                        wheel.min_validated_speed,
+                        wheel.lateral_stiffness_graph,
+                        response.is_soil(),
+                    );
                     if faults.raise(
                         "physics-wheel-step-invalid",
                         Some(entity),
                         "wheel mechanical step",
-                        detail,
+                        &detail,
                     ) {
                         error!("[wheel] {detail}");
                     }

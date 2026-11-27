@@ -2690,6 +2690,14 @@ actually call, with the fields the deserializer actually accepts. See the
 |---|---|---|
 | `enabled` | `bool` |   |
 
+#### `InspectCameraHudWindows`
+
+ Inspect the camera HUD windows actually drawn during the last UI pass.
+
+- *defined in:* `crates/lunco-luncosim-ui/src/ui/camera_feed.rs`
+
+- *fields:* none — call with `InspectCameraHudWindows` (no params)
+
 #### `ShowCameraImageSettings`
 
  Open live image controls. Omitted source follows the selected main camera.
@@ -4799,7 +4807,7 @@ actually call, with the fields the deserializer actually accepts. See the
 | Field | Type | Description |
 |---|---|---|
 | `id` | `String` |  Surface id from InspectRuntimeHuds. |
-| `visible` | `bool` |   |
+| `visible` | `Option<bool>` | True or false overrides the authored visibility setting; omission resets to automatic. |
 
 #### `SetRuntimeUiDataSource`
 

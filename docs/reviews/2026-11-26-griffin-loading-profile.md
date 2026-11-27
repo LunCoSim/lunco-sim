@@ -1,5 +1,151 @@
 # Griffin loading profile — 2026-11-26
 
+## November 27 desktop rebuild with prebuilt Modelica records
+
+In consecutive runs on a quiet host, the previous release took **16.58 seconds**
+to reach lander physics readiness with an empty Modelica cache. The Kache
+rebuild took **9.71 seconds** with the prebuilt bundle and an empty local
+cache (6.86 seconds saved, 41% shorter, 1.71× speedup). Two other fresh
+processes with the bundle took 9.75 and 10.22 seconds. The same new executable
+without the bundle took 16.66 seconds. The measured first-open gain came
+primarily from reusing the prebuilt records. Two previous-release cold runs
+that overlapped other compiler jobs took 20.69 and 21.35 seconds. All runs
+used the same Griffin source snapshot and private desktop setup.
+
+| Desktop run | Open to physics ready | Shared session construction | Of which, prepare/read component | Longest live constructor | DAE / checked component hits |
+|---|---:|---:|---:|---:|---:|
+| Quiet pair, previous release, empty cache | 16.58 s | 5.31 s | 3.59 s | 2.93 s | 0 / 0 |
+| Quiet pair, Kache rebuild, prebuilt | 9.71 s | 3.04 s | 1.39 s | 2.46 s | 16 / 15 |
+| Previous release, populated local cache | 10.31 s | 3.65 s | 1.84 s | 2.59 s | 16 / 15 |
+| Kache rebuild, empty local cache | 16.66 s | 5.33 s | 3.53 s | 2.69 s | 0 / 0 |
+| Kache rebuild, prebuilt first open | 9.75 s | 3.39 s | 1.65 s | 2.51 s | 16 / 15 |
+| Kache rebuild, prebuilt repeat in a fresh process | 10.22 s | 3.44 s | 1.63 s | 2.81 s | 16 / 15 |
+
+The release uses Rust 1.100.0 and LunCoSim Rumoca commit
+`50972f69a6548e3c2997f1602508f3d6f61a8e1e`. Its executable SHA-256 is
+`c126f64b762c7556aa5bac3ec4b634307009044c892ac57a78a1c112e2d62196`.
+Kache built the executable. The bundled records are a separate runtime
+optimization. The producer opened Griffin directly. The desktop opened a
+different Twin before Griffin. Using the stable logical asset identity in the
+compiler context allowed both launches to share records. In the first seeded
+run the altimeter prepared locally in 18 ms.
+
+The popup reported four sources remaining at 3.46 seconds, a shared solve
+for eight participants at 3.60 seconds, and the start of eight live sessions
+at 7.05 seconds. A screenshot from a regular cached open showed the shared
+solve and `Scene elapsed: 00:03` together. The regular desktop took 18.16
+seconds to populate its cache and 11.71 seconds on reopening. All 15 participants entered co-simulation. All 199 named
+initial observations matched the earlier binary64 digest. An independent
+package-layout run used the staged assets with automatic bundle discovery and
+reached readiness in 10.15 seconds. Installing the 32 records under the source
+checkout’s default assets directory gave a 9.06-second first open with no
+environment override and an empty local Modelica cache (31 prebuilt hits).
+A run with a missing DAE, a DAE stored
+under the wrong key, and a truncated shared component reached readiness in
+12.91 seconds with identical observations. The initialization and Twin
+replacement scenarios passed 47 checks. The inconsistent fixture produced
+the expected terminal initialization fault. Separate desktop sessions passed the
+landing handoff and terrain checks at 52.21 seconds on the previous release and
+50.30 seconds with the new seeded release.
+
+**What still costs time.** The seeded shared session took 3.04–3.44 seconds,
+including 1.39–1.65 seconds reading and checking the shared component.
+Constructing the live sessions after the shared observation added 2.51–2.89
+seconds through certification. These constructors run concurrently. The
+separate dispatch probe observed 1,243 whole-residual handles, 70 selected
+residual handles, 129 Jacobian-row handles and three Jacobian-batch handles.
+The seeded processes still issued about 29,570 fresh Cranelift function
+compilations apiece. A single dispatched handle can call many generated
+functions. Determine which functions those entry points reach before deferring
+more code generation. For a further reduction in the first open, compare
+shared-component decoding and native session construction separately.
+
+## Desktop profile of the integrated release
+
+Local merge `5235460ca`, built from `usd`, reached lander physics readiness in
+**18.40 seconds on an empty Modelica cache and 11.99 seconds on the next open
+in a fresh process**. The first ready screenshots completed at 18.71 and
+12.27 seconds. This was the same surface-operations Twin and private desktop
+setup as the paired comparison below. The binary SHA-256 was
+`b132e0f846156423165f6e06250f3de1f0b7f1eeb6f1685e8a0340c`.
+
+| Merged desktop run | Shared initialization | Prepare or read shared component | Longest live constructor | DAE / component hits |
+|---|---:|---:|---:|---:|
+| Empty Modelica cache | 5.30 s | 3.55 s | 3.02 s | 0 / 0 |
+| Warm Modelica cache | 3.61 s | 1.81 s | 2.91 s | 16 / 16 |
+
+The warm run reused 12,444 native functions and compiled 29,576. All 199
+time-zero values matched the paired builds. Both runs reached physics readiness
+with 15 active participants, zero scene diagnostics and matching source snapshots.
+A separate desktop run observed `landing_handoff = 1.0`. It reached lander
+physics readiness at 17.13 seconds and passed the full handoff and terrain
+qualification at 64.48 seconds. The integrated executable also passed the 47
+authored initialization and replacement checks and the expected-fault fixture.
+The desktop displayed a separate download warning for the Earth and Moon color
+maps during these physics measurements.
+
+The merged build also includes intervening runtime and rendering changes.
+Use the paired runs below to estimate the effect of the Modelica changes alone.
+
+## Production result with checked component and native function reuse
+
+The release from the `usd` checkout reached Griffin lander physics readiness
+in **17.48 and 14.04 seconds** on two warm desktop opens. The immediate
+control reached it in **17.35 and 17.02 seconds**. The median fell from
+17.19 to 15.76 seconds (8%). Both candidate opens beat the 20-second target.
+The paired comparison does not establish a twofold end-to-end improvement.
+
+| Fresh process and Modelica cache | Control ready | Candidate ready | Control shared initialization | Candidate shared initialization |
+|---|---:|---:|---:|---:|
+| Empty, headless | 24.13 s | 21.76 s | 7.41 s | 7.75 s |
+| Warm, private desktop, candidate first | 17.35 s | 17.48 s | 7.63 s | 4.94 s |
+| Warm, private desktop, control first | 17.02 s | 14.04 s | 7.78 s | 4.56 s |
+| Warm, headless | 15.84 s | 11.75 s | 8.73 s | 3.75 s |
+
+The control was release `8906e198` with Rumoca `dc3574345`. The candidate
+pinned `429e3ff2765b` of the LunCoSim Rumoca fork. Each run used
+`scripts/perf/twin_startup.py --startup-only` to open
+`twins/astrobotic-griffin-1/scenes/griffin_1_surface_ops.usda` at model
+revision `269273031bec`. Timing starts at `OpenFile` from a ready bootstrap
+and ends at the first authoritative physics state for
+`/Griffin1SurfaceOps/Lander`. The desktop runs used private X displays and
+the NVIDIA Vulkan renderer. Each binary had its own Modelica cache and
+shared the other asset directories. Other simulator and linker processes
+were active on the machine during the first candidate desktop run.
+
+Every paired run admitted 15 participants, certified the eight coupled
+members, reported zero scene diagnostics, preserved the source snapshot,
+and released its process and API port. Across all four candidate processes
+the 115 named probes and 84 state starts at time zero matched bit for bit.
+The SHA-256 of the sorted role/name/binary64 snapshot was
+`2550c62f1d33e34085ce5f25c155fc9a923d038b38b0d0b2e4c43d85844614fe`.
+In a separate run a valid cached record placed under a different key
+was rejected and rebuilt. The lander reached readiness with all 15 participants.
+The initialization network and Twin-replacement gates passed 47 authored
+checks. The inconsistent system produced its expected terminal
+`modelica-initialization-failed` fault.
+
+**Remaining loading time.** Both warm desktop runs reused all 16 strict DAEs
+and respectively 15 and 16 checked components. Reading and validating the
+shared component took 2.45 and 2.30 seconds. Another 2.49 and 2.26 seconds
+went to the remaining initialization and observation. The longest live
+constructor took 5.91 and 3.29 seconds, overlapping the other constructors.
+In the second desktop run Cranelift reused 12,460 of 42,020 native function
+compilations across participants. The popup first reported source work, then
+eight participants in the shared solve and finally progress starting eight
+sessions. The captured popup showed elapsed scene time in both later phases.
+
+To reduce a repeat desktop open further, measure the roughly 29,560 fresh
+native functions by function family and the independent work that can start
+before the shared solve returns. The 2.3–2.5 seconds spent reading and
+validating the shared component also warrant a split between wire decoding and
+proof reconstruction. Preserve the fresh per-instance solve and compare the
+same named time-zero values on each path. On an empty headless cache, shared
+initialization took 7.75 seconds, including 4.98 seconds to prepare the
+component. Disk publication had no measurable queue wait for that component.
+
+## Earlier headless comparison
+
 The updated release reached first physics readiness in **15.01 and 16.33 s**
 on two warm headless loads, compared with **46.07 and 34.34 s** in alternating
 control runs. With an empty Modelica cache, the control took **33.67 s** and the

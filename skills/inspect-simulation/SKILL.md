@@ -60,6 +60,14 @@ of every dynamic member, rather than treating wheel motion as proof of a
 balanced contact force. The fourth-pass physical tire gate exercises that
 contract through a deck with only vertical and rotational constraint.
 
+For `physics-wheel-step-invalid`, read `GetBrokenConnections.runtime_fault`,
+the carrier's `QueryPhysicsState.wheel_contacts`, and each wheel's `drive` and
+`shaft_speed` ports. Preserve scientific-notation values even near zero: the
+shared axle balance accepts correctly rounded subnormal speeds without a
+contact-torque bound and bisects representable speeds when loaded. Reproduce
+the exact mechanical inputs from the fault detail at the mobility owner. The
+fault's `global_id` and `entity_name` identify the affected wheel when registered.
+
 For scoped pause, establish nonzero raycast shaft motion before pausing, then
 compare angle, speed, shaft and heat samples while an independent object advances.
 A stationary wheel is insufficient evidence. During prescribed body motion,

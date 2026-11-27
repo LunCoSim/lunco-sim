@@ -15,12 +15,12 @@ from runtime import (
 )
 
 
-def viewport_probe(output, rect):
+def viewport_probe(output, rect, names=("viewport-first.png", "complete-draw.png", "final.png")):
     """Measure an unobscured terrain rectangle, not merely an ECS draw count."""
     from PIL import Image, ImageStat
 
     probes = {}
-    for name in ("viewport-first.png", "complete-draw.png", "final.png"):
+    for name in names:
         with Image.open(output / name) as image:
             left, top, right, bottom = rect
             assert 0 <= left < right <= image.width and 0 <= top < bottom <= image.height
@@ -34,8 +34,9 @@ def viewport_probe(output, rect):
 def assert_viewport_probe(probes):
     final = probes["final.png"]
     assert final["lit_fraction"] >= .2 and final["luminance_stddev"] >= 2.0, "probe must be on visibly lit, unobscured terrain"
-    for name in ("viewport-first.png", "complete-draw.png"):
-        early = probes[name]
+    for name, early in probes.items():
+        if name == "final.png":
+            continue
         assert early["lit_fraction"] >= .5 * final["lit_fraction"], (name, probes)
         assert early["luminance_stddev"] >= .1 * final["luminance_stddev"], (name, probes)
 
@@ -118,6 +119,10 @@ def main():
                 paused = True
             status = execute("TerrainLodStatus")
             views = status["camera_cover"]
+            main_view = [v for v in views if v["camera"] == status["viewport_camera"]]
+            complete_partition = bool(main_view) and all(
+                v["presented_ready"] and v["wanted"] == v["drawn"] == v["resident"] and v["wanted"] > 0
+                for v in views)
             sample = {"elapsed_s": time.monotonic() - started,
                       "views": views, "stream": status["stream"], "derived": status["derived"]}
             evidence["samples"].append(sample)
@@ -126,22 +131,23 @@ def main():
                 raise RuntimeError(f"terminal terrain preparation failure: {sample}")
             if views:
                 milestone("visual_demand", sample)
+            # Sample the exposed viewport before any independent-feed readback
+            # can delay it. Do not condition this receipt on CPU tile residency.
+            if paused and status["exposed_viewport_camera"] is not None:
+                if milestone("viewport_first_publication", sample):
+                    session.capture_screenshot(output / "viewport-first.png")
+                    evidence["milestones"]["viewport_first_publication"]["captured_elapsed_s"] = time.monotonic() - started
             if views and any(v["drawn"] > 0 for v in views):
                 if milestone("first_publication", sample):
                     session.capture_screenshot(output / "first.png")
-            if paused and any(v["camera"] == status["viewport_camera"] and v["drawn"] > 0
-                              for v in views):
-                if milestone("viewport_first_publication", sample):
-                    session.capture_screenshot(output / "viewport-first.png")
-            if views and all(v["focus_ready"] for v in views):
+            if main_view and all(v["focus_ready"] for v in views):
                 if milestone("camera_focus_ready", sample):
                     session.capture_screenshot(output / "near.png")
-            if paused and views and all(v["presented_ready"] and v["wanted"] == v["drawn"] == v["resident"] and v["wanted"] > 0 for v in views):
+            if paused and complete_partition:
                 if milestone("complete_draw_partition", sample):
                     session.capture_screenshot(output / "complete-draw.png")
                     evidence["milestones"]["complete_draw_partition"]["captured_elapsed_s"] = time.monotonic() - started
-            if (views and all(v["ready"] and v["wanted"] == v["drawn"] == v["resident"]
-                              for v in views) and status["stream"]["pending"] == 0):
+            if (complete_partition and all(v["ready"] for v in views) and status["stream"]["pending"] == 0):
                 milestone("geometry_ready", sample)
                 rasters = status["derived"]["rasters"] or []
                 preview_published = any(r["published_resolution"] is not None
@@ -255,26 +261,75 @@ def main():
         if args.verify_view_retirement:
             before = execute("TerrainLodStatus")
             main_camera = before["viewport_camera"]
+            expected = {(v["camera"], v["source"]) for v in before["camera_cover"] if v["camera"] == main_camera}
+            assert expected, "expected a nonempty main terrain cover"
+            def settled_main_only(status):
+                views = status["camera_cover"]
+                return (status["stream"]["pending"] == 0
+                        and {(v["camera"], v["source"]) for v in views} == expected
+                        and all(v["ready"] and v["presented_ready"] and v["wanted"] == v["drawn"] == v["resident"] and v["wanted"] > 0 for v in views))
             feeds = execute("InspectCameraFeeds")["views"]
             assert feeds and len(before["camera_cover"]) > 1, "expected a live independent feed"
+            # Close and reopen one output before the retired geometry has an
+            # arbitrary frame-count grace period. Other cameras must keep their
+            # exact resident cover, and the reopened feed must render real pixels.
+            retiring = next(feed for feed in feeds if feed["active"] and feed["source"] is not None)
+            old_identity = drawn_identity()
+            old_cameras = {v["camera"] for v in before["camera_cover"]}
+            execute("RemoveCameraFeed", feed=retiring["feed"])
+            reopened = execute("CreateCameraFeed")["feed"]
+            execute("SetCameraFeed", feed=reopened, source=retiring["source"],
+                    label="Reopened terrain probe", width=retiring["width"], height=retiring["height"],
+                    minimum_scene_items=1)
+            deadline = time.monotonic() + 45
+            while time.monotonic() < deadline:
+                reopened_status = execute("TerrainLodStatus")
+                reopened_views = reopened_status["camera_cover"]
+                cameras = {v["camera"] for v in reopened_views}
+                common = old_cameras & cameras
+                if (len(cameras) == len(old_cameras) and len(common) == len(old_cameras) - 1
+                        and main_camera in common and reopened_status["stream"]["pending"] == 0
+                        and all(v["ready"] and v["presented_ready"] and 0 < v["wanted"] == v["drawn"] == v["resident"]
+                                for v in reopened_views)
+                        and any(feed["feed"] == reopened and feed["ready"] for feed in execute("InspectCameraFeeds")["views"])):
+                    break
+                time.sleep(.2)
+            else:
+                raise RuntimeError(f"rapidly reopened feed failed to settle: {reopened_status}")
+            new_identity = drawn_identity()
+            assert [tile for tile in old_identity["tiles"] if tile[0] in common] == [tile for tile in new_identity["tiles"] if tile[0] in common], "reopening changed another camera's resident geometry"
+            feed_image = output / "reopened-feed.png"
+            capture_started = time.time_ns()
+            execute("CaptureCameraFeed", feed=reopened, path=str(feed_image), request="reopened-terrain-probe")
+            deadline = time.monotonic() + 30
+            while not (feed_image.exists() and feed_image.stat().st_mtime_ns >= capture_started):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("reopened feed image was not saved")
+                time.sleep(.1)
+            from PIL import Image, ImageStat
+            with Image.open(feed_image) as image:
+                assert ImageStat.Stat(image.convert("L")).stddev[0] >= 2.0, "reopened feed has no tonal structure"
+            evidence["rapid_reopen"] = {"retired": sorted(old_cameras - cameras), "reopened": sorted(cameras - old_cameras),
+                                        "unchanged": sorted(common), "cover": reopened_views}
+            print("rapid feed reopening PASS", flush=True)
+            feeds = execute("InspectCameraFeeds")["views"]
             for feed in feeds:
                 execute("RemoveCameraFeed", feed=feed["feed"])
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 remaining = execute("TerrainLodStatus")
-                if (remaining["stream"]["pending"] == 0 and remaining["camera_cover"]
-                    and all(v["camera"] == main_camera and v["ready"] for v in remaining["camera_cover"])):
+                if settled_main_only(remaining):
                     break
                 time.sleep(.2)
             else:
                 raise RuntimeError(f"feed removal left unsettled geometry: {remaining}")
             probe = remaining["config"]["probe_resolution"]
-            execute("SetTerrainRenderingQuality", probe_resolution=min(257, probe + 2))
+            execute("SetTerrainRenderingQuality", probe_resolution=probe + 2 if probe <= 255 else probe - 2)
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 retuned = execute("TerrainLodStatus")
                 if (retuned["config"]["probe_resolution"] != probe
-                    and retuned["stream"]["pending"] == 0 and all(v["ready"] for v in retuned["camera_cover"])):
+                    and settled_main_only(retuned)):
                     break
                 time.sleep(.2)
             else:
@@ -286,6 +341,15 @@ def main():
             diagnostics = execute("RuntimeDiagnostics")
             assert diagnostics["errors"] == 0 and diagnostics["warnings"] == 0, diagnostics
             print("feed retirement and probe retune PASS", flush=True)
+        if args.viewport_probe:
+            names = ["final.png"]
+            if args.verify_recording:
+                names.extend(["numbered/frame_000000.png", "numbered/frame_000001.png"])
+            if args.verify_view_retirement:
+                names.append("view-retirement.png")
+            probes = viewport_probe(output, args.viewport_probe, names)
+            evidence["viewport_probe"].update(probes)
+            assert_viewport_probe(probes)
         (output / "validation.json").write_text(json.dumps(evidence, indent=2))
         assert_render_log_clean(output / "runtime.log")
     assert not port_is_open(args.port), "owned test port was not released"

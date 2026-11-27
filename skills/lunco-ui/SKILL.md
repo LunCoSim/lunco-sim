@@ -67,7 +67,7 @@ Lunica and Analyze screenshots. The no-model workspace and Welcome surfaces
 share equally sized primary actions, centered as a pair and stacked in narrow
 panels.
 
-For a viewport demonstration, enable **View → HUDs → Telemetry graphs**.
+For a viewport demonstration, enable **View → HUDs → Built-in HUDs → Telemetry graphs**.
 Use the card's **Parameters** picker to browse source/component groups or
 filter names and descriptions, then choose up to four parameters. The selected
 parameters stay pinned above the groups. Units and Y scales
@@ -75,7 +75,7 @@ stay independent; time axes stay aligned. The browser's **Show in HUD** starts
 with its selected channel. The title-bar history dropdown selects the retained time window;
 **Style** exposes layout and native per-plot appearance controls. Use **+** for
 another independent HUD; drag an edge or corner to resize, and use **×** to close it.
-View → HUDs visibility toggles retain parameters while hidden. Shared `HudVisibility` rows distinguish user permission from availability in the active perspective. The picker stays
+View → HUDs visibility controls retain parameters while hidden. Built-in and Twin submenus use the same Auto/Show/Hide row; owner registration supplies the inventory. Scene HUD availability follows the interactive main viewport, not an exact perspective ID. Verify actual native camera and image-control rectangles with `InspectCameraHudWindows` and graphs with `InspectGraphHud`. Shared `HudVisibility` rows distinguish user permission from availability in the active perspective. The picker stays
 open while browsing and selecting; **Done** or an outside click dismisses it. Each instance has
 its own position, dimensions, visibility and parameters. No document
 or dock tab opens. A Twin calls `SetGraphHud { signals, visible: true }`, where
@@ -138,13 +138,13 @@ Verify the saved width and rendered stroke in the actual plot panel.
 
 The main Camera picker includes mounted sensor cameras, grouped by controlled
 USD owner with path-aware search. Use **Image controls…** for the selected main
-camera. Start the first independent camera view from **View → HUDs → + Add
+camera. Start the first independent camera view from **View → HUDs → Built-in HUDs → + Add
 camera view**; the menu shows the active count out of eight and disables the
 action at the limit. Each camera window keeps source, resolution and **Style**
 controls on one toolbar line, with the graph HUD frame and `+`/`×` buttons.
 Its image controls affect only that feed. Fixed color exposure (EV100), depth
 range, noise, seed, animation, quantization and shader asset are live typed settings.
-The main camera's fixed EV100 takes precedence over **Settings → General →
+Reset EV restores the inherited value without disabling fixed exposure. The main camera's fixed EV100 takes precedence over **Settings → General →
 Fixed viewport exposure** (also in Graphics → Camera look). The main image
 controls must open even when no independent feed exists.
 See [camera image controls](../../docs/architecture/render-decoupling.md#camera-image-controls)

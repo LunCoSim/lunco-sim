@@ -40,6 +40,8 @@ use bevy::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use bevy::tasks::{AsyncComputeTaskPool, Task, block_on, futures_lite::future};
 use big_space::prelude::{CellCoord, Grid, Stationary};
+#[cfg(test)]
+use glam::dcamera::rh::view::look_to_mat4;
 use lunco_core::{Command, on_command, register_commands};
 use lunco_materials::{
     ATTRIBUTE_MORPH_EDGE, ATTRIBUTE_MORPH_NORMAL, ATTRIBUTE_MORPH_TARGET, ParamValue, ShaderLook,
@@ -650,7 +652,7 @@ pub(crate) fn collect_terrain_detail_demands(
     let defaults = terrain_settings.as_deref().cloned().unwrap_or_default();
     demands.visual.clear();
     let frame = active_frame.as_deref().map(|frame| frame.0);
-    let live_sources = frame.map(|frame| {
+    let live_sources = frame.filter(|_| !targets.targets.is_empty()).map(|frame| {
         sources
             .iter()
             .map(|(entity, field)| {
@@ -1813,7 +1815,7 @@ impl LodTiles {
 
     pub(crate) fn view_status(&self, camera: Entity) -> Option<TerrainViewStatus> {
         let view = self.views.get(&camera)?;
-        let cover = selected_cover_status(view, view.r#gen);
+        let cover = view.selected_cover_status();
         Some(TerrainViewStatus {
             wanted: cover.wanted,
             resident: cover.resident,
@@ -1824,7 +1826,7 @@ impl LodTiles {
             selection_current: view.selection_current(),
             initial_near_cover_ready: view.bootstrap_ready,
             cover_preparation_pending: view.pending_cover.is_some(),
-            ready: view.latest_ready_with_cover(|| cover.complete),
+            ready: view.latest_ready(),
             presentation_pending: view.presentation_pending,
             presentation_reason: view
                 .presentation_wait
@@ -1941,6 +1943,13 @@ struct LodView {
     selection_clip: Option<SelectionClip>,
     draw_revision: u64,
     draw_revision_exhausted: bool,
+    /// Exact residency of the selected partition, invalidated at its mutation boundaries.
+    selected_status: std::sync::OnceLock<SelectedCoverStatus>,
+    /// Derived coordinate index of the constrained selection, not the persistent
+    /// discretionary cover (mandatory camera/corridor pins may split it further).
+    selected_index: std::sync::OnceLock<SelectedCoordinateIndex>,
+    /// A measured impossible transition, valid for this exact selection and draw revision.
+    transition_budget_floor: Option<(u64, u64)>,
     render_layer: usize,
     resolution: usize,
     effective_max_depth: u8,
@@ -2047,6 +2056,7 @@ impl LodView {
     fn commit_frozen_cover(&mut self, selected: &[Selected], signature: u64, admission: u64) {
         if self.cover_selected != selected {
             self.cover_selected = selected.to_vec();
+            self.selected_index.take();
             self.bump_draw_revision();
         }
         self.last_sig = Some(signature);
@@ -2071,13 +2081,31 @@ impl LodView {
                 .as_ref()
                 .is_none_or(|held| self.preparation_signature == Some(held.requirements_signature))
     }
-    fn latest_ready(&self) -> bool {
-        self.latest_ready_with_cover(|| selected_cover_status(self, self.r#gen).complete)
+    fn selected_cover_status(&self) -> SelectedCoverStatus {
+        *self
+            .selected_status
+            .get_or_init(|| measure_selected_cover_status(self))
     }
-    fn latest_ready_with_cover(&self, cover_complete: impl FnOnce() -> bool) -> bool {
+    fn selected_index(&self) -> &SelectedCoordinateIndex {
+        self.selected_index
+            .get_or_init(|| SelectedCoordinateIndex::new(&self.cover_selected))
+    }
+    fn focus_coord(&self, point: [f64; 2]) -> Option<QuadCoord> {
+        let index = self.selected_index();
+        selected_focus_leaf(&index.coords, index.tree.as_ref()?, point)
+    }
+    fn active_transition_floor(&mut self, signature: u64, byte_ceiling: u64) -> Option<u64> {
+        let active = self.transition_budget_floor.filter(|(proof_sig, floor)| {
+            *proof_sig == signature && *floor > byte_ceiling && self.selection_current()
+        });
+        self.transition_budget_floor = active;
+        active.map(|(_, floor)| floor)
+    }
+    fn latest_ready(&self) -> bool {
         !self.presentation_pending
+            && self.transition_budget_floor.is_none()
             && self.selection_current()
-            && cover_complete()
+            && self.selected_cover_status().complete
             && self.held_preparation.as_ref().is_none_or(|held| {
                 !held.capacity_refused
                     && !held
@@ -2152,7 +2180,12 @@ impl LodView {
             preparation,
         ));
     }
+    fn invalidate_selected_residency(&mut self) {
+        self.selected_status.take();
+        self.transition_budget_floor = None;
+    }
     fn bump_draw_revision(&mut self) {
+        self.invalidate_selected_residency();
         if let Some(next) = self.draw_revision.checked_add(1) {
             self.draw_revision = next;
         } else {
@@ -2316,20 +2349,13 @@ impl LodView {
 
     /// Read the selected camera leaf without deriving a parallel cover.
     pub(crate) fn focus_tile(&self, point: [f64; 2]) -> Option<(u8, bool, bool)> {
-        self.cover_selected
-            .iter()
-            .find(|selected| selected.region.distance_to(point) <= f64::EPSILON)
-            .map(|selected| {
-                (
-                    selected.coord.depth,
-                    self.tiles
-                        .get(&selected.coord)
-                        .is_some_and(|slot| slot.r#gen == self.r#gen && slot.ready && slot.drawn),
-                    self.tiles
-                        .get(&selected.coord)
-                        .is_some_and(|slot| slot.morph_end >= 1.0e20),
-                )
-            })
+        let coord = self.focus_coord(point)?;
+        let slot = self.tiles.get(&coord);
+        Some((
+            coord.depth,
+            slot.is_some_and(|slot| slot.r#gen == self.r#gen && slot.ready && slot.drawn),
+            slot.is_some_and(|slot| slot.morph_end >= 1.0e20),
+        ))
     }
 
     /// Invalidate only the tiles whose world footprint overlaps the committed
@@ -2387,6 +2413,30 @@ impl LodView {
     }
 }
 
+/// Exact selected coordinate lookup and its original lattice. The persistent
+/// discretionary cover and newer oracle settings may describe a different tree.
+struct SelectedCoordinateIndex {
+    coords: HashSet<QuadCoord>,
+    tree: Option<Quadtree>,
+}
+impl SelectedCoordinateIndex {
+    fn new(selected: &[Selected]) -> Self {
+        let tree = selected.first().map(|root| {
+            let half = root.region.half * f64::from(1u32 << root.coord.depth);
+            let depth = selected
+                .iter()
+                .map(|tile| tile.coord.depth)
+                .max()
+                .unwrap_or(0);
+            Quadtree::new(half, depth, 0.0, 0.0)
+        });
+        Self {
+            coords: selected.iter().map(|tile| tile.coord).collect(),
+            tree,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SelectedCoverStatus {
     wanted: usize,
@@ -2400,15 +2450,14 @@ struct SelectedCoverStatus {
 /// re-bakes, so it contributes to `resident`. It cannot make the cover complete:
 /// the idle gate may stop only after every selected leaf is current-generation,
 /// material-bound, and selected by the exact draw partition.
-fn selected_cover_status(tiles: &LodView, current_generation: u32) -> SelectedCoverStatus {
+fn measure_selected_cover_status(tiles: &LodView) -> SelectedCoverStatus {
     let wanted = tiles.cover_selected.len();
     let mut resident = 0;
     let mut complete = wanted > 0;
     for selected in &tiles.cover_selected {
         let slot = tiles.tiles.get(&selected.coord);
         resident += usize::from(slot.is_some_and(|slot| slot.ready));
-        complete &=
-            slot.is_some_and(|slot| slot.r#gen == current_generation && slot.ready && slot.drawn);
+        complete &= slot.is_some_and(|slot| slot.r#gen == tiles.r#gen && slot.ready && slot.drawn);
     }
     SelectedCoverStatus {
         wanted,
@@ -2716,10 +2765,10 @@ impl LodMeshCache {
         }
     }
 
-    /// Capture every live view's mesh identities, including retiring tiles.
-    fn begin_frame(&mut self, live: HashSet<AssetId<Mesh>>) {
-        if self.protected != live {
-            self.protected = live;
+    /// Capture all live tile mesh identities; reuse the caller's inventory buffer.
+    fn begin_frame(&mut self, live: &mut HashSet<AssetId<Mesh>>) {
+        if self.protected != *live {
+            std::mem::swap(&mut self.protected, live);
             self.accounting.take();
         }
         let before = self.retired.len();
@@ -2818,6 +2867,108 @@ impl LodMeshCache {
         status.mesh_retired_bytes = accounting.retired;
         status.mesh_byte_limit = byte_cap;
     }
+}
+
+/// A measured allocation that the transition needs. Unuploaded coordinates
+/// are distinct allocations; already uploaded mesh identities may be shared.
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum RequiredMeshIdentity {
+    Uploaded(AssetId<Mesh>),
+    Prepared(QuadCoord),
+}
+
+type RequiredMesh = (RequiredMeshIdentity, u64);
+
+/// A measured lower bound, not a prediction of the unbaked frontier. Missing
+/// measurements never contribute fabricated sizes, and shared assets count once.
+fn required_mesh_floor(meshes: impl IntoIterator<Item = RequiredMesh>) -> u64 {
+    let mut unique = HashMap::new();
+    for (id, bytes) in meshes {
+        unique
+            .entry(id)
+            .and_modify(|size: &mut u64| *size = (*size).max(bytes))
+            .or_insert(bytes);
+    }
+    unique.values().copied().fold(0u64, u64::saturating_add)
+}
+
+/// Determine whether a currently blocked mesh belongs to a provably impossible
+/// set of concurrent allocations. Do not sum unrelated resident meshes; they
+/// may retire as other branches progress. The final selected cover itself is
+/// mandatory. An unchanged generation-refresh partition cannot release its
+/// stale cover until every replacement is current. An immediate sibling split
+/// or selected ancestor coarsening also requires its outgoing group until the
+/// incoming group is drawable. A stale drawable substitute defeats these
+/// ordinary topology proofs; the candidate may publish it before replacing it.
+fn required_transition_floor(
+    selected: &HashSet<QuadCoord>,
+    published: &HashSet<QuadCoord>,
+    refreshing: bool,
+    blocked: &HashSet<QuadCoord>,
+    incoming: impl Fn(QuadCoord) -> Option<RequiredMesh>,
+    outgoing: impl Fn(QuadCoord) -> Option<RequiredMesh>,
+    stale_substitute: impl Fn(QuadCoord) -> bool,
+) -> u64 {
+    if selected.is_disjoint(blocked) {
+        return 0;
+    }
+    // Every known current selected allocation must coexist in the finished cover.
+    let mut floor = required_mesh_floor(selected.iter().copied().filter_map(&incoming));
+    if !valid_draw_partition(published) {
+        return floor;
+    }
+    let group_floor = |prior: &[QuadCoord], next: &[QuadCoord]| {
+        if !next.iter().any(|coord| blocked.contains(coord)) {
+            return 0;
+        }
+        let Some(prior) = prior
+            .iter()
+            .copied()
+            .map(&outgoing)
+            .collect::<Option<Vec<_>>>()
+        else {
+            return 0;
+        };
+        // The measured subset is an exact necessary lower bound even when later
+        // required bakes have not yet been admitted. No unknown bytes count.
+        required_mesh_floor(
+            prior
+                .into_iter()
+                .chain(next.iter().copied().filter_map(&incoming)),
+        )
+    };
+    if refreshing && selected == published {
+        let nodes = selected.iter().copied().collect::<Vec<_>>();
+        return floor.max(group_floor(&nodes, &nodes));
+    }
+    for &parent in published {
+        let children = parent.children();
+        if children
+            .iter()
+            .all(|coord| selected.contains(coord) && !stale_substitute(*coord))
+        {
+            floor = floor.max(group_floor(&[parent], &children));
+        }
+    }
+    for &parent in blocked {
+        if !selected.contains(&parent) || stale_substitute(parent) {
+            continue;
+        }
+        let descendants = published
+            .iter()
+            .copied()
+            .filter(|coord| {
+                let depth = coord.depth.saturating_sub(parent.depth);
+                coord.depth > parent.depth
+                    && coord.x >> depth == parent.x
+                    && coord.z >> depth == parent.z
+            })
+            .collect::<Vec<_>>();
+        if !descendants.is_empty() {
+            floor = floor.max(group_floor(&descendants, &[parent]));
+        }
+    }
+    floor
 }
 
 /// Byte estimate of one cached tile mesh as uploaded: per `res²` vertex, four
@@ -2960,9 +3111,32 @@ pub struct PendingTileBakes {
     #[cfg(not(target_arch = "wasm32"))]
     capacity_wait_revision: Option<u64>,
     failed: HashSet<(QuadCoord, u32)>,
+    /// A mesh that cannot fit even in an otherwise empty cache. The exact
+    /// observed byte count permits recovery when its quality ceiling changes.
+    oversize: HashMap<(QuadCoord, u32), u64>,
 }
 
 impl PendingTileBakes {
+    fn refresh_upload_ceiling(&mut self, generation: u32, ceiling: u64) {
+        self.oversize.retain(|(_, baked_generation), bytes| {
+            *baked_generation == generation && *bytes > ceiling
+        });
+    }
+
+    fn reject_oversize(
+        &mut self,
+        coord: QuadCoord,
+        generation: u32,
+        bytes: u64,
+        ceiling: u64,
+    ) -> bool {
+        if bytes <= ceiling {
+            return false;
+        }
+        self.oversize.insert((coord, generation), bytes);
+        true
+    }
+
     fn len(&self) -> usize {
         #[cfg(not(target_arch = "wasm32"))]
         let jobs = self.jobs.len();
@@ -3071,6 +3245,8 @@ impl PendingTileBakes {
         root_half_extent: f64,
         admission: Option<&mut lunco_core_runtime::AsyncWorkAdmission>,
     ) {
+        // A changed surface can change the boundary lattice and mesh size.
+        self.oversize.clear();
         #[cfg(not(target_arch = "wasm32"))]
         let mut admission = admission;
         let Some(generation) = generation else {
@@ -3149,6 +3325,7 @@ impl PendingTileBakes {
             self.tasks.clear();
         }
         self.ready.clear();
+        self.oversize.clear();
     }
 
     fn cancel_for_missing_demand(
@@ -3163,6 +3340,20 @@ impl PendingTileBakes {
             self.cancel_jobs(None);
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn impossible_upload_is_held_until_its_ceiling_or_generation_changes() {
+    let mut pending = PendingTileBakes::default();
+    assert!(pending.reject_oversize(QuadCoord::ROOT, 7, 200, 100));
+    pending.refresh_upload_ceiling(7, 199);
+    assert_eq!(pending.oversize.get(&(QuadCoord::ROOT, 7)), Some(&200));
+    pending.refresh_upload_ceiling(7, 200);
+    assert!(pending.oversize.is_empty());
+    assert!(pending.reject_oversize(QuadCoord::ROOT, 7, 200, 100));
+    pending.refresh_upload_ceiling(8, 100);
+    assert!(pending.oversize.is_empty());
 }
 
 /// Apply one committed surface change to every visual cache owned by the
@@ -4099,6 +4290,8 @@ pub struct TerrainStreamStatus {
     pub mesh_upload_refused: usize,
     /// Largest individual waiting upload estimate, for an unsatisfied profile.
     pub mesh_upload_required_bytes: u64,
+    /// Proven measured lower bound for an impossible simultaneous draw transition.
+    pub mesh_transition_required_bytes: u64,
     /// Exhausted revisions withdraw exact drawn-surface query availability.
     pub draw_revision_exhausted: usize,
     /// Tiles the current selection wants on screen (all streaming terrains).
@@ -4141,14 +4334,13 @@ impl TerrainStreamStatus {
 fn publish_mesh_pressure(
     status: &TerrainStreamStatus,
     diagnostics: &mut Option<ResMut<lunco_core::RuntimeDiagnostics>>,
+    mut findings: Vec<lunco_core::RuntimeDiagnostic>,
 ) {
     let Some(diagnostics) = diagnostics.as_deref_mut() else {
         return;
     };
-    let mut findings = if status.mesh_upload_refused > 0
-        || status.mesh_accounted_bytes > status.mesh_byte_limit
-    {
-        vec![lunco_core::RuntimeDiagnostic {
+    if status.mesh_upload_refused > 0 || status.mesh_accounted_bytes > status.mesh_byte_limit {
+        findings.push(lunco_core::RuntimeDiagnostic {
             producer: "terrain-mesh-residency".into(),
             code: "mesh-upload-waiting".into(),
             severity: lunco_core::DiagnosticSeverity::Info,
@@ -4160,10 +4352,32 @@ fn publish_mesh_pressure(
                 status.mesh_byte_limit,
                 status.mesh_upload_required_bytes
             ),
-        }]
-    } else {
-        Vec::new()
-    };
+        });
+    }
+    if status.mesh_upload_required_bytes > status.mesh_byte_limit {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(),
+            code: "mesh-upload-impossible".into(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            subject: "terrain mesh residency".into(),
+            message: format!(
+                "a required mesh needs {} bytes, exceeding the entire {} byte ceiling",
+                status.mesh_upload_required_bytes, status.mesh_byte_limit
+            ),
+        });
+    }
+    if status.mesh_transition_required_bytes > status.mesh_byte_limit {
+        findings.push(lunco_core::RuntimeDiagnostic {
+            producer: "terrain-mesh-residency".into(),
+            code: "mesh-transition-impossible".into(),
+            severity: lunco_core::DiagnosticSeverity::Error,
+            subject: "terrain draw partition".into(),
+            message: format!(
+                "the current terrain transition requires at least {} measured unique mesh bytes simultaneously, exceeding the entire {} byte ceiling",
+                status.mesh_transition_required_bytes, status.mesh_byte_limit
+            ),
+        });
+    }
     if status.failed > 0 {
         findings.push(lunco_core::RuntimeDiagnostic {
             producer: "terrain-mesh-residency".into(),
@@ -4215,11 +4429,7 @@ fn publish_mesh_pressure(
 /// frames, even though they were still hidden and the selected cover was not
 /// complete. The root fallback is included while its readiness latch is false;
 /// it is required even though it is not part of the selected cover.
-fn render_pending_count(
-    pending_bakes: usize,
-    wanted: &HashSet<QuadCoord>,
-    tiles: &LodView,
-) -> usize {
+fn render_pending_count(wanted: &HashSet<QuadCoord>, tiles: &LodView) -> usize {
     let wanted_unready = wanted
         .iter()
         .filter(|coord| {
@@ -4236,7 +4446,62 @@ fn render_pending_count(
             .tiles
             .get(&QuadCoord::ROOT)
             .is_some_and(|slot| !slot.ready)) as usize;
-    pending_bakes + wanted_unready + root_unready
+    wanted_unready + root_unready
+}
+
+/// Resolve the selected leaf from the quadtree owner rather than scanning all
+/// leaves. Interior points need only an ancestor walk. Closed shared edges
+/// retain the selected-cover ordering (shallowest, then x/z); inspect only
+/// intersecting branches when an edge may make more than one leaf eligible.
+fn selected_focus_leaf(
+    cover: &HashSet<QuadCoord>,
+    quadtree: &Quadtree,
+    point: [f64; 2],
+) -> Option<QuadCoord> {
+    if cover.is_empty()
+        || !quadtree.root_half_extent.is_finite()
+        || quadtree.root_half_extent <= 0.0
+        || !point.iter().all(|value| value.is_finite())
+        || quadtree.region(QuadCoord::ROOT).distance_to(point) > f64::EPSILON
+    {
+        return None;
+    }
+    let mut coord = Some(quadtree.node_containing(quadtree.max_depth, point));
+    while let Some(node) = coord {
+        if cover.contains(&node) {
+            let region = quadtree.region(node);
+            if point
+                .iter()
+                .zip(region.center)
+                .all(|(value, center)| region.half - (*value - center).abs() > f64::EPSILON)
+            {
+                return Some(node);
+            }
+            break;
+        }
+        coord = node.parent();
+    }
+    fn search(
+        cover: &HashSet<QuadCoord>,
+        tree: &Quadtree,
+        point: [f64; 2],
+        node: QuadCoord,
+    ) -> Option<QuadCoord> {
+        if tree.region(node).distance_to(point) > f64::EPSILON {
+            return None;
+        }
+        if cover.contains(&node) {
+            return Some(node);
+        }
+        if node.depth == tree.max_depth {
+            return None;
+        }
+        node.children()
+            .into_iter()
+            .filter_map(|child| search(cover, tree, point, child))
+            .min_by_key(|leaf| (leaf.depth, leaf.x, leaf.z))
+    }
+    search(cover, quadtree, point, QuadCoord::ROOT)
 }
 
 fn required_focus_depth(
@@ -4248,11 +4513,7 @@ fn required_focus_depth(
         .iter()
         .filter(|demand| demand.required)
         .filter_map(|demand| {
-            cover
-                .iter()
-                .copied()
-                .find(|&coord| quadtree.region(coord).distance_to(demand.focus) <= f64::EPSILON)
-                .map(|coord| coord.depth)
+            selected_focus_leaf(cover, quadtree, demand.focus).map(|coord| coord.depth)
         })
         .min()
 }
@@ -4296,17 +4557,16 @@ fn cached_node_geometry(
 fn add_focus_readiness(
     status: &mut TerrainStreamStatus,
     demands: &[TerrainVisualDemand],
-    selected: impl IntoIterator<Item = QuadCoord> + Clone,
-    quadtree: &Quadtree,
-    is_ready: impl Fn(QuadCoord) -> bool,
+    view: &LodView,
 ) {
     for demand in demands.iter().filter(|demand| demand.required) {
         status.focus_wanted += 1;
-        let selected_coord = selected
-            .clone()
-            .into_iter()
-            .find(|&coord| quadtree.region(coord).distance_to(demand.focus) <= f64::EPSILON);
-        if selected_coord.is_some_and(&is_ready) {
+        let selected_coord = view.focus_coord(demand.focus);
+        if selected_coord.is_some_and(|coord| {
+            view.tiles
+                .get(&coord)
+                .is_some_and(|slot| slot.ready && slot.drawn)
+        }) {
             status.focus_resident += 1;
         }
     }
@@ -5384,6 +5644,7 @@ fn commit_prepared_terrain_cover(
     tiles.bump_draw_revision();
     tiles.cover = prepared.cover;
     tiles.cover_selected = prepared.selected;
+    tiles.selected_index.take();
     tiles.camera_patches = prepared.camera_patches;
     tiles.budget_refused = prepared.budget_refused;
     tiles.preparation_refused_nodes = prepared.preparation_refused_nodes;
@@ -5486,6 +5747,7 @@ pub(crate) fn cancel_removed_terrain_preparation(
 /// idle-signature gate already skips the whole pass when nothing moved.
 #[derive(Default)]
 pub struct StreamScratch {
+    #[cfg(target_arch = "wasm32")]
     done: Vec<(QuadCoord, u32, BakedTile)>,
     keyed: Vec<TerrainBakeSortKey>,
     wanted: HashSet<QuadCoord>,
@@ -5509,6 +5771,7 @@ pub struct StreamScratch {
     /// Results returned by bounded background cover preparation.
     cover_completions: HashMap<(Entity, Entity), Vec<TerrainCoverCompletion>>,
     cover_union: HashSet<QuadCoord>,
+    live_mesh_ids: HashSet<AssetId<Mesh>>,
     #[cfg(not(target_arch = "wasm32"))]
     /// Results returned by shared-priority streamed tile bakes.
     tile_completions: HashMap<Entity, Vec<TerrainTileBakeCompletion>>,
@@ -5565,17 +5828,32 @@ pub fn update_lod_tiles(
     // the current params (live re-tuning of resident tiles rides `sync_terrain_overlay`).
     let overlay = environment.overlay_params.uniforms();
     *stream_status = TerrainStreamStatus::default();
-    mesh_cache.begin_frame(
-        environment
-            .live_meshes
+    let mut input_failures = Vec::new();
+    let mut report_input_failure = |terrain: Entity, message: String| {
+        let subject = format!("{terrain:?}");
+        if !input_failures
             .iter()
-            .map(|mesh| mesh.0.id())
-            .collect(),
-    );
+            .any(|finding: &lunco_core::RuntimeDiagnostic| finding.subject == subject)
+        {
+            input_failures.push(lunco_core::RuntimeDiagnostic {
+                producer: "terrain-mesh-residency".into(),
+                code: "terrain-input-invalid".into(),
+                severity: lunco_core::DiagnosticSeverity::Error,
+                subject,
+                message,
+            });
+        }
+    };
+    scratch.live_mesh_ids.clear();
+    scratch
+        .live_mesh_ids
+        .extend(environment.live_meshes.iter().map(|mesh| mesh.0.id()));
+    mesh_cache.begin_frame(&mut scratch.live_mesh_ids);
     mesh_cache.trim(usize::MAX, profile.terrain_mesh_cache_bytes);
     let mut refused_uploads = HashSet::new();
     // Split-borrow the per-frame scratch buffers (see [`StreamScratch`]).
     let StreamScratch {
+        #[cfg(target_arch = "wasm32")]
         done,
         keyed,
         wanted,
@@ -5590,6 +5868,7 @@ pub fn update_lod_tiles(
         cover_union,
         #[cfg(not(target_arch = "wasm32"))]
         tile_completions,
+        ..
     } = &mut *scratch;
     cover_completions.clear();
     #[cfg(not(target_arch = "wasm32"))]
@@ -5633,7 +5912,7 @@ pub fn update_lod_tiles(
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
         mesh_cache.publish_accounting(&mut stream_status, profile.terrain_mesh_cache_bytes);
-        publish_mesh_pressure(&stream_status, &mut environment.diagnostics);
+        publish_mesh_pressure(&stream_status, &mut environment.diagnostics, input_failures);
         return;
     }
     #[cfg(not(target_arch = "wasm32"))]
@@ -5681,6 +5960,20 @@ pub fn update_lod_tiles(
                 terrain,
                 tile_completions.remove(&terrain).unwrap_or_default(),
             );
+            #[cfg(target_arch = "wasm32")]
+            {
+                done.clear();
+                pending.tasks.retain(|coord, (r#gen, task)| {
+                    match block_on(future::poll_once(&mut *task)) {
+                        Some(baked) => {
+                            done.push((*coord, *r#gen, baked));
+                            false
+                        }
+                        None => true,
+                    }
+                });
+                pending.ready.append(done);
+            }
 
             let resolution = if frozen {
                 profile.terrain_lod_cinematic_resolution
@@ -5695,6 +5988,7 @@ pub fn update_lod_tiles(
             }
             stream_status.pending += pending.len();
             let generation = terrain_tiles.r#gen;
+            pending.refresh_upload_ceiling(generation, profile.terrain_mesh_cache_bytes);
             let live: HashSet<_> = demands
                 .visual
                 .iter()
@@ -5771,7 +6065,8 @@ pub fn update_lod_tiles(
                 let max_depth = match visual_max_depth(&hf.0, profile.terrain_lod_max_depth) {
                     Ok(depth) => depth,
                     Err(error) => {
-                        bevy::log::error!(target: "terrain", "{error}");
+                        stream_status.failed += 1;
+                        report_input_failure(terrain, error.to_string());
                         continue;
                     }
                 };
@@ -5780,18 +6075,18 @@ pub fn update_lod_tiles(
                     || tiles.cover.is_empty()
                     || tiles.cover.iter().any(|coord| coord.depth > max_depth);
                 let Some(template) = template else {
-                    bevy::log::error!(
-                        target: "terrain",
-                        entity = ?terrain,
-                        "streamed DEM terrain has no authored production material"
+                    stream_status.failed += 1;
+                    report_input_failure(
+                        terrain,
+                        "streamed DEM terrain has no authored production material".into(),
                     );
                     continue;
                 };
                 if template.vertex_shader.is_none() {
-                    bevy::log::error!(
-                        target: "terrain",
-                        entity = ?terrain,
-                        "streamed DEM terrain material has no authored CDLOD vertex source"
+                    stream_status.failed += 1;
+                    report_input_failure(
+                        terrain,
+                        "streamed DEM terrain material has no authored CDLOD vertex source".into(),
                     );
                     continue;
                 }
@@ -5870,6 +6165,8 @@ pub fn update_lod_tiles(
                 if selection_cycle_due && tiles.cover.iter().any(|coord| coord.depth > max_depth) {
                     tiles.cover.clear();
                     tiles.cover_selected.clear();
+                    tiles.selected_index.take();
+                    tiles.bump_draw_revision();
                     tiles.bootstrap_ready = false;
                     tiles.settled_sig = None;
                     tiles.last_sig = None;
@@ -6096,9 +6393,15 @@ pub fn update_lod_tiles(
                     }
                 }
                 {
-                    let cover_status = selected_cover_status(&tiles, cur_gen);
+                    let cover_status = tiles.selected_cover_status();
+                    let impossible =
+                        tiles.active_transition_floor(sig, profile.terrain_mesh_cache_bytes);
+                    // A proven impossible transition holds its outgoing cover and
+                    // prepared bytes without attempting the same refused uploads.
+                    // Any selection/draw mutation or a sufficient cap increase
+                    // releases the hold and normal preparation resumes.
                     // A newly committed cover can change morph windows on resident meshes.
-                    if !cover_committed
+                    let settled = !cover_committed
                         && !promoted_tiles
                         && !tiles.presentation_pending
                         && tiles.pending_replacements.is_empty()
@@ -6107,10 +6410,18 @@ pub fn update_lod_tiles(
                         && tiles.pending_cover.is_none()
                         && tiles.selection_current()
                         && tiles.coarse_ready
-                        && cover_status.complete
-                    {
-                        // Idle: resident tiles already match. Contribute this terrain's
-                        // resident count so the status bar still reads "done", not "0/0".
+                        && cover_status.complete;
+                    if settled || impossible.is_some() {
+                        if let Some(floor) = impossible {
+                            stream_status.failed += 1;
+                            stream_status.mesh_transition_required_bytes =
+                                stream_status.mesh_transition_required_bytes.max(floor);
+                            stream_status.pending +=
+                                render_pending_count(&tiles.selected_index().coords, &tiles);
+                            stream_status.presentation_pending +=
+                                usize::from(tiles.presentation_pending);
+                        }
+                        // Idle or terminal hold: retain the exact cover's counts.
                         stream_status.wanted += cover_status.wanted;
                         stream_status.resident += cover_status.resident;
                         stream_status.budget_refused += tiles.budget_refused;
@@ -6118,22 +6429,10 @@ pub fn update_lod_tiles(
                             demands.preparation_signature(view_camera, terrain),
                             admission_sig,
                         );
-                        let pending =
-                            usize::from(!tiles.latest_ready_with_cover(|| cover_status.complete));
+                        let pending = usize::from(impossible.is_some() || !tiles.latest_ready());
                         stream_status.selection_pending += pending;
                         stream_status.pending += pending;
-                        add_focus_readiness(
-                            &mut stream_status,
-                            visual_foci,
-                            tiles.cover_selected.iter().map(|selected| selected.coord),
-                            &qt,
-                            |coord| {
-                                tiles
-                                    .tiles
-                                    .get(&coord)
-                                    .is_some_and(|slot| slot.ready && slot.drawn)
-                            },
-                        );
+                        add_focus_readiness(&mut stream_status, visual_foci, &tiles);
                         continue;
                     }
                 }
@@ -6346,18 +6645,6 @@ pub fn update_lod_tiles(
                 // then publish meshes in stable tile order under the per-frame budget.
                 // Offline capture waits at its presentation boundary for readiness rather
                 // than blocking this system.
-                done.clear();
-                #[cfg(target_arch = "wasm32")]
-                pending.tasks.retain(|coord, (r#gen, task)| {
-                    match block_on(future::poll_once(&mut *task)) {
-                        Some(baked) => {
-                            done.push((*coord, *r#gen, baked));
-                            false
-                        }
-                        None => true,
-                    }
-                });
-                pending.ready.append(done);
                 let upload_ranks: HashMap<_, _> = bake_targets
                     .iter()
                     .enumerate()
@@ -6376,6 +6663,14 @@ pub fn update_lod_tiles(
                         continue;
                     }
                     let upload_bytes = baked.bytes as u64;
+                    if pending.reject_oversize(
+                        coord,
+                        cur_gen,
+                        upload_bytes,
+                        profile.terrain_mesh_cache_bytes,
+                    ) {
+                        continue;
+                    }
                     if !mesh_cache.admit_upload(upload_bytes, profile.terrain_mesh_cache_bytes) {
                         refused_uploads.insert((terrain, coord, cur_gen));
                         stream_status.mesh_upload_refused += 1;
@@ -6508,7 +6803,9 @@ pub fn update_lod_tiles(
                     if fresh_tile(&tiles, &s.coord) || have_pending {
                         continue;
                     }
-                    if pending.failed.contains(&(s.coord, cur_gen)) {
+                    if pending.failed.contains(&(s.coord, cur_gen))
+                        || pending.oversize.contains_key(&(s.coord, cur_gen))
+                    {
                         continue;
                     }
                     let resolution = tile_res;
@@ -6578,7 +6875,6 @@ pub fn update_lod_tiles(
                     let oracle_arc = hf.0.clone();
                     let coord = s.coord;
                     let region = s.region;
-                    let half = h;
                     let center = s.region.center;
                     #[cfg(not(target_arch = "wasm32"))]
                     {
@@ -6619,8 +6915,6 @@ pub fn update_lod_tiles(
                                     coord,
                                     region,
                                     resolution,
-                                    half,
-                                    center,
                                 );
                                 assemble_baked_tile(
                                     tile_mesh,
@@ -6686,8 +6980,6 @@ pub fn update_lod_tiles(
                                 coord,
                                 region,
                                 resolution,
-                                half,
-                                center,
                             )
                             .await;
                             assemble_baked_tile(
@@ -6879,6 +7171,7 @@ pub fn update_lod_tiles(
                         || wanted.contains(coord)
                         || parent_fallbacks.contains(coord)
                 };
+                let slots_before_prune = tiles.tiles.len() + tiles.pending_replacements.len();
                 tiles.tiles.retain(|coord, slot| {
                     let keep = slot.drawn || retain(coord);
                     if !keep {
@@ -6893,6 +7186,11 @@ pub fn update_lod_tiles(
                     }
                     keep
                 });
+                if tiles.tiles.len() + tiles.pending_replacements.len() != slots_before_prune {
+                    // The pruned slots were hidden, so no drawn-surface revision
+                    // changed. Retire only the derived residency/proof facts.
+                    tiles.invalidate_selected_residency();
+                }
                 // Diagnostics below describe the actually published topology.
                 draw.clear();
                 draw.extend(
@@ -6967,6 +7265,83 @@ pub fn update_lod_tiles(
                     );
                 }
 
+                // Prove the necessary concurrent working set only after actual
+                // upload admission fails for the settled selection. The outgoing
+                // draw uses exact live mesh handles; candidate bytes use current
+                // cache identities or already measured CPU bake payloads.
+                if !refused_uploads.is_empty() && tiles.selection_current() {
+                    let blocked: HashSet<_> = refused_uploads
+                        .iter()
+                        .filter_map(|&(source, coord, generation)| {
+                            (source == terrain
+                                && generation == cur_gen
+                                && wanted.contains(&coord)
+                                && !tiles.fresh_slot(&coord, cur_gen)
+                                && !mesh_cache.map.contains_key(&(terrain, coord, tile_res)))
+                            .then_some(coord)
+                        })
+                        .collect();
+                    if !blocked.is_empty() {
+                        let resident_mesh = |slot: &TileSlot| -> Option<RequiredMesh> {
+                            let handle = &environment.live_meshes.get(slot.entity).ok()?.0;
+                            let mesh = meshes.get(handle)?;
+                            Some((
+                                RequiredMeshIdentity::Uploaded(handle.id()),
+                                measured_mesh_bytes(mesh) as u64,
+                            ))
+                        };
+                        let outgoing = |coord: QuadCoord| resident_mesh(tiles.tiles.get(&coord)?);
+                        let incoming = |coord: QuadCoord| -> Option<RequiredMesh> {
+                            let current = tiles
+                                .pending_replacements
+                                .get(&coord)
+                                .or_else(|| tiles.tiles.get(&coord))
+                                .filter(|slot| slot.r#gen == cur_gen);
+                            if let Some(mesh) = current.and_then(|slot| resident_mesh(slot)) {
+                                return Some(mesh);
+                            }
+                            if let Some(entry) = mesh_cache.map.get(&(terrain, coord, tile_res)) {
+                                return Some((
+                                    RequiredMeshIdentity::Uploaded(entry.mesh.id()),
+                                    entry.bytes as u64,
+                                ));
+                            }
+                            pending
+                                .ready
+                                .iter()
+                                .find(|(prepared, generation, _)| {
+                                    *prepared == coord && *generation == cur_gen
+                                })
+                                .map(|(_, _, baked)| {
+                                    (RequiredMeshIdentity::Prepared(coord), baked.bytes as u64)
+                                })
+                        };
+                        let refreshing = tiles
+                            .tiles
+                            .values()
+                            .any(|slot| slot.drawn && slot.r#gen != cur_gen);
+                        let floor = required_transition_floor(
+                            wanted,
+                            draw,
+                            refreshing,
+                            &blocked,
+                            incoming,
+                            outgoing,
+                            |coord| {
+                                tiles
+                                    .candidate_slot(&coord)
+                                    .is_some_and(|slot| slot.r#gen != cur_gen)
+                            },
+                        );
+                        if floor > profile.terrain_mesh_cache_bytes {
+                            tiles.transition_budget_floor = Some((sig, floor));
+                            stream_status.failed += 1;
+                            stream_status.mesh_transition_required_bytes =
+                                stream_status.mesh_transition_required_bytes.max(floor);
+                        }
+                    }
+                }
+
                 stream_status.failed += usize::from(tiles.failed_cover_signature == Some(sig));
                 stream_status.failed += pending
                     .failed
@@ -6978,6 +7353,17 @@ pub fn update_lod_tiles(
                                 || *coord == QuadCoord::ROOT)
                     })
                     .count();
+                for (&(coord, baked_generation), &bytes) in &pending.oversize {
+                    if baked_generation == cur_gen
+                        && (wanted.contains(&coord)
+                            || parent_fallbacks.contains(&coord)
+                            || coord == QuadCoord::ROOT)
+                    {
+                        stream_status.failed += 1;
+                        stream_status.mesh_upload_required_bytes =
+                            stream_status.mesh_upload_required_bytes.max(bytes);
+                    }
+                }
 
                 // Streaming progress for the UI indicator (accumulated across terrains).
                 stream_status.wanted += wanted.len();
@@ -6988,30 +7374,19 @@ pub fn update_lod_tiles(
                 let selection_pending = usize::from(!tiles.latest_ready());
                 stream_status.selection_pending += selection_pending;
                 stream_status.presentation_pending += usize::from(tiles.presentation_pending);
-                stream_status.pending +=
-                    render_pending_count(0, wanted, &tiles) + selection_pending;
+                stream_status.pending += render_pending_count(wanted, &tiles) + selection_pending;
                 stream_status.budget_refused += tiles.budget_refused;
                 stream_status.preparation_refused += tiles.preparation_refusal_count(
                     demands.preparation_signature(view_camera, terrain),
                     admission_sig,
                 );
-                add_focus_readiness(
-                    &mut stream_status,
-                    visual_foci,
-                    sel.iter().map(|selected| selected.coord),
-                    &qt,
-                    |coord| {
-                        tiles
-                            .tiles
-                            .get(&coord)
-                            .is_some_and(|slot| slot.ready && slot.drawn)
-                    },
-                );
+                add_focus_readiness(&mut stream_status, visual_foci, &tiles);
             }
             // Only pending work or a pressured memo needs the cross-view union.
             // Settled views do not allocate or revisit the entire ancestor tree.
             if !pending.is_empty()
                 || !pending.failed.is_empty()
+                || !pending.oversize.is_empty()
                 || errs.map.len() > NODE_GEOMETRY_CACHE_CAP
             {
                 cover_union.clear();
@@ -7045,6 +7420,9 @@ pub fn update_lod_tiles(
                 pending
                     .failed
                     .retain(|(coord, r#gen)| *r#gen == generation && keep(coord));
+                pending
+                    .oversize
+                    .retain(|(coord, r#gen), _| *r#gen == generation && keep(coord));
                 stream_status.stale_cancelled += before.saturating_sub(pending.len());
                 if errs.map.len() > NODE_GEOMETRY_CACHE_CAP {
                     errs.map.retain(|coord, _| keep(coord));
@@ -7068,7 +7446,7 @@ pub fn update_lod_tiles(
         })
         .sum();
     mesh_cache.publish_accounting(&mut stream_status, profile.terrain_mesh_cache_bytes);
-    publish_mesh_pressure(&stream_status, &mut environment.diagnostics);
+    publish_mesh_pressure(&stream_status, &mut environment.diagnostics, input_failures);
 }
 
 /// Reap LOD tiles whose owning terrain no longer exists (or no longer streams) —
@@ -7271,15 +7649,6 @@ pub(crate) fn bind_shadow_cache_to_tiles(
 }
 
 #[cfg(test)]
-#[expect(
-    deprecated,
-    reason = "Bevy reexports DMat4 but does not expose glam's dcamera replacement"
-)]
-fn test_view(eye: DVec3, forward: DVec3, up: DVec3) -> DMat4 {
-    DMat4::look_to_rh(eye, forward, up)
-}
-
-#[cfg(test)]
 fn test_perspective(fov_y_rad: f64, eye: DVec3, forward: DVec3) -> TerrainProjection {
     let up = if forward.y.abs() > 0.99 {
         DVec3::NEG_Z
@@ -7289,7 +7658,7 @@ fn test_perspective(fov_y_rad: f64, eye: DVec3, forward: DVec3) -> TerrainProjec
     TerrainProjection::Perspective {
         fov_y_rad,
         clip_from_local: bevy::math::dproj::perspective_infinite_reverse(fov_y_rad, 1.0, 0.1)
-            * test_view(eye, forward, up),
+            * look_to_mat4(eye, forward, up),
     }
 }
 
@@ -7444,11 +7813,13 @@ mod draw_partition_tests {
         let visual = &mut demands.visual[0];
         visual.terrain_clips.insert(
             terrain,
-            visual.projection.clip_from_local() * test_view(DVec3::Y, DVec3::NEG_Z, DVec3::Y),
+            visual.projection.clip_from_local() * look_to_mat4(DVec3::Y, DVec3::NEG_Z, DVec3::Y),
         );
         let quadtree = Quadtree::new(100.0, 5, 1.0, 100.0);
         let mut view = LodView {
             r#gen: 4,
+            half_extent: quadtree.root_half_extent,
+            effective_max_depth: quadtree.max_depth,
             cover: HashSet::from([QuadCoord::ROOT]),
             cover_selected: vec![quadtree.selected(QuadCoord::ROOT, f64::INFINITY)],
             ..default()
@@ -7763,7 +8134,7 @@ mod draw_partition_tests {
             status.pending, 0,
             "a stable completed fixed point releases readiness"
         );
-        view.tiles.get_mut(&QuadCoord::ROOT).unwrap().r#gen -= 1;
+        view.invalidate_region(None, view.half_extent);
         assert!(
             !view.latest_ready(),
             "retained stale-generation geometry remains presented, not current"
@@ -7792,7 +8163,7 @@ mod draw_partition_tests {
         let (eye, forward) = demand.terrain_poses[&terrain];
         demand.terrain_clips.insert(
             terrain,
-            demand.projection.clip_from_local() * test_view(eye, forward, DVec3::Y),
+            demand.projection.clip_from_local() * look_to_mat4(eye, forward, DVec3::Y),
         );
         view.publish_latest_demand(
             &demands,
@@ -8025,7 +8396,7 @@ mod draw_partition_tests {
     fn orthographic_clip_retains_subpixel_jitter_and_detects_roll() {
         let native = bevy::math::dproj::orthographic(-10.0, 10.0, -10.0, 10.0, 0.1, 10_000.0);
         let eye = DVec3::new(-380.25, -1918.25, -380.25);
-        let pose = test_view(eye, DVec3::NEG_Y, DVec3::NEG_Z).inverse();
+        let pose = look_to_mat4(eye, DVec3::NEG_Y, DVec3::NEG_Z).inverse();
         let projection = |roll, offset| TerrainProjection::Orthographic {
             pixels_per_metre: 50.0,
             area: [-10.0, -10.0, 10.0, 10.0],
@@ -8070,7 +8441,7 @@ mod draw_partition_tests {
                 10.0,
                 0.1,
                 2_000_000.0,
-            ) * test_view(distant_eye, DVec3::NEG_Y, DVec3::NEG_Z),
+            ) * look_to_mat4(distant_eye, DVec3::NEG_Y, DVec3::NEG_Z),
         };
         let distant_anchor = SelectionClip::new(distant, 1000.0, 2.0, distant_eye).unwrap();
         assert_eq!(
@@ -8146,7 +8517,7 @@ mod draw_partition_tests {
             view.latest_ready(),
             "a root-wide fixed cinematic mesh does not require reselection when the capture camera moves"
         );
-        view.tiles.get_mut(&QuadCoord::ROOT).unwrap().r#gen -= 1;
+        view.invalidate_region(None, view.half_extent);
         assert!(!view.latest_ready());
     }
 
@@ -8956,7 +9327,7 @@ mod draw_partition_tests {
             }],
         };
         let clip = demands.visual[0].projection.clip_from_local()
-            * test_view(DVec3::Y, DVec3::NEG_Z, DVec3::Y);
+            * look_to_mat4(DVec3::Y, DVec3::NEG_Z, DVec3::Y);
         demands.visual[0].terrain_clips.insert(terrain, clip);
         let mut tiles = LodTiles::default();
         let mut held = HeldTerrainPreparation::default();
@@ -9806,7 +10177,7 @@ mod draw_partition_tests {
             camera.position,
             camera.forward,
             camera.projection.clip_from_local()
-                * test_view(camera.position, camera.forward, DVec3::Y),
+                * look_to_mat4(camera.position, camera.forward, DVec3::Y),
             2.0,
         )
         .expect("finite camera pose remains a valid visual demand");
@@ -9961,11 +10332,11 @@ mod draw_partition_tests {
             },
         );
 
-        assert_eq!(render_pending_count(2, &wanted, &tiles), 4);
+        assert_eq!(render_pending_count(&wanted, &tiles), 2);
         tiles.coarse_ready = true;
-        assert_eq!(render_pending_count(2, &wanted, &tiles), 3);
+        assert_eq!(render_pending_count(&wanted, &tiles), 1);
         tiles.tiles.get_mut(&unready).unwrap().ready = true;
-        assert_eq!(render_pending_count(2, &wanted, &tiles), 2);
+        assert_eq!(render_pending_count(&wanted, &tiles), 0);
     }
 
     #[test]
@@ -10836,12 +11207,228 @@ mod draw_partition_tests {
     }
 
     #[test]
+    fn selected_focus_lookup_matches_closed_partition_order_at_edges() {
+        let tree = Quadtree::new(8.0, 4, 1.0, 8.0);
+        let mut cover = QuadCoord::ROOT
+            .children()
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let branch = QuadCoord::ROOT.children()[0];
+        cover.remove(&branch);
+        cover.extend(branch.children());
+        assert!(valid_draw_partition(&cover));
+        for x in -10..=10 {
+            for z in -10..=10 {
+                let point = [f64::from(x), f64::from(z)];
+                let expected = cover
+                    .iter()
+                    .copied()
+                    .filter(|&coord| tree.region(coord).distance_to(point) <= f64::EPSILON)
+                    .min_by_key(|coord| (coord.depth, coord.x, coord.z));
+                assert_eq!(
+                    selected_focus_leaf(&cover, &tree, point),
+                    expected,
+                    "focus at {point:?}"
+                );
+            }
+        }
+        assert!(selected_focus_leaf(&cover, &tree, [8.0, 8.0]).is_some());
+        assert!(selected_focus_leaf(&cover, &tree, [8.01, 8.0]).is_none());
+        let view = LodView {
+            // The discretionary root may have been constrained by mandatory
+            // camera/corridor nodes. The finalized geometry owns focus lookup.
+            cover: HashSet::from([QuadCoord::ROOT]),
+            cover_selected: cover
+                .iter()
+                .map(|&coord| tree.selected(coord, f64::INFINITY))
+                .collect(),
+            half_extent: 1.0,
+            effective_max_depth: 0,
+            ..Default::default()
+        };
+        assert_eq!(view.focus_coord([-6.0, -6.0]).unwrap().depth, 2);
+        assert_eq!(view.focus_coord([7.0, 7.0]).unwrap().depth, 1);
+    }
+
+    #[test]
+    fn retained_cover_status_retires_on_material_and_generation_changes() {
+        let (_, camera, _, _, mut view) = ready_view_fixture();
+        assert!(view.selected_cover_status().complete);
+        assert!(view.selected_status.get().is_some());
+        assert!(view.invalidate_material_readiness(camera));
+        assert!(view.selected_status.get().is_none());
+        assert_eq!(view.selected_cover_status().resident, 0);
+        view.invalidate_region(None, view.half_extent);
+        assert!(view.selected_status.get().is_none());
+        assert!(!view.selected_cover_status().complete);
+    }
+
+    #[test]
+    fn impossible_working_set_proof_deduplicates_meshes_and_requires_a_real_transition() {
+        let assets = Assets::<Mesh>::default();
+        let shared = assets.reserve_handle();
+        let id = RequiredMeshIdentity::Uploaded(shared.id());
+        let root = QuadCoord::ROOT;
+        let children = root.children().into_iter().collect::<HashSet<_>>();
+        let root_cover = HashSet::from([root]);
+        let current = |coord| Some((RequiredMeshIdentity::Prepared(coord), 20));
+        // The independent set test models shared cache entities without
+        // counting their CPU and GPU handle ownership more than once.
+        assert_eq!(
+            required_mesh_floor([
+                (id, 50),
+                (id, 50),
+                (RequiredMeshIdentity::Prepared(root), 20)
+            ]),
+            70
+        );
+        let outgoing = |_: QuadCoord| Some((id, 100));
+        // Refresh needs the old root until the current root is drawable.
+        assert_eq!(
+            required_transition_floor(
+                &root_cover,
+                &root_cover,
+                true,
+                &root_cover,
+                current,
+                outgoing,
+                |_| true
+            ),
+            120
+        );
+        // Without a generation refresh this pair is not a simultaneous replacement.
+        assert_eq!(
+            required_transition_floor(
+                &root_cover,
+                &root_cover,
+                false,
+                &root_cover,
+                current,
+                outgoing,
+                |_| false
+            ),
+            20
+        );
+        let blocked = HashSet::from([root.children()[0]]);
+        assert_eq!(
+            required_transition_floor(
+                &children,
+                &root_cover,
+                false,
+                &blocked,
+                current,
+                outgoing,
+                |_| false
+            ),
+            180
+        );
+        assert_eq!(
+            required_transition_floor(
+                &children,
+                &root_cover,
+                false,
+                &blocked,
+                current,
+                outgoing,
+                |coord| coord == root.children()[1]
+            ),
+            80
+        );
+        assert_eq!(
+            required_transition_floor(
+                &root_cover,
+                &children,
+                false,
+                &root_cover,
+                current,
+                outgoing,
+                |_| false
+            ),
+            120
+        );
+        let grandchildren = root
+            .children()
+            .into_iter()
+            .flat_map(QuadCoord::children)
+            .collect::<HashSet<_>>();
+        let blocked = HashSet::from([root.children()[0].children()[0]]);
+        // A deep refinement can release the old root through an intermediate
+        // frontier, so its bytes cannot be included in the final-cover floor.
+        assert_eq!(
+            required_transition_floor(
+                &grandchildren,
+                &root_cover,
+                false,
+                &blocked,
+                current,
+                outgoing,
+                |_| false
+            ),
+            320
+        );
+        let partial = |coord| {
+            (coord == root.children()[0]).then_some((RequiredMeshIdentity::Prepared(coord), 20))
+        };
+        assert_eq!(
+            required_transition_floor(
+                &children,
+                &root_cover,
+                false,
+                &HashSet::from([root.children()[0]]),
+                partial,
+                outgoing,
+                |_| false
+            ),
+            120
+        );
+    }
+
+    #[test]
+    fn terminal_transition_hold_is_scoped_to_draw_selection_and_ceiling() {
+        let (_, _, _, _, mut view) = ready_view_fixture();
+        let signature = view.requested_signature.unwrap();
+        let assets = Assets::<Mesh>::default();
+        let old = assets.reserve_handle();
+        let mut cache = LodMeshCache::default();
+        let source = Entity::PLACEHOLDER;
+        cache.insert((source, QuadCoord::ROOT, 3), old.clone(), 0.0, None, 100);
+        cache.begin_frame(&mut HashSet::from([old.id()]));
+        assert!(!cache.admit_upload(20, 119));
+        let selected = HashSet::from([QuadCoord::ROOT]);
+        let floor = required_transition_floor(
+            &selected,
+            &selected,
+            true,
+            &selected,
+            |coord| Some((RequiredMeshIdentity::Prepared(coord), 20)),
+            |_| Some((RequiredMeshIdentity::Uploaded(old.id()), 100)),
+            |_| false,
+        );
+        assert_eq!(floor, 120);
+        view.transition_budget_floor = Some((signature, floor));
+        assert_eq!(view.active_transition_floor(signature, 119), Some(120));
+        assert!(!view.latest_ready());
+        assert_eq!(view.active_transition_floor(signature, 120), None);
+        assert!(cache.admit_upload(20, 120));
+        assert!(view.latest_ready());
+        view.transition_budget_floor = Some((signature, 120));
+        assert_eq!(
+            view.active_transition_floor(signature.wrapping_add(1), 100),
+            None
+        );
+        view.transition_budget_floor = Some((signature, 120));
+        view.bump_draw_revision();
+        assert_eq!(view.active_transition_floor(signature, 100), None);
+    }
+
+    #[test]
     fn selected_cover_status_requires_current_render_ready_leaves() {
         let cover = QuadCoord::ROOT
             .children()
             .into_iter()
             .collect::<HashSet<_>>();
         let mut tiles = LodView {
+            r#gen: 7,
             cover: cover.clone(),
             cover_selected: cover
                 .iter()
@@ -10877,7 +11464,7 @@ mod draw_partition_tests {
         let stale = *cover.iter().nth(1).expect("cover has four leaves");
         tiles.tiles.get_mut(&stale).unwrap().r#gen = 6;
 
-        let status = selected_cover_status(&tiles, 7);
+        let status = tiles.selected_cover_status();
         assert_eq!(status.wanted, 4);
         assert_eq!(status.resident, 3, "the stale leaf still covers the ground");
         assert!(
@@ -10887,7 +11474,8 @@ mod draw_partition_tests {
 
         tiles.tiles.get_mut(&not_bound).unwrap().ready = true;
         tiles.tiles.get_mut(&stale).unwrap().r#gen = 7;
-        let status = selected_cover_status(&tiles, 7);
+        tiles.bump_draw_revision();
+        let status = tiles.selected_cover_status();
         assert_eq!(status.resident, status.wanted);
         assert!(status.complete);
     }
@@ -11325,7 +11913,7 @@ mod draw_partition_tests {
             handles.push(handle.clone());
             cache.insert(key(x), handle, 0.0, None, tile_mesh_bytes(tile_res));
         }
-        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.begin_frame(&mut HashSet::from([handles[3].id()]));
         cache.trim(4, u64::MAX);
         assert_eq!(
             cache.map.len(),
@@ -11334,7 +11922,7 @@ mod draw_partition_tests {
         );
         let initial = cache.accounted_bytes();
         assert!(cache.accounting.get().is_some());
-        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.begin_frame(&mut HashSet::from([handles[3].id()]));
         assert!(cache.accounting.get().is_some());
         assert_eq!(cache.accounted_bytes(), initial);
         // Touch 0 so 1 becomes the oldest unprotected entry.
@@ -11359,7 +11947,7 @@ mod draw_partition_tests {
                 .sum::<u64>()
         );
         // The byte ceiling alone also forces eviction.
-        cache.begin_frame(HashSet::from([handles[3].id()]));
+        cache.begin_frame(&mut HashSet::from([handles[3].id()]));
         cache.trim(usize::MAX, (tile_mesh_bytes(tile_res)) as u64);
         assert_eq!(cache.map.len(), 1);
         assert!(cache.map.contains_key(&key(3)));
@@ -11381,7 +11969,7 @@ mod draw_partition_tests {
         let key = (source, QuadCoord::ROOT, 49);
         let bytes = (tile_mesh_bytes(49)) as u64;
         cache.insert(key, old.clone(), 0.0, None, bytes as usize);
-        cache.begin_frame(HashSet::from([old.id()]));
+        cache.begin_frame(&mut HashSet::from([old.id()]));
         cache.drop_region(source, None, 10.0);
         assert_eq!(
             cache.accounted_bytes(),
@@ -11403,14 +11991,14 @@ mod draw_partition_tests {
             bytes * 2,
             "shared views retain one mesh allocation"
         );
-        cache.begin_frame(HashSet::from([fresh.id()]));
+        cache.begin_frame(&mut HashSet::from([fresh.id()]));
         assert_eq!(
             cache.accounted_bytes(),
             bytes,
             "retired handles leave accounting only after all live geometry releases them"
         );
         assert!(!cache.admit_upload(bytes, bytes));
-        cache.begin_frame(HashSet::new());
+        cache.begin_frame(&mut HashSet::new());
         assert!(cache.admit_upload(bytes, bytes));
         assert!(
             cache.map.is_empty(),
@@ -11442,7 +12030,7 @@ mod draw_partition_tests {
             !cache.admit_upload(bytes, bytes * 2),
             "deferred tile spawns already own their admitted handles"
         );
-        cache.begin_frame(ids);
+        cache.begin_frame(&mut ids);
         assert!(
             !cache.admit_upload(bytes, bytes),
             "a lower cap cannot evict another source's residents"

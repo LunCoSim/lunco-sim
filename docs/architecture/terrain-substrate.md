@@ -144,6 +144,12 @@ restricted draw cover, parent fallback, stitch topology and morph context. Mesh
 bakes are shared by source, node and resolution; view state is separate. All color,
 shadow and prepass passes use the same parent view context.
 
+Each private output channel retains its lease until no surviving terrain
+geometry mask refers to it. The renderer checks retired channels only when a
+new output needs admission, including hidden and disabled geometry in the
+inventory. Extraction consumes the final camera and mesh masks/removals before
+drawing; layer reuse is not paced by a fixed frame delay.
+
 Perspective error uses output pixels, vertical FOV and three-dimensional camera
 distance. Orthographic error uses pixels per metre from the finalized projection
 area and output dimensions. Translating an orthographic camera along its viewing
@@ -183,6 +189,22 @@ unique uploaded geometry across views and sources, including live old generation
 and retiring tiles; retained CPU vertex/index payload is reported separately. Uploads wait
 before allocation if residents consume the configured limit. Lowering the limit
 does not discard visible coverage; pressure remains explicit in streaming status.
+A required tile larger than the entire byte ceiling is a terminal preparation
+failure for that source and ceiling, not a per-frame upload retry. A changed
+ceiling or surface makes a new admission eligible.
+For a refused upload, the streamer also checks measured necessary concurrent
+allocations: the final selected cover, unchanged generation refresh, immediate
+sibling refinement, and selected-ancestor coarsening. Shared uploaded mesh
+identities count once; missing estimates never become fabricated bytes. An
+exact lower bound larger than the ceiling produces `mesh-transition-impossible`
+and retains the outgoing drawable cover until a selection, source or ceiling
+change makes admission eligible. Ordinary progressive transitions are not
+treated as requiring the entire old and new frontiers simultaneously.
+
+The selected-cover status is retained at its exact residency/generation/draw
+mutation boundaries. The focus query uses the actual constrained selected
+quadtree coordinate index, including closed shared-edge ordering, rather than
+walking every selected leaf in each settled frame.
 The consumed-output registry and output pixel admission bound the number and size
 of views. New demands withdraw obsolete queued work; already-running
 work retains exact scene/source/view leases at publication. Ready ancestors remain
@@ -222,14 +244,29 @@ coverage. Incomplete cover convergence advances independently of the simulation
 clock; cover operations are allocated by the terrain owner, across view
 replacement, and only an admitted operation can own a pending completion.
 
-On a native cold cache, a shared-admission derived-layer worker first checks
-the final content-addressed map, otherwise publishes a 256-or-smaller texel
-preview. Each cache load validates the requested raster dimensions. The final
-map is admitted in the background after the consumed near-camera cover is
-actually drawn. Source and requested bake identity fence every completion;
-cancelled scene or quality leases cannot publish stale material data.
+On a native cold cache, the derived-layer owner first checks the final
+content-addressed map, otherwise publishes a 256-or-smaller texel preview.
+Each cache load validates the requested raster dimensions. The final map is
+admitted in the background after the consumed near-camera draw partition is
+published. One immutable region-filtered sampling plan supplies independent
+contiguous row jobs through the shared bounded work admission. Each completed
+chunk releases its worker permit; the owner reserves the full staging and
+assembly byte layout separately against the validated raster size. Ordered
+assembly, cache writing and mip generation run off the UI thread. Cancellation
+at row boundaries releases obsolete computation, and an in-flight allocation
+retains its byte reservation until it is actually dropped. The web serial
+consumer uses the same row lattice and transfer. Source and requested bake identity fence every completion;
+cancelled scene or quality leases cannot publish stale material data. Removing
+the DEM from a surviving entity also retires its queued request, result receipt
+and derived maps, leaving authored raster bindings intact.
 Material reconciliation upgrades resident meshes independently of geometry.
 The preview has lower-frequency shading, not final-map equivalence.
+
+Static-mesh and streamed horizon producers retain exact published image leases;
+one producer cannot retire the other's map. A shadow-cache task owns the map and
+quality that it sampled. Source retirement cancels that task at a row boundary
+and prevents stale visibility publication. Streamed horizon bakes prepare the
+oracle once for the exact map region rather than rediscovering modifiers per sample.
 
 Offline capture waits for the requested map identity and applicable horizon
 products, including the initial visibility cache wired into streamed
@@ -241,6 +278,16 @@ visible ground or a GPU pixel acknowledgement. Browser CPU baking remains
 cooperative on the existing page executor; native async timings do not
 certify web responsiveness.
 
+The final capture admission evaluates terminal failures before advancing or
+requesting an image. An outstanding numbered request has an exact entity
+identity; stopping a take retires its logical lease immediately. A submitted
+window screenshot remains owned by Bevy until its GPU completion and cleanup.
+Windowless capture acknowledges the
+actual target and all occupied color-phase pipelines from the render world,
+including alpha-masked, transmissive and non-mesh bins, with no elapsed-time
+warm-up. The target-born capture output consumes the same canonical selected
+pose owner as globe LOD and the render-origin precision contract.
+
 `TerrainLodStatus.camera_cover` reports each view's local position and forward direction, draw revision, initial
 near-cover readiness, pending cover preparation, clearance, selected
 depth, effective maximum depth, metric spacing, readiness, pin state, wanted,
@@ -248,6 +295,9 @@ resident and drawn counts, and refused refinements. `contacts` reports physical
 support readiness and lattice parameters independently of rendered tiles.
 `presented_ready` describes the retained drawable cover; `ready` additionally
 requires the latest requested selection to be settled in its current generation.
+`exposed_viewport_camera` distinguishes the exposed, active main viewport from
+the selected camera preparing behind the loading backdrop. Startup pixel
+validation observes that exposure independently of the drawn tile count.
 `stream.selection_pending` counts unqueued follow-up work and newly consumed
 outputs as well as unfinished selections, so retained residency cannot authorize
 an unfinished numbered capture. Finalized demand publication updates this fence

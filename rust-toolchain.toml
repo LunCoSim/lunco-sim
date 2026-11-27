@@ -1,5 +1,5 @@
 # Repository toolchain shared by the native and browser builds.
 [toolchain]
-channel = "1.97.1"
+channel = "1.100.0"
 components = ["rust-src", "rustfmt"]
 targets = ["wasm32-unknown-unknown"]

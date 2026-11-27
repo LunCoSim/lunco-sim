@@ -62,6 +62,8 @@ pub struct WorkbenchLayout {
 
     /// Registered panels rendered in borderless, viewport-anchored hosts.
     pub floating_panels: Vec<PerspectiveFloatingPanel>,
+    /// Scene-local user choices for authored floating HUD panels.
+    floating_hud_overrides: HashMap<(PerspectiveId, TabId), bool>,
 
     /// Per-perspective snapshots of the live dock + slot intent, so
     /// switching back to a perspective restores *its own* open tabs and
@@ -111,6 +113,7 @@ impl Default for WorkbenchLayout {
             bottom: Vec::new(),
             dock: DockState::new(Vec::new()),
             floating_panels: Vec::new(),
+            floating_hud_overrides: HashMap::new(),
             dock_cache: HashMap::new(),
         }
     }
@@ -208,6 +211,13 @@ impl WorkbenchLayout {
                     .find(|p| p.tab == tab)
             });
         if let Some(floating) = floating {
+            if self
+                .active_perspective
+                .as_ref()
+                .is_some_and(|id| self.floating_hud_preference(id, tab) == Some(false))
+            {
+                return;
+            }
             if !self.floating_panels.iter().any(|p| p.tab == tab) {
                 self.floating_panels.push(floating);
             }
@@ -580,6 +590,8 @@ impl WorkbenchLayout {
     /// Retire a multi-instance tab from the live and cached perspectives.
     pub fn close_instance(&mut self, kind: PanelId, instance: u64) {
         let tab = TabId::Instance { kind, instance };
+        self.floating_hud_overrides
+            .retain(|(_, candidate), _| *candidate != tab);
         self.floating_panels.retain(|p| p.tab != tab);
         let remove = |dock: &mut DockState<TabId>| {
             while let Some(path) = dock.find_tab(&tab) {
@@ -611,11 +623,53 @@ impl WorkbenchLayout {
         });
     }
 
+    /// Visibility choice for an authored floating HUD.
+    pub fn floating_hud_preference(&self, perspective: &PerspectiveId, tab: TabId) -> Option<bool> {
+        self.floating_hud_overrides
+            .get(&(perspective.clone(), tab))
+            .copied()
+    }
+
+    /// The layout owner applies a preference without destroying its panel or data.
+    pub fn set_floating_hud_preference(
+        &mut self,
+        perspective: PerspectiveId,
+        panel: PerspectiveFloatingPanel,
+        preference: Option<bool>,
+    ) {
+        let key = (perspective.clone(), panel.tab);
+        if let Some(visible) = preference {
+            self.floating_hud_overrides.insert(key, visible);
+        } else {
+            self.floating_hud_overrides.remove(&key);
+        }
+        let panels = if self.active_perspective.as_ref() == Some(&perspective) {
+            Some(&mut self.floating_panels)
+        } else {
+            self.dock_cache
+                .get_mut(&perspective)
+                .map(|slot| &mut slot.floating_panels)
+        };
+        if let Some(panels) = panels {
+            if preference.unwrap_or(true) {
+                if !panels.iter().any(|p| p.tab == panel.tab) {
+                    panels.push(panel);
+                }
+            } else {
+                panels.retain(|p| p.tab != panel.tab);
+            }
+        }
+    }
+
     /// Materialize a renderer-independent perspective plan into the concrete
     /// dock tree. Only this shell method knows how semantic slots map to
     /// `egui_dock` nodes.
     pub fn apply_perspective_plan(&mut self, id: PerspectiveId, plan: PerspectiveLayoutPlan) {
-        self.floating_panels = plan.floating_panels;
+        self.floating_panels = plan
+            .floating_panels
+            .into_iter()
+            .filter(|panel| self.floating_hud_preference(&id, panel.tab) != Some(false))
+            .collect();
         self.center_has_initial_instances = plan
             .instance_tabs
             .iter()
@@ -721,11 +775,22 @@ impl WorkbenchLayout {
         self.perspectives.retain(|p| !previous.contains(&p.id()));
         for id in previous.iter().filter(|id| !ids.contains(id)) {
             self.dock_cache.remove(id);
+            self.floating_hud_overrides
+                .retain(|(perspective, _), _| perspective != id);
             if self.required_perspective.as_deref() == Some(id.as_str()) {
                 self.required_perspective = None;
             }
         }
         self.perspectives.extend(incoming);
+        self.floating_hud_overrides.retain(|(perspective, tab), _| {
+            self.perspectives.iter().any(|p| {
+                p.id() == *perspective
+                    && p.layout()
+                        .floating_panels
+                        .iter()
+                        .any(|panel| panel.tab == *tab)
+            })
+        });
         if self
             .active_perspective
             .as_ref()
@@ -1394,7 +1459,15 @@ impl WorkbenchLayout {
                 .perspectives
                 .iter()
                 .find(|p| p.id() == *perspective)
-                .map(|p| p.layout().floating_panels)
+                .map(|p| {
+                    p.layout()
+                        .floating_panels
+                        .into_iter()
+                        .filter(|panel| {
+                            self.floating_hud_preference(perspective, panel.tab) != Some(false)
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
             side_browser: registered(&snap.side_browser),
             side_browser_bottom: registered(&snap.side_browser_bottom),
@@ -1486,6 +1559,13 @@ impl WorkbenchLayout {
                     .find(|p| p.tab == tab)
             })
         {
+            if self
+                .active_perspective
+                .as_ref()
+                .is_some_and(|id| self.floating_hud_preference(id, tab) == Some(false))
+            {
+                return false;
+            }
             self.floating_panels.push(panel);
             return true;
         }

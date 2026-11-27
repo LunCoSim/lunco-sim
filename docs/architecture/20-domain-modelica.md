@@ -464,6 +464,43 @@ memory. Native persistent reuse stores validated compiled DAEs under the
 versioned `compiled-dae-v6` namespace and its captured disk budgets. Each
 participant owns its Rumoca session and initialized state.
 
+The native preparation worker also stores immutable FMI components in
+`prepared-fmi-v1`. Its key includes the Rumoca build and wire schema, target,
+source and bound model identity, structural parameters, solver and exact
+parameter, input and state-start values. A cache hit passes through Rumoca's
+checked wire reader and creates a fresh session. A bounded writer publishes
+components through the same storage transaction and retention limits as compiled
+equations. The `artifact.cache.policy` hook can request a rebuild with artifact
+kind `modelica_prepared`. Components with external tables or lowering warnings
+that need their source context are prepared from the DAE.
+
+A native Twin release can ship both artifact families as a read-only directory.
+With `LUNCOSIM_BIN` set to the release executable, the publisher runs
+`python3 scripts/prebuild_modelica.py <absolute-scene> <new-directory> --port <free-port>`.
+The tool waits for the mounted scene and active co-simulation, shuts down the
+writer, and publishes only its new records. Include that directory in the
+application release with `scripts/build_native.sh luncosim --modelica-prebuilt <directory>`
+for automatic lookup under `assets/prebuilt/modelica/`,
+or set `LUNCOSIM_MODELICA_PREBUILT` to the extracted directory for a separate
+Twin distribution. For a local checkout, place the generated directory at
+`assets/prebuilt/modelica` to use it on the next normal launch. An empty
+environment setting disables prebuilt lookup. Build for the
+target OS and architecture with the same Rumoca revision. A Twin cannot select its own trusted root.
+Twin source sets use the stable logical asset identity and declared root index as
+their compiler name. The workspace Twin ID and source-root operation generation
+guard live ownership. The exact compiler context includes source admission order
+and diagnostic file URIs. Relocating sources can therefore require a prebuild
+at the deployment paths. The worker checks the local cache first and reads an exact-key match from the
+release directory on a miss. Both sources use the same bounded zstd reader,
+payload checksum, checked decoder and cache policy. Missing or invalid records
+are rebuilt into the writable cache. The release directory stays read-only.
+
+Live constructors share a worker-owned, byte-bounded in-memory Cranelift
+compilation cache. Cranelift keys the function stencil, target and codegen flags.
+Every JIT module binds its own relocations. The worker reports freshly compiled
+and reused functions per construction. The capacity is
+`ModelicaCacheLimits::native_compilation_bytes` (64 MiB by default).
+
 Generated-network compilation consumes its complete synthesized document and
 the admitted source roots, not other open Modelica documents. Their reserved
 bundled `generated/` filename namespace is classified by the runtime metadata

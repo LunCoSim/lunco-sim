@@ -102,5 +102,8 @@ wasm-bindgen = { workspace = true }
 # `spawn_local` drives the non-`Send` OPFS futures (grid/derived-map caches).
 wasm-bindgen-futures = { workspace = true }
 
+[dev-dependencies]
+glam = { version = "0.33.2", default-features = false, features = ["f64"] }
+
 [lints]
 workspace = true

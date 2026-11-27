@@ -160,6 +160,8 @@ struct LiveBuildPlan {
     snapshot: Arc<ModelicaLiveSolverSnapshot>,
     options: rumoca_sim::SimOptions,
     initial_state_values: Option<Vec<(String, f64)>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    component_cache: Option<cache::prepared::Request>,
 }
 
 fn source_state_names(compiled: &CompiledModelArtifact) -> Vec<String> {
@@ -172,6 +174,26 @@ fn source_state_names(compiled: &CompiledModelArtifact) -> Vec<String> {
 }
 
 impl LiveBuildPlan {
+    fn construct(
+        &self,
+        dae: &rumoca_ir_dae::Dae,
+    ) -> Result<LiveStepper, rumoca_sim::SimulationDiagnosticError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(request) = &self.component_cache {
+            return lunco_modelica_solver::simulation_session::live_for_solver_with(
+                dae,
+                &self.spec,
+                self.options.clone(),
+                |dae, options| request.construct(dae, options, self.spec.id.as_str()),
+            );
+        }
+        lunco_modelica_solver::simulation_session::live_for_solver(
+            dae,
+            &self.spec,
+            self.options.clone(),
+        )
+    }
+
     fn with_initial_state_values(
         mut self,
         compiled: &CompiledModelArtifact,
@@ -285,6 +307,8 @@ fn live_build_plan(
         snapshot,
         options,
         initial_state_values: None,
+        #[cfg(not(target_arch = "wasm32"))]
+        component_cache: None,
     })
 }
 
@@ -325,11 +349,7 @@ fn build_live_stepper(
     let retained = plan.clone();
     let stepper = {
         let _span = bevy::log::info_span!("modelica_live_session_construct").entered();
-        lunco_modelica_solver::simulation_session::live_for_solver(
-            dae,
-            &plan.spec,
-            plan.options.clone(),
-        )?
+        plan.construct(dae)?
     };
     let constructed = web_time::Instant::now();
     let variable_metadata = {
@@ -458,9 +478,12 @@ impl WorkerThreadBudget {
 /// Each session is constructed, stepped and retired on one persistent thread;
 /// the command owner admits only typed observations in command order.
 struct ModelicaWorkerPools {
+    native_compilation: rumoca_sim::native_compilation::NativeCompilationCache,
     pool: ThreadAffinePool<()>,
     live_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
     document_pool: ThreadAffinePool<HashMap<u64, LiveStepper>>,
+    // Drain construction lanes before flushing their pending component publications.
+    component_cache: cache::prepared::Cache,
     tx: Sender<WorkerPreparationResult>,
     rx: Receiver<WorkerPreparationResult>,
     next_id: u64,
@@ -536,7 +559,11 @@ fn prepare_source_root_payload(id: String, payload: LoadSourceRootPayload) -> Pr
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ModelicaWorkerPools {
-    fn new(limits: ModelicaWorkerLimits) -> Result<Self, String> {
+    fn new(
+        limits: ModelicaWorkerLimits,
+        disk_limits: ModelicaArtifactDiskLimits,
+        native_bytes: std::num::NonZeroUsize,
+    ) -> Result<Self, String> {
         let available = std::thread::available_parallelism()
             .map_err(|error| format!("cannot determine Modelica worker CPU capacity: {error}"))?;
         let preparation_threads = limits
@@ -591,6 +618,10 @@ impl ModelicaWorkerPools {
             tx,
             rx,
             next_id: 0,
+            component_cache: cache::prepared::Cache::new(disk_limits)?,
+            native_compilation: rumoca_sim::native_compilation::NativeCompilationCache::new(
+                native_bytes,
+            ),
         })
     }
 
@@ -929,14 +960,19 @@ fn dispatch_live_construction(
     pipeline: &mut LivePreparationPipeline,
     pending: &mut HashMap<u64, PreparationWork>,
 ) {
-    let plan = work.plan().clone();
-    let lane = match (&work, lane) {
+    let mut plan = work.plan().clone();
+    let doc_uri = match &work {
+        PreparationWork::Initialization(work) => &work.doc_uri,
+        PreparationWork::Participant(work) => &work.doc_uri,
+    };
+    plan.component_cache = pool.component_cache.request(work.compiled(), doc_uri);
+    let (lane, entity) = match (&work, lane) {
         (
             PreparationWork::Initialization(initialization),
             ConstructionLane::Initialization(lane),
         ) => {
             let dae = initialization.comp_res.compiled.dae.clone();
-            let result = initialization::dispatch(id, lane, dae, initialization, pool);
+            let result = initialization::dispatch(id, lane, dae, initialization, plan, pool);
             pending.insert(id, work);
             if let Err(error) = result {
                 pipeline.constructed.insert(
@@ -948,7 +984,9 @@ fn dispatch_live_construction(
             }
             return;
         }
-        (PreparationWork::Participant(_), ConstructionLane::Participant(lane)) => lane,
+        (PreparationWork::Participant(participant), ConstructionLane::Participant(lane)) => {
+            (lane, participant.entity)
+        }
         _ => {
             pending.insert(id, work);
             pipeline.constructed.insert(
@@ -962,7 +1000,15 @@ fn dispatch_live_construction(
     };
     let dae = work.compiled().compiled.dae.clone();
     pending.insert(id, work);
-    if let Err(error) = live_session::construct(id, lane, dae, plan, pool.tx.clone()) {
+    if let Err(error) = live_session::construct(
+        id,
+        entity,
+        lane,
+        dae,
+        plan,
+        pool.native_compilation.clone(),
+        pool.tx.clone(),
+    ) {
         let _ = tx.send(ModelicaResult::worker_failure(error.clone()));
         pipeline.constructed.insert(
             id,
@@ -2822,7 +2868,11 @@ pub fn modelica_worker(
     let mut cached_models: HashMap<Entity, CachedModel> = HashMap::default();
     // Source-root reads and mutable compiler work stay off the owner thread;
     // Rumoca creates each session on its thread-affine execution lane.
-    let mut solve_preparation_pool = match ModelicaWorkerPools::new(worker_limits) {
+    let mut solve_preparation_pool = match ModelicaWorkerPools::new(
+        worker_limits,
+        disk_limits,
+        cache_limits.native_compilation_bytes,
+    ) {
         Ok(pool) => pool,
         Err(error) => {
             let _ = tx.send(ModelicaResult::worker_failure(error));
@@ -3303,6 +3353,7 @@ pub fn modelica_worker(
                         unit.expected_library_revision = expected_library_revision;
                         unit.project_edit_interface = false;
                         let pending = initialization::PendingInitialization {
+                            doc_uri: doc_uri.clone(),
                             request_id,
                             parameter_overrides,
                             initial_inputs,
@@ -4957,7 +5008,12 @@ mod worker_budget_tests {
                 reserved_cpu_threads: 0,
             },
         };
-        let pool = ModelicaWorkerPools::new(custom).unwrap();
+        let pool = ModelicaWorkerPools::new(
+            custom,
+            Default::default(),
+            ModelicaCacheLimits::default().native_compilation_bytes,
+        )
+        .unwrap();
         let count = pool.pool.worker_count();
         assert!((1..=3).contains(&count));
         assert!((1..=2).contains(&pool.live_pool.worker_count()));

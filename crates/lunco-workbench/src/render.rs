@@ -1501,7 +1501,7 @@ pub(crate) fn render_status_bar_inner(
         StatusBarNotificationSnapshot::Hidden | StatusBarNotificationSnapshot::Ready => None,
     };
     let perf_stats = world.resource::<PerfStats>().clone();
-    let perf_enabled = world.resource::<PerfHudSettings>().enabled;
+    let perf_enabled = world.resource::<PerfHudSettings>().enabled.unwrap_or(false);
     // Engine frame health advances with rendered frames, including before a
     // Twin is active. Its shared snapshot owns this history; simulation
     // telemetry remains sampled on its fixed simulation clock.
